@@ -1,0 +1,3 @@
+input: rvs_foo_e
+base: "foo_e"
+capabilities: {}

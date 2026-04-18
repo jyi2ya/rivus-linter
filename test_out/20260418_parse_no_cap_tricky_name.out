@@ -1,0 +1,3 @@
+input: rvs_cache_lookup
+base: "cache_lookup"
+capabilities: {}

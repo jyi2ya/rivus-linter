@@ -1,0 +1,4 @@
+functions: 1
+name: rvs_check_E
+calls: 1
+  - regular_function

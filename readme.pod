@@ -1,0 +1,5 @@
+=encoding utf8
+
+rivus-coding-skill 的辅助工具
+
+具体详见项目目录下 rivus-coding.skill

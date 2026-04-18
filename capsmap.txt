@@ -1,0 +1,162 @@
+# ─── Rust 语言关键字构造器 ─────────────────────
+# Self 用于类型自身的构造，语义上等于 new，纯函数
+Self=
+Self::default=
+None=
+
+# ─── 标准库：容器 ──────────────────────────────
+# 这些是纯函数，无副作用，安全可调。
+alloc::vec::Vec::new=
+alloc::vec::Vec::push=
+alloc::vec::Vec::extend=
+alloc::vec::Vec::is_empty=
+alloc::vec::Vec::len=
+alloc::vec::Vec::iter=
+alloc::vec::Vec::last=
+alloc::collections::BTreeMap::new=
+alloc::collections::BTreeMap::insert=
+alloc::collections::BTreeMap::get=
+alloc::collections::BTreeMap::contains=
+alloc::collections::BTreeMap::entry=
+alloc::collections::BTreeMap::or_default=
+alloc::collections::BTreeMap::iter=
+alloc::collections::BTreeMap::len=
+alloc::collections::BTreeMap::is_empty=
+alloc::collections::BTreeSet::new=
+alloc::collections::BTreeSet::insert=
+alloc::collections::BTreeSet::contains=
+alloc::collections::BTreeSet::iter=
+alloc::collections::BTreeSet::len=
+alloc::collections::BTreeSet::difference=
+
+# ─── 标准库：迭代器 ────────────────────────────
+core::iter::Iterator::next=
+core::iter::Iterator::map=
+core::iter::Iterator::filter=
+core::iter::Iterator::filter_map=
+core::iter::Iterator::flat_map=
+core::iter::Iterator::collect=
+core::iter::Iterator::enumerate=
+core::iter::Iterator::into_iter=
+core::iter::Iterator::copied=
+core::iter::Iterator::all=
+core::iter::Iterator::any=
+core::iter::Iterator::count=
+core::iter::Iterator::fold=
+core::iter::Iterator::for_each=
+core::iter::Iterator::join=
+
+# ─── 标准库：Option / Result ────────────────────
+core::option::Option::Some=
+core::option::Option::ok=
+core::option::Option::unwrap=
+core::option::Option::unwrap_or=
+core::option::Option::unwrap_or_default=
+core::option::Option::unwrap_or_else=
+core::option::Option::ok_or_else=
+core::option::Option::map=
+core::option::Option::as_ref=
+core::option::Option::is_some=
+core::option::Option::is_none=
+core::option::Option::is_some_and=
+core::result::Result::Ok=
+core::result::Result::map=
+core::result::Result::map_err=
+core::result::Result::expect=
+core::result::Result::unwrap=
+core::result::Result::unwrap_or=
+core::result::Result::unwrap_or_default=
+core::result::Result::unwrap_or_else=
+core::result::Result::ok=
+core::result::Result::is_ok=
+core::result::Result::is_err=
+
+# ─── 标准库：字符串与切片 ──────────────────────
+alloc::string::String::new=
+alloc::string::String::to_string=
+alloc::string::String::trim=
+alloc::string::String::split=
+alloc::string::String::split_once=
+alloc::string::String::lines=
+alloc::string::String::starts_with=
+alloc::string::String::ends_with=
+alloc::string::String::contains=
+alloc::string::String::is_empty=
+alloc::string::String::len=
+alloc::string::String::chars=
+alloc::string::String::join=
+alloc::string::ToString::to_string=
+core::str::starts_with=
+core::str::ends_with=
+core::str::contains=
+core::str::is_empty=
+core::str::len=
+core::str::split=
+core::str::rsplit=
+core::str::trim=
+core::str::chars=
+core::str::lines=
+alloc::string::String::concat=
+
+# ─── 标准库：路径 ──────────────────────────────
+std::path::Path::is_dir=
+std::path::Path::is_file=
+std::path::Path::extension=
+std::path::Path::display=
+std::path::Path::exists=
+std::path::PathBuf::to_path_buf=
+std::path::PathBuf::into_path=
+std::path::PathBuf::push=
+std::path::Display::to_string=
+
+# ─── 标准库：文件系统 ──────────────────────────
+# read_to_string 会阻塞(B)并做I/O(I)，可能失败(E)
+std::fs::read_to_string=BEI
+
+# ─── 标准库：进程 ──────────────────────────────
+# process::exit 是副作用(P)，终止进程
+std::process::exit=P
+
+# ─── 标准库：Clone / Default ───────────────────
+core::clone::Clone::clone=
+core::default::Default::default=
+alloc::fmt::Display::fmt=
+
+# ─── 外部库：syn ───────────────────────────────
+# syn::parse_file 解析源码，纯计算但可能失败(E)
+syn::parse_file=E
+# syn 类型上的访问器方法，纯函数
+proc_macro2::Span::start=
+proc_macro2::Span::end=
+proc_macro2::Span::join=
+quote::spanned::Spanned::span=
+
+# ─── 外部库：walkdir ───────────────────────────
+# WalkDir::new 构造遍历器，不执行I/O
+walkdir::WalkDir::new=
+# DirEntry 上的方法
+walkdir::DirEntry::file_type=
+walkdir::DirEntry::path=
+walkdir::DirEntry::into_path=
+
+# ─── 外部库：clap ──────────────────────────────
+# Cli::parse 读取全局进程参数，有副作用(P)
+clap::Parser::parse=P
+
+# ─── 本项目：内部非 rvs 函数 ────────────────────
+rivus_linter::capability::parse_rvs_function=
+rivus_linter::check::CheckOutput::default=
+rivus_linter::capsmap::CapsMapError::InvalidLetter=
+rivus_linter::source::ReadError::FileRead=
+# 局部类型的路径调用
+Cli::parse=P
+CapabilityParseError::InvalidLetter=
+
+# ─── syn 类型上的方法 ──────────────────────────
+# proc_macro2::Span 的方法
+proc_macro2::Span::start=
+proc_macro2::Span::end=
+proc_macro2::Span::join=
+
+# ─── 其他标准库构造器 ──────────────────────────
+core::option::Option::None=

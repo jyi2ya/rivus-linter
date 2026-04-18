@@ -1,0 +1,2 @@
+input: ABEI
+capabilities: {A, B, E, I}

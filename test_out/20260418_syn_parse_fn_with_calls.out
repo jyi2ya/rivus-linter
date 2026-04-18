@@ -1,0 +1,5 @@
+name: rvs_write_db_ABEI
+caps: {A, B, E, I}
+calls: 2
+  - rvs_parse_int_E
+  - rvs_validate_M

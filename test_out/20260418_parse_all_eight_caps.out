@@ -1,0 +1,3 @@
+input: rvs_nuclear_ABEIMPTU
+base: "nuclear"
+capabilities: {A, B, E, I, M, P, T, U}

@@ -1,0 +1,4 @@
+caller: {E}
+callee: {A, B, E, I}
+can_call: false
+missing: {ABI}

@@ -1,0 +1,11 @@
+[package]
+name = "rivus-linter"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+proc-macro2 = { version = "1", features = ["span-locations"] }
+syn = { version = "2", features = ["full", "visit"] }
+walkdir = "2"
+clap = { version = "4", features = ["derive"] }
+thiserror = "2"

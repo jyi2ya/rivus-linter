@@ -1,0 +1,2 @@
+input: ABX
+result: Err(InvalidLetter('X'))

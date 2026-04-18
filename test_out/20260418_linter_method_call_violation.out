@@ -1,0 +1,5 @@
+violations: 1
+error: rvs_simple_E calls rvs_complex_ABEI but is missing capabilities [A(Async), B(Blocking), I(IO)]
+  at test.rs:6
+  caller has: {E}
+  callee needs: {A, B, E, I}
