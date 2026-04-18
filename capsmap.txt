@@ -45,6 +45,12 @@ core::iter::Iterator::count=
 core::iter::Iterator::fold=
 core::iter::Iterator::for_each=
 core::iter::Iterator::join=
+core::iter::Iterator::find=
+core::iter::Iterator::peek=
+core::iter::Iterator::peekable=
+core::iter::Iterator::fuse=
+core::iter::Iterator::stream=
+core::iter::Iterator::last=
 
 # ─── 标准库：Option / Result ────────────────────
 core::option::Option::Some=
@@ -97,6 +103,8 @@ core::str::trim=
 core::str::chars=
 core::str::lines=
 alloc::string::String::concat=
+core::str::strip_prefix=
+core::str::rfind=
 
 # ─── 标准库：路径 ──────────────────────────────
 std::path::Path::is_dir=
@@ -152,11 +160,12 @@ rivus_linter::source::ReadError::FileRead=
 Cli::parse=P
 CapabilityParseError::InvalidLetter=
 
+# ─── 本项目：私有辅助函数 ──────────────────────
+rivus_linter::extract::Harvest::empty=
+rivus_linter::extract::Harvest::merge=
+
 # ─── syn 类型上的方法 ──────────────────────────
-# proc_macro2::Span 的方法
-proc_macro2::Span::start=
-proc_macro2::Span::end=
-proc_macro2::Span::join=
+# proc_macro2::Span 的方法（已在外部库一节声明）
 
 # ─── 其他标准库构造器 ──────────────────────────
 core::option::Option::None=

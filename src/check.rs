@@ -2,21 +2,35 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::path::Path;
 
-use crate::capsmap::CapsMap;
 use crate::capability::{parse_rvs_function, Capability, CapabilitySet};
+use crate::capsmap::CapsMap;
 use crate::extract::{rvs_extract_functions_E, FnDef};
-use crate::source::{rvs_read_rust_sources_BEI, SourceFile};
+use crate::source::rvs_read_rust_sources_BEI;
 
-/// 一条违规：谁调了谁，差了什么。
-///
-/// 如一封讼状：原告（caller）越权调用被告（callee），
-/// 所缺之能力，白纸黑字，历历在目。
+/// 违规之别：调用越权与静态引用越权。
+#[derive(Debug, Clone, PartialEq)]
+pub enum ViolationKind {
+    Call,
+    StaticRef,
+}
+
+impl fmt::Display for ViolationKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ViolationKind::Call => write!(f, "calls"),
+            ViolationKind::StaticRef => write!(f, "references"),
+        }
+    }
+}
+
+/// 一条违规：谁做了什么，差了什么。
 #[derive(Debug, Clone)]
 pub struct Violation {
+    pub kind: ViolationKind,
     pub caller: String,
     pub caller_caps: CapabilitySet,
-    pub callee: String,
-    pub callee_caps: CapabilitySet,
+    pub target: String,
+    pub target_caps: CapabilitySet,
     pub missing: BTreeSet<Capability>,
     pub file: String,
     pub line: usize,
@@ -32,20 +46,20 @@ impl fmt::Display for Violation {
             .join(", ");
         write!(
             f,
-            "error: {} calls {} but is missing capabilities [{}]\n  at {}:{}\n  caller has: {}\n  callee needs: {}",
+            "error: {} {} {} but is missing capabilities [{}]\n  at {}:{}\n  caller has: {}\n  target needs: {}",
             self.caller,
-            self.callee,
+            self.kind,
+            self.target,
             missing_str,
             self.file,
             self.line,
             self.caller_caps,
-            self.callee_caps,
+            self.target_caps,
         )
     }
 }
 
-/// 一条警告：调了不知底细的函数。
-/// 不以 rvs 起首，册中又无备案，来路不明，需提防。
+/// 一条警告：调用了一个既非 rvs_ 亦不在册的函数。
 #[derive(Debug, Clone)]
 pub struct Warning {
     pub caller: String,
@@ -58,129 +72,124 @@ impl fmt::Display for Warning {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "warning: {} calls '{}' which is not rvs_ and not in capsmap\n  at {}:{}",
+            "warning: {} calls {} which is neither rvs_-prefixed nor in capsmap\n  at {}:{}",
             self.caller, self.callee, self.file, self.line,
         )
     }
 }
 
-/// 检查之 verdict：违规与警告，各列各的。
-#[derive(Debug, Clone, Default)]
+/// 检查结果：违规与警告。
+#[derive(Debug, Clone)]
 pub struct CheckOutput {
     pub violations: Vec<Violation>,
     pub warnings: Vec<Warning>,
 }
 
-/// 名中有 rvs，即为自家函数。
-/// 取尾段判之，以应对 `module::rvs_foo_E` 之路径调用。
-fn rvs_is_rvs_name(name: &str) -> bool {
-    name.rsplit("::")
-        .next()
-        .unwrap_or(name)
-        .starts_with("rvs_")
-}
-
-/// 纯函数：检查一组函数定义中的调用合规性。
-/// 有则记过，无则放行，不打折扣。
-pub fn rvs_check_functions(functions: &[FnDef], file: &str, capsmap: &CapsMap) -> CheckOutput {
+/// 内部实现：检查函数调用合规性与静态引用合规性。
+fn rvs_check_functions_impl(
+    functions: &[FnDef],
+    file: &str,
+    capsmap: &CapsMap,
+) -> CheckOutput {
     let mut violations = Vec::new();
     let mut warnings = Vec::new();
 
     for func in functions {
         for call in &func.calls {
-            if rvs_is_rvs_name(&call.name) {
-                let last_seg = call.name.rsplit("::").next().unwrap();
-                let (_, callee_caps) = parse_rvs_function(last_seg)
-                    .expect("rvs_ callee suffix parse must succeed");
-                let missing = func.capabilities.rvs_missing_for(&callee_caps);
-
-                if !missing.is_empty() {
-                    violations.push(Violation {
-                        caller: func.name.clone(),
-                        caller_caps: func.capabilities.clone(),
-                        callee: call.name.clone(),
-                        callee_caps,
-                        missing,
-                        file: file.to_string(),
-                        line: call.line,
-                    });
-                }
-            } else {
-                match capsmap.rvs_lookup(&call.name) {
-                    Some(callee_caps) => {
-                        let missing = func.capabilities.rvs_missing_for(callee_caps);
-                        if !missing.is_empty() {
-                            violations.push(Violation {
-                                caller: func.name.clone(),
-                                caller_caps: func.capabilities.clone(),
-                                callee: call.name.clone(),
-                                callee_caps: callee_caps.clone(),
-                                missing,
-                                file: file.to_string(),
-                                line: call.line,
-                            });
-                        }
-                    }
-                    None => {
+            let callee_caps = match parse_rvs_function(&call.name) {
+                Some((_, caps)) => caps,
+                None => {
+                    if let Some(caps) = capsmap.rvs_lookup(&call.name) {
+                        caps.clone()
+                    } else {
                         warnings.push(Warning {
                             caller: func.name.clone(),
                             callee: call.name.clone(),
                             file: file.to_string(),
                             line: call.line,
                         });
+                        continue;
                     }
                 }
+            };
+            let missing = func.capabilities.rvs_missing_for(&callee_caps);
+
+            if !missing.is_empty() {
+                violations.push(Violation {
+                    kind: ViolationKind::Call,
+                    caller: func.name.clone(),
+                    caller_caps: func.capabilities.clone(),
+                    target: call.name.clone(),
+                    target_caps: callee_caps,
+                    missing,
+                    file: file.to_string(),
+                    line: call.line,
+                });
+            }
+        }
+
+        for sr in &func.static_refs {
+            let missing = func.capabilities.rvs_missing_for(&sr.required_caps);
+
+            if !missing.is_empty() {
+                violations.push(Violation {
+                    kind: ViolationKind::StaticRef,
+                    caller: func.name.clone(),
+                    caller_caps: func.capabilities.clone(),
+                    target: sr.name.clone(),
+                    target_caps: sr.required_caps.clone(),
+                    missing,
+                    file: file.to_string(),
+                    line: sr.line,
+                });
             }
         }
     }
 
-    CheckOutput {
-        violations,
-        warnings,
-    }
+    CheckOutput { violations, warnings }
 }
 
-/// 从一段源码文本中检查违规。
-/// 可能失败：解析出错便报错。
+/// 纯函数：检查一组函数定义中的调用合规性与静态引用合规性。
+pub fn rvs_check_functions(functions: &[FnDef], file: &str) -> Vec<Violation> {
+    rvs_check_functions_impl(functions, file, &CapsMap::rvs_new()).violations
+}
+
+/// 从一段源码文本中检查违规，配合 CapsMap。
 #[allow(non_snake_case)]
 pub fn rvs_check_source_E(
     source: &str,
     file: &str,
     capsmap: &CapsMap,
 ) -> Result<CheckOutput, CheckError> {
-    let functions = rvs_extract_functions_E(source).map_err(|e| CheckError::Extract {
-        source: e,
-        file: file.to_string(),
-    })?;
-    Ok(rvs_check_functions(&functions, file, capsmap))
+    let functions = rvs_extract_functions_E(source)
+        .map_err(|e| CheckError::Extract {
+            source: e,
+            file: file.to_string(),
+        })?;
+    Ok(rvs_check_functions_impl(&functions, file, capsmap))
 }
 
-/// 从多个已读入的源文件中检查违规。
-/// 可能失败：解析出错便报错。无 IO，干干净净。
+/// 从文件路径（或目录）出发，检查违规。
+/// CapsMap 用于查找非 rvs_ 函数的能力。
 #[allow(non_snake_case)]
-pub fn rvs_check_sources_E(
-    sources: &[SourceFile],
-    capsmap: &CapsMap,
-) -> Result<CheckOutput, CheckError> {
-    let mut output = CheckOutput::default();
-    for sf in sources {
-        let result = rvs_check_source_E(&sf.source, &sf.path, capsmap)?;
+pub fn rvs_check_path_BEI(path: &Path, capsmap: &CapsMap) -> Result<CheckOutput, CheckError> {
+    let sources = rvs_read_rust_sources_BEI(path)
+        .map_err(|e| CheckError::Read { source: e })?;
+    let mut output = CheckOutput {
+        violations: Vec::new(),
+        warnings: Vec::new(),
+    };
+    for sf in &sources {
+        let functions = rvs_extract_functions_E(&sf.source)
+            .map_err(|e| CheckError::Extract {
+                source: e,
+                file: sf.path.clone(),
+            })?;
+        let result = rvs_check_functions_impl(&functions, &sf.path, capsmap);
         output.violations.extend(result.violations);
         output.warnings.extend(result.warnings);
     }
     Ok(output)
-}
-
-/// 从文件路径（或目录）出发，检查违规。
-/// 薄薄一层壳：只管读文件，真正的事交给纯函数。
-#[allow(non_snake_case)]
-pub fn rvs_check_path_BEI(
-    path: &Path,
-    capsmap: &CapsMap,
-) -> Result<CheckOutput, CheckError> {
-    let sources = rvs_read_rust_sources_BEI(path)
-        .map_err(|e| CheckError::Read { source: e })?;
-    rvs_check_sources_E(&sources, capsmap)
 }
 
 #[derive(Debug, thiserror::Error)]

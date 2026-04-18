@@ -1,0 +1,5 @@
+violations: 1
+error: rvs_read_tls references TLS but is missing capabilities [P(imPure), T(ThreadLocal)]
+  at test.rs:7
+  caller has: {}
+  target needs: {P, T}

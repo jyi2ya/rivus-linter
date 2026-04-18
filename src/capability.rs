@@ -88,6 +88,16 @@ impl CapabilitySet {
         Ok(Self(set))
     }
 
+    /// 从已验证的后缀字符串中构建能力集。
+    /// 调用方须保证字符串中仅含合法能力字母。
+    pub fn rvs_from_validated(s: &str) -> Self {
+        let mut set = BTreeSet::new();
+        for c in s.chars() {
+            set.insert(Capability::rvs_from_char(c).expect("后缀已验，字符必合法"));
+        }
+        Self(set)
+    }
+
     /// 调用之规：我有，方可调你。
     /// 你有的每一个能力，我都必须有，方为合规。
     pub fn rvs_can_call(&self, other: &Self) -> bool {
@@ -128,6 +138,10 @@ impl CapabilitySet {
     pub fn rvs_len(&self) -> usize {
         self.0.len()
     }
+
+    pub fn rvs_insert(&mut self, cap: Capability) {
+        self.0.insert(cap);
+    }
 }
 
 impl fmt::Display for CapabilitySet {
@@ -148,11 +162,24 @@ pub enum CapabilityParseError {
 /// 拆法：取末段下划线之后的部分，若尽是能力字母，则视为后缀；
 /// 否则，全名即基名，能力为空。
 ///
-/// 例：rvs_write_db_ABEI → 基名 write_db，能力 {A, B, E, I}
-/// 例：rvs_add           → 基名 add，能力 {}
+/// 亦能处理路径限定之名，如 `CapsMap::rvs_parse_E`，
+/// 取末段路径片段而拆之。
+///
+/// 例：rvs_write_db_ABEI     → 基名 write_db，能力 {A, B, E, I}
+/// 例：rvs_add               → 基名 add，能力 {}
+/// 例：CapsMap::rvs_parse_E  → 基名 parse，能力 {E}
 pub fn parse_rvs_function(name: &str) -> Option<(&str, CapabilitySet)> {
     debug_assert!(!name.is_empty());
 
+    if let Some(result) = rvs_parse_rvs_segment(name) {
+        return Some(result);
+    }
+    let last_segment = name.rsplit("::").next()?;
+    rvs_parse_rvs_segment(last_segment)
+}
+
+/// 拆解单个片段：去掉 rvs_ 前缀后，萃取能力后缀。
+fn rvs_parse_rvs_segment(name: &str) -> Option<(&str, CapabilitySet)> {
     let rest = name.strip_prefix("rvs_")?;
 
     if let Some(pos) = rest.rfind('_') {
@@ -164,8 +191,7 @@ pub fn parse_rvs_function(name: &str) -> Option<(&str, CapabilitySet)> {
                 .chars()
                 .all(|c| VALID_SUFFIX_CHARS.contains(&c))
         {
-            let caps = CapabilitySet::rvs_from_str_E(potential_suffix)
-                .expect("后缀已验，不应出错");
+            let caps = CapabilitySet::rvs_from_validated(potential_suffix);
             return Some((base, caps));
         }
     }

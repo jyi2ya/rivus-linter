@@ -2,4 +2,4 @@ violations: 1
 error: rvs_add calls rvs_sort_inplace_M but is missing capabilities [M(Mutable)]
   at test.rs:3
   caller has: {}
-  callee needs: {M}
+  target needs: {M}

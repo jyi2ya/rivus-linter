@@ -1,4 +1,4 @@
 violations: 0
 warnings: 1
-warning: rvs_good_E calls 'unknown_function' which is not rvs_ and not in capsmap
+warning: rvs_good_E calls unknown_function which is neither rvs_-prefixed nor in capsmap
   at test.rs:3

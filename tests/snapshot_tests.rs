@@ -510,7 +510,7 @@ fn rvs_inner_E() {
 
     let v = &output.violations[0];
     assert_eq!(v.caller, "rvs_inner_E");
-    assert_eq!(v.callee, "rvs_outer_ABEI");
+    assert_eq!(v.target, "rvs_outer_ABEI");
     assert!(v.missing.contains(&Capability::A));
     assert!(v.missing.contains(&Capability::B));
     assert!(v.missing.contains(&Capability::I));
@@ -874,6 +874,151 @@ fn rvs_simple() {
 
     rvs_snapshot_BIP(
         "20260419_capsmap_known_non_rvs_violation",
+        format!("violations: {}\n{}\n", output.violations.len(), output.violations[0]),
+    );
+}
+
+// ─── 静态变量与 thread_local! 检查 ────────────────────────
+
+#[test]
+fn test_20260418_static_ref_requires_P() {
+    let source = r#"
+static COUNTER: i32 = 0;
+
+fn rvs_read_counter() -> i32 {
+    COUNTER
+}
+"#;
+    let output = rvs_check_source_E(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.violations.len(), 1);
+    assert_eq!(output.violations[0].kind, rivus_linter::check::ViolationKind::StaticRef);
+    assert!(output.violations[0].missing.contains(&Capability::P));
+    assert_eq!(output.violations[0].target, "COUNTER");
+
+    rvs_snapshot_BIP(
+        "20260418_static_ref_requires_P",
+        format!("violations: {}\n{}\n", output.violations.len(), output.violations[0]),
+    );
+}
+
+#[test]
+fn test_20260418_static_ref_with_P_ok() {
+    let source = r#"
+static COUNTER: i32 = 0;
+
+fn rvs_read_counter_P() -> i32 {
+    COUNTER
+}
+"#;
+    let output = rvs_check_source_E(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.violations.is_empty());
+
+    rvs_snapshot_BIP(
+        "20260418_static_ref_with_P_ok",
+        "violations: 0\n",
+    );
+}
+
+#[test]
+fn test_20260418_static_mut_ref_requires_PU() {
+    let source = r#"
+static mut STATE: i32 = 0;
+
+fn rvs_read_state_U() -> i32 {
+    unsafe { STATE }
+}
+"#;
+    let output = rvs_check_source_E(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.violations.len(), 1);
+    assert!(output.violations[0].missing.contains(&Capability::P));
+
+    rvs_snapshot_BIP(
+        "20260418_static_mut_ref_requires_PU",
+        format!("violations: {}\n{}\n", output.violations.len(), output.violations[0]),
+    );
+}
+
+#[test]
+fn test_20260418_static_mut_ref_with_UP_ok() {
+    let source = r#"
+static mut STATE: i32 = 0;
+
+fn rvs_read_state_PU() -> i32 {
+    unsafe { STATE }
+}
+"#;
+    let output = rvs_check_source_E(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.violations.is_empty());
+
+    rvs_snapshot_BIP(
+        "20260418_static_mut_ref_with_UP_ok",
+        "violations: 0\n",
+    );
+}
+
+#[test]
+fn test_20260418_thread_local_ref_requires_TP() {
+    let source = r#"
+thread_local! {
+    static TLS: i32 = 42;
+}
+
+fn rvs_read_tls() -> i32 {
+    TLS.with(|v| *v)
+}
+"#;
+    let output = rvs_check_source_E(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.violations.len() >= 1);
+    let tls_violation = output.violations.iter().find(|v| v.target == "TLS").unwrap();
+    assert!(tls_violation.missing.contains(&Capability::T));
+    assert!(tls_violation.missing.contains(&Capability::P));
+
+    rvs_snapshot_BIP(
+        "20260418_thread_local_ref_requires_TP",
+        format!("violations: {}\n{}\n", output.violations.len(), tls_violation),
+    );
+}
+
+#[test]
+fn test_20260418_thread_local_ref_with_TP_ok() {
+    let source = r#"
+thread_local! {
+    static TLS: i32 = 42;
+}
+
+fn rvs_read_tls_PT() -> i32 {
+    TLS.with(|v| *v)
+}
+"#;
+    let output = rvs_check_source_E(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.violations.is_empty());
+
+    rvs_snapshot_BIP(
+        "20260418_thread_local_ref_with_TP_ok",
+        "violations: 0\n",
+    );
+}
+
+#[test]
+fn test_20260418_static_in_method_usage() {
+    let source = r#"
+static CACHE: i32 = 0;
+
+struct Service;
+
+impl Service {
+    fn rvs_check_cache_E(&self) -> i32 {
+        CACHE
+    }
+}
+"#;
+    let output = rvs_check_source_E(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.violations.len(), 1);
+    assert!(output.violations[0].missing.contains(&Capability::P));
+    assert_eq!(output.violations[0].target, "CACHE");
+
+    rvs_snapshot_BIP(
+        "20260418_static_in_method_usage",
         format!("violations: {}\n{}\n", output.violations.len(), output.violations[0]),
     );
 }

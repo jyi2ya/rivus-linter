@@ -1,0 +1,5 @@
+violations: 1
+error: rvs_check_cache_E references CACHE but is missing capabilities [P(imPure)]
+  at test.rs:8
+  caller has: {E}
+  target needs: {P}

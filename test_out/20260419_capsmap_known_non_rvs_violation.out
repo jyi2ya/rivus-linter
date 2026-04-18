@@ -2,4 +2,4 @@ violations: 1
 error: rvs_simple calls heavy_io but is missing capabilities [B(Blocking), E(Fallible), I(IO)]
   at test.rs:3
   caller has: {}
-  callee needs: {B, E, I}
+  target needs: {B, E, I}
