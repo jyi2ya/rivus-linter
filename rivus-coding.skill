@@ -168,7 +168,7 @@ async fn rvs_send_email_AEI(email: &Validated<Email>, body: &str) -> Result<(), 
 | `T` | **ThreadLocal** | 依赖线程局部状态，不可跨线程共享 | 线程安全 / 无状态 |
 | `U` | **Unsafe** | 包含不安全操作（裸指针、FFI、transmute） | 安全代码 |
 
-其中，权限小于 ABEM 的函数为好函数，因为它们方便单元测试
+其中，权限小于等于 ABEM 的函数为好函数，因为它们方便单元测试
 
 ### 常见行为模式示例
 
