@@ -58,3 +58,39 @@ pub enum ReadError {
         source: std::io::Error,
     },
 }
+
+#[allow(non_snake_case)]
+pub fn rvs_read_mir_sources_BEI(path: &Path) -> Result<Vec<SourceFile>, ReadError> {
+    debug_assert!(path.exists(), "路径必须存在");
+
+    let file_paths = if path.is_dir() {
+        WalkDir::new(path)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().is_file())
+            .filter(|e| {
+                e.path()
+                    .extension()
+                    .is_some_and(|ext| ext == "mir")
+            })
+            .map(|e| e.into_path())
+            .collect::<Vec<_>>()
+    } else {
+        vec![path.to_path_buf()]
+    };
+
+    let mut sources = Vec::new();
+    for file_path in file_paths {
+        let source = std::fs::read_to_string(&file_path)
+            .map_err(|e| ReadError::FileRead {
+                path: file_path.display().to_string(),
+                source: e,
+            })?;
+        sources.push(SourceFile {
+            path: file_path.display().to_string(),
+            source,
+        });
+    }
+
+    Ok(sources)
+}

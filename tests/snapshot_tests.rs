@@ -1022,3 +1022,527 @@ impl Service {
         format!("violations: {}\n{}\n", output.violations.len(), output.violations[0]),
     );
 }
+
+// ─── MIR 解析测试 ─────────────────────────────────────────
+
+#[test]
+fn test_20260419_mir_extract_rvs_functions() {
+    let mir = r#"
+fn rvs_add(_1: i32, _2: i32) -> i32 {
+    debug x => _1;
+    debug y => _2;
+    let mut _0: i32;
+    let mut _3: (i32, bool);
+
+    bb0: {
+        _3 = AddWithOverflow(copy _1, copy _2);
+        assert(!move (_3.1: bool), "attempt to compute", copy _1, copy _2) -> [success: bb1, unwind continue];
+    }
+
+    bb1: {
+        _0 = move (_3.0: i32);
+        return;
+    }
+}
+
+fn rvs_read_BEI(_1: &str) -> Result<String, std::io::Error> {
+    debug path => _1;
+    let mut _0: std::result::Result<std::string::String, std::io::Error>;
+
+    bb0: {
+        _0 = std::fs::read_to_string::<&str>(copy _1) -> [return: bb1, unwind continue];
+    }
+
+    bb1: {
+        return;
+    }
+}
+
+fn main() -> () {
+    bb0: {
+        _1 = rvs_add(const 1_i32, const 2_i32) -> [return: bb1, unwind continue];
+    }
+}
+"#;
+
+    let fns = rivus_linter::mir::rvs_extract_from_mir_E(mir).unwrap();
+    assert_eq!(fns.len(), 2);
+    assert_eq!(fns[0].name, "rvs_add");
+    assert!(fns[0].capabilities.rvs_is_empty());
+    assert!(fns[0].calls.is_empty());
+
+    assert_eq!(fns[1].name, "rvs_read_BEI");
+    assert!(fns[1].capabilities.rvs_contains(Capability::B));
+    assert!(fns[1].capabilities.rvs_contains(Capability::E));
+    assert!(fns[1].capabilities.rvs_contains(Capability::I));
+    assert_eq!(fns[1].calls.len(), 1);
+    assert_eq!(fns[1].calls[0].name, "std::fs::read_to_string");
+
+    rvs_snapshot_BIP(
+        "20260419_mir_extract_rvs_functions",
+        format!(
+            "functions: {}\n1: {} caps={} calls={}\n2: {} caps={} calls={}\n  - {}\n",
+            fns.len(),
+            fns[0].name, fns[0].capabilities, fns[0].calls.len(),
+            fns[1].name, fns[1].capabilities, fns[1].calls.len(),
+            fns[1].calls[0].name,
+        ),
+    );
+}
+
+#[test]
+fn test_20260419_mir_trait_dispatch() {
+    let mir = r#"
+fn rvs_process_BEI(_1: &str) -> Result<Vec<i32>, std::io::Error> {
+    let mut _0: std::result::Result<std::vec::Vec<i32>, std::io::Error>;
+    let mut _5: std::str::Lines<'_>;
+    let mut _4: std::iter::Map<std::str::Lines<'_>, {closure@src/main.rs:13:43: 13:46}>;
+
+    bb0: {
+        _5 = core::str::<impl str>::lines(copy _1) -> [return: bb1, unwind: bb6];
+    }
+
+    bb1: {
+        _4 = <std::str::Lines<'_> as Iterator>::map::<i32, {closure@src/main.rs:13:43: 13:46}>(move _5, const ZeroSized) -> [return: bb2, unwind: bb6];
+    }
+
+    bb2: {
+        _3 = <Map<std::str::Lines<'_>, {closure@src/main.rs:13:43: 13:46}> as Iterator>::collect::<Vec<i32>>(move _4) -> [return: bb3, unwind: bb6];
+    }
+
+    bb3: {
+        return;
+    }
+}
+"#;
+
+    let fns = rivus_linter::mir::rvs_extract_from_mir_E(mir).unwrap();
+    assert_eq!(fns.len(), 1);
+    let func = &fns[0];
+    assert_eq!(func.name, "rvs_process_BEI");
+
+    let call_names: Vec<&str> = func.calls.iter().map(|c| c.name.as_str()).collect();
+    assert!(call_names.iter().any(|n| n.contains("Iterator") && n.contains("map")));
+    assert!(call_names.iter().any(|n| n.contains("Iterator") && n.contains("collect")));
+    assert!(call_names.iter().any(|n| n.contains("core::str") && n.contains("lines")));
+
+    rvs_snapshot_BIP(
+        "20260419_mir_trait_dispatch",
+        format!(
+            "name: {}\ncalls: {}\n{}\n",
+            func.name,
+            func.calls.len(),
+            func.calls.iter().map(|c| format!("  - {}", c.name)).collect::<Vec<_>>().join("\n"),
+        ),
+    );
+}
+
+#[test]
+fn test_20260419_mir_inherent_method() {
+    let mir = r#"
+fn rvs_init_E() -> HashMap<String, i32> {
+    let mut _0: HashMap<String, i32>;
+
+    bb0: {
+        _0 = HashMap::<String, i32>::new() -> [return: bb1, unwind continue];
+    }
+
+    bb1: {
+        _2 = <HashMap<String, i32> as Clone>::clone(copy _0) -> [return: bb2, unwind continue];
+    }
+
+    bb2: {
+        return;
+    }
+}
+"#;
+
+    let fns = rivus_linter::mir::rvs_extract_from_mir_E(mir).unwrap();
+    assert_eq!(fns.len(), 1);
+    let func = &fns[0];
+
+    let call_names: Vec<&str> = func.calls.iter().map(|c| c.name.as_str()).collect();
+    assert!(call_names.iter().any(|n| n.contains("HashMap") && n.contains("new")));
+    assert!(call_names.iter().any(|n| n.contains("Clone") && n.contains("clone")));
+
+    rvs_snapshot_BIP(
+        "20260419_mir_inherent_method",
+        format!(
+            "name: {}\ncalls: {}\n{}\n",
+            func.name,
+            func.calls.len(),
+            func.calls.iter().map(|c| format!("  - {}", c.name)).collect::<Vec<_>>().join("\n"),
+        ),
+    );
+}
+
+#[test]
+fn test_20260419_mir_closures_skipped() {
+    let mir = r#"
+fn rvs_outer_AEI(_1: &str) -> Vec<i32> {
+    bb0: {
+        _3 = rvs_inner_E(copy _1) -> [return: bb1, unwind continue];
+    }
+
+    bb1: {
+        return;
+    }
+}
+
+fn rvs_outer_AEI::{closure#0}(_1: &mut {closure@src/main.rs:5:20: 5:23}, _2: &str) -> i32 {
+    bb0: {
+        _3 = core::str::<impl str>::len(copy _2) -> [return: bb1, unwind continue];
+    }
+
+    bb1: {
+        return;
+    }
+}
+"#;
+
+    let fns = rivus_linter::mir::rvs_extract_from_mir_E(mir).unwrap();
+    assert_eq!(fns.len(), 1);
+    assert_eq!(fns[0].name, "rvs_outer_AEI");
+    assert_eq!(fns[0].calls.len(), 2);
+
+    let call_names: Vec<&str> = fns[0].calls.iter().map(|c| c.name.as_str()).collect();
+    assert!(call_names.contains(&"rvs_inner_E"));
+    assert!(call_names.iter().any(|n| n.contains("core::str") && n.contains("len")));
+
+    rvs_snapshot_BIP(
+        "20260419_mir_closures_skipped",
+        format!(
+            "functions: {}\nname: {}\ncalls: {}\n{}\n",
+            fns.len(),
+            fns[0].name,
+            fns[0].calls.len(),
+            fns[0].calls.iter().map(|c| format!("  - {}", c.name)).collect::<Vec<_>>().join("\n"),
+        ),
+    );
+}
+
+#[test]
+fn test_20260419_mir_bare_path_calls() {
+    let mir = r#"
+fn rvs_process_E(_1: &str) -> Result<i32, ()> {
+    let mut _0: std::result::Result<i32, ()>;
+
+    bb0: {
+        _3 = parse_file(copy _1) -> [return: bb1, unwind continue];
+    }
+
+    bb1: {
+        _4 = format(copy _3) -> [return: bb2, unwind continue];
+    }
+
+    bb2: {
+        return;
+    }
+}
+"#;
+
+    let fns = rivus_linter::mir::rvs_extract_from_mir_E(mir).unwrap();
+    assert_eq!(fns.len(), 1);
+    assert_eq!(fns[0].name, "rvs_process_E");
+    assert_eq!(fns[0].calls.len(), 2);
+
+    let call_names: Vec<&str> = fns[0].calls.iter().map(|c| c.name.as_str()).collect();
+    assert!(call_names.contains(&"parse_file"));
+    assert!(call_names.contains(&"format"));
+
+    rvs_snapshot_BIP(
+        "20260419_mir_bare_path_calls",
+        format!(
+            "name: {}\ncalls: {}\n{}\n",
+            fns[0].name,
+            fns[0].calls.len(),
+            fns[0].calls.iter().map(|c| format!("  - {}", c.name)).collect::<Vec<_>>().join("\n"),
+        ),
+    );
+}
+
+#[test]
+fn test_20260419_mir_unwrap_or_else_fn_ptr() {
+    let mir = r#"
+fn rvs_harvest_from_expr(_1: &str) -> Harvest {
+    let mut _0: Harvest;
+
+    bb0: {
+        _23 = Option::<Harvest>::unwrap_or_else::<fn() -> Harvest {Harvest::empty}>(move _24, Harvest::empty) -> [return: bb1, unwind continue];
+    }
+
+    bb1: {
+        return;
+    }
+}
+"#;
+
+    let fns = rivus_linter::mir::rvs_extract_from_mir_E(mir).unwrap();
+    assert_eq!(fns.len(), 1);
+    assert_eq!(fns[0].name, "rvs_harvest_from_expr");
+    assert_eq!(fns[0].calls.len(), 1);
+
+    let call_names: Vec<&str> = fns[0].calls.iter().map(|c| c.name.as_str()).collect();
+    assert!(call_names.iter().any(|n| n.contains("unwrap_or_else")));
+
+    rvs_snapshot_BIP(
+        "20260419_mir_unwrap_or_else_fn_ptr",
+        format!(
+            "name: {}\ncalls: {}\n{}\n",
+            fns[0].name,
+            fns[0].calls.len(),
+            fns[0].calls.iter().map(|c| format!("  - {}", c.name)).collect::<Vec<_>>().join("\n"),
+        ),
+    );
+}
+
+// ─── MIR 目录级检查测试 ──────────────────────────────────
+
+#[test]
+fn test_20260419_mir_check_dir_compliant() {
+    let mir = r#"
+fn rvs_outer_ABEI(_1: &str) -> () {
+    bb0: {
+        _0 = rvs_inner_E(copy _1) -> [return: bb1, unwind continue];
+    }
+
+    bb1: {
+        return;
+    }
+}
+
+fn rvs_inner_E(_1: &str) -> () {
+    bb0: {
+        return;
+    }
+}
+"#;
+
+    let dir = std::env::temp_dir().join("rivus_test_mir_compliant");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("test.mir"), mir).unwrap();
+
+    let cm = CapsMap::rvs_new();
+    let output = rivus_linter::rvs_check_mir_dir_BEIM(&dir, &cm).unwrap();
+    assert!(output.violations.is_empty());
+
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    rvs_snapshot_BIP(
+        "20260419_mir_check_dir_compliant",
+        "violations: 0\nwarnings: 0\n",
+    );
+}
+
+#[test]
+fn test_20260419_mir_check_dir_violation() {
+    let mir = r#"
+fn rvs_pure() -> () {
+    bb0: {
+        _0 = rvs_io_BEI() -> [return: bb1, unwind continue];
+    }
+
+    bb1: {
+        return;
+    }
+}
+
+fn rvs_io_BEI() -> () {
+    bb0: {
+        return;
+    }
+}
+"#;
+
+    let dir = std::env::temp_dir().join("rivus_test_mir_violation");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("test.mir"), mir).unwrap();
+
+    let cm = CapsMap::rvs_new();
+    let output = rivus_linter::rvs_check_mir_dir_BEIM(&dir, &cm).unwrap();
+    assert_eq!(output.violations.len(), 1);
+    assert!(output.violations[0].missing.contains(&Capability::B));
+    assert!(output.violations[0].missing.contains(&Capability::E));
+    assert!(output.violations[0].missing.contains(&Capability::I));
+
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    rvs_snapshot_BIP(
+        "20260419_mir_check_dir_violation",
+        format!("violations: {}\n{}\n", output.violations.len(), output.violations[0]),
+    );
+}
+
+#[test]
+fn test_20260419_mir_check_dir_with_capsmap() {
+    let mir = r#"
+fn rvs_simple() -> () {
+    bb0: {
+        _0 = heavy_io() -> [return: bb1, unwind continue];
+    }
+
+    bb1: {
+        return;
+    }
+}
+"#;
+
+    let dir = std::env::temp_dir().join("rivus_test_mir_capsmap");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("test.mir"), mir).unwrap();
+
+    let cm = CapsMap::rvs_parse_E("heavy_io=BEI\n").unwrap();
+    let output = rivus_linter::rvs_check_mir_dir_BEIM(&dir, &cm).unwrap();
+    assert_eq!(output.violations.len(), 1);
+    assert!(output.violations[0].missing.contains(&Capability::B));
+
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    rvs_snapshot_BIP(
+        "20260419_mir_check_dir_with_capsmap",
+        format!("violations: {}\n{}\n", output.violations.len(), output.violations[0]),
+    );
+}
+
+#[test]
+fn test_20260419_mir_check_dir_merge_multiple_files() {
+    let mir1 = r#"
+fn rvs_outer_E() -> () {
+    bb0: {
+        _0 = rvs_helper() -> [return: bb1, unwind continue];
+    }
+
+    bb1: {
+        return;
+    }
+}
+"#;
+
+    let mir2 = r#"
+fn rvs_outer_E(_1: i32) -> () {
+    bb0: {
+        _0 = rvs_other_E() -> [return: bb1, unwind continue];
+    }
+
+    bb1: {
+        return;
+    }
+}
+"#;
+
+    let dir = std::env::temp_dir().join("rivus_test_mir_merge");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("part1.mir"), mir1).unwrap();
+    std::fs::write(dir.join("part2.mir"), mir2).unwrap();
+
+    let cm = CapsMap::rvs_new();
+    let output = rivus_linter::rvs_check_mir_dir_BEIM(&dir, &cm).unwrap();
+    assert!(output.violations.is_empty());
+
+    let fns = {
+        let sources = rivus_linter::source::rvs_read_mir_sources_BEI(&dir).unwrap();
+        let mut all = Vec::new();
+        for sf in &sources {
+            if let Ok(fns) = rivus_linter::mir::rvs_extract_from_mir_E(&sf.source) {
+                all.extend(fns);
+            }
+        }
+        let mut map: std::collections::HashMap<String, rivus_linter::FnDef> = std::collections::HashMap::new();
+        for f in all {
+            match map.entry(f.name.clone()) {
+                std::collections::hash_map::Entry::Occupied(mut e) => {
+                    e.get_mut().calls.extend(f.calls);
+                }
+                std::collections::hash_map::Entry::Vacant(e) => {
+                    e.insert(f);
+                }
+            }
+        }
+        map.into_values().collect::<Vec<_>>()
+    };
+
+    let outer = fns.iter().find(|f| f.name == "rvs_outer_E").unwrap();
+    assert_eq!(outer.calls.len(), 2);
+
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    rvs_snapshot_BIP(
+        "20260419_mir_check_dir_merge",
+        format!(
+            "violations: {}\nmerged calls for rvs_outer_E: {}\n  - {}\n  - {}\n",
+            output.violations.len(),
+            outer.calls.len(),
+            outer.calls[0].name,
+            outer.calls[1].name,
+        ),
+    );
+}
+
+#[test]
+fn test_20260419_mir_check_dir_empty() {
+    let dir = std::env::temp_dir().join("rivus_test_mir_empty");
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let cm = CapsMap::rvs_new();
+    let output = rivus_linter::rvs_check_mir_dir_BEIM(&dir, &cm).unwrap();
+    assert!(output.violations.is_empty());
+    assert!(output.warnings.is_empty());
+
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    rvs_snapshot_BIP(
+        "20260419_mir_check_dir_empty",
+        "violations: 0\nwarnings: 0\n",
+    );
+}
+
+#[test]
+fn test_20260419_mir_check_dir_empty_dir() {
+    let dir = std::env::temp_dir().join("rivus_test_mir_empty_real");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let cm = CapsMap::rvs_new();
+    let output = rivus_linter::rvs_check_mir_dir_BEIM(&dir, &cm).unwrap();
+    assert!(output.violations.is_empty());
+    assert!(output.warnings.is_empty());
+
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    rvs_snapshot_BIP(
+        "20260419_mir_check_dir_empty_dir",
+        "violations: 0\nwarnings: 0\n",
+    );
+}
+
+#[test]
+fn test_20260419_mir_check_dir_unknown_non_rvs_warning() {
+    let mir = r#"
+fn rvs_do_thing_E() -> () {
+    bb0: {
+        _0 = mystery_function() -> [return: bb1, unwind continue];
+    }
+
+    bb1: {
+        return;
+    }
+}
+"#;
+
+    let dir = std::env::temp_dir().join("rivus_test_mir_warning");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("test.mir"), mir).unwrap();
+
+    let cm = CapsMap::rvs_new();
+    let output = rivus_linter::rvs_check_mir_dir_BEIM(&dir, &cm).unwrap();
+    assert!(output.violations.is_empty());
+    assert_eq!(output.warnings.len(), 1);
+    assert_eq!(output.warnings[0].callee, "mystery_function");
+
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    rvs_snapshot_BIP(
+        "20260419_mir_check_dir_unknown_non_rvs_warning",
+        format!("violations: 0\nwarnings: {}\n{}\n", output.warnings.len(), output.warnings[0]),
+    );
+}

@@ -6,6 +6,7 @@ None=
 
 # ─── 标准库：容器 ──────────────────────────────
 # 这些是纯函数，无副作用，安全可调。
+alloc::collections::HashMap::new=
 alloc::vec::Vec::new=
 alloc::vec::Vec::push=
 alloc::vec::Vec::extend=
@@ -115,6 +116,7 @@ std::path::Path::exists=
 std::path::PathBuf::to_path_buf=
 std::path::PathBuf::into_path=
 std::path::PathBuf::push=
+std::path::Path::join=
 std::path::Display::to_string=
 
 # ─── 标准库：文件系统 ──────────────────────────
@@ -169,3 +171,120 @@ rivus_linter::extract::Harvest::merge=
 
 # ─── 其他标准库构造器 ──────────────────────────
 core::option::Option::None=
+
+# ─── 标准库：字符串与切片（补充）─────────────────
+alloc::string::String::with_capacity=
+core::str::trim_start=
+core::str::char_indices=
+core::str::is_ascii_digit=
+core::str::len_utf8=
+core::str::take_while=
+core::result::Result::Err=
+
+# ─── 标准库：数值运算 ────────────────────────────
+core::num::saturating_sub=
+
+# ─── 标准库：Option（补充）─────────────────────────
+alloc::vec::Vec::sort_by=
+core::cmp::Ord::cmp=
+core::option::Option::as_mut=
+core::option::Option::take=
+
+# ─── 标准库：进程（Command）─────────────────────────
+std::process::Command::new=
+std::process::Command::args=M
+std::process::Command::env=M
+std::process::Command::current_dir=M
+std::process::Command::output=BEIP
+std::process::ExitStatus::success=
+
+# ─── 标准库：字符串（补充）─────────────────────────
+alloc::string::String::from_utf8_lossy=
+
+# ─── 标准库：文件系统（补充）─────────────────────────
+std::fs::read_dir=BEI
+std::fs::DirEntry::path=
+
+# ─── 标准库：HashMap（补充）─────────────────────────
+std::collections::HashMap::get_mut=M
+std::collections::HashMap::into_values=
+
+# ─── 本项目：错误变体构造器 ────────────────────────
+rivus_linter::mir::MirCompileError::SpawnFailed=
+
+# ─── MIR 可见：编译器内部（语言特性展开）─────────
+# ? 运算符展开为 Try::branch + from_residual
+std::ops::Try::branch=
+FromResidual::from_residual=
+# . 和 * 运算符展开为 Deref
+std::ops::Deref::deref=
+Deref::deref=
+DerefMut::deref_mut=
+# [] 运算符展开为 Index
+std::ops::Index::index=
+# == / != 展开
+PartialEq::eq=
+PartialEq::ne=
+# for 循环展开
+IntoIterator::into_iter=
+# 集合扩展（局部变量操作，非语义级 Mutable）
+Extend::extend=
+
+# ─── MIR 可见：格式化/打印内部 ──────────────────
+core::fmt::rt::Argument::new_display=
+Arguments::new=
+Arguments::from_str=
+format=
+std::io::_print=IP
+std::io::_eprint=IP
+
+# ─── MIR 可见：panic/错误内部 ────────────────────
+# panic_fmt 多数来自 debug_assert!，release 下零开销
+panic_fmt=
+Option::expect=
+
+# ─── MIR 可见：内存分配内部 ──────────────────────
+std::boxed::Box::new_uninit=
+std::boxed::box_assume_init_into_vec_unsafe=
+
+# ─── MIR 可见：标准库容器方法（全限定名）─────────
+# 局部集合操作，非语义级 Mutable
+HashMap::entry=
+std::collections::btree_map::Entry::or_default=
+std::collections::hash_map::Entry::or_default=
+String::push=
+std::collections::hash_map::VacantEntry::insert=
+std::collections::hash_map::OccupiedEntry::get_mut=
+
+# ─── MIR 可见：标准库迭代器/切片方法 ────────────
+Iterator::take_while=
+core::slice::iter=
+core::slice::contains=
+std::slice::join=
+std::slice::sort_by=
+Peekable::peek=
+
+# ─── MIR 可见：标准库字符串方法（全限定名）─────
+core::str::find=
+core::str::split_once=
+core::str::contains=
+char::methods::len_utf8=
+char::methods::is_ascii_digit=
+char::methods::is_alphanumeric=
+
+# ─── MIR 可见：标准库其他 ────────────────────────
+FileType::is_file=
+std::default::Default::default=
+std::path::Path::to_path_buf=
+BTreeSet::is_empty=
+
+# ─── MIR 可见：syn/proc_macro2 方法（全限定名）──
+syn::Ident::span=
+syn::punctuated::Punctuated::iter=
+syn::punctuated::Punctuated::last=
+DelimSpan::join=
+proc_macro2::Group::stream=
+proc_macro2::Punct::as_char=
+
+# ─── MIR 可见：编译器内部属性展开 ──────────────────
+must_use=

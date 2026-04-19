@@ -1,0 +1,5 @@
+name: rvs_process_BEI
+calls: 3
+  - core::str::lines
+  - Iterator::map
+  - Iterator::collect

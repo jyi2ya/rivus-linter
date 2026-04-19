@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::collections::HashMap;
 use std::fmt;
 use std::path::Path;
 
@@ -203,4 +204,60 @@ pub enum CheckError {
         file: String,
         source: crate::extract::ExtractError,
     },
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum MirCheckError {
+    #[error("failed to compile MIR: {source}")]
+    Compile { source: crate::mir::MirCompileError },
+    #[error("failed to read MIR files: {source}")]
+    Read { source: crate::source::ReadError },
+    #[error("failed to extract MIR from '{file}': {source}")]
+    MirExtract { file: String, source: crate::mir::MirError },
+}
+
+#[allow(non_snake_case)]
+pub fn rvs_check_mir_dir_BEIM(
+    mir_dir: &Path,
+    capsmap: &CapsMap,
+) -> Result<CheckOutput, MirCheckError> {
+    let sources = crate::source::rvs_read_mir_sources_BEI(mir_dir)
+        .map_err(|e| MirCheckError::Read { source: e })?;
+
+    let mut all_functions: Vec<FnDef> = Vec::new();
+    for sf in &sources {
+        if let Ok(functions) = crate::mir::rvs_extract_from_mir_E(&sf.source) {
+            all_functions.extend(functions);
+        }
+    }
+
+    let mut fn_map: HashMap<String, FnDef> = HashMap::new();
+    for func in all_functions {
+        let name = func.name.clone();
+        match fn_map.entry(name) {
+            std::collections::hash_map::Entry::Occupied(mut entry) => {
+                entry.get_mut().calls.extend(func.calls);
+            }
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(func);
+            }
+        }
+    }
+    let functions: Vec<FnDef> = fn_map.into_values().collect();
+
+    Ok(rvs_check_functions_impl(
+        &functions,
+        &mir_dir.display().to_string(),
+        capsmap,
+    ))
+}
+
+#[allow(non_snake_case)]
+pub fn rvs_check_mir_path_BEIMP(
+    project_dir: &Path,
+    capsmap: &CapsMap,
+) -> Result<CheckOutput, MirCheckError> {
+    let deps_dir = crate::mir::rvs_compile_to_mir_BEIMP(project_dir)
+        .map_err(|e| MirCheckError::Compile { source: e })?;
+    rvs_check_mir_dir_BEIM(&deps_dir, capsmap)
 }

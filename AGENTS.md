@@ -61,6 +61,8 @@ fn rvs_transfer_E(
 
 每个测试必须有唯一名字，格式为 `YYYYMMDD_test_name`，其中前八位是日期
 
+用户提出软件的问题时，在确认有问题后，必须构造一个可以触发该问题的测试用例。之后才允许对软件进行修改。
+
 ### 纯函数与不纯函数的测试策略
 
 你尽量使用纯函数。纯函数的测试价值最高——同样的输入永远产生同样的输出，无环境依赖。
@@ -225,14 +227,76 @@ rvs_sort_inplace_M 可调用  rvs_add                ✅ (有 M 可调无 M)
 3. trait 和接口的函数签名也须遵循能力标记
 4. 调用外部库函数时，外部函数名无须遵循标记规则，但须仔细审查其运行时行为是否满足调用方的约束
 
-rivus-linter 是一个可以快速检查指定目录是否符合 rvs 函数调用规范的工具。`rivus-linter check <dir>` 可以递归检查某个目录，`rivus-linter report <dir>` 可以获取目录下各种能力的函数所占行数的比例。好函数应该越多越好。
+rivus-linter 是一个可以快速检查指定目录是否符合 rvs 函数调用规范的工具。每次代码修改后交付前，都必须运行 rivus-linter 检查有无能力冲突。
 
-每次代码修改后交付前，都必须运行 rivus-linter 检查有无能力冲突
+### rivus-linter 命令手册
 
+#### `rivus-linter check <path> -m <capsmap>`
 
-项目根目录下有个叫 capsmap.txt 的文件，它是一个键值对，每行一个，键和值之间以等于号分割，包含了非 rvs 函数的能力。键必须是从 crate 开始的完整函数路径，值则是和 rvs 函数后缀格式相同的大写字母字符串。后面可以可选地加空格并且注释对该能力标注的信任程度。一行的示例可能是：`std::collections::HashMap::new=MP # weak`，注释会被 linter 忽略。这个文件应该以 -m 参数传入 rivus-linter 中。如果 rivus-linter 抱怨缺少某些函数的能力导致它无法正常工作，你需要想办法将能力补全满足它的要求。如果有源代码就检查源代码，没有就编写测试，实在没有办法可以猜一个
+基于 syn 的源码分析。递归扫描 `path` 下所有 `.rs` 文件，提取 `rvs_` 函数的定义与调用关系，检查调用链的能力合规性。速度快，适合日常开发中频繁使用。
 
-但是话又说回来，syn 是没法获取 full qualified name 的。也就是说 linter 只能拿着代码里的函数对着 capsmap 做后缀匹配。如果你觉得某个函数 linter 在 capsmap 里找错了，就在代码里把它的路径写长一点
+```bash
+# 检查 src 目录，使用 capsmap 映射非 rvs 函数的能力
+rivus-linter check src/ -m capsmap.txt
+```
+
+退出码：`0` = 无违规，`1` = 有违规，`2` = 运行错误。
+
+#### `rivus-linter mir-check <path> -m <capsmap> [--mir-dir <dir>]`
+
+基于 MIR 的分析。编译项目到 MIR 中间表示，从编译器的视角提取函数调用。比 syn 更精确——能看到编译器展开的 trait 方法调用、闭包、运算符重载等 syn 看不到的东西。
+
+```bash
+# 完整流程：自动编译到 MIR 再检查
+rivus-linter mir-check . -m capsmap.txt
+
+# 跳过编译：直接检查已有的 .mir 文件（用于 CI 或调试）
+rivus-linter mir-check . -m capsmap.txt --mir-dir target/debug/deps
+```
+
+`path` 必须是包含 `Cargo.toml` 的项目根目录（完整流程），或任意目录（`--mir-dir` 模式）。
+
+#### `rivus-linter report <path>`
+
+统计 `path` 下所有 `.rs` 文件中 `rvs_` 函数的能力分布，输出各能力标记的函数数量和行数占比。好函数（能力 ≤ ABEM）应该越多越好。
+
+```bash
+rivus-linter report src/
+```
+
+### capsmap.txt 格式
+
+项目根目录下的 `capsmap.txt` 文件为非 `rvs_` 函数声明能力。每行一个条目，格式：
+
+```
+完整函数路径=能力字母 # 可选注释
+```
+
+示例：
+
+```
+std::fs::read_to_string=BEI     # 阻塞+可能失败+I/O
+std::collections::HashMap::new=  # 纯函数，无能力
+std::process::exit=P # 强副作用
+```
+
+- 注释（`#` 后的内容）会被 linter 忽略，可用于标注信任程度
+- linter 对 capsmap 中的键做**后缀匹配**：`HashMap::new=` 能匹配 `std::collections::HashMap::new`。如果匹配到了错误的条目，在代码里把调用路径写长一点以消除歧义
+- 如果 linter 报告某函数"既非 rvs_-prefixed nor in capsmap"，你需要补全 capsmap。方法优先级：检查源码 > 编写测试验证行为 > 合理猜测
+
+### 日常开发流程
+
+1. **写代码时**：确保每个 `rvs_` 函数名的后缀与其实际行为一致
+2. **交付前必跑**（全部通过才算交付完成）：
+   ```bash
+   cargo build          # 编译通过
+   cargo clippy         # 无警告
+   cargo test           # 测试通过
+   rivus-linter check src/ -m capsmap.txt   # syn 检查无违规
+   rivus-linter mir-check . -m capsmap.txt  # MIR 检查无违规（可选，更严格）
+   ```
+3. **遇到 warning 时**：linter 输出的 warning 表示某个函数调用既非 `rvs_` 前缀也不在 capsmap 中。补全 capsmap 即可消除
+4. **遇到 violation 时**：调用链能力冲突。要么修改调用方的标记（可能级联影响），要么重构代码避免不合规的调用
 
 ---
 
@@ -447,3 +511,10 @@ impl From<Order> for OrderRow {
 * 懒惰是美德！在想要实现某个功能之前，永远先想想有没有现成的库可以使用。当然，引入现成的库的时候，需要对引用的每个功能编写一个测试用例，确保它如同自己希望的一样工作。
 * 函数能力最好按照字母顺序排列
 * 多用泛型少用 dyn
+* 汇报任务完成之前，必须运行以下命令确保全部通过：
+  ```bash
+  cargo build
+  cargo clippy
+  cargo test
+  rivus-linter check src/ -m capsmap.txt
+  ```
