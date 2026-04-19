@@ -1,7 +1,7 @@
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
-use crate::capability::parse_rvs_function;
+use crate::capability::{parse_rvs_function, rvs_extract_raw_suffix};
 use crate::extract::{CalleeInfo, FnDef};
 
 #[derive(Debug, thiserror::Error)]
@@ -75,10 +75,11 @@ struct MirFnDef {
     body_lines: Vec<String>,
 }
 
-fn rvs_extract_calls_from_body(body_lines: &[String]) -> Vec<CalleeInfo> {
+#[allow(non_snake_case)]
+fn rvs_extract_calls_from_body_E(body_lines: &[String]) -> Vec<CalleeInfo> {
     let mut calls = Vec::new();
     for (i, line) in body_lines.iter().enumerate() {
-        if let Some(target) = rvs_extract_call_target(line) {
+        if let Some(target) = rvs_extract_call_target_E(line) {
             calls.push(CalleeInfo {
                 name: target,
                 line: i + 1,
@@ -88,7 +89,8 @@ fn rvs_extract_calls_from_body(body_lines: &[String]) -> Vec<CalleeInfo> {
     calls
 }
 
-fn rvs_extract_parent_fn_name(closure_name: &str) -> Option<&str> {
+#[allow(non_snake_case)]
+fn rvs_extract_parent_fn_name_E(closure_name: &str) -> Option<&str> {
     let brace_pos = closure_name.find("::{")?;
     let parent = &closure_name[..brace_pos];
     parse_rvs_function(parent)?;
@@ -134,7 +136,8 @@ fn rvs_strip_generics(path: &str) -> String {
     result
 }
 
-fn rvs_find_call_open_paren(s: &str) -> Option<usize> {
+#[allow(non_snake_case)]
+fn rvs_find_call_open_paren_E(s: &str) -> Option<usize> {
     let mut angle_depth: i32 = 0;
     let chars: Vec<char> = s.chars().collect();
     let mut i = 0;
@@ -152,7 +155,8 @@ fn rvs_find_call_open_paren(s: &str) -> Option<usize> {
     None
 }
 
-fn rvs_find_matching_angle(s: &str) -> Option<usize> {
+#[allow(non_snake_case)]
+fn rvs_find_matching_angle_E(s: &str) -> Option<usize> {
     let mut depth = 0;
     for (i, ch) in s.chars().enumerate() {
         match ch {
@@ -169,7 +173,8 @@ fn rvs_find_matching_angle(s: &str) -> Option<usize> {
     None
 }
 
-fn rvs_extract_call_target(line: &str) -> Option<String> {
+#[allow(non_snake_case)]
+fn rvs_extract_call_target_E(line: &str) -> Option<String> {
     let line = line.trim_start();
     if !line.contains("-> [") {
         return None;
@@ -184,13 +189,13 @@ fn rvs_extract_call_target(line: &str) -> Option<String> {
     let rest = rest.strip_prefix("const ").unwrap_or(rest);
 
     if let Some(stripped) = rest.strip_prefix('<') {
-        let end = rvs_find_matching_angle(stripped)?;
+        let end = rvs_find_matching_angle_E(stripped)?;
         let end_in_rest = end + 1;
         let inner = &rest[1..end_in_rest];
         let after_angle = &rest[end_in_rest..];
 
         if let Some(method_path) = after_angle.strip_prefix(">::") {
-            let method_end = rvs_find_call_open_paren(method_path)
+            let method_end = rvs_find_call_open_paren_E(method_path)
                 .unwrap_or_else(|| method_path.find(' ').unwrap_or(method_path.len()));
             let method = &method_path[..method_end];
             let clean_method = rvs_strip_generics(method);
@@ -208,7 +213,7 @@ fn rvs_extract_call_target(line: &str) -> Option<String> {
             None
         }
     } else if rest.contains("::") {
-        let paren_pos = rvs_find_call_open_paren(rest)?;
+        let paren_pos = rvs_find_call_open_paren_E(rest)?;
         let path = &rest[..paren_pos];
         let clean = rvs_strip_generics(path);
         if clean.contains("::") || (!clean.is_empty() && clean.chars().all(|c| c.is_alphanumeric() || c == '_')) {
@@ -217,11 +222,11 @@ fn rvs_extract_call_target(line: &str) -> Option<String> {
             None
         }
     } else if rest.starts_with("rvs_") {
-        let paren_pos = rvs_find_call_open_paren(rest)
+        let paren_pos = rvs_find_call_open_paren_E(rest)
             .unwrap_or_else(|| rest.find(' ').unwrap_or(rest.len()));
         Some(rest[..paren_pos].to_string())
-    } else if rvs_find_call_open_paren(rest).is_some() && rest.contains("->") {
-        let paren_pos = rvs_find_call_open_paren(rest)
+    } else if rvs_find_call_open_paren_E(rest).is_some() && rest.contains("->") {
+        let paren_pos = rvs_find_call_open_paren_E(rest)
             .unwrap_or_else(|| rest.find(' ').unwrap_or(rest.len()));
         if paren_pos > 0 {
             Some(rest[..paren_pos].to_string())
@@ -297,9 +302,9 @@ pub fn rvs_extract_from_mir_E(mir_text: &str) -> Result<Vec<FnDef>, MirError> {
     let mut fn_calls: HashMap<String, Vec<CalleeInfo>> = HashMap::new();
 
     for mir_fn in &mir_functions {
-        let calls = rvs_extract_calls_from_body(&mir_fn.body_lines);
+        let calls = rvs_extract_calls_from_body_E(&mir_fn.body_lines);
 
-        if let Some(parent) = rvs_extract_parent_fn_name(&mir_fn.name) {
+        if let Some(parent) = rvs_extract_parent_fn_name_E(&mir_fn.name) {
             fn_calls.entry(parent.to_string()).or_default().extend(calls);
         } else if parse_rvs_function(&mir_fn.name).is_some() {
             fn_calls
@@ -312,6 +317,7 @@ pub fn rvs_extract_from_mir_E(mir_text: &str) -> Result<Vec<FnDef>, MirError> {
     let mut result = Vec::new();
     for (name, calls) in fn_calls {
         let (_, caps) = parse_rvs_function(&name).unwrap();
+        let raw_suffix = rvs_extract_raw_suffix(&name);
         result.push(FnDef {
             name,
             capabilities: caps,
@@ -322,6 +328,14 @@ pub fn rvs_extract_from_mir_E(mir_text: &str) -> Result<Vec<FnDef>, MirError> {
             params: Vec::new(),
             debug_asserted_params: BTreeSet::new(),
             has_body: true,
+            has_unsafe_block: false,
+            is_async_fn: false,
+            is_unsafe_fn: false,
+            has_mut_param: false,
+            has_mut_self: false,
+            returns_result_or_option: false,
+            has_panic_macro: false,
+            raw_suffix,
         });
     }
 

@@ -79,12 +79,13 @@ impl fmt::Display for Warning {
     }
 }
 
-/// 检查结果：违规、警告、缺断言警告。
+/// 检查结果：违规、警告、缺断言警告、推断警告。
 #[derive(Debug, Clone)]
 pub struct CheckOutput {
     pub violations: Vec<Violation>,
     pub warnings: Vec<Warning>,
     pub assert_warnings: Vec<MissingAssertWarning>,
+    pub inference_warnings: Vec<InferenceWarning>,
 }
 
 /// 一条缺断言警告：函数有参数却未对每个参数写 debug_assert。
@@ -109,6 +110,54 @@ impl fmt::Display for MissingAssertWarning {
     }
 }
 
+/// 推断警告之别：函数的实际行为与其声明的能力后缀不符。
+#[derive(Debug, Clone, PartialEq)]
+pub enum InferenceKind {
+    MissingAsync,
+    MissingUnsafe,
+    MissingMutable,
+    MissingFallible,
+    MissingImpure,
+    NonAlphabeticalSuffix,
+    DuplicateSuffixLetter,
+}
+
+impl fmt::Display for InferenceKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            InferenceKind::MissingAsync => write!(f, "declared async but missing A"),
+            InferenceKind::MissingUnsafe => write!(f, "contains unsafe but missing U"),
+            InferenceKind::MissingMutable => write!(f, "has &mut parameter but missing M"),
+            InferenceKind::MissingFallible => write!(f, "returns Result/Option but missing E"),
+            InferenceKind::MissingImpure => write!(f, "calls panic macro but missing P"),
+            InferenceKind::NonAlphabeticalSuffix => write!(f, "capability suffix not in alphabetical order"),
+            InferenceKind::DuplicateSuffixLetter => write!(f, "duplicate capability letter in suffix"),
+        }
+    }
+}
+
+/// 一条推断警告：函数的实际行为暗示它应有某能力，但名字里没写。
+#[derive(Debug, Clone)]
+pub struct InferenceWarning {
+    pub function: String,
+    pub kind: InferenceKind,
+    pub file: String,
+    pub line: usize,
+}
+
+impl fmt::Display for InferenceWarning {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "hint: {} {} in its name\n  at {}:{}",
+            self.function,
+            self.kind,
+            self.file,
+            self.line,
+        )
+    }
+}
+
 /// 内部实现：检查函数调用合规性与静态引用合规性。
 fn rvs_check_functions_impl(
     functions: &[FnDef],
@@ -118,6 +167,7 @@ fn rvs_check_functions_impl(
     let mut violations = Vec::new();
     let mut warnings = Vec::new();
     let mut assert_warnings = Vec::new();
+    let mut inference_warnings = Vec::new();
 
     for func in functions {
         if func.has_body && !func.params.is_empty() {
@@ -142,7 +192,7 @@ fn rvs_check_functions_impl(
             let callee_caps = match parse_rvs_function(&call.name) {
                 Some((_, caps)) => caps,
                 None => {
-                    if let Some(caps) = capsmap.rvs_lookup(&call.name) {
+                    if let Some(caps) = capsmap.lookup(&call.name) {
                         caps.clone()
                     } else {
                         warnings.push(Warning {
@@ -187,9 +237,79 @@ fn rvs_check_functions_impl(
                 });
             }
         }
+
+        if func.is_async_fn && !func.capabilities.rvs_contains(Capability::A) {
+            inference_warnings.push(InferenceWarning {
+                function: func.name.clone(),
+                kind: InferenceKind::MissingAsync,
+                file: file.to_string(),
+                line: func.line,
+            });
+        }
+        if (func.has_unsafe_block || func.is_unsafe_fn) && !func.capabilities.rvs_contains(Capability::U) {
+            inference_warnings.push(InferenceWarning {
+                function: func.name.clone(),
+                kind: InferenceKind::MissingUnsafe,
+                file: file.to_string(),
+                line: func.line,
+            });
+        }
+        if (func.has_mut_param || func.has_mut_self) && !func.capabilities.rvs_contains(Capability::M) {
+            inference_warnings.push(InferenceWarning {
+                function: func.name.clone(),
+                kind: InferenceKind::MissingMutable,
+                file: file.to_string(),
+                line: func.line,
+            });
+        }
+        if func.returns_result_or_option && !func.capabilities.rvs_contains(Capability::E) {
+            inference_warnings.push(InferenceWarning {
+                function: func.name.clone(),
+                kind: InferenceKind::MissingFallible,
+                file: file.to_string(),
+                line: func.line,
+            });
+        }
+        if func.has_panic_macro && !func.capabilities.rvs_contains(Capability::P) {
+            inference_warnings.push(InferenceWarning {
+                function: func.name.clone(),
+                kind: InferenceKind::MissingImpure,
+                file: file.to_string(),
+                line: func.line,
+            });
+        }
+
+        if !func.raw_suffix.is_empty() {
+            let chars: Vec<char> = func.raw_suffix.chars().collect();
+            let sorted: Vec<char> = {
+                let mut s = chars.clone();
+                s.sort();
+                s
+            };
+            if chars != sorted {
+                inference_warnings.push(InferenceWarning {
+                    function: func.name.clone(),
+                    kind: InferenceKind::NonAlphabeticalSuffix,
+                    file: file.to_string(),
+                    line: func.line,
+                });
+            }
+            let mut seen = std::collections::HashSet::new();
+            for &c in &chars {
+                if !seen.insert(c) {
+                    inference_warnings.push(InferenceWarning {
+                        function: func.name.clone(),
+                        kind: InferenceKind::DuplicateSuffixLetter,
+                        file: file.to_string(),
+                        line: func.line,
+                    });
+                    break;
+                }
+            }
+        }
     }
 
-    CheckOutput { violations, warnings, assert_warnings }
+    CheckOutput { violations, warnings, assert_warnings, inference_warnings }
 }
 
 /// 纯函数：检查一组函数定义中的调用合规性与静态引用合规性。
@@ -222,6 +342,7 @@ pub fn rvs_check_path_BEI(path: &Path, capsmap: &CapsMap) -> Result<CheckOutput,
         violations: Vec::new(),
         warnings: Vec::new(),
         assert_warnings: Vec::new(),
+        inference_warnings: Vec::new(),
     };
     for sf in &sources {
         let functions = rvs_extract_functions_E(&sf.source)
@@ -233,6 +354,7 @@ pub fn rvs_check_path_BEI(path: &Path, capsmap: &CapsMap) -> Result<CheckOutput,
         output.violations.extend(result.violations);
         output.warnings.extend(result.warnings);
         output.assert_warnings.extend(result.assert_warnings);
+        output.inference_warnings.extend(result.inference_warnings);
     }
     Ok(output)
 }

@@ -1,0 +1,3 @@
+inference_warnings: 1
+hint: rvs_read_raw contains unsafe but missing U in its name
+  at test.rs:2

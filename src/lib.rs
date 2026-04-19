@@ -10,8 +10,8 @@ pub use capability::{parse_rvs_function, Capability, CapabilitySet};
 pub use capsmap::CapsMap;
 pub use check::{
     rvs_check_functions, rvs_check_mir_dir_BEIM, rvs_check_mir_path_BEIMP, rvs_check_path_BEI,
-    rvs_check_source_E, CheckOutput, MirCheckError, MissingAssertWarning, Violation,
-    ViolationKind, Warning,
+    rvs_check_source_E, CheckOutput, InferenceKind, InferenceWarning, MirCheckError,
+    MissingAssertWarning, Violation, ViolationKind, Warning,
 };
 pub use extract::{rvs_extract_functions_E, CalleeInfo, FnDef, ParamInfo, ParamType, StaticRef};
 pub use mir::{MirCompileError, MirError};

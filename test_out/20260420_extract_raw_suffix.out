@@ -1,0 +1,6 @@
+rvs_foo_AB -> "AB"
+rvs_foo -> ""
+rvs_foo_BA -> "BA"
+rvs_foo_EE -> "EE"
+rvs_nuclear_ABEIMPTU -> "ABEIMPTU"
+not_rvs -> ""

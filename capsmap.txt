@@ -166,6 +166,14 @@ CapabilityParseError::InvalidLetter=
 # ─── 本项目：私有辅助函数 ──────────────────────
 rivus_linter::extract::Harvest::empty=
 rivus_linter::extract::Harvest::merge=
+rivus_linter::capability::CapabilitySet::insert=
+rivus_linter::capsmap::CapsMap::lookup=
+rivus_linter::extract::check_path_for_static=
+rivus_linter::extract::extract_from_item_fn=E
+rivus_linter::extract::extract_from_impl_fn=E
+rivus_linter::extract::extract_from_trait_fn=E
+rivus_linter::extract::collect_assert_ids_from_block=
+rivus_linter::extract::collect_assert_ids_from_expr=
 
 # ─── syn 类型上的方法 ──────────────────────────
 # proc_macro2::Span 的方法（已在外部库一节声明）
@@ -187,6 +195,9 @@ core::num::saturating_sub=
 
 # ─── 标准库：Option（补充）─────────────────────────
 alloc::vec::Vec::sort_by=
+alloc::vec::Vec::sort=
+std::collections::HashSet::new=
+std::collections::HashSet::insert=
 core::cmp::Ord::cmp=
 core::option::Option::as_mut=
 core::option::Option::take=
@@ -240,8 +251,8 @@ std::io::_print=IP
 std::io::_eprint=IP
 
 # ─── MIR 可见：panic/错误内部 ────────────────────
-# panic_fmt 多数来自 debug_assert!，release 下零开销
-panic_fmt=
+# panic_fmt 标记为 P：panic 是副作用，终止进程
+panic_fmt=P
 Option::expect=
 
 # ─── MIR 可见：内存分配内部 ──────────────────────
@@ -262,6 +273,7 @@ Iterator::take_while=
 core::slice::iter=
 core::slice::contains=
 std::slice::join=
+std::slice::sort=
 std::slice::sort_by=
 Peekable::peek=
 

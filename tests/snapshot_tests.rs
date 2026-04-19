@@ -6,7 +6,7 @@ use rivus_linter::capsmap::CapsMap;
 use rivus_linter::capability::{
     parse_rvs_function, Capability, CapabilityParseError, CapabilitySet,
 };
-use rivus_linter::check::rvs_check_source_E;
+use rivus_linter::check::{rvs_check_source_E, InferenceKind};
 use rivus_linter::extract::rvs_extract_functions_E;
 use rivus_linter::report::rvs_build_report;
 
@@ -757,21 +757,21 @@ fn test_20260419_capsmap_parse_basic() {
     let content = "std::fs::read_to_string=BEI\nVec::new=\n";
     let cm = CapsMap::rvs_parse_E(content).unwrap();
 
-    let caps = cm.rvs_lookup("std::fs::read_to_string").unwrap();
+    let caps = cm.lookup("std::fs::read_to_string").unwrap();
     assert!(caps.rvs_contains(Capability::B));
     assert!(caps.rvs_contains(Capability::E));
     assert!(caps.rvs_contains(Capability::I));
     assert_eq!(caps.rvs_len(), 3);
 
-    let caps = cm.rvs_lookup("Vec::new").unwrap();
+    let caps = cm.lookup("Vec::new").unwrap();
     assert!(caps.rvs_is_empty());
 
     rvs_snapshot_BIP(
         "20260419_capsmap_parse_basic",
         format!(
             "entries: 2\nstd::fs::read_to_string: {}\nVec::new: {}\n",
-            cm.rvs_lookup("std::fs::read_to_string").unwrap(),
-            cm.rvs_lookup("Vec::new").unwrap(),
+            cm.lookup("std::fs::read_to_string").unwrap(),
+            cm.lookup("Vec::new").unwrap(),
         ),
     );
 }
@@ -780,7 +780,7 @@ fn test_20260419_capsmap_parse_basic() {
 fn test_20260419_capsmap_parse_comments() {
     let content = "# 这是一个注释\nstd::process::exit=P # 强副作用\n\n";
     let cm = CapsMap::rvs_parse_E(content).unwrap();
-    let caps = cm.rvs_lookup("std::process::exit").unwrap();
+    let caps = cm.lookup("std::process::exit").unwrap();
     assert!(caps.rvs_contains(Capability::P));
 
     rvs_snapshot_BIP(
@@ -794,20 +794,20 @@ fn test_20260419_capsmap_suffix_match() {
     let content = "alloc::vec::Vec::new=\nstd::process::exit=P\n";
     let cm = CapsMap::rvs_parse_E(content).unwrap();
 
-    let caps = cm.rvs_lookup("Vec::new").unwrap();
+    let caps = cm.lookup("Vec::new").unwrap();
     assert!(caps.rvs_is_empty());
 
-    let caps = cm.rvs_lookup("exit").unwrap();
+    let caps = cm.lookup("exit").unwrap();
     assert!(caps.rvs_contains(Capability::P));
 
-    assert!(cm.rvs_lookup("nonexistent").is_none());
+    assert!(cm.lookup("nonexistent").is_none());
 
     rvs_snapshot_BIP(
         "20260419_capsmap_suffix_match",
         format!(
             "Vec::new: {}\nexit: {}\nnonexistent: None\n",
-            cm.rvs_lookup("Vec::new").unwrap(),
-            cm.rvs_lookup("exit").unwrap(),
+            cm.lookup("Vec::new").unwrap(),
+            cm.lookup("exit").unwrap(),
         ),
     );
 }
@@ -1749,4 +1749,527 @@ fn rvs_foo_E(x: i32) -> i32 {
         "20260419_assert_warning_nested_block",
         "assert_warnings: 0\n",
     );
+}
+
+// ─── A1: mod 块递归提取 ────────────────────────────────────
+
+#[test]
+fn test_20260420_mod_recursive_extract() {
+    let source = r#"
+mod inner {
+    fn rvs_helper_E() {
+        rvs_sub();
+    }
+}
+
+fn rvs_outer_ABEI() {
+    rvs_helper_E();
+}
+"#;
+    let fns = rvs_extract_functions_E(source).unwrap();
+    assert_eq!(fns.len(), 2);
+    let helper = fns.iter().find(|f| f.name == "rvs_helper_E").unwrap();
+    let outer = fns.iter().find(|f| f.name == "rvs_outer_ABEI").unwrap();
+    assert_eq!(helper.calls.len(), 1);
+    assert_eq!(outer.calls.len(), 1);
+
+    rvs_snapshot_BIP(
+        "20260420_mod_recursive_extract",
+        format!(
+            "functions: {}\n1: {} calls={}\n2: {} calls={}\n",
+            fns.len(),
+            helper.name, helper.calls.len(),
+            outer.name, outer.calls.len(),
+        ),
+    );
+}
+
+#[test]
+fn test_20260420_mod_nested_static_ref() {
+    let source = r#"
+static COUNTER: i32 = 0;
+
+mod inner {
+    fn rvs_read_counter() -> i32 {
+        COUNTER
+    }
+}
+"#;
+    let output = rvs_check_source_E(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.violations.len(), 1);
+    assert!(output.violations[0].missing.contains(&Capability::P));
+
+    rvs_snapshot_BIP(
+        "20260420_mod_nested_static_ref",
+        format!("violations: {}\n{}\n", output.violations.len(), output.violations[0]),
+    );
+}
+
+// ─── A2: 遍历缺失的 Expr 变体 ──────────────────────────────
+
+#[test]
+fn test_20260420_async_block_calls() {
+    let source = r#"
+fn rvs_outer_E() {
+    let _ = async { rvs_inner_E(); };
+}
+"#;
+    let fns = rvs_extract_functions_E(source).unwrap();
+    assert_eq!(fns[0].calls.len(), 1);
+    assert_eq!(fns[0].calls[0].name, "rvs_inner_E");
+
+    rvs_snapshot_BIP(
+        "20260420_async_block_calls",
+        format!(
+            "name: {}\ncalls: {}\n  - {}\n",
+            fns[0].name, fns[0].calls.len(), fns[0].calls[0].name,
+        ),
+    );
+}
+
+#[test]
+fn test_20260420_cast_expr_calls() {
+    let source = r#"
+fn rvs_outer_E() {
+    let _ = rvs_inner_E() as i32;
+}
+"#;
+    let fns = rvs_extract_functions_E(source).unwrap();
+    assert_eq!(fns[0].calls.len(), 1);
+    assert_eq!(fns[0].calls[0].name, "rvs_inner_E");
+
+    rvs_snapshot_BIP(
+        "20260420_cast_expr_calls",
+        format!(
+            "name: {}\ncalls: {}\n  - {}\n",
+            fns[0].name, fns[0].calls.len(), fns[0].calls[0].name,
+        ),
+    );
+}
+
+#[test]
+fn test_20260420_try_block_calls() {
+    let source = r#"
+fn rvs_outer_E() {
+    let _ = try { rvs_inner_E(); };
+}
+"#;
+    let fns = rvs_extract_functions_E(source).unwrap();
+    assert_eq!(fns[0].calls.len(), 1);
+    assert_eq!(fns[0].calls[0].name, "rvs_inner_E");
+
+    rvs_snapshot_BIP(
+        "20260420_try_block_calls",
+        format!(
+            "name: {}\ncalls: {}\n  - {}\n",
+            fns[0].name, fns[0].calls.len(), fns[0].calls[0].name,
+        ),
+    );
+}
+
+// ─── A3: match arm guard 和 let else ────────────────────────
+
+#[test]
+fn test_20260420_match_guard_calls() {
+    let source = r#"
+fn rvs_outer_E(x: i32) {
+    match x {
+        n if rvs_check_E(n) => {}
+        _ => {}
+    }
+}
+"#;
+    let fns = rvs_extract_functions_E(source).unwrap();
+    let call_names: Vec<&str> = fns[0].calls.iter().map(|c| c.name.as_str()).collect();
+    assert!(call_names.contains(&"rvs_check_E"));
+
+    rvs_snapshot_BIP(
+        "20260420_match_guard_calls",
+        format!(
+            "name: {}\ncalls: {}\n  - {}\n",
+            fns[0].name, fns[0].calls.len(), fns[0].calls[0].name,
+        ),
+    );
+}
+
+#[test]
+fn test_20260420_let_else_calls() {
+    let source = r#"
+fn rvs_outer_E(x: Option<i32>) {
+    let Some(v) = x else { rvs_handle_E(); return; };
+}
+"#;
+    let fns = rvs_extract_functions_E(source).unwrap();
+    let call_names: Vec<&str> = fns[0].calls.iter().map(|c| c.name.as_str()).collect();
+    assert!(call_names.contains(&"rvs_handle_E"));
+
+    rvs_snapshot_BIP(
+        "20260420_let_else_calls",
+        format!(
+            "name: {}\ncalls: {}\n{}\n",
+            fns[0].name,
+            fns[0].calls.len(),
+            fns[0].calls.iter().map(|c| format!("  - {}", c.name)).collect::<Vec<_>>().join("\n"),
+        ),
+    );
+}
+
+#[test]
+fn test_20260420_struct_rest_calls() {
+    let source = r#"
+fn rvs_outer_E() {
+    let _ = Foo { x: rvs_a_E(), ..rvs_b_E() };
+}
+"#;
+    let fns = rvs_extract_functions_E(source).unwrap();
+    let call_names: Vec<&str> = fns[0].calls.iter().map(|c| c.name.as_str()).collect();
+    assert!(call_names.contains(&"rvs_a_E"));
+    assert!(call_names.contains(&"rvs_b_E"));
+
+    rvs_snapshot_BIP(
+        "20260420_struct_rest_calls",
+        format!(
+            "name: {}\ncalls: {}\n{}\n",
+            fns[0].name,
+            fns[0].calls.len(),
+            fns[0].calls.iter().map(|c| format!("  - {}", c.name)).collect::<Vec<_>>().join("\n"),
+        ),
+    );
+}
+
+// ─── B1: unsafe 块/函数 → 应有 U 检测 ──────────────────────
+
+#[test]
+fn test_20260420_infer_unsafe_block_missing_U() {
+    let source = r#"
+fn rvs_read_raw() -> i32 {
+    unsafe { std::ptr::read(std::ptr::null()) }
+}
+"#;
+    let output = rvs_check_source_E(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.violations.is_empty());
+    assert_eq!(output.inference_warnings.len(), 1);
+    assert_eq!(output.inference_warnings[0].kind, InferenceKind::MissingUnsafe);
+
+    rvs_snapshot_BIP(
+        "20260420_infer_unsafe_block_missing_U",
+        format!("inference_warnings: {}\n{}\n", output.inference_warnings.len(), output.inference_warnings[0]),
+    );
+}
+
+#[test]
+fn test_20260420_infer_unsafe_block_with_U_ok() {
+    let source = r#"
+fn rvs_read_raw_U() -> i32 {
+    unsafe { std::ptr::read(std::ptr::null()) }
+}
+"#;
+    let output = rvs_check_source_E(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.inference_warnings.is_empty());
+
+    rvs_snapshot_BIP(
+        "20260420_infer_unsafe_block_with_U_ok",
+        "inference_warnings: 0\n",
+    );
+}
+
+#[test]
+fn test_20260420_infer_unsafe_fn_missing_U() {
+    let source = r#"
+unsafe fn rvs_dangerous() {
+    std::ptr::read(std::ptr::null());
+}
+"#;
+    let output = rvs_check_source_E(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.inference_warnings.iter().any(|w| w.kind == InferenceKind::MissingUnsafe));
+
+    rvs_snapshot_BIP(
+        "20260420_infer_unsafe_fn_missing_U",
+        format!("inference_warnings: {}\n", output.inference_warnings.len()),
+    );
+}
+
+// ─── B2: async fn → 应有 A 检测 ─────────────────────────────
+
+#[test]
+fn test_20260420_infer_async_fn_missing_A() {
+    let source = r#"
+async fn rvs_fetch_E() {
+    rvs_inner_E();
+}
+"#;
+    let output = rvs_check_source_E(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.inference_warnings.iter().any(|w| w.kind == InferenceKind::MissingAsync));
+
+    rvs_snapshot_BIP(
+        "20260420_infer_async_fn_missing_A",
+        format!("inference_warnings: {}\n", output.inference_warnings.len()),
+    );
+}
+
+#[test]
+fn test_20260420_infer_async_fn_with_A_ok() {
+    let source = r#"
+async fn rvs_fetch_AE() {
+    rvs_inner_E();
+}
+"#;
+    let output = rvs_check_source_E(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.inference_warnings.iter().all(|w| w.kind != InferenceKind::MissingAsync));
+
+    rvs_snapshot_BIP(
+        "20260420_infer_async_fn_with_A_ok",
+        "inference_warnings: 0\n",
+    );
+}
+
+// ─── B3/B4: &mut 参数/self → 应有 M 检测 ────────────────────
+
+#[test]
+fn test_20260420_infer_mut_param_missing_M() {
+    let source = r#"
+fn rvs_update(data: &mut i32) {
+    *data = 42;
+}
+"#;
+    let output = rvs_check_source_E(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.inference_warnings.iter().any(|w| w.kind == InferenceKind::MissingMutable));
+
+    rvs_snapshot_BIP(
+        "20260420_infer_mut_param_missing_M",
+        format!("inference_warnings: {}\n", output.inference_warnings.len()),
+    );
+}
+
+#[test]
+fn test_20260420_infer_mut_self_missing_M() {
+    let source = r#"
+struct Foo;
+impl Foo {
+    fn rvs_modify(&mut self) {
+        self.value = 42;
+    }
+}
+"#;
+    let output = rvs_check_source_E(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.inference_warnings.iter().any(|w| w.kind == InferenceKind::MissingMutable));
+
+    rvs_snapshot_BIP(
+        "20260420_infer_mut_self_missing_M",
+        format!("inference_warnings: {}\n", output.inference_warnings.len()),
+    );
+}
+
+#[test]
+fn test_20260420_infer_mut_with_M_ok() {
+    let source = r#"
+fn rvs_update_M(data: &mut i32) {
+    *data = 42;
+}
+"#;
+    let output = rvs_check_source_E(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.inference_warnings.iter().all(|w| w.kind != InferenceKind::MissingMutable));
+
+    rvs_snapshot_BIP(
+        "20260420_infer_mut_with_M_ok",
+        "inference_warnings: 0\n",
+    );
+}
+
+// ─── B5: 返回 Result/Option → 应有 E 检测 ──────────────────
+
+#[test]
+fn test_20260420_infer_result_return_missing_E() {
+    let source = r#"
+fn rvs_parse(s: &str) -> Result<i32, ()> {
+    Ok(42)
+}
+"#;
+    let output = rvs_check_source_E(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.inference_warnings.iter().any(|w| w.kind == InferenceKind::MissingFallible));
+
+    rvs_snapshot_BIP(
+        "20260420_infer_result_return_missing_E",
+        format!("inference_warnings: {}\n", output.inference_warnings.len()),
+    );
+}
+
+#[test]
+fn test_20260420_infer_option_return_missing_E() {
+    let source = r#"
+fn rvs_find(id: u64) -> Option<String> {
+    None
+}
+"#;
+    let output = rvs_check_source_E(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.inference_warnings.iter().any(|w| w.kind == InferenceKind::MissingFallible));
+
+    rvs_snapshot_BIP(
+        "20260420_infer_option_return_missing_E",
+        format!("inference_warnings: {}\n", output.inference_warnings.len()),
+    );
+}
+
+#[test]
+fn test_20260420_infer_result_return_with_E_ok() {
+    let source = r#"
+fn rvs_parse_E(s: &str) -> Result<i32, ()> {
+    Ok(42)
+}
+"#;
+    let output = rvs_check_source_E(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.inference_warnings.iter().all(|w| w.kind != InferenceKind::MissingFallible));
+
+    rvs_snapshot_BIP(
+        "20260420_infer_result_return_with_E_ok",
+        "inference_warnings: 0\n",
+    );
+}
+
+// ─── B8: panic 宏 → 应有 P 检测 ─────────────────────────────
+
+#[test]
+fn test_20260420_infer_panic_macro_missing_P() {
+    let source = r#"
+fn rvs_bail(msg: &str) {
+    panic!("{}", msg);
+}
+"#;
+    let output = rvs_check_source_E(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.inference_warnings.iter().any(|w| w.kind == InferenceKind::MissingImpure));
+
+    rvs_snapshot_BIP(
+        "20260420_infer_panic_macro_missing_P",
+        format!("inference_warnings: {}\n", output.inference_warnings.len()),
+    );
+}
+
+#[test]
+fn test_20260420_infer_assert_macro_missing_P() {
+    let source = r#"
+fn rvs_check_valid(x: i32) {
+    assert!(x > 0);
+}
+"#;
+    let output = rvs_check_source_E(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.inference_warnings.iter().any(|w| w.kind == InferenceKind::MissingImpure));
+
+    rvs_snapshot_BIP(
+        "20260420_infer_assert_macro_missing_P",
+        format!("inference_warnings: {}\n", output.inference_warnings.len()),
+    );
+}
+
+#[test]
+fn test_20260420_infer_debug_assert_no_P() {
+    let source = r#"
+fn rvs_check_valid(x: i32) {
+    debug_assert!(x > 0);
+}
+"#;
+    let output = rvs_check_source_E(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.inference_warnings.iter().all(|w| w.kind != InferenceKind::MissingImpure));
+
+    rvs_snapshot_BIP(
+        "20260420_infer_debug_assert_no_P",
+        "inference_warnings: 0\n",
+    );
+}
+
+#[test]
+fn test_20260420_infer_panic_with_P_ok() {
+    let source = r#"
+fn rvs_bail_P(msg: &str) {
+    panic!("{}", msg);
+}
+"#;
+    let output = rvs_check_source_E(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.inference_warnings.iter().all(|w| w.kind != InferenceKind::MissingImpure));
+
+    rvs_snapshot_BIP(
+        "20260420_infer_panic_with_P_ok",
+        "inference_warnings: 0\n",
+    );
+}
+
+// ─── C4: 能力字母非字母序检查 ────────────────────────────────
+
+#[test]
+fn test_20260420_suffix_non_alphabetical() {
+    let source = r#"
+fn rvs_foo_BA() {}
+"#;
+    let output = rvs_check_source_E(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.inference_warnings.iter().any(|w| w.kind == InferenceKind::NonAlphabeticalSuffix));
+
+    rvs_snapshot_BIP(
+        "20260420_suffix_non_alphabetical",
+        format!("inference_warnings: {}\n{}\n", output.inference_warnings.len(), output.inference_warnings[0]),
+    );
+}
+
+#[test]
+fn test_20260420_suffix_alphabetical_ok() {
+    let source = r#"
+fn rvs_foo_AB() {}
+"#;
+    let output = rvs_check_source_E(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.inference_warnings.iter().all(|w| w.kind != InferenceKind::NonAlphabeticalSuffix));
+
+    rvs_snapshot_BIP(
+        "20260420_suffix_alphabetical_ok",
+        "inference_warnings: 0\n",
+    );
+}
+
+// ─── C5: 重复能力字母检查 ────────────────────────────────────
+
+#[test]
+fn test_20260420_suffix_duplicate_letter() {
+    let source = r#"
+fn rvs_foo_EE() {}
+"#;
+    let output = rvs_check_source_E(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.inference_warnings.iter().any(|w| w.kind == InferenceKind::DuplicateSuffixLetter));
+
+    rvs_snapshot_BIP(
+        "20260420_suffix_duplicate_letter",
+        format!("inference_warnings: {}\n{}\n", output.inference_warnings.len(), output.inference_warnings[0]),
+    );
+}
+
+#[test]
+fn test_20260420_suffix_no_duplicate_ok() {
+    let source = r#"
+fn rvs_foo_E() {}
+"#;
+    let output = rvs_check_source_E(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.inference_warnings.iter().all(|w| w.kind != InferenceKind::DuplicateSuffixLetter));
+
+    rvs_snapshot_BIP(
+        "20260420_suffix_no_duplicate_ok",
+        "inference_warnings: 0\n",
+    );
+}
+
+// ─── rvs_extract_raw_suffix ──────────────────────────────────
+
+#[test]
+fn test_20260420_extract_raw_suffix() {
+    let cases = vec![
+        ("rvs_foo_AB", "AB"),
+        ("rvs_foo", ""),
+        ("rvs_foo_BA", "BA"),
+        ("rvs_foo_EE", "EE"),
+        ("rvs_nuclear_ABEIMPTU", "ABEIMPTU"),
+        ("not_rvs", ""),
+    ];
+    let mut result = String::new();
+    for (name, expected) in &cases {
+        let suffix = rivus_linter::capability::rvs_extract_raw_suffix(name);
+        assert_eq!(&suffix, expected, "for {name}");
+        result.push_str(&format!("{name} -> \"{suffix}\"\n"));
+    }
+
+    rvs_snapshot_BIP("20260420_extract_raw_suffix", result);
 }

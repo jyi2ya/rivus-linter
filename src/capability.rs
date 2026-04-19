@@ -16,7 +16,8 @@ pub enum Capability {
 }
 
 impl Capability {
-    pub fn rvs_from_char(c: char) -> Option<Self> {
+    #[allow(non_snake_case)]
+    pub fn rvs_from_char_E(c: char) -> Option<Self> {
         match c {
             'A' => Some(Self::A),
             'B' => Some(Self::B),
@@ -81,7 +82,7 @@ impl CapabilitySet {
     pub fn rvs_from_str_E(s: &str) -> Result<Self, CapabilityParseError> {
         let mut set = BTreeSet::new();
         for c in s.chars() {
-            let cap = Capability::rvs_from_char(c)
+            let cap = Capability::rvs_from_char_E(c)
                 .ok_or(CapabilityParseError::InvalidLetter(c))?;
             set.insert(cap);
         }
@@ -93,7 +94,21 @@ impl CapabilitySet {
     pub fn rvs_from_validated(s: &str) -> Self {
         let mut set = BTreeSet::new();
         for c in s.chars() {
-            set.insert(Capability::rvs_from_char(c).expect("后缀已验，字符必合法"));
+            let cap = match c {
+                'A' => Capability::A,
+                'B' => Capability::B,
+                'E' => Capability::E,
+                'I' => Capability::I,
+                'M' => Capability::M,
+                'P' => Capability::P,
+                'T' => Capability::T,
+                'U' => Capability::U,
+                _ => {
+                    debug_assert!(false, "后缀已验，字符必合法");
+                    continue;
+                }
+            };
+            set.insert(cap);
         }
         Self(set)
     }
@@ -139,7 +154,7 @@ impl CapabilitySet {
         self.0.len()
     }
 
-    pub fn rvs_insert(&mut self, cap: Capability) {
+    pub fn insert(&mut self, cap: Capability) {
         self.0.insert(cap);
     }
 }
@@ -171,15 +186,15 @@ pub enum CapabilityParseError {
 pub fn parse_rvs_function(name: &str) -> Option<(&str, CapabilitySet)> {
     debug_assert!(!name.is_empty());
 
-    if let Some(result) = rvs_parse_rvs_segment(name) {
+    if let Some(result) = parse_rvs_segment(name) {
         return Some(result);
     }
     let last_segment = name.rsplit("::").next()?;
-    rvs_parse_rvs_segment(last_segment)
+    parse_rvs_segment(last_segment)
 }
 
 /// 拆解单个片段：去掉 rvs_ 前缀后，萃取能力后缀。
-fn rvs_parse_rvs_segment(name: &str) -> Option<(&str, CapabilitySet)> {
+fn parse_rvs_segment(name: &str) -> Option<(&str, CapabilitySet)> {
     let rest = name.strip_prefix("rvs_")?;
 
     if let Some(pos) = rest.rfind('_') {
@@ -197,4 +212,22 @@ fn rvs_parse_rvs_segment(name: &str) -> Option<(&str, CapabilitySet)> {
     }
 
     Some((rest, CapabilitySet::rvs_new()))
+}
+
+/// 从 rvs_ 函数名中萃取原始后缀字符串（未排序、未去重）。
+/// 用于检查命名规范（C4 字母序、C5 重复字母）。
+pub fn rvs_extract_raw_suffix(name: &str) -> String {
+    if let Some(rest) = name.strip_prefix("rvs_")
+        && let Some(pos) = rest.rfind('_')
+    {
+        let potential_suffix = &rest[pos + 1..];
+        if !potential_suffix.is_empty()
+            && potential_suffix
+                .chars()
+                .all(|c| VALID_SUFFIX_CHARS.contains(&c))
+        {
+            return potential_suffix.to_string();
+        }
+    }
+    String::new()
 }
