@@ -1,0 +1,3 @@
+assert_warnings: 1
+warning: rvs_add has parameters without debug_assert: [a, b]
+  at test.rs:2

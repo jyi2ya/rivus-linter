@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use crate::capability::parse_rvs_function;
@@ -211,9 +211,7 @@ fn rvs_extract_call_target(line: &str) -> Option<String> {
         let paren_pos = rvs_find_call_open_paren(rest)?;
         let path = &rest[..paren_pos];
         let clean = rvs_strip_generics(path);
-        if clean.contains("::") {
-            Some(clean)
-        } else if !clean.is_empty() && clean.chars().all(|c| c.is_alphanumeric() || c == '_') {
+        if clean.contains("::") || (!clean.is_empty() && clean.chars().all(|c| c.is_alphanumeric() || c == '_')) {
             Some(clean)
         } else {
             None
@@ -321,6 +319,9 @@ pub fn rvs_extract_from_mir_E(mir_text: &str) -> Result<Vec<FnDef>, MirError> {
             static_refs: Vec::new(),
             line: 0,
             line_count: 0,
+            params: Vec::new(),
+            debug_asserted_params: BTreeSet::new(),
+            has_body: true,
         });
     }
 

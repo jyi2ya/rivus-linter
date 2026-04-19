@@ -1546,3 +1546,207 @@ fn rvs_do_thing_E() -> () {
         format!("violations: 0\nwarnings: {}\n{}\n", output.warnings.len(), output.warnings[0]),
     );
 }
+
+// ─── debug_assert 参数检查 ─────────────────────────────────
+
+#[test]
+fn test_20260419_assert_warning_missing_all() {
+    let source = r#"
+fn rvs_add(a: i32, b: i32) -> i32 {
+    a + b
+}
+"#;
+    let output = rvs_check_source_E(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.violations.is_empty());
+    assert_eq!(output.assert_warnings.len(), 1);
+    assert_eq!(output.assert_warnings[0].function, "rvs_add");
+    assert_eq!(output.assert_warnings[0].missing_params, vec!["a".to_string(), "b".to_string()]);
+
+    rvs_snapshot_BIP(
+        "20260419_assert_warning_missing_all",
+        format!(
+            "assert_warnings: {}\n{}\n",
+            output.assert_warnings.len(),
+            output.assert_warnings[0],
+        ),
+    );
+}
+
+#[test]
+fn test_20260419_assert_warning_partial() {
+    let source = r#"
+fn rvs_div(a: i32, b: i32) -> i32 {
+    debug_assert!(b != 0, "divisor must be non-zero");
+    a / b
+}
+"#;
+    let output = rvs_check_source_E(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.violations.is_empty());
+    assert_eq!(output.assert_warnings.len(), 1);
+    assert_eq!(output.assert_warnings[0].missing_params, vec!["a".to_string()]);
+
+    rvs_snapshot_BIP(
+        "20260419_assert_warning_partial",
+        format!(
+            "assert_warnings: {}\n{}\n",
+            output.assert_warnings.len(),
+            output.assert_warnings[0],
+        ),
+    );
+}
+
+#[test]
+fn test_20260419_assert_warning_all_covered() {
+    let source = r#"
+fn rvs_div_E(a: i32, b: i32) -> i32 {
+    debug_assert!(a >= 0);
+    debug_assert!(b != 0);
+    a / b
+}
+"#;
+    let output = rvs_check_source_E(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.violations.is_empty());
+    assert!(output.assert_warnings.is_empty());
+
+    rvs_snapshot_BIP(
+        "20260419_assert_warning_all_covered",
+        "assert_warnings: 0\n",
+    );
+}
+
+#[test]
+fn test_20260419_assert_warning_no_params() {
+    let source = r#"
+fn rvs_pure() -> i32 {
+    42
+}
+"#;
+    let output = rvs_check_source_E(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.violations.is_empty());
+    assert!(output.assert_warnings.is_empty());
+
+    rvs_snapshot_BIP(
+        "20260419_assert_warning_no_params",
+        "assert_warnings: 0\n",
+    );
+}
+
+#[test]
+fn test_20260419_assert_warning_self_excluded() {
+    let source = r#"
+struct Foo;
+
+impl Foo {
+    fn rvs_compute_E(&self, x: i32) -> i32 {
+        x * 2
+    }
+}
+"#;
+    let output = rvs_check_source_E(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.violations.is_empty());
+    assert_eq!(output.assert_warnings.len(), 1);
+    assert_eq!(output.assert_warnings[0].missing_params, vec!["x".to_string()]);
+
+    rvs_snapshot_BIP(
+        "20260419_assert_warning_self_excluded",
+        format!(
+            "assert_warnings: {}\n{}\n",
+            output.assert_warnings.len(),
+            output.assert_warnings[0],
+        ),
+    );
+}
+
+#[test]
+fn test_20260419_assert_warning_trait_no_default() {
+    let source = r#"
+trait Repository {
+    fn rvs_find_by_id_ABEI(&self, id: u64);
+}
+"#;
+    let output = rvs_check_source_E(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.violations.is_empty());
+    assert!(output.assert_warnings.is_empty());
+
+    rvs_snapshot_BIP(
+        "20260419_assert_warning_trait_no_default",
+        "assert_warnings: 0\n",
+    );
+}
+
+#[test]
+fn test_20260419_assert_warning_debug_assert_eq() {
+    let source = r#"
+fn rvs_process_E(data: &str, count: usize) -> bool {
+    debug_assert_eq!(count, 0);
+    data.is_empty()
+}
+"#;
+    let output = rvs_check_source_E(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.violations.is_empty());
+    assert!(output.assert_warnings.is_empty());
+
+    rvs_snapshot_BIP(
+        "20260419_assert_warning_debug_assert_eq",
+        "assert_warnings: 0\n",
+    );
+}
+
+#[test]
+fn test_20260419_assert_warning_non_numeric_exempt() {
+    let source = r#"
+fn rvs_greet(name: &str) -> String {
+    format!("hello {}", name)
+}
+"#;
+    let output = rvs_check_source_E(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.violations.is_empty());
+    assert!(output.assert_warnings.is_empty());
+
+    rvs_snapshot_BIP(
+        "20260419_assert_warning_non_numeric_exempt",
+        "assert_warnings: 0\n",
+    );
+}
+
+#[test]
+fn test_20260419_assert_warning_numeric_unasserted() {
+    let source = r#"
+fn rvs_compute_E(x: i32, name: &str) -> i32 {
+    x + 1
+}
+"#;
+    let output = rvs_check_source_E(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.violations.is_empty());
+    assert_eq!(output.assert_warnings.len(), 1);
+    assert_eq!(output.assert_warnings[0].missing_params, vec!["x".to_string()]);
+
+    rvs_snapshot_BIP(
+        "20260419_assert_warning_numeric_unasserted",
+        format!(
+            "assert_warnings: {}\n{}\n",
+            output.assert_warnings.len(),
+            output.assert_warnings[0],
+        ),
+    );
+}
+
+#[test]
+fn test_20260419_assert_warning_nested_block() {
+    let source = r#"
+fn rvs_foo_E(x: i32) -> i32 {
+    if x > 0 {
+        debug_assert!(x > 0);
+    }
+    x
+}
+"#;
+    let output = rvs_check_source_E(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.violations.is_empty());
+    assert!(output.assert_warnings.is_empty());
+
+    rvs_snapshot_BIP(
+        "20260419_assert_warning_nested_block",
+        "assert_warnings: 0\n",
+    );
+}

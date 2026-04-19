@@ -135,7 +135,7 @@ impl fmt::Display for Report {
             }
         }
 
-        rows.sort_by(|a, b| b.2.cmp(&a.2));
+        rows.sort_by_key(|b| std::cmp::Reverse(b.2));
 
         for (label, fn_count, line_count) in &rows {
             let pct = *line_count as f64 / self.total_line_count as f64 * 100.0;

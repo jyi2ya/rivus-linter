@@ -60,6 +60,7 @@ core::option::Option::unwrap=
 core::option::Option::unwrap_or=
 core::option::Option::unwrap_or_default=
 core::option::Option::unwrap_or_else=
+core::option::Option::ok_or=
 core::option::Option::ok_or_else=
 core::option::Option::map=
 core::option::Option::as_ref=
@@ -288,3 +289,7 @@ proc_macro2::Punct::as_char=
 
 # ─── MIR 可见：编译器内部属性展开 ──────────────────
 must_use=
+
+# ─── 标准库：str 方法（补充）─────────────────────────
+alloc::str::as_str=
+alloc::string::String::as_str=

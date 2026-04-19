@@ -117,6 +117,9 @@ fn rvs_print_check_output_BIP(output: &rivus_linter::CheckOutput) {
     for w in &output.warnings {
         eprintln!("{w}");
     }
+    for w in &output.assert_warnings {
+        eprintln!("{w}");
+    }
     for v in &output.violations {
         eprintln!("{v}");
     }

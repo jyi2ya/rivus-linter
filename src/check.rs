@@ -79,11 +79,34 @@ impl fmt::Display for Warning {
     }
 }
 
-/// 检查结果：违规与警告。
+/// 检查结果：违规、警告、缺断言警告。
 #[derive(Debug, Clone)]
 pub struct CheckOutput {
     pub violations: Vec<Violation>,
     pub warnings: Vec<Warning>,
+    pub assert_warnings: Vec<MissingAssertWarning>,
+}
+
+/// 一条缺断言警告：函数有参数却未对每个参数写 debug_assert。
+#[derive(Debug, Clone)]
+pub struct MissingAssertWarning {
+    pub function: String,
+    pub missing_params: Vec<String>,
+    pub file: String,
+    pub line: usize,
+}
+
+impl fmt::Display for MissingAssertWarning {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "warning: {} has parameters without debug_assert: [{}]\n  at {}:{}",
+            self.function,
+            self.missing_params.join(", "),
+            self.file,
+            self.line,
+        )
+    }
 }
 
 /// 内部实现：检查函数调用合规性与静态引用合规性。
@@ -94,8 +117,27 @@ fn rvs_check_functions_impl(
 ) -> CheckOutput {
     let mut violations = Vec::new();
     let mut warnings = Vec::new();
+    let mut assert_warnings = Vec::new();
 
     for func in functions {
+        if func.has_body && !func.params.is_empty() {
+            let missing: Vec<String> = func
+                .params
+                .iter()
+                .filter(|p| p.ty == crate::extract::ParamType::PrimitiveNumeric)
+                .filter(|p| !func.debug_asserted_params.contains(&p.name))
+                .map(|p| p.name.clone())
+                .collect();
+            if !missing.is_empty() {
+                assert_warnings.push(MissingAssertWarning {
+                    function: func.name.clone(),
+                    missing_params: missing,
+                    file: file.to_string(),
+                    line: func.line,
+                });
+            }
+        }
+
         for call in &func.calls {
             let callee_caps = match parse_rvs_function(&call.name) {
                 Some((_, caps)) => caps,
@@ -147,7 +189,7 @@ fn rvs_check_functions_impl(
         }
     }
 
-    CheckOutput { violations, warnings }
+    CheckOutput { violations, warnings, assert_warnings }
 }
 
 /// 纯函数：检查一组函数定义中的调用合规性与静态引用合规性。
@@ -179,6 +221,7 @@ pub fn rvs_check_path_BEI(path: &Path, capsmap: &CapsMap) -> Result<CheckOutput,
     let mut output = CheckOutput {
         violations: Vec::new(),
         warnings: Vec::new(),
+        assert_warnings: Vec::new(),
     };
     for sf in &sources {
         let functions = rvs_extract_functions_E(&sf.source)
@@ -189,6 +232,7 @@ pub fn rvs_check_path_BEI(path: &Path, capsmap: &CapsMap) -> Result<CheckOutput,
         let result = rvs_check_functions_impl(&functions, &sf.path, capsmap);
         output.violations.extend(result.violations);
         output.warnings.extend(result.warnings);
+        output.assert_warnings.extend(result.assert_warnings);
     }
     Ok(output)
 }

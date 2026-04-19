@@ -39,7 +39,7 @@ impl CapsMap {
             }
             let (key, value) = line
                 .split_once('=')
-                .ok_or_else(|| CapsMapError::MissingSeparator { line: line_num })?;
+                .ok_or(CapsMapError::MissingSeparator { line: line_num })?;
             let key = key.trim().to_string();
             let value = value.split('#').next().unwrap().trim();
             let caps =

@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use crate::capability::{parse_rvs_function, Capability, CapabilitySet};
 
 /// 被调用者的蛛丝马迹：名与行。
@@ -18,7 +20,7 @@ pub struct StaticRef {
     pub line: usize,
 }
 
-/// 函数之全貌：名、能力、所调、静态引用、所在行、所占行数。
+/// 函数之全貌：名、能力、所调、静态引用、所在行、所占行数、参数、已断言之参。
 #[derive(Debug, Clone)]
 pub struct FnDef {
     pub name: String,
@@ -27,6 +29,23 @@ pub struct FnDef {
     pub static_refs: Vec<StaticRef>,
     pub line: usize,
     pub line_count: usize,
+    pub params: Vec<ParamInfo>,
+    pub debug_asserted_params: BTreeSet<String>,
+    pub has_body: bool,
+}
+
+/// 参数之名与类型。
+#[derive(Debug, Clone)]
+pub struct ParamInfo {
+    pub name: String,
+    pub ty: ParamType,
+}
+
+/// 参数类型的大致分类。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParamType {
+    PrimitiveNumeric,
+    Other,
 }
 
 /// 文件中声明的静态变量：名字与所需能力。
@@ -289,23 +308,23 @@ fn rvs_parse_thread_local_names(tokens: &proc_macro2::TokenStream) -> Vec<String
             proc_macro2::TokenTree::Group(group) => {
                 names.extend(rvs_parse_thread_local_names(&group.stream()));
             }
-            proc_macro2::TokenTree::Ident(ident) => {
-                if ident == "static" {
-                    while let Some(next) = tokens.peek() {
-                        match next {
-                            proc_macro2::TokenTree::Ident(name) => {
-                                let name_str = name.to_string();
-                                if name_str != "mut" {
-                                    names.push(name_str);
-                                }
-                                tokens.next();
-                                break;
+            proc_macro2::TokenTree::Ident(ident)
+                if ident == "static" =>
+            {
+                while let Some(next) = tokens.peek() {
+                    match next {
+                        proc_macro2::TokenTree::Ident(name) => {
+                            let name_str = name.to_string();
+                            if name_str != "mut" {
+                                names.push(name_str);
                             }
-                            proc_macro2::TokenTree::Punct(p) if p.as_char() == ':' => {
-                                tokens.next();
-                            }
-                            _ => break,
+                            tokens.next();
+                            break;
                         }
+                        proc_macro2::TokenTree::Punct(p) if p.as_char() == ':' => {
+                            tokens.next();
+                        }
+                        _ => break,
                     }
                 }
             }
@@ -363,6 +382,203 @@ fn rvs_collect_static_decls_from_items(items: &[syn::Item]) -> Vec<StaticDecl> {
     decls
 }
 
+const PRIMITIVE_NUMERIC_TYPES: &[&str] = &[
+    "i8", "i16", "i32", "i64", "i128",
+    "u8", "u16", "u32", "u64", "u128",
+    "f32", "f64",
+    "isize", "usize",
+];
+
+fn rvs_classify_param_type(ty: &syn::Type) -> ParamType {
+    if let syn::Type::Path(type_path) = ty {
+        let ident = type_path.path.segments.last().map(|s| s.ident.to_string());
+        if let Some(name) = ident
+            && PRIMITIVE_NUMERIC_TYPES.contains(&name.as_str())
+        {
+            return ParamType::PrimitiveNumeric;
+        }
+    }
+    ParamType::Other
+}
+
+/// 从函数签名的参数列表中萃取参数名与类型。
+/// self、&self、&mut self 不算参数，跳过之。
+fn rvs_extract_param_names(
+    inputs: &syn::punctuated::Punctuated<syn::FnArg, syn::token::Comma>,
+) -> Vec<ParamInfo> {
+    inputs
+        .iter()
+        .filter_map(|arg| match arg {
+            syn::FnArg::Typed(pat_type) => {
+                if let syn::Pat::Ident(pat_ident) = &*pat_type.pat {
+                    let ty = rvs_classify_param_type(&pat_type.ty);
+                    Some(ParamInfo {
+                        name: pat_ident.ident.to_string(),
+                        ty,
+                    })
+                } else {
+                    None
+                }
+            }
+            syn::FnArg::Receiver(_) => None,
+        })
+        .collect()
+}
+
+/// 判断一个宏是否为 debug_assert! / debug_assert_eq! / debug_assert_ne!。
+fn rvs_is_debug_assert(mac: &syn::Macro) -> bool {
+    mac.path
+        .segments
+        .last()
+        .map(|s| s.ident.to_string().starts_with("debug_assert"))
+        .unwrap_or(false)
+}
+
+/// 从宏的 token 流中萃取所有标识符。
+fn rvs_collect_ident_tokens(tokens: &proc_macro2::TokenStream) -> BTreeSet<String> {
+    let mut ids = BTreeSet::new();
+    for tt in tokens.clone() {
+        match tt {
+            proc_macro2::TokenTree::Ident(ident) => {
+                ids.insert(ident.to_string());
+            }
+            proc_macro2::TokenTree::Group(group) => {
+                ids.extend(rvs_collect_ident_tokens(&group.stream()));
+            }
+            _ => {}
+        }
+    }
+    ids
+}
+
+/// 从一个块中搜集所有 debug_assert! 宏里出现的参数名。
+fn rvs_collect_debug_asserted_params(block: &syn::Block) -> BTreeSet<String> {
+    let mut ids = BTreeSet::new();
+    rvs_collect_assert_ids_from_block(block, &mut ids);
+    ids
+}
+
+fn rvs_collect_assert_ids_from_block(block: &syn::Block, ids: &mut BTreeSet<String>) {
+    for stmt in &block.stmts {
+        match stmt {
+            syn::Stmt::Macro(m) => {
+                if rvs_is_debug_assert(&m.mac) {
+                    ids.extend(rvs_collect_ident_tokens(&m.mac.tokens));
+                }
+            }
+            syn::Stmt::Expr(expr, _) => rvs_collect_assert_ids_from_expr(expr, ids),
+            syn::Stmt::Local(l) => {
+                if let Some(init) = &l.init {
+                    rvs_collect_assert_ids_from_expr(&init.expr, ids);
+                }
+            }
+            syn::Stmt::Item(_) => {}
+        }
+    }
+}
+
+fn rvs_collect_assert_ids_from_expr(expr: &syn::Expr, ids: &mut BTreeSet<String>) {
+    match expr {
+        syn::Expr::Macro(m) if rvs_is_debug_assert(&m.mac) => {
+            ids.extend(rvs_collect_ident_tokens(&m.mac.tokens));
+        }
+        syn::Expr::Block(b) => rvs_collect_assert_ids_from_block(&b.block, ids),
+        syn::Expr::If(e) => {
+            rvs_collect_assert_ids_from_expr(&e.cond, ids);
+            rvs_collect_assert_ids_from_block(&e.then_branch, ids);
+            if let Some((_, els)) = &e.else_branch {
+                rvs_collect_assert_ids_from_expr(els, ids);
+            }
+        }
+        syn::Expr::Match(e) => {
+            for arm in &e.arms {
+                rvs_collect_assert_ids_from_expr(&arm.body, ids);
+            }
+        }
+        syn::Expr::Loop(e) => rvs_collect_assert_ids_from_block(&e.body, ids),
+        syn::Expr::While(e) => {
+            rvs_collect_assert_ids_from_expr(&e.cond, ids);
+            rvs_collect_assert_ids_from_block(&e.body, ids);
+        }
+        syn::Expr::ForLoop(e) => {
+            rvs_collect_assert_ids_from_expr(&e.expr, ids);
+            rvs_collect_assert_ids_from_block(&e.body, ids);
+        }
+        syn::Expr::Unsafe(e) => rvs_collect_assert_ids_from_block(&e.block, ids),
+        syn::Expr::Closure(c) => rvs_collect_assert_ids_from_expr(&c.body, ids),
+        syn::Expr::Call(e) => {
+            rvs_collect_assert_ids_from_expr(&e.func, ids);
+            for a in &e.args {
+                rvs_collect_assert_ids_from_expr(a, ids);
+            }
+        }
+        syn::Expr::MethodCall(e) => {
+            rvs_collect_assert_ids_from_expr(&e.receiver, ids);
+            for a in &e.args {
+                rvs_collect_assert_ids_from_expr(a, ids);
+            }
+        }
+        syn::Expr::Assign(e) => {
+            rvs_collect_assert_ids_from_expr(&e.left, ids);
+            rvs_collect_assert_ids_from_expr(&e.right, ids);
+        }
+        syn::Expr::Binary(e) => {
+            rvs_collect_assert_ids_from_expr(&e.left, ids);
+            rvs_collect_assert_ids_from_expr(&e.right, ids);
+        }
+        syn::Expr::Unary(e) => rvs_collect_assert_ids_from_expr(&e.expr, ids),
+        syn::Expr::Paren(e) => rvs_collect_assert_ids_from_expr(&e.expr, ids),
+        syn::Expr::Group(e) => rvs_collect_assert_ids_from_expr(&e.expr, ids),
+        syn::Expr::Reference(e) => rvs_collect_assert_ids_from_expr(&e.expr, ids),
+        syn::Expr::Try(e) => rvs_collect_assert_ids_from_expr(&e.expr, ids),
+        syn::Expr::Await(e) => rvs_collect_assert_ids_from_expr(&e.base, ids),
+        syn::Expr::Return(e) => {
+            if let Some(inner) = &e.expr {
+                rvs_collect_assert_ids_from_expr(inner, ids);
+            }
+        }
+        syn::Expr::Break(e) => {
+            if let Some(inner) = &e.expr {
+                rvs_collect_assert_ids_from_expr(inner, ids);
+            }
+        }
+        syn::Expr::Let(e) => rvs_collect_assert_ids_from_expr(&e.expr, ids),
+        syn::Expr::Index(e) => {
+            rvs_collect_assert_ids_from_expr(&e.expr, ids);
+            rvs_collect_assert_ids_from_expr(&e.index, ids);
+        }
+        syn::Expr::Field(e) => rvs_collect_assert_ids_from_expr(&e.base, ids),
+        syn::Expr::Range(e) => {
+            if let Some(s) = &e.start {
+                rvs_collect_assert_ids_from_expr(s, ids);
+            }
+            if let Some(end) = &e.end {
+                rvs_collect_assert_ids_from_expr(end, ids);
+            }
+        }
+        syn::Expr::Repeat(e) => {
+            rvs_collect_assert_ids_from_expr(&e.expr, ids);
+            rvs_collect_assert_ids_from_expr(&e.len, ids);
+        }
+        syn::Expr::Tuple(e) => {
+            for el in &e.elems {
+                rvs_collect_assert_ids_from_expr(el, ids);
+            }
+        }
+        syn::Expr::Array(e) => {
+            for el in &e.elems {
+                rvs_collect_assert_ids_from_expr(el, ids);
+            }
+        }
+        syn::Expr::Struct(e) => {
+            for f in &e.fields {
+                rvs_collect_assert_ids_from_expr(&f.expr, ids);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// 从顶层函数定义中萃取信息。
 fn rvs_extract_from_item_fn(
     item_fn: &syn::ItemFn,
@@ -376,6 +592,8 @@ fn rvs_extract_from_item_fn(
         item_fn.block.brace_token.span.join(),
     );
     let (calls, static_refs) = rvs_collect_calls_and_statics(&item_fn.block, statics);
+    let params = rvs_extract_param_names(&item_fn.sig.inputs);
+    let debug_asserted_params = rvs_collect_debug_asserted_params(&item_fn.block);
 
     Some(FnDef {
         name,
@@ -384,6 +602,9 @@ fn rvs_extract_from_item_fn(
         static_refs,
         line,
         line_count,
+        params,
+        debug_asserted_params,
+        has_body: true,
     })
 }
 
@@ -400,6 +621,8 @@ fn rvs_extract_from_impl_fn(
         impl_fn.block.brace_token.span.join(),
     );
     let (calls, static_refs) = rvs_collect_calls_and_statics(&impl_fn.block, statics);
+    let params = rvs_extract_param_names(&impl_fn.sig.inputs);
+    let debug_asserted_params = rvs_collect_debug_asserted_params(&impl_fn.block);
 
     Some(FnDef {
         name,
@@ -408,6 +631,9 @@ fn rvs_extract_from_impl_fn(
         static_refs,
         line,
         line_count,
+        params,
+        debug_asserted_params,
+        has_body: true,
     })
 }
 
@@ -434,6 +660,16 @@ fn rvs_extract_from_trait_fn(
             )
         })
         .unwrap_or(1);
+    let has_body = trait_fn.default.is_some();
+    let (params, debug_asserted_params) = trait_fn
+        .default
+        .as_ref()
+        .map(|block| {
+            let params = rvs_extract_param_names(&trait_fn.sig.inputs);
+            let debug_asserted_params = rvs_collect_debug_asserted_params(block);
+            (params, debug_asserted_params)
+        })
+        .unwrap_or_default();
 
     Some(FnDef {
         name,
@@ -442,6 +678,9 @@ fn rvs_extract_from_trait_fn(
         static_refs,
         line,
         line_count,
+        params,
+        debug_asserted_params,
+        has_body,
     })
 }
 
@@ -467,19 +706,19 @@ pub fn rvs_extract_functions_E(source: &str) -> Result<Vec<FnDef>, ExtractError>
             }
             syn::Item::Impl(item_impl) => {
                 for impl_item in &item_impl.items {
-                    if let syn::ImplItem::Fn(impl_fn) = impl_item {
-                        if let Some(fn_def) = rvs_extract_from_impl_fn(impl_fn, &statics) {
-                            functions.push(fn_def);
-                        }
+                    if let syn::ImplItem::Fn(impl_fn) = impl_item
+                        && let Some(fn_def) = rvs_extract_from_impl_fn(impl_fn, &statics)
+                    {
+                        functions.push(fn_def);
                     }
                 }
             }
             syn::Item::Trait(item_trait) => {
                 for trait_item in &item_trait.items {
-                    if let syn::TraitItem::Fn(trait_fn) = trait_item {
-                        if let Some(fn_def) = rvs_extract_from_trait_fn(trait_fn, &statics) {
-                            functions.push(fn_def);
-                        }
+                    if let syn::TraitItem::Fn(trait_fn) = trait_item
+                        && let Some(fn_def) = rvs_extract_from_trait_fn(trait_fn, &statics)
+                    {
+                        functions.push(fn_def);
                     }
                 }
             }

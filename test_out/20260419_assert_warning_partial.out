@@ -1,0 +1,3 @@
+assert_warnings: 1
+warning: rvs_div has parameters without debug_assert: [a]
+  at test.rs:2

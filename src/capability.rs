@@ -82,7 +82,7 @@ impl CapabilitySet {
         let mut set = BTreeSet::new();
         for c in s.chars() {
             let cap = Capability::rvs_from_char(c)
-                .ok_or_else(|| CapabilityParseError::InvalidLetter(c))?;
+                .ok_or(CapabilityParseError::InvalidLetter(c))?;
             set.insert(cap);
         }
         Ok(Self(set))
