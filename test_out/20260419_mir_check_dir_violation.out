@@ -1,5 +1,5 @@
 violations: 1
-error: rvs_pure calls rvs_io_BEI but is missing capabilities [B(Blocking), E(Fallible), I(IO)]
+error: rvs_pure calls rvs_io_BI but is missing capabilities [B(Blocking), I(IO)]
   at /tmp/rivus_test_mir_violation:2
   caller has: {}
-  target needs: {B, E, I}
+  target needs: {B, I}

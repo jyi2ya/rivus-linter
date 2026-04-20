@@ -1,3 +1,3 @@
-input: rvs_nuclear_ABEIMPTU
+input: rvs_nuclear_ABIMPSTU
 base: "nuclear"
-capabilities: {A, B, E, I, M, P, T, U}
+capabilities: {A, B, I, M, P, S, T, U}

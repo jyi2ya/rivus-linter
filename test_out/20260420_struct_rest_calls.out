@@ -1,4 +1,4 @@
-name: rvs_outer_E
+name: rvs_outer
 calls: 2
-  - rvs_a_E
-  - rvs_b_E
+  - rvs_a
+  - rvs_b

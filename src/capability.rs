@@ -1,30 +1,29 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
-/// 能力之八德：异步、阻塞、可败、读写、可变、不纯、线程、不安。
-/// 八德既立，函数之名即为契约，调用之际便有章法。
+/// 能力之七德：异步、阻塞、读写、可变、惊慌、副作用、线程、不安。
+/// 七德既立，函数之名即为契约，调用之际便有章法。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Capability {
     A,
     B,
-    E,
     I,
     M,
     P,
+    S,
     T,
     U,
 }
 
 impl Capability {
-    #[allow(non_snake_case)]
-    pub fn rvs_from_char_E(c: char) -> Option<Self> {
+    pub fn rvs_from_char(c: char) -> Option<Self> {
         match c {
             'A' => Some(Self::A),
             'B' => Some(Self::B),
-            'E' => Some(Self::E),
             'I' => Some(Self::I),
             'M' => Some(Self::M),
             'P' => Some(Self::P),
+            'S' => Some(Self::S),
             'T' => Some(Self::T),
             'U' => Some(Self::U),
             _ => None,
@@ -35,10 +34,10 @@ impl Capability {
         match self {
             Self::A => 'A',
             Self::B => 'B',
-            Self::E => 'E',
             Self::I => 'I',
             Self::M => 'M',
             Self::P => 'P',
+            Self::S => 'S',
             Self::T => 'T',
             Self::U => 'U',
         }
@@ -48,10 +47,10 @@ impl Capability {
         match self {
             Self::A => "Async",
             Self::B => "Blocking",
-            Self::E => "Fallible",
             Self::I => "IO",
             Self::M => "Mutable",
-            Self::P => "imPure",
+            Self::P => "Panic",
+            Self::S => "SideEffect",
             Self::T => "ThreadLocal",
             Self::U => "Unsafe",
         }
@@ -64,7 +63,7 @@ impl fmt::Display for Capability {
     }
 }
 
-const VALID_SUFFIX_CHARS: &[char] = &['A', 'B', 'E', 'I', 'M', 'P', 'T', 'U'];
+const VALID_SUFFIX_CHARS: &[char] = &['A', 'B', 'I', 'M', 'P', 'S', 'T', 'U'];
 
 /// 一组能力，如同一面旗——旗上画的，便是这函数的本事。
 /// 旗上没画的，便是它干不了的。
@@ -77,30 +76,26 @@ impl CapabilitySet {
         Self(BTreeSet::new())
     }
 
-    /// 从字母串中萃取能力，如炼丹之取精华。
-    /// 若遇不识之符，即刻报错，绝不含糊。
-    pub fn rvs_from_str_E(s: &str) -> Result<Self, CapabilityParseError> {
+    pub fn rvs_from_str(s: &str) -> Result<Self, CapabilityParseError> {
         let mut set = BTreeSet::new();
         for c in s.chars() {
-            let cap = Capability::rvs_from_char_E(c)
+            let cap = Capability::rvs_from_char(c)
                 .ok_or(CapabilityParseError::InvalidLetter(c))?;
             set.insert(cap);
         }
         Ok(Self(set))
     }
 
-    /// 从已验证的后缀字符串中构建能力集。
-    /// 调用方须保证字符串中仅含合法能力字母。
     pub fn rvs_from_validated(s: &str) -> Self {
         let mut set = BTreeSet::new();
         for c in s.chars() {
             let cap = match c {
                 'A' => Capability::A,
                 'B' => Capability::B,
-                'E' => Capability::E,
                 'I' => Capability::I,
                 'M' => Capability::M,
                 'P' => Capability::P,
+                'S' => Capability::S,
                 'T' => Capability::T,
                 'U' => Capability::U,
                 _ => {
@@ -129,10 +124,10 @@ impl CapabilitySet {
         self.0.iter().all(|cap| allowed.0.contains(cap))
     }
 
-    /// 好函数的及格线：ABEM 四德以内，便是善。
+    /// 好函数的及格线：ABM 三德以内，便是善。
     pub fn rvs_from_good_caps() -> Self {
         Self(
-            [Capability::A, Capability::B, Capability::E, Capability::M]
+            [Capability::A, Capability::B, Capability::M]
                 .into_iter()
                 .collect(),
         )
@@ -177,12 +172,12 @@ pub enum CapabilityParseError {
 /// 拆法：取末段下划线之后的部分，若尽是能力字母，则视为后缀；
 /// 否则，全名即基名，能力为空。
 ///
-/// 亦能处理路径限定之名，如 `CapsMap::rvs_parse_E`，
+/// 亦能处理路径限定之名，如 `CapsMap::rvs_parse`，
 /// 取末段路径片段而拆之。
 ///
-/// 例：rvs_write_db_ABEI     → 基名 write_db，能力 {A, B, E, I}
+/// 例：rvs_write_db_ABI     → 基名 write_db，能力 {A, B, I}
 /// 例：rvs_add               → 基名 add，能力 {}
-/// 例：CapsMap::rvs_parse_E  → 基名 parse，能力 {E}
+/// 例：CapsMap::rvs_parse  → 基名 parse，能力 {}
 pub fn parse_rvs_function(name: &str) -> Option<(&str, CapabilitySet)> {
     debug_assert!(!name.is_empty());
 

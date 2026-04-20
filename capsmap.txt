@@ -56,7 +56,7 @@ core::iter::Iterator::last=
 # ─── 标准库：Option / Result ────────────────────
 core::option::Option::Some=
 core::option::Option::ok=
-core::option::Option::unwrap=
+core::option::Option::unwrap=P
 core::option::Option::unwrap_or=
 core::option::Option::unwrap_or_default=
 core::option::Option::unwrap_or_else=
@@ -70,8 +70,8 @@ core::option::Option::is_some_and=
 core::result::Result::Ok=
 core::result::Result::map=
 core::result::Result::map_err=
-core::result::Result::expect=
-core::result::Result::unwrap=
+core::result::Result::expect=P
+core::result::Result::unwrap=P
 core::result::Result::unwrap_or=
 core::result::Result::unwrap_or_default=
 core::result::Result::unwrap_or_else=
@@ -121,12 +121,12 @@ std::path::Path::join=
 std::path::Display::to_string=
 
 # ─── 标准库：文件系统 ──────────────────────────
-# read_to_string 会阻塞(B)并做I/O(I)，可能失败(E)
-std::fs::read_to_string=BEI
+# read_to_string 会阻塞(B)并做I/O(I)
+std::fs::read_to_string=BI
 
 # ─── 标准库：进程 ──────────────────────────────
-# process::exit 是副作用(P)，终止进程
-std::process::exit=P
+# process::exit 是副作用(S)，终止进程
+std::process::exit=S
 
 # ─── 标准库：Clone / Default ───────────────────
 core::clone::Clone::clone=
@@ -134,8 +134,8 @@ core::default::Default::default=
 alloc::fmt::Display::fmt=
 
 # ─── 外部库：syn ───────────────────────────────
-# syn::parse_file 解析源码，纯计算但可能失败(E)
-syn::parse_file=E
+# syn::parse_file 解析源码，纯计算
+syn::parse_file=
 # syn 类型上的访问器方法，纯函数
 proc_macro2::Span::start=
 proc_macro2::Span::end=
@@ -151,8 +151,8 @@ walkdir::DirEntry::path=
 walkdir::DirEntry::into_path=
 
 # ─── 外部库：clap ──────────────────────────────
-# Cli::parse 读取全局进程参数，有副作用(P)
-clap::Parser::parse=P
+# Cli::parse 读取全局进程参数，有副作用(S)
+clap::Parser::parse=S
 
 # ─── 本项目：内部非 rvs 函数 ────────────────────
 rivus_linter::capability::parse_rvs_function=
@@ -160,7 +160,7 @@ rivus_linter::check::CheckOutput::default=
 rivus_linter::capsmap::CapsMapError::InvalidLetter=
 rivus_linter::source::ReadError::FileRead=
 # 局部类型的路径调用
-Cli::parse=P
+Cli::parse=S
 CapabilityParseError::InvalidLetter=
 
 # ─── 本项目：私有辅助函数 ──────────────────────
@@ -169,9 +169,9 @@ rivus_linter::extract::Harvest::merge=
 rivus_linter::capability::CapabilitySet::insert=
 rivus_linter::capsmap::CapsMap::lookup=
 rivus_linter::extract::check_path_for_static=
-rivus_linter::extract::extract_from_item_fn=E
-rivus_linter::extract::extract_from_impl_fn=E
-rivus_linter::extract::extract_from_trait_fn=E
+rivus_linter::extract::extract_from_item_fn=
+rivus_linter::extract::extract_from_impl_fn=
+rivus_linter::extract::extract_from_trait_fn=
 rivus_linter::extract::collect_assert_ids_from_block=
 rivus_linter::extract::collect_assert_ids_from_expr=
 
@@ -207,14 +207,14 @@ std::process::Command::new=
 std::process::Command::args=M
 std::process::Command::env=M
 std::process::Command::current_dir=M
-std::process::Command::output=BEIP
+std::process::Command::output=BIPS
 std::process::ExitStatus::success=
 
 # ─── 标准库：字符串（补充）─────────────────────────
 alloc::string::String::from_utf8_lossy=
 
 # ─── 标准库：文件系统（补充）─────────────────────────
-std::fs::read_dir=BEI
+std::fs::read_dir=BI
 std::fs::DirEntry::path=
 
 # ─── 标准库：HashMap（补充）─────────────────────────
@@ -247,13 +247,13 @@ core::fmt::rt::Argument::new_display=
 Arguments::new=
 Arguments::from_str=
 format=
-std::io::_print=IP
-std::io::_eprint=IP
+std::io::_print=IS
+std::io::_eprint=IS
 
 # ─── MIR 可见：panic/错误内部 ────────────────────
-# panic_fmt 标记为 P：panic 是副作用，终止进程
+# panic_fmt 标记为 P：panic 可能终止进程
 panic_fmt=P
-Option::expect=
+Option::expect=P
 
 # ─── MIR 可见：内存分配内部 ──────────────────────
 std::boxed::Box::new_uninit=
@@ -305,3 +305,7 @@ must_use=
 # ─── 标准库：str 方法（补充）─────────────────────────
 alloc::str::as_str=
 alloc::string::String::as_str=
+
+# ─── 标准库：HashMap Entry（补充）─────────────────────────
+std::collections::hash_map::Entry::or_insert=
+std::collections::HashMap::remove=

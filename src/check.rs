@@ -5,8 +5,8 @@ use std::path::Path;
 
 use crate::capability::{parse_rvs_function, Capability, CapabilitySet};
 use crate::capsmap::CapsMap;
-use crate::extract::{rvs_extract_functions_E, FnDef};
-use crate::source::rvs_read_rust_sources_BEI;
+use crate::extract::{rvs_extract_functions, FnDef};
+use crate::source::rvs_read_rust_sources_BI;
 
 /// 违规之别：调用越权与静态引用越权。
 #[derive(Debug, Clone, PartialEq)]
@@ -116,8 +116,9 @@ pub enum InferenceKind {
     MissingAsync,
     MissingUnsafe,
     MissingMutable,
-    MissingFallible,
-    MissingImpure,
+    MissingPanic,
+    MissingSideEffect,
+    MissingThreadLocal,
     NonAlphabeticalSuffix,
     DuplicateSuffixLetter,
 }
@@ -128,8 +129,9 @@ impl fmt::Display for InferenceKind {
             InferenceKind::MissingAsync => write!(f, "declared async but missing A"),
             InferenceKind::MissingUnsafe => write!(f, "contains unsafe but missing U"),
             InferenceKind::MissingMutable => write!(f, "has &mut parameter but missing M"),
-            InferenceKind::MissingFallible => write!(f, "returns Result/Option but missing E"),
-            InferenceKind::MissingImpure => write!(f, "calls panic macro but missing P"),
+            InferenceKind::MissingPanic => write!(f, "calls panic macro but missing P"),
+            InferenceKind::MissingSideEffect => write!(f, "reads static/thread_local but missing S"),
+            InferenceKind::MissingThreadLocal => write!(f, "reads thread_local but missing T"),
             InferenceKind::NonAlphabeticalSuffix => write!(f, "capability suffix not in alphabetical order"),
             InferenceKind::DuplicateSuffixLetter => write!(f, "duplicate capability letter in suffix"),
         }
@@ -262,21 +264,35 @@ fn rvs_check_functions_impl(
                 line: func.line,
             });
         }
-        if func.returns_result_or_option && !func.capabilities.rvs_contains(Capability::E) {
+        if func.has_panic_macro && !func.capabilities.rvs_contains(Capability::P) {
             inference_warnings.push(InferenceWarning {
                 function: func.name.clone(),
-                kind: InferenceKind::MissingFallible,
+                kind: InferenceKind::MissingPanic,
                 file: file.to_string(),
                 line: func.line,
             });
         }
-        if func.has_panic_macro && !func.capabilities.rvs_contains(Capability::P) {
-            inference_warnings.push(InferenceWarning {
-                function: func.name.clone(),
-                kind: InferenceKind::MissingImpure,
-                file: file.to_string(),
-                line: func.line,
-            });
+        for sr in &func.static_refs {
+            if sr.required_caps.rvs_contains(Capability::S) && !func.capabilities.rvs_contains(Capability::S) {
+                inference_warnings.push(InferenceWarning {
+                    function: func.name.clone(),
+                    kind: InferenceKind::MissingSideEffect,
+                    file: file.to_string(),
+                    line: func.line,
+                });
+                break;
+            }
+        }
+        for sr in &func.static_refs {
+            if sr.required_caps.rvs_contains(Capability::T) && !func.capabilities.rvs_contains(Capability::T) {
+                inference_warnings.push(InferenceWarning {
+                    function: func.name.clone(),
+                    kind: InferenceKind::MissingThreadLocal,
+                    file: file.to_string(),
+                    line: func.line,
+                });
+                break;
+            }
         }
 
         if !func.raw_suffix.is_empty() {
@@ -318,13 +334,12 @@ pub fn rvs_check_functions(functions: &[FnDef], file: &str) -> Vec<Violation> {
 }
 
 /// 从一段源码文本中检查违规，配合 CapsMap。
-#[allow(non_snake_case)]
-pub fn rvs_check_source_E(
+pub fn rvs_check_source(
     source: &str,
     file: &str,
     capsmap: &CapsMap,
 ) -> Result<CheckOutput, CheckError> {
-    let functions = rvs_extract_functions_E(source)
+    let functions = rvs_extract_functions(source)
         .map_err(|e| CheckError::Extract {
             source: e,
             file: file.to_string(),
@@ -335,8 +350,8 @@ pub fn rvs_check_source_E(
 /// 从文件路径（或目录）出发，检查违规。
 /// CapsMap 用于查找非 rvs_ 函数的能力。
 #[allow(non_snake_case)]
-pub fn rvs_check_path_BEI(path: &Path, capsmap: &CapsMap) -> Result<CheckOutput, CheckError> {
-    let sources = rvs_read_rust_sources_BEI(path)
+pub fn rvs_check_path_BI(path: &Path, capsmap: &CapsMap) -> Result<CheckOutput, CheckError> {
+    let sources = rvs_read_rust_sources_BI(path)
         .map_err(|e| CheckError::Read { source: e })?;
     let mut output = CheckOutput {
         violations: Vec::new(),
@@ -345,7 +360,7 @@ pub fn rvs_check_path_BEI(path: &Path, capsmap: &CapsMap) -> Result<CheckOutput,
         inference_warnings: Vec::new(),
     };
     for sf in &sources {
-        let functions = rvs_extract_functions_E(&sf.source)
+        let functions = rvs_extract_functions(&sf.source)
             .map_err(|e| CheckError::Extract {
                 source: e,
                 file: sf.path.clone(),
@@ -383,16 +398,16 @@ pub enum MirCheckError {
 }
 
 #[allow(non_snake_case)]
-pub fn rvs_check_mir_dir_BEIM(
+pub fn rvs_check_mir_dir_BIM(
     mir_dir: &Path,
     capsmap: &CapsMap,
 ) -> Result<CheckOutput, MirCheckError> {
-    let sources = crate::source::rvs_read_mir_sources_BEI(mir_dir)
+    let sources = crate::source::rvs_read_mir_sources_BI(mir_dir)
         .map_err(|e| MirCheckError::Read { source: e })?;
 
     let mut all_functions: Vec<FnDef> = Vec::new();
     for sf in &sources {
-        if let Ok(functions) = crate::mir::rvs_extract_from_mir_E(&sf.source) {
+        if let Ok(functions) = crate::mir::rvs_extract_from_mir(&sf.source) {
             all_functions.extend(functions);
         }
     }
@@ -419,11 +434,11 @@ pub fn rvs_check_mir_dir_BEIM(
 }
 
 #[allow(non_snake_case)]
-pub fn rvs_check_mir_path_BEIMP(
+pub fn rvs_check_mir_path_BIMPS(
     project_dir: &Path,
     capsmap: &CapsMap,
 ) -> Result<CheckOutput, MirCheckError> {
-    let deps_dir = crate::mir::rvs_compile_to_mir_BEIMP(project_dir)
+    let deps_dir = crate::mir::rvs_compile_to_mir_BIMPS(project_dir)
         .map_err(|e| MirCheckError::Compile { source: e })?;
-    rvs_check_mir_dir_BEIM(&deps_dir, capsmap)
+    rvs_check_mir_dir_BIM(&deps_dir, capsmap)
 }

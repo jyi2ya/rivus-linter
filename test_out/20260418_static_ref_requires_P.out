@@ -1,5 +1,0 @@
-violations: 1
-error: rvs_read_counter references COUNTER but is missing capabilities [P(imPure)]
-  at test.rs:5
-  caller has: {}
-  target needs: {P}

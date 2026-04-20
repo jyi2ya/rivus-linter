@@ -1,5 +1,5 @@
 violations: 1
 error: rvs_read_counter references COUNTER but is missing capabilities [S(SideEffect)]
-  at test.rs:6
+  at test.rs:5
   caller has: {}
   target needs: {S}

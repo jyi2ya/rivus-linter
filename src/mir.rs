@@ -23,7 +23,7 @@ pub enum MirCompileError {
 }
 
 #[allow(non_snake_case)]
-pub fn rvs_compile_to_mir_BEIMP(project_dir: &Path) -> Result<PathBuf, MirCompileError> {
+pub fn rvs_compile_to_mir_BIMPS(project_dir: &Path) -> Result<PathBuf, MirCompileError> {
     debug_assert!(project_dir.exists(), "项目目录必须存在");
 
     let cargo_toml = project_dir.join("Cargo.toml");
@@ -72,14 +72,14 @@ pub fn rvs_compile_to_mir_BEIMP(project_dir: &Path) -> Result<PathBuf, MirCompil
 #[derive(Debug, Clone)]
 struct MirFnDef {
     name: String,
+    sig_line: String,
     body_lines: Vec<String>,
 }
 
-#[allow(non_snake_case)]
-fn rvs_extract_calls_from_body_E(body_lines: &[String]) -> Vec<CalleeInfo> {
+fn rvs_extract_calls_from_body(body_lines: &[String]) -> Vec<CalleeInfo> {
     let mut calls = Vec::new();
     for (i, line) in body_lines.iter().enumerate() {
-        if let Some(target) = rvs_extract_call_target_E(line) {
+        if let Some(target) = rvs_extract_call_target(line) {
             calls.push(CalleeInfo {
                 name: target,
                 line: i + 1,
@@ -89,8 +89,7 @@ fn rvs_extract_calls_from_body_E(body_lines: &[String]) -> Vec<CalleeInfo> {
     calls
 }
 
-#[allow(non_snake_case)]
-fn rvs_extract_parent_fn_name_E(closure_name: &str) -> Option<&str> {
+fn rvs_extract_parent_fn_name(closure_name: &str) -> Option<&str> {
     let brace_pos = closure_name.find("::{")?;
     let parent = &closure_name[..brace_pos];
     parse_rvs_function(parent)?;
@@ -136,8 +135,7 @@ fn rvs_strip_generics(path: &str) -> String {
     result
 }
 
-#[allow(non_snake_case)]
-fn rvs_find_call_open_paren_E(s: &str) -> Option<usize> {
+fn rvs_find_call_open_paren(s: &str) -> Option<usize> {
     let mut angle_depth: i32 = 0;
     let chars: Vec<char> = s.chars().collect();
     let mut i = 0;
@@ -155,8 +153,7 @@ fn rvs_find_call_open_paren_E(s: &str) -> Option<usize> {
     None
 }
 
-#[allow(non_snake_case)]
-fn rvs_find_matching_angle_E(s: &str) -> Option<usize> {
+fn rvs_find_matching_angle(s: &str) -> Option<usize> {
     let mut depth = 0;
     for (i, ch) in s.chars().enumerate() {
         match ch {
@@ -173,8 +170,7 @@ fn rvs_find_matching_angle_E(s: &str) -> Option<usize> {
     None
 }
 
-#[allow(non_snake_case)]
-fn rvs_extract_call_target_E(line: &str) -> Option<String> {
+fn rvs_extract_call_target(line: &str) -> Option<String> {
     let line = line.trim_start();
     if !line.contains("-> [") {
         return None;
@@ -189,13 +185,13 @@ fn rvs_extract_call_target_E(line: &str) -> Option<String> {
     let rest = rest.strip_prefix("const ").unwrap_or(rest);
 
     if let Some(stripped) = rest.strip_prefix('<') {
-        let end = rvs_find_matching_angle_E(stripped)?;
+        let end = rvs_find_matching_angle(stripped)?;
         let end_in_rest = end + 1;
         let inner = &rest[1..end_in_rest];
         let after_angle = &rest[end_in_rest..];
 
         if let Some(method_path) = after_angle.strip_prefix(">::") {
-            let method_end = rvs_find_call_open_paren_E(method_path)
+            let method_end = rvs_find_call_open_paren(method_path)
                 .unwrap_or_else(|| method_path.find(' ').unwrap_or(method_path.len()));
             let method = &method_path[..method_end];
             let clean_method = rvs_strip_generics(method);
@@ -213,7 +209,7 @@ fn rvs_extract_call_target_E(line: &str) -> Option<String> {
             None
         }
     } else if rest.contains("::") {
-        let paren_pos = rvs_find_call_open_paren_E(rest)?;
+        let paren_pos = rvs_find_call_open_paren(rest)?;
         let path = &rest[..paren_pos];
         let clean = rvs_strip_generics(path);
         if clean.contains("::") || (!clean.is_empty() && clean.chars().all(|c| c.is_alphanumeric() || c == '_')) {
@@ -222,11 +218,11 @@ fn rvs_extract_call_target_E(line: &str) -> Option<String> {
             None
         }
     } else if rest.starts_with("rvs_") {
-        let paren_pos = rvs_find_call_open_paren_E(rest)
+        let paren_pos = rvs_find_call_open_paren(rest)
             .unwrap_or_else(|| rest.find(' ').unwrap_or(rest.len()));
         Some(rest[..paren_pos].to_string())
-    } else if rvs_find_call_open_paren_E(rest).is_some() && rest.contains("->") {
-        let paren_pos = rvs_find_call_open_paren_E(rest)
+    } else if rvs_find_call_open_paren(rest).is_some() && rest.contains("->") {
+        let paren_pos = rvs_find_call_open_paren(rest)
             .unwrap_or_else(|| rest.find(' ').unwrap_or(rest.len()));
         if paren_pos > 0 {
             Some(rest[..paren_pos].to_string())
@@ -261,11 +257,13 @@ fn rvs_parse_mir_functions(mir_text: &str) -> Vec<MirFnDef> {
             if brace_depth == 0 {
                 functions.push(MirFnDef {
                     name,
+                    sig_line: trimmed.to_string(),
                     body_lines: Vec::new(),
                 });
             } else {
                 current_fn = Some(MirFnDef {
                     name,
+                    sig_line: trimmed.to_string(),
                     body_lines: Vec::new(),
                 });
             }
@@ -284,10 +282,11 @@ fn rvs_parse_mir_functions(mir_text: &str) -> Vec<MirFnDef> {
             }
 
             if brace_depth == 0 {
-                let done = current_fn.take().unwrap();
-                functions.push(done);
-            } else {
-                current_fn.as_mut().unwrap().body_lines.push(line.to_string());
+                if let Some(done) = current_fn.take() {
+                    functions.push(done);
+                }
+            } else if let Some(fn_def) = current_fn.as_mut() {
+                fn_def.body_lines.push(line.to_string());
             }
         }
     }
@@ -295,29 +294,61 @@ fn rvs_parse_mir_functions(mir_text: &str) -> Vec<MirFnDef> {
     functions
 }
 
-#[allow(non_snake_case)]
-pub fn rvs_extract_from_mir_E(mir_text: &str) -> Result<Vec<FnDef>, MirError> {
+fn rvs_scan_mir_has_mut_param(mir_fn: &MirFnDef) -> bool {
+    let is_closure = mir_fn.name.contains("::{closure#");
+    if is_closure {
+        return false;
+    }
+    mir_fn.sig_line.contains("&mut")
+}
+
+fn rvs_scan_mir_has_panic(mir_fn: &MirFnDef) -> bool {
+    for line in &mir_fn.body_lines {
+        let trimmed = line.trim();
+        let has_panic_pattern = trimmed.contains("panicking::panic")
+            || trimmed.contains("panicking::assert")
+            || trimmed.contains("panicking::panic_fmt");
+        if has_panic_pattern && !trimmed.contains("const \"") {
+            return true;
+        }
+    }
+    false
+}
+
+pub fn rvs_extract_from_mir(mir_text: &str) -> Result<Vec<FnDef>, MirError> {
     let mir_functions = rvs_parse_mir_functions(mir_text);
 
     let mut fn_calls: HashMap<String, Vec<CalleeInfo>> = HashMap::new();
+    let mut fn_meta: HashMap<String, (bool, bool)> = HashMap::new();
 
     for mir_fn in &mir_functions {
-        let calls = rvs_extract_calls_from_body_E(&mir_fn.body_lines);
+        let has_mut_param = rvs_scan_mir_has_mut_param(mir_fn);
+        let has_panic_macro = rvs_scan_mir_has_panic(mir_fn);
+        let calls = rvs_extract_calls_from_body(&mir_fn.body_lines);
 
-        if let Some(parent) = rvs_extract_parent_fn_name_E(&mir_fn.name) {
+        if let Some(parent) = rvs_extract_parent_fn_name(&mir_fn.name) {
             fn_calls.entry(parent.to_string()).or_default().extend(calls);
+            let entry = fn_meta.entry(parent.to_string()).or_insert((false, false));
+            entry.0 = entry.0 || has_mut_param;
+            entry.1 = entry.1 || has_panic_macro;
         } else if parse_rvs_function(&mir_fn.name).is_some() {
             fn_calls
                 .entry(mir_fn.name.clone())
                 .or_default()
                 .extend(calls);
+            let entry = fn_meta.entry(mir_fn.name.clone()).or_insert((false, false));
+            entry.0 = entry.0 || has_mut_param;
+            entry.1 = entry.1 || has_panic_macro;
         }
     }
 
     let mut result = Vec::new();
     for (name, calls) in fn_calls {
-        let (_, caps) = parse_rvs_function(&name).unwrap();
+        let Some((_, caps)) = parse_rvs_function(&name) else {
+            continue;
+        };
         let raw_suffix = rvs_extract_raw_suffix(&name);
+        let (has_mut_param, has_panic_macro) = fn_meta.remove(&name).unwrap_or((false, false));
         result.push(FnDef {
             name,
             capabilities: caps,
@@ -331,10 +362,9 @@ pub fn rvs_extract_from_mir_E(mir_text: &str) -> Result<Vec<FnDef>, MirError> {
             has_unsafe_block: false,
             is_async_fn: false,
             is_unsafe_fn: false,
-            has_mut_param: false,
+            has_mut_param,
             has_mut_self: false,
-            returns_result_or_option: false,
-            has_panic_macro: false,
+            has_panic_macro,
             raw_suffix,
         });
     }

@@ -15,7 +15,7 @@ pub struct SourceFile {
 /// 千里之行，始于足下；
 /// 万卷之源，皆从磁盘来。
 #[allow(non_snake_case)]
-pub fn rvs_read_rust_sources_BEI(path: &Path) -> Result<Vec<SourceFile>, ReadError> {
+pub fn rvs_read_rust_sources_BI(path: &Path) -> Result<Vec<SourceFile>, ReadError> {
     debug_assert!(path.exists(), "路径必须存在");
 
     let file_paths = if path.is_dir() {
@@ -60,7 +60,7 @@ pub enum ReadError {
 }
 
 #[allow(non_snake_case)]
-pub fn rvs_read_mir_sources_BEI(path: &Path) -> Result<Vec<SourceFile>, ReadError> {
+pub fn rvs_read_mir_sources_BI(path: &Path) -> Result<Vec<SourceFile>, ReadError> {
     debug_assert!(path.exists(), "路径必须存在");
 
     let file_paths = if path.is_dir() {

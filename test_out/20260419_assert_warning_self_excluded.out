@@ -1,3 +1,3 @@
 assert_warnings: 1
-warning: rvs_compute_E has parameters without debug_assert: [x]
+warning: rvs_compute has parameters without debug_assert: [x]
   at test.rs:5

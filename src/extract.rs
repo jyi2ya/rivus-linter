@@ -37,7 +37,6 @@ pub struct FnDef {
     pub is_unsafe_fn: bool,
     pub has_mut_param: bool,
     pub has_mut_self: bool,
-    pub returns_result_or_option: bool,
     pub has_panic_macro: bool,
     pub raw_suffix: String,
 }
@@ -112,16 +111,10 @@ fn rvs_harvest_from_expr_call(call: &syn::ExprCall, statics: &[StaticDecl]) -> H
             .map(|s| s.ident.to_string())
             .collect::<Vec<_>>()
             .join("::");
-        if !name.is_empty() {
-            let line = expr_path
-                .path
-                .segments
-                .last()
-                .unwrap()
-                .ident
-                .span()
-                .start()
-                .line;
+        if !name.is_empty()
+            && let Some(seg) = expr_path.path.segments.last()
+        {
+            let line = seg.ident.span().start().line;
             result.calls.push(CalleeInfo { name, line });
         }
     }
@@ -370,7 +363,7 @@ fn rvs_collect_static_decls_from_items(items: &[syn::Item]) -> Vec<StaticDecl> {
                 if let syn::StaticMutability::Mut(_) = s.mutability {
                     caps.insert(Capability::U);
                 }
-                caps.insert(Capability::P);
+                caps.insert(Capability::S);
                 decls.push(StaticDecl {
                     name: s.ident.to_string(),
                     required_caps: caps,
@@ -388,8 +381,8 @@ fn rvs_collect_static_decls_from_items(items: &[syn::Item]) -> Vec<StaticDecl> {
                     let names = rvs_parse_thread_local_names(&m.mac.tokens);
                     for name in names {
                         let mut caps = CapabilitySet::rvs_new();
+                        caps.insert(Capability::S);
                         caps.insert(Capability::T);
-                        caps.insert(Capability::P);
                         decls.push(StaticDecl {
                             name,
                             required_caps: caps,
@@ -441,25 +434,6 @@ fn rvs_has_mut_typed_param(inputs: &syn::punctuated::Punctuated<syn::FnArg, syn:
         syn::FnArg::Typed(pt) => matches!(&*pt.ty, syn::Type::Reference(r) if r.mutability.is_some()),
         _ => false,
     })
-}
-
-/// 判断返回类型是否包含 Result 或 Option。
-fn rvs_returns_result_or_option(ret: &syn::ReturnType) -> bool {
-    match ret {
-        syn::ReturnType::Default => false,
-        syn::ReturnType::Type(_, ty) => rvs_type_contains_result_or_option(ty),
-    }
-}
-
-fn rvs_type_contains_result_or_option(ty: &syn::Type) -> bool {
-    match ty {
-        syn::Type::Path(tp) => tp
-            .path
-            .segments
-            .last()
-            .is_some_and(|s| matches!(s.ident.to_string().as_str(), "Result" | "Option")),
-        _ => false,
-    }
 }
 
 /// 从函数签名的参数列表中萃取参数名与类型。
@@ -662,7 +636,6 @@ fn extract_from_item_fn(
     let has_panic_macro = rvs_scan_block_has_panic(&item_fn.block);
     let has_mut_self = rvs_has_mut_receiver(&item_fn.sig.inputs);
     let has_mut_param = rvs_has_mut_typed_param(&item_fn.sig.inputs);
-    let returns_result_or_option = rvs_returns_result_or_option(&item_fn.sig.output);
 
     Some(FnDef {
         name,
@@ -679,7 +652,6 @@ fn extract_from_item_fn(
         is_unsafe_fn,
         has_mut_param,
         has_mut_self,
-        returns_result_or_option,
         has_panic_macro,
         raw_suffix,
     })
@@ -707,7 +679,6 @@ fn extract_from_impl_fn(
     let has_panic_macro = rvs_scan_block_has_panic(&impl_fn.block);
     let has_mut_self = rvs_has_mut_receiver(&impl_fn.sig.inputs);
     let has_mut_param = rvs_has_mut_typed_param(&impl_fn.sig.inputs);
-    let returns_result_or_option = rvs_returns_result_or_option(&impl_fn.sig.output);
 
     Some(FnDef {
         name,
@@ -724,7 +695,6 @@ fn extract_from_impl_fn(
         is_unsafe_fn,
         has_mut_param,
         has_mut_self,
-        returns_result_or_option,
         has_panic_macro,
         raw_suffix,
     })
@@ -776,7 +746,6 @@ fn extract_from_trait_fn(
         .is_some_and(rvs_scan_block_has_panic);
     let has_mut_self = rvs_has_mut_receiver(&trait_fn.sig.inputs);
     let has_mut_param = rvs_has_mut_typed_param(&trait_fn.sig.inputs);
-    let returns_result_or_option = rvs_returns_result_or_option(&trait_fn.sig.output);
 
     Some(FnDef {
         name,
@@ -793,14 +762,16 @@ fn extract_from_trait_fn(
         is_unsafe_fn,
         has_mut_param,
         has_mut_self,
-        returns_result_or_option,
         has_panic_macro,
         raw_suffix,
     })
 }
 
-/// 判断一个宏是否为 panic 类宏（panic!/assert!/unreachable!/todo!/unimplemented!），
+/// 判断一个宏是否为 panic 类宏（panic!/assert!/assert_eq!/assert_ne!/unreachable!/todo!/unimplemented!），
 /// 但排除 debug_assert! 系列。
+///
+/// 注意：方法调用 `.unwrap()` / `.expect()` 的检测在 `rvs_scan_expr_has_panic` 的
+/// `MethodCall` 分支中完成，不在此函数范围内。
 fn rvs_is_panic_macro(mac: &syn::Macro) -> bool {
     let name = mac
         .path
@@ -997,7 +968,9 @@ fn rvs_scan_expr_has_panic(expr: &syn::Expr) -> bool {
                 || c.args.iter().any(rvs_scan_expr_has_panic)
         }
         syn::Expr::MethodCall(c) => {
-            rvs_scan_expr_has_panic(&c.receiver)
+            let is_panic_method = matches!(c.method.to_string().as_str(), "unwrap" | "expect");
+            is_panic_method
+                || rvs_scan_expr_has_panic(&c.receiver)
                 || c.args.iter().any(rvs_scan_expr_has_panic)
         }
         syn::Expr::Assign(a) => {
@@ -1056,8 +1029,7 @@ fn rvs_scan_expr_has_panic(expr: &syn::Expr) -> bool {
 }
 
 /// 从顶层项中萃取 rvs_ 函数定义，递归进入 mod 块。
-#[allow(non_snake_case)]
-fn rvs_extract_from_items_E(items: &[syn::Item], statics: &[StaticDecl]) -> Vec<FnDef> {
+fn rvs_extract_from_items(items: &[syn::Item], statics: &[StaticDecl]) -> Vec<FnDef> {
     let mut functions = Vec::new();
 
     for item in items {
@@ -1087,7 +1059,7 @@ fn rvs_extract_from_items_E(items: &[syn::Item], statics: &[StaticDecl]) -> Vec<
             }
             syn::Item::Mod(m) => {
                 if let Some((_, inner_items)) = &m.content {
-                    functions.extend(rvs_extract_from_items_E(inner_items, statics));
+                    functions.extend(rvs_extract_from_items(inner_items, statics));
                 }
             }
             _ => {}
@@ -1101,14 +1073,13 @@ fn rvs_extract_from_items_E(items: &[syn::Item], statics: &[StaticDecl]) -> Vec<
 /// 顶层函数、impl 方法、trait 方法、mod 块内函数，一网打尽。
 /// 同时搜集文件中的 static 与 thread_local! 声明，
 /// 据此检查函数体内的静态变量引用。
-#[allow(non_snake_case)]
-pub fn rvs_extract_functions_E(source: &str) -> Result<Vec<FnDef>, ExtractError> {
+pub fn rvs_extract_functions(source: &str) -> Result<Vec<FnDef>, ExtractError> {
     let file = syn::parse_file(source)
         .map_err(|e| ExtractError::Parse { message: e.to_string() })?;
 
     let statics = rvs_collect_static_decls_from_items(&file.items);
 
-    Ok(rvs_extract_from_items_E(&file.items, &statics))
+    Ok(rvs_extract_from_items(&file.items, &statics))
 }
 
 #[derive(Debug, thiserror::Error)]

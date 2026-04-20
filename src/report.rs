@@ -3,8 +3,8 @@ use std::fmt;
 use std::path::Path;
 
 use crate::capability::{Capability, CapabilitySet};
-use crate::extract::{rvs_extract_functions_E, FnDef};
-use crate::source::{rvs_read_rust_sources_BEI, SourceFile};
+use crate::extract::{rvs_extract_functions, FnDef};
+use crate::source::{rvs_read_rust_sources_BI, SourceFile};
 
 /// 一种能力所占的份量：函数数、行数。
 #[derive(Debug, Clone, Default)]
@@ -75,11 +75,10 @@ pub fn rvs_build_report(functions: &[FnDef]) -> Report {
 
 /// 从多个已读入的源文件中生成报告。
 /// 可能失败：解析出错便报错。无 IO，干干净净。
-#[allow(non_snake_case)]
-pub fn rvs_report_sources_E(sources: &[SourceFile]) -> Result<Report, ReportError> {
+pub fn rvs_report_sources(sources: &[SourceFile]) -> Result<Report, ReportError> {
     let mut all_functions = Vec::new();
     for sf in sources {
-        let functions = rvs_extract_functions_E(&sf.source)
+        let functions = rvs_extract_functions(&sf.source)
             .map_err(|e| ReportError::Extract {
                 file: sf.path.clone(),
                 source: e,
@@ -123,10 +122,10 @@ impl fmt::Display for Report {
         for cap in [
             Capability::A,
             Capability::B,
-            Capability::E,
             Capability::I,
             Capability::M,
             Capability::P,
+            Capability::S,
             Capability::T,
             Capability::U,
         ] {
@@ -160,10 +159,10 @@ impl fmt::Display for Report {
 /// 从文件路径（或目录）出发，生成汇报。
 /// 薄薄一层壳：只管读文件，真正的事交给纯函数。
 #[allow(non_snake_case)]
-pub fn rvs_report_path_BEI(path: &Path) -> Result<Report, ReportError> {
-    let sources = rvs_read_rust_sources_BEI(path)
+pub fn rvs_report_path_BI(path: &Path) -> Result<Report, ReportError> {
+    let sources = rvs_read_rust_sources_BI(path)
         .map_err(|e| ReportError::Read { source: e })?;
-    rvs_report_sources_E(&sources)
+    rvs_report_sources(&sources)
 }
 
 #[derive(Debug, thiserror::Error)]

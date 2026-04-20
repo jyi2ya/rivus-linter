@@ -1,3 +1,3 @@
-input: rvs_parse_int_E
-base: "parse_int"
-capabilities: {E}
+input: rvs_validate_M
+base: "validate"
+capabilities: {M}

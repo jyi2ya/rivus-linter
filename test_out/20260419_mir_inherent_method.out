@@ -1,4 +1,4 @@
-name: rvs_init_E
+name: rvs_init
 calls: 2
   - HashMap::new
   - Clone::clone

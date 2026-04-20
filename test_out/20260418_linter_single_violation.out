@@ -1,5 +1,5 @@
 violations: 1
-error: rvs_inner_E calls rvs_outer_ABEI but is missing capabilities [A(Async), B(Blocking), I(IO)]
+error: rvs_inner calls rvs_outer_ABI but is missing capabilities [A(Async), B(Blocking), I(IO)]
   at test.rs:3
-  caller has: {E}
-  target needs: {A, B, E, I}
+  caller has: {}
+  target needs: {A, B, I}

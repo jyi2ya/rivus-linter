@@ -3,10 +3,10 @@ use std::process;
 
 use clap::{Parser, Subcommand};
 use rivus_linter::capsmap::CapsMap;
-use rivus_linter::rvs_check_mir_dir_BEIM;
-use rivus_linter::rvs_check_mir_path_BEIMP;
-use rivus_linter::rvs_check_path_BEI;
-use rivus_linter::rvs_report_path_BEI;
+use rivus_linter::rvs_check_mir_dir_BIM;
+use rivus_linter::rvs_check_mir_path_BIMPS;
+use rivus_linter::rvs_check_path_BI;
+use rivus_linter::rvs_report_path_BI;
 
 #[derive(Parser)]
 #[command(name = "rivus-linter")]
@@ -45,16 +45,16 @@ enum Command {
 }
 
 #[allow(non_snake_case)]
-fn rvs_main_BEIMP() {
+fn rvs_main_BIMPS() {
     let cli = Cli::parse();
 
     match cli.command {
         Command::Check { path, capsmap } => {
-            let cm = rvs_load_capsmap_BEIP(capsmap);
+            let cm = rvs_load_capsmap_BIPS(capsmap);
 
-            match rvs_check_path_BEI(&path, &cm) {
+            match rvs_check_path_BI(&path, &cm) {
                 Ok(output) => {
-                    rvs_print_check_output_BIP(&output);
+                    rvs_print_check_output_BIPS(&output);
                 }
                 Err(e) => {
                     eprintln!("Error: {e}");
@@ -67,17 +67,17 @@ fn rvs_main_BEIMP() {
             capsmap,
             mir_dir,
         } => {
-            let cm = rvs_load_capsmap_BEIP(capsmap);
+            let cm = rvs_load_capsmap_BIPS(capsmap);
 
             let result = if let Some(dir) = mir_dir {
-                rvs_check_mir_dir_BEIM(&dir, &cm)
+                rvs_check_mir_dir_BIM(&dir, &cm)
             } else {
-                rvs_check_mir_path_BEIMP(&path, &cm)
+                rvs_check_mir_path_BIMPS(&path, &cm)
             };
 
             match result {
                 Ok(output) => {
-                    rvs_print_check_output_BIP(&output);
+                    rvs_print_check_output_BIPS(&output);
                 }
                 Err(e) => {
                     eprintln!("Error: {e}");
@@ -85,7 +85,7 @@ fn rvs_main_BEIMP() {
                 }
             }
         }
-        Command::Report { path } => match rvs_report_path_BEI(&path) {
+        Command::Report { path } => match rvs_report_path_BI(&path) {
             Ok(report) => print!("{report}"),
             Err(e) => {
                 eprintln!("Error: {e}");
@@ -96,14 +96,14 @@ fn rvs_main_BEIMP() {
 }
 
 #[allow(non_snake_case)]
-fn rvs_load_capsmap_BEIP(capsmap: Option<PathBuf>) -> CapsMap {
+fn rvs_load_capsmap_BIPS(capsmap: Option<PathBuf>) -> CapsMap {
     match capsmap {
         Some(cm_path) => {
             let content = std::fs::read_to_string(&cm_path).unwrap_or_else(|e| {
                 eprintln!("Error: cannot read capsmap '{}': {e}", cm_path.display());
                 process::exit(2);
             });
-            CapsMap::rvs_parse_E(&content).unwrap_or_else(|e| {
+            CapsMap::rvs_parse(&content).unwrap_or_else(|e| {
                 eprintln!("Error: invalid capsmap '{}': {e}", cm_path.display());
                 process::exit(2);
             })
@@ -113,7 +113,7 @@ fn rvs_load_capsmap_BEIP(capsmap: Option<PathBuf>) -> CapsMap {
 }
 
 #[allow(non_snake_case)]
-fn rvs_print_check_output_BIP(output: &rivus_linter::CheckOutput) {
+fn rvs_print_check_output_BIPS(output: &rivus_linter::CheckOutput) {
     for w in &output.warnings {
         eprintln!("{w}");
     }
@@ -132,5 +132,5 @@ fn rvs_print_check_output_BIP(output: &rivus_linter::CheckOutput) {
 }
 
 fn main() {
-    rvs_main_BEIMP();
+    rvs_main_BIMPS();
 }

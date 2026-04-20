@@ -1,4 +1,4 @@
-name: rvs_create_order_ABEIP
+name: rvs_create_order_ABM
 calls: 2
-  - rvs_find_by_id_ABEI
-  - rvs_publish_ABEI
+  - rvs_find_by_id_ABI
+  - rvs_publish_AIS

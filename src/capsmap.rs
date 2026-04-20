@@ -28,12 +28,11 @@ impl CapsMap {
 
     /// 册子一行一行翻，键值各归其位。
     /// 注释以井号起，等号为界，空行跳过。
-    #[allow(non_snake_case)]
-    pub fn rvs_parse_E(content: &str) -> Result<Self, CapsMapError> {
+    pub fn rvs_parse(content: &str) -> Result<Self, CapsMapError> {
         let mut entries = BTreeMap::new();
         for (i, raw_line) in content.lines().enumerate() {
             let line_num = i + 1;
-            let line = raw_line.split('#').next().unwrap().trim();
+            let line = raw_line.split('#').next().unwrap_or_default().trim();
             if line.is_empty() {
                 continue;
             }
@@ -41,9 +40,9 @@ impl CapsMap {
                 .split_once('=')
                 .ok_or(CapsMapError::MissingSeparator { line: line_num })?;
             let key = key.trim().to_string();
-            let value = value.split('#').next().unwrap().trim();
+            let value = value.split('#').next().unwrap_or_default().trim();
             let caps =
-                CapabilitySet::rvs_from_str_E(value).map_err(|_| CapsMapError::InvalidCaps {
+                CapabilitySet::rvs_from_str(value).map_err(|_| CapsMapError::InvalidCaps {
                     key: key.clone(),
                     caps: value.to_string(),
                     line: line_num,

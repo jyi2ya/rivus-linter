@@ -1,3 +1,3 @@
-name: rvs_outer_E
+name: rvs_outer
 calls: 1
-  - rvs_check_E
+  - rvs_check

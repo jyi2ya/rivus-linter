@@ -1,10 +1,10 @@
 violations: 2
-error: rvs_bad_E calls rvs_good_ABEI but is missing capabilities [A(Async), B(Blocking), I(IO)]
+error: rvs_bad_B calls rvs_good_ABI but is missing capabilities [A(Async), I(IO)]
   at test.rs:7
-  caller has: {E}
-  target needs: {A, B, E, I}
+  caller has: {B}
+  target needs: {A, B, I}
 ---
-error: rvs_pure calls rvs_bad_E but is missing capabilities [E(Fallible)]
+error: rvs_pure calls rvs_bad_B but is missing capabilities [B(Blocking)]
   at test.rs:11
   caller has: {}
-  target needs: {E}
+  target needs: {B}

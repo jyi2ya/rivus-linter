@@ -1,2 +1,2 @@
-input: ABEI
-capabilities: {A, B, E, I}
+input: ABI
+capabilities: {A, B, I}

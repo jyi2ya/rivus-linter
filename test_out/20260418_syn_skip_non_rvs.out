@@ -1,4 +1,4 @@
 functions: 1
-name: rvs_check_E
+name: rvs_check_M
 calls: 1
   - regular_function

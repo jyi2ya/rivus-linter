@@ -1,0 +1,5 @@
+violations: 1
+error: rvs_read_state_U references STATE but is missing capabilities [S(SideEffect)]
+  at test.rs:5
+  caller has: {U}
+  target needs: {S, U}
