@@ -1,0 +1,3 @@
+into_impl_warnings: 1
+warning: impl Into<f64> for Celsius—prefer impl From<Celsius> for f64 instead
+  at test.rs:3

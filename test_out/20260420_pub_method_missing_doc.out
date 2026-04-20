@@ -1,0 +1,3 @@
+missing_doc_warnings: 1
+warning: public item 'rvs_method' is missing a doc comment (///)
+  at test.rs:4

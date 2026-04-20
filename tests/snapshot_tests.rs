@@ -3080,3 +3080,1256 @@ fn rvs_real_M() {}
 
     rvs_snapshot_BI("20260420_report_excludes_unused", format!("{report}"));
 }
+
+// ─── F1: #[allow(non_snake_case)] 标注检查 ───────────────────
+
+#[test]
+fn test_20260420_allow_missing_for_cap_fn() {
+    let source = r#"
+fn rvs_write_db_ABI() {}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.missing_allow_warnings.len(), 1);
+    assert_eq!(
+        output.missing_allow_warnings[0].function,
+        "rvs_write_db_ABI"
+    );
+
+    rvs_snapshot_BI(
+        "20260420_allow_missing_for_cap_fn",
+        format!(
+            "missing_allow_warnings: {}\n{}\n",
+            output.missing_allow_warnings.len(),
+            output.missing_allow_warnings[0],
+        ),
+    );
+}
+
+#[test]
+fn test_20260420_allow_present_on_fn_ok() {
+    let source = r#"
+#[allow(non_snake_case)]
+fn rvs_write_db_ABI() {}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.missing_allow_warnings.is_empty());
+
+    rvs_snapshot_BI(
+        "20260420_allow_present_on_fn_ok",
+        "missing_allow_warnings: 0\n",
+    );
+}
+
+#[test]
+fn test_20260420_allow_no_caps_no_warning() {
+    let source = r#"
+fn rvs_pure() {}
+fn rvs_helper() {}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.missing_allow_warnings.is_empty());
+
+    rvs_snapshot_BI(
+        "20260420_allow_no_caps_no_warning",
+        "missing_allow_warnings: 0\n",
+    );
+}
+
+#[test]
+fn test_20260420_allow_file_level_ok() {
+    let source = r#"#![allow(non_snake_case)]
+
+fn rvs_write_db_ABI() {}
+fn rvs_fetch_AI() {}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.missing_allow_warnings.is_empty());
+
+    rvs_snapshot_BI(
+        "20260420_allow_file_level_ok",
+        "missing_allow_warnings: 0\n",
+    );
+}
+
+#[test]
+fn test_20260420_allow_on_impl_block_ok() {
+    let source = r#"
+struct Svc;
+
+#[allow(non_snake_case)]
+impl Svc {
+    fn rvs_run_AI(&self) {}
+    fn rvs_stop_M(&mut self) {}
+}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.missing_allow_warnings.is_empty());
+
+    rvs_snapshot_BI(
+        "20260420_allow_on_impl_block_ok",
+        "missing_allow_warnings: 0\n",
+    );
+}
+
+#[test]
+fn test_20260420_allow_missing_on_impl_method() {
+    let source = r#"
+struct Svc;
+
+impl Svc {
+    fn rvs_run_AI(&self) {}
+}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.missing_allow_warnings.len(), 1);
+    assert_eq!(output.missing_allow_warnings[0].function, "rvs_run_AI");
+
+    rvs_snapshot_BI(
+        "20260420_allow_missing_on_impl_method",
+        format!(
+            "missing_allow_warnings: {}\n{}\n",
+            output.missing_allow_warnings.len(),
+            output.missing_allow_warnings[0],
+        ),
+    );
+}
+
+#[test]
+fn test_20260420_allow_mod_level_ok() {
+    let source = r#"
+#[allow(non_snake_case)]
+mod inner {
+    fn rvs_deep_BI() {}
+}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.missing_allow_warnings.is_empty());
+
+    rvs_snapshot_BI("20260420_allow_mod_level_ok", "missing_allow_warnings: 0\n");
+}
+
+// ─── F2: #[test] 命名格式检查 ───────────────────────────────
+
+#[test]
+fn test_20260420_testname_invalid_no_date() {
+    let source = r#"
+#[test]
+fn test_something_obvious() {}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.test_name_warnings.len(), 1);
+    assert_eq!(
+        output.test_name_warnings[0].function,
+        "test_something_obvious"
+    );
+
+    rvs_snapshot_BI(
+        "20260420_testname_invalid_no_date",
+        format!(
+            "test_name_warnings: {}\n{}\n",
+            output.test_name_warnings.len(),
+            output.test_name_warnings[0],
+        ),
+    );
+}
+
+#[test]
+fn test_20260420_testname_valid_ok() {
+    let source = r#"
+#[test]
+fn test_20260420_valid_shape() {}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.test_name_warnings.is_empty());
+
+    rvs_snapshot_BI("20260420_testname_valid_ok", "test_name_warnings: 0\n");
+}
+
+#[test]
+fn test_20260420_testname_wrong_date_length() {
+    let source = r#"
+#[test]
+fn test_202604_short_date() {}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.test_name_warnings.len(), 1);
+    assert_eq!(
+        output.test_name_warnings[0].function,
+        "test_202604_short_date"
+    );
+
+    rvs_snapshot_BI(
+        "20260420_testname_wrong_date_length",
+        format!(
+            "test_name_warnings: {}\n{}\n",
+            output.test_name_warnings.len(),
+            output.test_name_warnings[0],
+        ),
+    );
+}
+
+#[test]
+fn test_20260420_testname_no_test_prefix() {
+    let source = r#"
+#[test]
+fn check_20260420_something() {}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.test_name_warnings.len(), 1);
+    assert_eq!(
+        output.test_name_warnings[0].function,
+        "check_20260420_something"
+    );
+
+    rvs_snapshot_BI(
+        "20260420_testname_no_test_prefix",
+        format!(
+            "test_name_warnings: {}\n{}\n",
+            output.test_name_warnings.len(),
+            output.test_name_warnings[0],
+        ),
+    );
+}
+
+#[test]
+fn test_20260420_testname_inside_cfg_test_mod() {
+    let source = r#"
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn stale_name() {}
+
+    #[test]
+    fn test_20260420_good_name() {}
+}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.test_name_warnings.len(), 1);
+    assert_eq!(output.test_name_warnings[0].function, "stale_name");
+
+    rvs_snapshot_BI(
+        "20260420_testname_inside_cfg_test_mod",
+        format!(
+            "test_name_warnings: {}\n{}\n",
+            output.test_name_warnings.len(),
+            output.test_name_warnings[0],
+        ),
+    );
+}
+
+// ─── F3: #[test] 命名唯一性检查 ──────────────────────────────
+
+#[test]
+fn test_20260420_testname_duplicate_same_file() {
+    let source = r#"
+#[test]
+fn test_20260420_dup_case() {}
+
+mod inner {
+    #[test]
+    fn test_20260420_dup_case() {}
+}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.duplicate_test_warnings.len(), 1);
+    assert_eq!(
+        output.duplicate_test_warnings[0].name,
+        "test_20260420_dup_case"
+    );
+    assert_eq!(output.duplicate_test_warnings[0].occurrences.len(), 2);
+
+    rvs_snapshot_BI(
+        "20260420_testname_duplicate_same_file",
+        format!(
+            "duplicate_test_warnings: {}\n{}\n",
+            output.duplicate_test_warnings.len(),
+            output.duplicate_test_warnings[0],
+        ),
+    );
+}
+
+#[test]
+fn test_20260420_testname_no_duplicate_ok() {
+    let source = r#"
+#[test]
+fn test_20260420_first_case() {}
+
+#[test]
+fn test_20260420_second_case() {}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.duplicate_test_warnings.is_empty());
+
+    rvs_snapshot_BI(
+        "20260420_testname_no_duplicate_ok",
+        "duplicate_test_warnings: 0\n",
+    );
+}
+
+#[test]
+fn test_20260420_testname_duplicate_cross_file() {
+    let dir = std::env::temp_dir().join("rivus_test_dup_cross");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("a.rs"),
+        "#[test]\nfn test_20260420_shared_name() {}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("b.rs"),
+        "#[test]\nfn test_20260420_shared_name() {}\n",
+    )
+    .unwrap();
+
+    let output = rivus_linter::rvs_check_path_BI(&dir, &CapsMap::rvs_new()).unwrap();
+    let dup = output
+        .duplicate_test_warnings
+        .iter()
+        .find(|d| d.name == "test_20260420_shared_name")
+        .unwrap();
+    assert_eq!(dup.occurrences.len(), 2);
+
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    rvs_snapshot_BI(
+        "20260420_testname_duplicate_cross_file",
+        format!(
+            "duplicate name: {}\noccurrences: {}\n",
+            dup.name,
+            dup.occurrences.len()
+        ),
+    );
+}
+
+#[test]
+fn test_20260420_testname_triple_dup_same_file() {
+    let source = r#"
+#[test]
+fn test_20260420_triplicate() {}
+
+mod a {
+    #[test]
+    fn test_20260420_triplicate() {}
+}
+
+mod b {
+    #[test]
+    fn test_20260420_triplicate() {}
+}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.duplicate_test_warnings.len(), 1);
+    assert_eq!(output.duplicate_test_warnings[0].occurrences.len(), 3);
+
+    rvs_snapshot_BI(
+        "20260420_testname_triple_dup_same_file",
+        format!(
+            "duplicate name: {}\noccurrences: {}\n",
+            output.duplicate_test_warnings[0].name,
+            output.duplicate_test_warnings[0].occurrences.len(),
+        ),
+    );
+}
+
+// ─── G1: 被禁导入检查 ─────────────────────────────────────────
+
+#[test]
+fn test_20260420_banned_import_anyhow() {
+    let source = r#"
+use anyhow::Result;
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.banned_import_warnings.len(), 1);
+    assert_eq!(output.banned_import_warnings[0].crate_name, "anyhow");
+
+    rvs_snapshot_BI(
+        "20260420_banned_import_anyhow",
+        format!(
+            "banned_import_warnings: {}\n{}\n",
+            output.banned_import_warnings.len(),
+            output.banned_import_warnings[0],
+        ),
+    );
+}
+
+#[test]
+fn test_20260420_banned_import_eyre() {
+    let source = r#"
+use eyre::Report;
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.banned_import_warnings.len(), 1);
+    assert_eq!(output.banned_import_warnings[0].crate_name, "eyre");
+
+    rvs_snapshot_BI(
+        "20260420_banned_import_eyre",
+        format!(
+            "banned_import_warnings: {}\n{}\n",
+            output.banned_import_warnings.len(),
+            output.banned_import_warnings[0],
+        ),
+    );
+}
+
+#[test]
+fn test_20260420_banned_import_color_eyre() {
+    let source = r#"
+use color_eyre::eyre::Result;
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.banned_import_warnings.len(), 1);
+    assert_eq!(output.banned_import_warnings[0].crate_name, "color_eyre");
+
+    rvs_snapshot_BI(
+        "20260420_banned_import_color_eyre",
+        format!(
+            "banned_import_warnings: {}\n{}\n",
+            output.banned_import_warnings.len(),
+            output.banned_import_warnings[0],
+        ),
+    );
+}
+
+#[test]
+fn test_20260420_banned_import_allowed_ok() {
+    let source = r#"
+use std::collections::HashMap;
+use thiserror::Error;
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.banned_import_warnings.is_empty());
+
+    rvs_snapshot_BI(
+        "20260420_banned_import_allowed_ok",
+        "banned_import_warnings: 0\n",
+    );
+}
+
+#[test]
+fn test_20260420_banned_import_in_mod() {
+    let source = r#"
+mod inner {
+    use anyhow::Result;
+}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.banned_import_warnings.len(), 1);
+
+    rvs_snapshot_BI(
+        "20260420_banned_import_in_mod",
+        format!(
+            "banned_import_warnings: {}\n{}\n",
+            output.banned_import_warnings.len(),
+            output.banned_import_warnings[0],
+        ),
+    );
+}
+
+// ─── G2: 私有函数命名检查 ─────────────────────────────────────
+
+#[test]
+fn test_20260420_private_fn_missing_rvs() {
+    let source = r#"
+fn bad_private_fn() {}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.private_fn_warnings.len(), 1);
+    assert_eq!(output.private_fn_warnings[0].function, "bad_private_fn");
+
+    rvs_snapshot_BI(
+        "20260420_private_fn_missing_rvs",
+        format!(
+            "private_fn_warnings: {}\n{}\n",
+            output.private_fn_warnings.len(),
+            output.private_fn_warnings[0],
+        ),
+    );
+}
+
+#[test]
+fn test_20260420_private_fn_with_rvs_ok() {
+    let source = r#"
+fn rvs_good_private_P() { panic!("test"); }
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.private_fn_warnings.is_empty());
+
+    rvs_snapshot_BI(
+        "20260420_private_fn_with_rvs_ok",
+        "private_fn_warnings: 0\n",
+    );
+}
+
+#[test]
+fn test_20260420_private_fn_in_impl() {
+    let source = r#"
+struct Svc;
+
+impl Svc {
+    fn bad_private(&self) {}
+    fn rvs_good_private_M(&mut self) {}
+}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.private_fn_warnings.len(), 1);
+    assert_eq!(output.private_fn_warnings[0].function, "bad_private");
+
+    rvs_snapshot_BI(
+        "20260420_private_fn_in_impl",
+        format!(
+            "private_fn_warnings: {}\n{}\n",
+            output.private_fn_warnings.len(),
+            output.private_fn_warnings[0],
+        ),
+    );
+}
+
+#[test]
+fn test_20260420_private_fn_in_mod() {
+    let source = r#"
+mod inner {
+    fn bad_fn() {}
+    fn rvs_good_fn() {}
+}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.private_fn_warnings.len(), 1);
+    assert_eq!(output.private_fn_warnings[0].function, "bad_fn");
+
+    rvs_snapshot_BI(
+        "20260420_private_fn_in_mod",
+        format!(
+            "private_fn_warnings: {}\n{}\n",
+            output.private_fn_warnings.len(),
+            output.private_fn_warnings[0],
+        ),
+    );
+}
+
+// ─── 公开 API 文档注释检查 ────────────────────────────────
+
+#[test]
+fn test_20260420_pub_fn_missing_doc() {
+    let source = r#"
+pub fn rvs_foo_bar() {}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.missing_doc_warnings.len(), 1);
+    assert_eq!(output.missing_doc_warnings[0].item, "rvs_foo_bar");
+
+    rvs_snapshot_BI(
+        "20260420_pub_fn_missing_doc",
+        format!(
+            "missing_doc_warnings: {}\n{}\n",
+            output.missing_doc_warnings.len(),
+            output.missing_doc_warnings[0],
+        ),
+    );
+}
+
+#[test]
+fn test_20260420_pub_fn_with_doc_ok() {
+    let source = r#"
+/// 一个带文档的 pub 函数。
+pub fn rvs_foo_bar() {}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.missing_doc_warnings.is_empty());
+
+    rvs_snapshot_BI("20260420_pub_fn_with_doc_ok", "missing_doc_warnings: 0\n");
+}
+
+#[test]
+fn test_20260420_pub_method_missing_doc() {
+    let source = r#"
+pub struct Svc;
+impl Svc {
+    pub fn rvs_method() {}
+}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.missing_doc_warnings.len(), 1);
+    assert_eq!(output.missing_doc_warnings[0].item, "rvs_method");
+
+    rvs_snapshot_BI(
+        "20260420_pub_method_missing_doc",
+        format!(
+            "missing_doc_warnings: {}\n{}\n",
+            output.missing_doc_warnings.len(),
+            output.missing_doc_warnings[0],
+        ),
+    );
+}
+
+#[test]
+fn test_20260420_pub_method_with_doc_ok() {
+    let source = r#"
+pub struct Svc;
+impl Svc {
+    /// 方法的文档。
+    pub fn rvs_method() {}
+}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.missing_doc_warnings.is_empty());
+
+    rvs_snapshot_BI(
+        "20260420_pub_method_with_doc_ok",
+        "missing_doc_warnings: 0\n",
+    );
+}
+
+#[test]
+fn test_20260420_pub_trait_impl_exempt() {
+    // trait 实现方法（如 Display::fmt）不需要独立文档
+    let source = r#"
+use std::fmt;
+pub struct X;
+impl fmt::Display for X {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { Ok(()) }
+}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.missing_doc_warnings.is_empty());
+
+    rvs_snapshot_BI(
+        "20260420_pub_trait_impl_exempt",
+        "missing_doc_warnings: 0\n",
+    );
+}
+
+#[test]
+fn test_20260420_pub_fn_in_mod_missing_doc() {
+    let source = r#"
+pub mod inner {
+    pub fn rvs_foo() {}
+}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.missing_doc_warnings.len(), 1);
+    assert_eq!(output.missing_doc_warnings[0].item, "rvs_foo");
+
+    rvs_snapshot_BI(
+        "20260420_pub_fn_in_mod_missing_doc",
+        format!(
+            "missing_doc_warnings: {}\n{}\n",
+            output.missing_doc_warnings.len(),
+            output.missing_doc_warnings[0],
+        ),
+    );
+}
+
+#[test]
+fn test_20260420_private_fn_doc_optional() {
+    // 私有函数不检查文档
+    let source = r#"
+fn rvs_private() {}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.missing_doc_warnings.is_empty());
+
+    rvs_snapshot_BI(
+        "20260420_private_fn_doc_optional",
+        "missing_doc_warnings: 0\n",
+    );
+}
+
+// ─── D: 禁用 #![deny(warnings)] 反模式 ────────────────────
+
+#[test]
+fn test_20260420_deny_warnings_detected() {
+    let source = r#"
+#![deny(warnings)]
+pub fn rvs_foo() {}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.deny_warnings_warnings.len(), 1);
+
+    rvs_snapshot_BI(
+        "20260420_deny_warnings_detected",
+        format!(
+            "deny_warnings_warnings: {}\n{}\n",
+            output.deny_warnings_warnings.len(),
+            output.deny_warnings_warnings[0],
+        ),
+    );
+}
+
+#[test]
+fn test_20260420_deny_warnings_in_group() {
+    // 在 deny(...) 里作为多个 lint 之一也要抓
+    let source = r#"
+#![deny(unused, warnings, dead_code)]
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.deny_warnings_warnings.len(), 1);
+
+    rvs_snapshot_BI(
+        "20260420_deny_warnings_in_group",
+        format!(
+            "deny_warnings_warnings: {}\n",
+            output.deny_warnings_warnings.len()
+        ),
+    );
+}
+
+#[test]
+fn test_20260420_deny_specific_lints_ok() {
+    // 具名 lint 允许
+    let source = r#"
+#![deny(dead_code, unused_imports)]
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.deny_warnings_warnings.is_empty());
+
+    rvs_snapshot_BI(
+        "20260420_deny_specific_lints_ok",
+        "deny_warnings_warnings: 0\n",
+    );
+}
+
+// ─── A: 禁 wildcard import (use foo::*) ────────────────────
+
+#[test]
+fn test_20260420_wildcard_import_external() {
+    let source = r#"
+use bytes::*;
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.wildcard_import_warnings.len(), 1);
+    assert_eq!(output.wildcard_import_warnings[0].use_path, "bytes::*");
+
+    rvs_snapshot_BI(
+        "20260420_wildcard_import_external",
+        format!(
+            "wildcard_import_warnings: {}\n{}\n",
+            output.wildcard_import_warnings.len(),
+            output.wildcard_import_warnings[0],
+        ),
+    );
+}
+
+#[test]
+fn test_20260420_wildcard_import_super_ok() {
+    // 测试内部 use super::*; 是允许的
+    let source = r#"
+#[cfg(test)]
+mod tests {
+    use super::*;
+}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.wildcard_import_warnings.is_empty());
+
+    rvs_snapshot_BI(
+        "20260420_wildcard_import_super_ok",
+        "wildcard_import_warnings: 0\n",
+    );
+}
+
+#[test]
+fn test_20260420_wildcard_import_prelude_ok() {
+    // *::prelude::* 是允许的（crate 作者刻意暴露）
+    let source = r#"
+use tokio::prelude::*;
+use std::io::prelude::*;
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.wildcard_import_warnings.is_empty());
+
+    rvs_snapshot_BI(
+        "20260420_wildcard_import_prelude_ok",
+        "wildcard_import_warnings: 0\n",
+    );
+}
+
+#[test]
+fn test_20260420_wildcard_import_regular_use_ok() {
+    let source = r#"
+use std::collections::HashMap;
+use std::fs::File;
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.wildcard_import_warnings.is_empty());
+
+    rvs_snapshot_BI(
+        "20260420_wildcard_import_regular_use_ok",
+        "wildcard_import_warnings: 0\n",
+    );
+}
+
+// ─── C: unsafe fn 必须有 /// # Safety 文档 ────────────────────
+
+#[test]
+fn test_20260420_unsafe_fn_missing_safety_doc() {
+    let source = r#"
+/// 一个未记录 safety 的 unsafe 函数。
+pub unsafe fn rvs_dangerous_U() {}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.missing_safety_doc_warnings.len(), 1);
+    assert_eq!(
+        output.missing_safety_doc_warnings[0].function,
+        "rvs_dangerous_U"
+    );
+
+    rvs_snapshot_BI(
+        "20260420_unsafe_fn_missing_safety_doc",
+        format!(
+            "missing_safety_doc_warnings: {}\n{}\n",
+            output.missing_safety_doc_warnings.len(),
+            output.missing_safety_doc_warnings[0],
+        ),
+    );
+}
+
+#[test]
+fn test_20260420_unsafe_fn_with_safety_doc_ok() {
+    let source = r#"
+/// 做一些危险的事情。
+///
+/// # Safety
+///
+/// 调用者必须保证 ptr 有效。
+pub unsafe fn rvs_dangerous_U() {}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.missing_safety_doc_warnings.is_empty());
+
+    rvs_snapshot_BI(
+        "20260420_unsafe_fn_with_safety_doc_ok",
+        "missing_safety_doc_warnings: 0\n",
+    );
+}
+
+#[test]
+fn test_20260420_safe_fn_doesnt_need_safety() {
+    let source = r#"
+/// 纯的、安全的函数。
+pub fn rvs_safe() {}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.missing_safety_doc_warnings.is_empty());
+
+    rvs_snapshot_BI(
+        "20260420_safe_fn_doesnt_need_safety",
+        "missing_safety_doc_warnings: 0\n",
+    );
+}
+
+// ─── B: 借用类型参数建议 ────────────────────────────────
+
+#[test]
+fn test_20260420_borrowed_param_ref_string() {
+    // &String 应改 &str
+    let source = r#"
+pub fn rvs_foo(s: &String) -> usize { s.len() }
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.borrowed_param_warnings.len(), 1);
+    assert!(
+        output.borrowed_param_warnings[0]
+            .suggestion
+            .contains("&str")
+    );
+
+    rvs_snapshot_BI(
+        "20260420_borrowed_param_ref_string",
+        format!(
+            "borrowed_param_warnings: {}\n{}\n",
+            output.borrowed_param_warnings.len(),
+            output.borrowed_param_warnings[0],
+        ),
+    );
+}
+
+#[test]
+fn test_20260420_borrowed_param_ref_vec() {
+    // &Vec<T> 应改 &[T]
+    let source = r#"
+pub fn rvs_sum(xs: &Vec<i32>) -> i32 { xs.iter().sum() }
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.borrowed_param_warnings.len(), 1);
+    assert!(
+        output.borrowed_param_warnings[0]
+            .suggestion
+            .contains("&[T]")
+    );
+
+    rvs_snapshot_BI(
+        "20260420_borrowed_param_ref_vec",
+        format!(
+            "borrowed_param_warnings: {}\n{}\n",
+            output.borrowed_param_warnings.len(),
+            output.borrowed_param_warnings[0],
+        ),
+    );
+}
+
+#[test]
+fn test_20260420_borrowed_param_ref_box() {
+    // &Box<T> 应改 &T
+    let source = r#"
+pub fn rvs_foo(b: &Box<i32>) -> i32 { **b }
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.borrowed_param_warnings.len(), 1);
+    assert!(output.borrowed_param_warnings[0].suggestion.contains("&T"));
+
+    rvs_snapshot_BI(
+        "20260420_borrowed_param_ref_box",
+        format!(
+            "borrowed_param_warnings: {}\n{}\n",
+            output.borrowed_param_warnings.len(),
+            output.borrowed_param_warnings[0],
+        ),
+    );
+}
+
+#[test]
+fn test_20260420_borrowed_param_str_ok() {
+    // &str 是对的
+    let source = r#"
+pub fn rvs_foo(s: &str) -> usize { s.len() }
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.borrowed_param_warnings.is_empty());
+
+    rvs_snapshot_BI(
+        "20260420_borrowed_param_str_ok",
+        "borrowed_param_warnings: 0\n",
+    );
+}
+
+#[test]
+fn test_20260420_borrowed_param_owned_string_ok() {
+    // 拥有所有权的 String 参数是合理的（要 move/consume）
+    let source = r#"
+pub fn rvs_take(s: String) {}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.borrowed_param_warnings.is_empty());
+
+    rvs_snapshot_BI(
+        "20260420_borrowed_param_owned_string_ok",
+        "borrowed_param_warnings: 0\n",
+    );
+}
+
+#[test]
+fn test_20260420_borrowed_param_mut_ref_string_ok() {
+    // &mut String 是合理的（可能要做 push_str 等）
+    let source = r#"
+pub fn rvs_append_M(s: &mut String) { s.push_str("x"); }
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.borrowed_param_warnings.is_empty());
+
+    rvs_snapshot_BI(
+        "20260420_borrowed_param_mut_ref_string_ok",
+        "borrowed_param_warnings: 0\n",
+    );
+}
+
+#[test]
+fn test_20260420_missing_debug_pub_struct() {
+    let source = r#"
+pub struct Foo { x: i32 }
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.missing_debug_warnings.len(), 1);
+    assert!(output.missing_debug_warnings[0].name.contains("Foo"));
+
+    rvs_snapshot_BI(
+        "20260420_missing_debug_pub_struct",
+        format!(
+            "missing_debug_warnings: {}\n{}\n",
+            output.missing_debug_warnings.len(),
+            output.missing_debug_warnings[0],
+        ),
+    );
+}
+
+#[test]
+fn test_20260420_missing_debug_pub_enum() {
+    let source = r#"
+pub enum Color { Red, Green, Blue }
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.missing_debug_warnings.len(), 1);
+
+    rvs_snapshot_BI(
+        "20260420_missing_debug_pub_enum",
+        format!(
+            "missing_debug_warnings: {}\n{}\n",
+            output.missing_debug_warnings.len(),
+            output.missing_debug_warnings[0],
+        ),
+    );
+}
+
+#[test]
+fn test_20260420_missing_debug_with_derive_ok() {
+    let source = r#"
+#[derive(Debug)]
+pub struct Foo { x: i32 }
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.missing_debug_warnings.is_empty());
+
+    rvs_snapshot_BI(
+        "20260420_missing_debug_with_derive_ok",
+        "missing_debug_warnings: 0\n",
+    );
+}
+
+#[test]
+fn test_20260420_missing_debug_private_ok() {
+    let source = r#"
+struct Foo { x: i32 }
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.missing_debug_warnings.is_empty());
+
+    rvs_snapshot_BI(
+        "20260420_missing_debug_private_ok",
+        "missing_debug_warnings: 0\n",
+    );
+}
+
+#[test]
+fn test_20260420_missing_panics_doc_P_marker() {
+    let source = r#"
+#[allow(non_snake_case)]
+pub fn rvs_divide_P(a: i32, b: i32) -> i32 { a / b }
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.missing_panics_doc_warnings.len(), 1);
+    assert!(
+        output.missing_panics_doc_warnings[0]
+            .function
+            .contains("rvs_divide_P")
+    );
+
+    rvs_snapshot_BI(
+        "20260420_missing_panics_doc_P_marker",
+        format!(
+            "missing_panics_doc_warnings: {}\n{}\n",
+            output.missing_panics_doc_warnings.len(),
+            output.missing_panics_doc_warnings[0],
+        ),
+    );
+}
+
+#[test]
+fn test_20260420_missing_panics_doc_with_doc_ok() {
+    let source = r#"
+/// Does a division.
+///
+/// # Panics
+///
+/// Panics if b is zero.
+#[allow(non_snake_case)]
+pub fn rvs_divide_P(a: i32, b: i32) -> i32 { a / b }
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.missing_panics_doc_warnings.is_empty());
+
+    rvs_snapshot_BI(
+        "20260420_missing_panics_doc_with_doc_ok",
+        "missing_panics_doc_warnings: 0\n",
+    );
+}
+
+#[test]
+fn test_20260420_missing_panics_doc_no_P_ok() {
+    let source = r#"
+#[allow(non_snake_case)]
+pub fn rvs_add(a: i32, b: i32) -> i32 { a + b }
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.missing_panics_doc_warnings.is_empty());
+
+    rvs_snapshot_BI(
+        "20260420_missing_panics_doc_no_P_ok",
+        "missing_panics_doc_warnings: 0\n",
+    );
+}
+
+#[test]
+fn test_20260420_into_impl_detected() {
+    let source = r#"
+struct Celsius(f64);
+impl Into<f64> for Celsius {
+    fn into(self) -> f64 { self.0 }
+}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.into_impl_warnings.len(), 1);
+    assert!(output.into_impl_warnings[0].impl_type.contains("Celsius"));
+
+    rvs_snapshot_BI(
+        "20260420_into_impl_detected",
+        format!(
+            "into_impl_warnings: {}\n{}\n",
+            output.into_impl_warnings.len(),
+            output.into_impl_warnings[0],
+        ),
+    );
+}
+
+#[test]
+fn test_20260420_from_impl_ok() {
+    let source = r#"
+struct Celsius(f64);
+impl From<Celsius> for f64 {
+    fn from(c: Celsius) -> f64 { c.0 }
+}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.into_impl_warnings.is_empty());
+
+    rvs_snapshot_BI("20260420_from_impl_ok", "into_impl_warnings: 0\n");
+}
+
+#[test]
+fn test_20260420_consumed_arg_on_error() {
+    let source = r#"
+#[allow(non_snake_case)]
+pub fn rvs_parse_P(data: String) -> Result<(), ParseError> { Err(ParseError) }
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.consumed_arg_on_error_warnings.len(), 1);
+    assert!(
+        output.consumed_arg_on_error_warnings[0]
+            .param_type
+            .contains("String")
+    );
+
+    rvs_snapshot_BI(
+        "20260420_consumed_arg_on_error",
+        format!(
+            "consumed_arg_on_error_warnings: {}\n{}\n",
+            output.consumed_arg_on_error_warnings.len(),
+            output.consumed_arg_on_error_warnings[0],
+        ),
+    );
+}
+
+#[test]
+fn test_20260420_consumed_arg_preserved_in_error_ok() {
+    let source = r#"
+#[allow(non_snake_case)]
+pub fn rvs_parse_P(data: String) -> Result<(), ParseError<String>> { Err(ParseError(data)) }
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.consumed_arg_on_error_warnings.is_empty());
+
+    rvs_snapshot_BI(
+        "20260420_consumed_arg_preserved_in_error_ok",
+        "consumed_arg_on_error_warnings: 0\n",
+    );
+}
+
+#[test]
+fn test_20260420_consumed_arg_ref_ok() {
+    let source = r#"
+#[allow(non_snake_case)]
+pub fn rvs_parse(data: &str) -> Result<(), ParseError> { Err(ParseError) }
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.consumed_arg_on_error_warnings.is_empty());
+
+    rvs_snapshot_BI(
+        "20260420_consumed_arg_ref_ok",
+        "consumed_arg_on_error_warnings: 0\n",
+    );
+}
+
+#[test]
+fn test_20260420_deref_polymorphism_detected() {
+    let source = r#"
+struct MyVec(Vec<i32>);
+impl std::ops::Deref for MyVec {
+    type Target = Vec<i32>;
+    fn deref(&self) -> &Self::Target { &self.0 }
+}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.deref_polymorphism_warnings.len(), 1);
+    assert!(
+        output.deref_polymorphism_warnings[0]
+            .impl_type
+            .contains("MyVec")
+    );
+
+    rvs_snapshot_BI(
+        "20260420_deref_polymorphism_detected",
+        format!(
+            "deref_polymorphism_warnings: {}\n{}\n",
+            output.deref_polymorphism_warnings.len(),
+            output.deref_polymorphism_warnings[0],
+        ),
+    );
+}
+
+#[test]
+fn test_20260420_deref_smart_pointer_ok() {
+    let source = r#"
+struct MyBox<T>(T);
+impl<T> std::ops::Deref for MyBox<T> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target { &self.0 }
+}
+"#;
+    // This WILL be flagged — Deref polymorphism is always flagged.
+    // Smart pointers are a legitimate use, but the linter warns by default.
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.deref_polymorphism_warnings.len(), 1);
+
+    rvs_snapshot_BI(
+        "20260420_deref_smart_pointer_warned",
+        format!(
+            "deref_polymorphism_warnings: {}\n{}\n",
+            output.deref_polymorphism_warnings.len(),
+            output.deref_polymorphism_warnings[0],
+        ),
+    );
+}
+
+#[test]
+fn test_20260420_reflection_usage_any() {
+    let source = r#"
+#[allow(non_snake_case)]
+pub fn rvs_process_P() -> String { std::any::type_name::<i32>().to_string() }
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.reflection_usage_warnings.len(), 1);
+    assert!(output.reflection_usage_warnings[0].path.contains("any"));
+
+    rvs_snapshot_BI(
+        "20260420_reflection_usage_any",
+        format!(
+            "reflection_usage_warnings: {}\n{}\n",
+            output.reflection_usage_warnings.len(),
+            output.reflection_usage_warnings[0],
+        ),
+    );
+}
+
+#[test]
+fn test_20260420_reflection_usage_ok() {
+    let source = r#"
+#[allow(non_snake_case)]
+pub fn rvs_process(value: &dyn std::fmt::Debug) -> String { format!("{value:?}") }
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.reflection_usage_warnings.is_empty());
+
+    rvs_snapshot_BI(
+        "20260420_reflection_usage_ok",
+        "reflection_usage_warnings: 0\n",
+    );
+}

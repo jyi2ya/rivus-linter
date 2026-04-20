@@ -1,0 +1,3 @@
+borrowed_param_warnings: 1
+warning: param 'b' of 'rvs_foo' uses '&Box<T>'—prefer '&T'
+  at test.rs:2

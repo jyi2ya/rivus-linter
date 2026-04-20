@@ -1,0 +1,3 @@
+private_fn_warnings: 1
+warning: private function 'bad_private' should have rvs_ prefix
+  at test.rs:5

@@ -1,0 +1,3 @@
+deref_polymorphism_warnings: 1
+warning: impl Deref for MyBox with Target = T looks like Deref polymorphism—use composition instead of emulating inheritance
+  at test.rs:3

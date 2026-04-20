@@ -1,0 +1,3 @@
+missing_safety_doc_warnings: 1
+warning: unsafe fn 'rvs_dangerous_U' is missing a `/// # Safety` doc section
+  at test.rs:3

@@ -17,6 +17,8 @@ description: 宝宝你应该这么写代码
 
 **rivus-linter 会自动检查**：如果 `rvs_` 函数的参数类型为原始数值类型（`i8`~`i128`、`u8`~`u128`、`f32`、`f64`、`isize`、`usize`）但未对该参数写 `debug_assert!`（含 `debug_assert_eq!`、`debug_assert_ne!`），则发出警告。`self` / `&self` / `&mut self` 不算参数，trait 方法声明（无默认实现）不触发此检查。非原始数值类型的参数（引用、字符串、泛型、自定义类型等）已被类型系统充分约束，无需强制断言。
 
+**检测机制**：linter 用 `starts_with("debug_assert")` 匹配宏名，因此任何以 `debug_assert` 开头的自定义宏也会被识别为断言宏。断言参数的提取基于名称匹配——`debug_assert!` 宏体中出现的标识符如果与参数名相同，即视为已断言。这是启发式检测，不保证语义精确（例如 `debug_assert!(x > 0)` 中的 `x` 会被视为已断言参数 `x`，即使断言的是其他性质）。
+
 启用以前因"误报太多"而被关闭的 lint 和静态分析规则，由你过滤噪音，只将真正的问题呈现给人类。
 
 契约三要素：
@@ -61,7 +63,7 @@ fn rvs_transfer_M(
 
 你必须编写详细的单元测试。出现 bug 时，将触发 bug 的奇怪输入编写为回归测试。采用快照测试方法，将每个测试的输出保存在项目根目录下的 `test_out` 目录中。
 
-每个测试必须有唯一名字，格式为 `YYYYMMDD_test_name`，其中前八位是日期
+每个测试必须有唯一名字，格式为 `test_YYYYMMDD_name`，即 `test_` 前缀 + 八位日期 + 下划线 + 描述名。linter 会检查测试函数名是否匹配 `^test_\d{8}_\w+$`
 
 用户提出软件的问题时，在确认有问题后，必须构造一个可以触发该问题的测试用例。之后才允许对软件进行修改。
 
@@ -79,10 +81,10 @@ fn rvs_transfer_M(
 
 ```
 test_out/
-├── 20260001_parse_ipv4_valid.out
-├── 20260002_parse_ipv4_missing_octet.out
-├── 20260003_sort_empty_list.out
-└── 20260004_sort_single_element.out
+├── test_20260001_parse_ipv4_valid.out
+├── test_20260002_parse_ipv4_missing_octet.out
+├── test_20260003_sort_empty_list.out
+└── test_20260004_sort_single_element.out
 ```
 
 ---
@@ -161,7 +163,7 @@ async fn rvs_send_email_AIS(email: &Validated<Email>, body: &str) -> Result<(), 
 
 你的所有函数名必须以 `rvs_` 开头！实现外部 traits 除外
 
-记得在每个 `rvs_` 函数上标注 `#[allow(non_snake_case)]`，防止编译器对大写字母后缀发出警告。
+记得在每个 `rvs_` 函数上标注 `#[allow(non_snake_case)]`，防止编译器对大写字母后缀发出警告。此标注可从外层作用域继承——如果在文件级（`#![allow(non_snake_case)]`）、`mod` 级、`impl` 块或 `trait` 定义上标注了 `#[allow(non_snake_case)]`，则内部的所有 `rvs_` 函数均视为已覆盖，无需逐个重复标注。linter 会检查此标注是否存在于函数自身或任意外层作用域。
 
 ### 能力字母表
 
@@ -249,23 +251,51 @@ rivus-linter check src/ -m capsmap.txt
 
 退出码：`0` = 无违规，`1` = 有违规，`2` = 运行错误。hint 和 warning 不影响退出码。
 
-`check` 和 `mir-check` 子命令输出四类结果：
+`check` 和 `mir-check` 子命令输出三类结果：
 
 | 类别 | 关键字 | 含义 | 影响退出码 |
 |------|--------|------|-----------|
 | 违规 | `error` | 调用链能力冲突（函数调用越权或静态变量引用越权） | 是 |
-| 警告 | `warning` | 调用了既非 `rvs_` 前缀也不在 capsmap 中的函数 | 否 |
-| 缺断言警告 | `warning` | `rvs_` 函数有原始数值类型参数却未写 `debug_assert!` | 否 |
-| 死代码警告 | `warning` | `rvs_` 函数被 `#[allow(dead_code)]` 或 `#[allow(unused)]` 标记 | 否 |
+| 警告 | `warning` | 各种代码质量问题（详见下表） | 否 |
 | 推断提示 | `hint` | 函数的实际行为暗示应有某能力但名字里没写 | 否 |
 
 **违规（violation）**分两种：函数调用越权（`calls`）和静态变量引用越权（`references`）。后者指函数引用了 `static` 或 `thread_local!` 变量但缺少相应的能力：`static` 不可变引用需要 `S`，`static mut` 引用需要 `S` + `U`，`thread_local!` 引用需要 `S` + `T`。
+
+### 警告类型完整列表
+
+linter 会产生以下警告（均为 `warning` 关键字，不影响退出码）：
+
+| 警告类型 | 含义 |
+|---------|------|
+| `Warning` | 调用了既非 `rvs_` 前缀也不在 capsmap 中的函数 |
+| `MissingAssertWarning` | `rvs_` 函数有原始数值类型参数却未写 `debug_assert!` |
+| `DeadCodeWarning` | `rvs_` 函数被 `#[allow(dead_code)]` 或 `#[allow(unused)]` 标记 |
+| `MissingAllowWarning` | `rvs_` 函数有大写后缀但未被 `#[allow(non_snake_case)]` 覆盖（含外层继承） |
+| `TestNameFormatWarning` | `#[test]` 函数名不匹配 `^test_\d{8}_\w+$` 格式 |
+| `DuplicateTestWarning` | 同名测试函数出现多次（跨文件检测） |
+| `BannedImportWarning` | 导入了被禁 crate（`anyhow`、`eyre`、`color_eyre`） |
+| `PrivateFnNamingWarning` | 私有函数（无 `pub`）缺少 `rvs_` 前缀（`#[test]` 函数、`main`、trait impl 方法除外） |
+| `MissingDocWarning` | pub 函数/方法缺少 `///` 文档注释 |
+| `DenyWarningsWarning` | 文件级 `#![deny(warnings)]` 反模式——应改用具名 lint |
+| `WildcardImportWarning` | `use xxx::*;` 通配导入（`super::*` 和 `*::prelude::*` 除外） |
+| `MissingSafetyDocWarning` | unsafe 函数缺少 `/// # Safety` 文档段 |
+| `BorrowedParamWarning` | 参数使用 `&String`/`&Vec<T>`/`&Box<T>`——应改用 `&str`/`&[T]`/`&T` |
+| `MissingDebugWarning` | pub struct/enum 缺少 `#[derive(Debug)]` |
+| `MissingPanicsDocWarning` | 带 `P` 标记的函数缺少 `/// # Panics` 文档段 |
+| `IntoImplWarning` | 直接实现 `Into`——应实现 `From`，`Into` 会自动提供 |
+| `ConsumedArgOnErrorWarning` | 函数消费了 owned 参数但错误类型中未保留该参数（当前仅检查返回 `Result<(), E>` 的函数） |
+| `DerefPolymorphismWarning` | 实现 `Deref`——可能用 Deref 模拟继承，应改用组合（当前不区分智能指针，所有 `Deref` 实现均被标记） |
+| `ReflectionUsageWarning` | 使用了 `std::any::Any`/`type_name`/`type_id`——应改用 trait 分发（仅检测函数调用，类型标注不触发） |
 
 #### `rivus-linter mir-check <path> [-m <capsmap>] [--mir-dir <dir>]`
 
 基于 MIR 的分析。编译项目到 MIR 中间表示，从编译器的视角提取函数调用。比 syn 更精确——能看到编译器展开的 trait 方法调用、闭包、运算符重载等 syn 看不到的东西。
 
-**当前 MIR 检查的局限**：MIR 提取的函数信息在某些字段上不如 syn 完整。具体而言，MIR 检查能产生 `MissingPanic` 和 `MissingMutable`（基于 `&mut` 参数签名）推断提示，但不能检测静态变量引用（不产生 `MissingSideEffect`/`MissingThreadLocal`）、`MissingAsync`、`MissingUnsafe`、缺断言警告等。对于这些推断，应依赖 syn 检查。
+**当前 MIR 检查的局限**：
+
+1. **MIR 不执行额外 lint 检查**：MIR 检查仅做能力合规性检查（违规 + 推断提示），不执行上述 19 种警告检查（被禁导入、测试命名、私有函数、缺文档、通配导入等）。这些 lint 依赖 syn 的 AST 分析，须通过 `rivus-linter check` 运行。
+
+2. **推断提示不完整**：MIR 检查能产生 `MissingPanic` 和 `MissingMutable`（基于 `&mut` 参数签名）推断提示，但不能检测静态变量引用（不产生 `MissingSideEffect`/`MissingThreadLocal`）、`MissingAsync`、`MissingUnsafe`、缺断言警告等。对于这些推断，应依赖 syn 检查。
 
 ```bash
 # 完整流程：自动编译到 MIR 再检查
@@ -282,6 +312,8 @@ rivus-linter mir-check . -m capsmap.txt --mir-dir target/debug/deps
 统计 `path` 下所有 `.rs` 文件中 `rvs_` 函数的能力分布，输出各能力标记的函数数量和行数占比。好函数（能力 ≤ ABM）应该越多越好。
 
 **报告中的百分比和柱状图均基于行数占比，而非函数数量占比。** 因此优化报告指标的方向是减少非好函数的代码行数——将逻辑从高能力函数抽出到低能力/纯函数中，比单纯增加纯函数数量更有效。
+
+**严禁注水**：为了提高好函数率而向代码库中注入无实际业务价值的纯函数（例如将一个常量拆成多个只返回该常量的函数、添加无人调用的纯函数、把一行逻辑拆成多个只被调用一次的琐碎纯函数等）是被禁止的。好函数率的提升必须来自**有意义的重构**——将高能力函数中的可测试逻辑提取为独立的纯函数，而非凭空创造纯函数来稀释分母。
 
 **以下函数会被排除在统计之外，不计入报告**（防止通过写死代码刷指标）：
 - `#[test]` 函数
@@ -345,6 +377,33 @@ use rivus_linter::{
 | `rvs_build_report(functions)` | 从函数列表生成能力统计报告 |
 | `rvs_report_path_BI(path)` | 读取路径并生成报告 |
 
+此外，库还导出以下提取函数，供需要细粒度控制的调用方使用：
+
+| 函数 | 用途 |
+|------|------|
+| `rvs_extract_tests(source)` | 提取 `#[test]` 函数名和行号 |
+| `rvs_extract_imports(source)` | 提取 `use` 导入语句 |
+| `rvs_extract_private_fns(source)` | 提取私有函数（无 `pub`） |
+| `rvs_extract_pub_items(source)` | 提取 pub 函数/方法及其文档状态 |
+| `rvs_extract_unsafe_fns(source)` | 提取 unsafe 函数及其 `/// # Safety` 文档状态 |
+| `rvs_extract_borrowed_params(source)` | 提取 `&String`/`&Vec<T>`/`&Box<T>` 参数 |
+| `rvs_extract_deny_warnings(source)` | 检测文件级 `#![deny(warnings)]` |
+| `rvs_extract_missing_debug(source)` | 提取缺少 `#[derive(Debug)]` 的 pub 类型 |
+| `rvs_extract_missing_panics_doc(source)` | 提取带 `P` 标记但缺 `/// # Panics` 的函数 |
+| `rvs_extract_into_impls(source)` | 提取直接实现 `Into` 的 impl 块 |
+| `rvs_extract_consumed_arg_on_error(source)` | 提取消费 owned 参数但错误中未保留的函数 |
+| `rvs_extract_deref_polymorphism(source)` | 提取非智能指针的 `Deref` 实现 |
+| `rvs_extract_reflection_usage(&functions)` | 从已提取的函数中检测 `std::any::Any`/`type_name`/`type_id` 使用 |
+
+以及以下检查辅助函数：
+
+| 函数 | 用途 |
+|------|------|
+| `rvs_check_imports(imports, file)` | 检查被禁 crate 导入 |
+| `rvs_check_missing_doc(pubs, file)` | 检查 pub 项缺文档 |
+| `rvs_find_duplicate_tests(entries)` | 查找跨文件同名测试 |
+| `rvs_is_valid_test_name(name)` | 判断测试名是否符合 `^test_\d{8}_\w+$` |
+
 ### capsmap.txt 格式
 
 项目根目录下的 `capsmap.txt` 文件为非 `rvs_` 函数声明能力。每行一个条目，格式：
@@ -363,7 +422,7 @@ core::panicking::panic=P       # 可能 panic
 ```
 
 - 注释（`#` 后的内容）会被 linter 忽略，可用于标注信任程度
-- linter 对 capsmap 中的键做**后缀匹配**：`HashMap::new=` 能匹配 `std::collections::HashMap::new`。如果匹配到了错误的条目，在代码里把调用路径写长一点以消除歧义
+- linter 对 capsmap 中的键做**双向后缀匹配**：`name.ends_with("::key")` 或 `key.ends_with("::name")` 均可命中。例如 capsmap 中的 `HashMap::new=` 能匹配代码中的 `std::collections::HashMap::new`；反过来，代码中的 `Vec::new` 也能匹配 capsmap 中的 `alloc::vec::Vec::new=`。先查全名精确匹配，找不到再做双向后缀匹配。如果匹配到了错误的条目，在代码里把调用路径写长一点以消除歧义
 - 如果 linter 报告某函数"既非 rvs_-prefixed nor in capsmap"，你需要补全 capsmap。方法优先级：检查源码 > 编写测试验证行为 > 合理猜测
 
 ### 日常开发流程

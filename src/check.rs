@@ -5,8 +5,229 @@ use std::path::Path;
 
 use crate::capability::{Capability, CapabilitySet, parse_rvs_function};
 use crate::capsmap::CapsMap;
-use crate::extract::{FnDef, rvs_extract_functions};
+use crate::extract::{
+    BorrowedParamInfo, ConsumedArgOnErrorInfo, DerefPolymorphismInfo, FnDef, ImportInfo,
+    IntoImplInfo, MissingDebugInfo, MissingPanicsDocInfo, PrivateFnInfo, PubItemInfo,
+    ReflectionUsageInfo, TestName, UnsafeFnInfo, rvs_extract_borrowed_params,
+    rvs_extract_consumed_arg_on_error, rvs_extract_deny_warnings, rvs_extract_deref_polymorphism,
+    rvs_extract_functions, rvs_extract_imports, rvs_extract_into_impls, rvs_extract_missing_debug,
+    rvs_extract_missing_panics_doc, rvs_extract_private_fns, rvs_extract_pub_items,
+    rvs_extract_reflection_usage, rvs_extract_tests, rvs_extract_unsafe_fns,
+};
 use crate::source::rvs_read_rust_sources_BI;
+
+/// 被禁用的 crate 列表。
+const BANNED_CRATES: &[&str] = &["anyhow", "eyre", "color_eyre"];
+
+/// 纯函数：检查导入列表中是否包含被禁 crate。
+/// 返回所有被禁导入的警告。
+pub fn rvs_check_imports(imports: &[ImportInfo], file: &str) -> Vec<BannedImportWarning> {
+    let mut warnings = Vec::new();
+    for imp in imports {
+        let first_segment = imp.use_path.split("::").next().unwrap_or("");
+        for &banned in BANNED_CRATES {
+            if first_segment == banned {
+                warnings.push(BannedImportWarning {
+                    crate_name: banned.to_string(),
+                    use_path: imp.use_path.clone(),
+                    file: file.to_string(),
+                    line: imp.line,
+                });
+                break;
+            }
+        }
+    }
+    warnings
+}
+
+/// 纯函数：检查导入列表中是否有 wildcard import（`use xxx::*;`）。
+/// 例外：`use super::*;` 和 `use *::prelude::*;`。
+fn rvs_check_wildcard_imports(imports: &[ImportInfo], file: &str) -> Vec<WildcardImportWarning> {
+    imports
+        .iter()
+        .filter(|imp| rvs_is_banned_wildcard(&imp.use_path))
+        .map(|imp| WildcardImportWarning {
+            use_path: imp.use_path.clone(),
+            file: file.to_string(),
+            line: imp.line,
+        })
+        .collect()
+}
+
+/// 判断 use 路径是否为被禁的 wildcard import。
+/// 允许 `super::*` 和 `*::prelude::*`。
+fn rvs_is_banned_wildcard(use_path: &str) -> bool {
+    if !use_path.contains('*') {
+        return false;
+    }
+    let normalized = use_path.replace(' ', "");
+    if normalized == "super::*" {
+        return false;
+    }
+    if normalized.contains("::prelude::*") {
+        return false;
+    }
+    true
+}
+
+/// 纯函数：检查函数参数中是否有 `&String`/`&Vec<T>`/`&Box<T>` 借用类型。
+fn rvs_check_borrowed_params(
+    params: &[BorrowedParamInfo],
+    file: &str,
+) -> Vec<BorrowedParamWarning> {
+    params
+        .iter()
+        .map(|p| BorrowedParamWarning {
+            function: p.function.clone(),
+            param: p.param.clone(),
+            original: p.original.clone(),
+            suggestion: p.suggestion.clone(),
+            file: file.to_string(),
+            line: p.line,
+        })
+        .collect()
+}
+
+/// 纯函数：检查 unsafe 函数是否缺少 `/// # Safety` 文档。
+fn rvs_check_unsafe_safety_doc(fns: &[UnsafeFnInfo], file: &str) -> Vec<MissingSafetyDocWarning> {
+    fns.iter()
+        .filter(|f| !f.has_safety_doc)
+        .map(|f| MissingSafetyDocWarning {
+            function: f.name.clone(),
+            file: file.to_string(),
+            line: f.line,
+        })
+        .collect()
+}
+
+/// 纯函数：检查文件级 `#![deny(warnings)]` 反模式。
+fn rvs_check_deny_warnings(line: Option<usize>, file: &str) -> Vec<DenyWarningsWarning> {
+    line.map(|l| {
+        vec![DenyWarningsWarning {
+            file: file.to_string(),
+            line: l,
+        }]
+    })
+    .unwrap_or_default()
+}
+
+fn rvs_check_missing_debug(items: &[MissingDebugInfo], file: &str) -> Vec<MissingDebugWarning> {
+    items
+        .iter()
+        .map(|i| MissingDebugWarning {
+            name: i.name.clone(),
+            file: file.to_string(),
+            line: i.line,
+        })
+        .collect()
+}
+
+fn rvs_check_missing_panics_doc(
+    items: &[MissingPanicsDocInfo],
+    file: &str,
+) -> Vec<MissingPanicsDocWarning> {
+    items
+        .iter()
+        .map(|i| MissingPanicsDocWarning {
+            function: i.function.clone(),
+            file: file.to_string(),
+            line: i.line,
+        })
+        .collect()
+}
+
+fn rvs_check_into_impls(items: &[IntoImplInfo], file: &str) -> Vec<IntoImplWarning> {
+    items
+        .iter()
+        .map(|i| IntoImplWarning {
+            impl_type: i.impl_type.clone(),
+            target_type: i.target_type.clone(),
+            file: file.to_string(),
+            line: i.line,
+        })
+        .collect()
+}
+
+fn rvs_check_consumed_arg_on_error(
+    items: &[ConsumedArgOnErrorInfo],
+    file: &str,
+) -> Vec<ConsumedArgOnErrorWarning> {
+    items
+        .iter()
+        .map(|i| ConsumedArgOnErrorWarning {
+            function: i.function.clone(),
+            param: i.param.clone(),
+            param_type: i.param_type.clone(),
+            file: file.to_string(),
+            line: i.line,
+        })
+        .collect()
+}
+
+fn rvs_check_deref_polymorphism(
+    items: &[DerefPolymorphismInfo],
+    file: &str,
+) -> Vec<DerefPolymorphismWarning> {
+    items
+        .iter()
+        .map(|i| DerefPolymorphismWarning {
+            impl_type: i.impl_type.clone(),
+            target_type: i.target_type.clone(),
+            file: file.to_string(),
+            line: i.line,
+        })
+        .collect()
+}
+
+fn rvs_check_reflection_usage(
+    items: &[ReflectionUsageInfo],
+    file: &str,
+) -> Vec<ReflectionUsageWarning> {
+    items
+        .iter()
+        .map(|i| ReflectionUsageWarning {
+            function: i.function.clone(),
+            path: i.path.clone(),
+            file: file.to_string(),
+            line: i.line,
+        })
+        .collect()
+}
+
+/// 纯函数：检查私有函数列表中是否缺少 rvs_ 前缀。
+/// 返回所有缺少前缀的私有函数警告。
+fn rvs_check_private_fn_names(
+    private_fns: &[PrivateFnInfo],
+    file: &str,
+) -> Vec<PrivateFnNamingWarning> {
+    let mut warnings = Vec::new();
+    for func in private_fns {
+        // 只报告没有 rvs_ 前缀的私有函数
+        if !func.has_rvs_prefix {
+            warnings.push(PrivateFnNamingWarning {
+                function: func.name.clone(),
+                file: file.to_string(),
+                line: func.line,
+            });
+        }
+    }
+    warnings
+}
+
+/// 纯函数：检查 pub 函数/方法列表中是否缺少文档注释。
+pub fn rvs_check_missing_doc(pubs: &[PubItemInfo], file: &str) -> Vec<MissingDocWarning> {
+    let mut warnings = Vec::new();
+    for item in pubs {
+        if !item.has_doc {
+            warnings.push(MissingDocWarning {
+                item: item.name.clone(),
+                file: file.to_string(),
+                line: item.line,
+            });
+        }
+    }
+    warnings
+}
 
 /// 违规之别：调用越权与静态引用越权。
 #[derive(Debug, Clone, PartialEq)]
@@ -79,14 +300,287 @@ impl fmt::Display for Warning {
     }
 }
 
-/// 检查结果：违规、警告、缺断言警告、死代码警告、推断警告。
+/// 一条被禁导入警告：使用了 anyhow、eyre 或 color_eyre 等被禁 crate。
 #[derive(Debug, Clone)]
+pub struct BannedImportWarning {
+    pub crate_name: String,
+    pub use_path: String,
+    pub file: String,
+    pub line: usize,
+}
+
+impl fmt::Display for BannedImportWarning {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "warning: banned crate '{}' imported via '{}'\n  at {}:{}",
+            self.crate_name, self.use_path, self.file, self.line,
+        )
+    }
+}
+
+/// 一条私有函数命名警告：非 rvs_ 前缀的私有函数。
+/// 私有函数（无 `pub` 关键字）应以 rvs_ 开头以便追踪。
+#[derive(Debug, Clone)]
+pub struct PrivateFnNamingWarning {
+    pub function: String,
+    pub file: String,
+    pub line: usize,
+}
+
+impl fmt::Display for PrivateFnNamingWarning {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "warning: private function '{}' should have rvs_ prefix\n  at {}:{}",
+            self.function, self.file, self.line,
+        )
+    }
+}
+
+/// 一条公开 API 缺文档警告：pub 函数/方法没有 `///` 或 `#[doc]` 注释。
+#[derive(Debug, Clone)]
+pub struct MissingDocWarning {
+    pub item: String,
+    pub file: String,
+    pub line: usize,
+}
+
+impl fmt::Display for MissingDocWarning {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "warning: public item '{}' is missing a doc comment (///)\n  at {}:{}",
+            self.item, self.file, self.line,
+        )
+    }
+}
+
+/// 检查结果：违规、警告、缺断言警告、死代码警告、推断警告、
+/// 缺 `#[allow(non_snake_case)]` 警告、测试命名格式警告、测试命名重复警告、
+/// 被禁导入警告、私有函数命名警告、缺文档警告、`#![deny(warnings)]` 反模式警告、
+/// wildcard import 警告、unsafe fn 缺 safety 文档警告、借用类型参数建议警告。
+#[derive(Debug, Clone, Default)]
 pub struct CheckOutput {
     pub violations: Vec<Violation>,
     pub warnings: Vec<Warning>,
     pub assert_warnings: Vec<MissingAssertWarning>,
     pub dead_code_warnings: Vec<DeadCodeWarning>,
     pub inference_warnings: Vec<InferenceWarning>,
+    pub missing_allow_warnings: Vec<MissingAllowWarning>,
+    pub test_name_warnings: Vec<TestNameFormatWarning>,
+    pub duplicate_test_warnings: Vec<DuplicateTestWarning>,
+    pub banned_import_warnings: Vec<BannedImportWarning>,
+    pub private_fn_warnings: Vec<PrivateFnNamingWarning>,
+    pub missing_doc_warnings: Vec<MissingDocWarning>,
+    pub deny_warnings_warnings: Vec<DenyWarningsWarning>,
+    pub wildcard_import_warnings: Vec<WildcardImportWarning>,
+    pub missing_safety_doc_warnings: Vec<MissingSafetyDocWarning>,
+    pub borrowed_param_warnings: Vec<BorrowedParamWarning>,
+    pub missing_debug_warnings: Vec<MissingDebugWarning>,
+    pub missing_panics_doc_warnings: Vec<MissingPanicsDocWarning>,
+    pub into_impl_warnings: Vec<IntoImplWarning>,
+    pub consumed_arg_on_error_warnings: Vec<ConsumedArgOnErrorWarning>,
+    pub deref_polymorphism_warnings: Vec<DerefPolymorphismWarning>,
+    pub reflection_usage_warnings: Vec<ReflectionUsageWarning>,
+}
+
+/// 一条 `#![deny(warnings)]` 反模式警告：这种粗粒度 deny 会随编译器升级意外破坏构建。
+/// 建议改用具名 lint，如 `#![deny(dead_code, unused_imports)]`。
+#[derive(Debug, Clone)]
+pub struct DenyWarningsWarning {
+    pub file: String,
+    pub line: usize,
+}
+
+impl fmt::Display for DenyWarningsWarning {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "warning: `#![deny(warnings)]` is an anti-pattern—use named lints instead\n  at {}:{}",
+            self.file, self.line,
+        )
+    }
+}
+
+/// 一条 wildcard import 警告：`use xxx::*;` 易与未来版本命名冲突。
+/// 例外：`use super::*;`（测试常用）、`use *::prelude::*;`（作者刻意暴露）。
+#[derive(Debug, Clone)]
+pub struct WildcardImportWarning {
+    pub use_path: String,
+    pub file: String,
+    pub line: usize,
+}
+
+impl fmt::Display for WildcardImportWarning {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "warning: wildcard import '{}' may cause name clashes with future versions\n  at {}:{}",
+            self.use_path, self.file, self.line,
+        )
+    }
+}
+
+/// 一条 unsafe 函数缺 `/// # Safety` 文档警告。
+/// unsafe 函数的前置条件必须显式记录，否则调用者无法安全使用。
+#[derive(Debug, Clone)]
+pub struct MissingSafetyDocWarning {
+    pub function: String,
+    pub file: String,
+    pub line: usize,
+}
+
+impl fmt::Display for MissingSafetyDocWarning {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "warning: unsafe fn '{}' is missing a `/// # Safety` doc section\n  at {}:{}",
+            self.function, self.file, self.line,
+        )
+    }
+}
+
+/// 一条借用类型参数建议：`&String`/`&Vec<T>`/`&Box<T>` 应改为 `&str`/`&[T]`/`&T`。
+/// 借用类型更灵活——能接受更多调用者类型，也消除多层间接。
+#[derive(Debug, Clone)]
+pub struct BorrowedParamWarning {
+    pub function: String,
+    pub param: String,
+    pub original: String,
+    pub suggestion: String,
+    pub file: String,
+    pub line: usize,
+}
+
+impl fmt::Display for BorrowedParamWarning {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "warning: param '{}' of '{}' uses '{}'—prefer '{}'\n  at {}:{}",
+            self.param, self.function, self.original, self.suggestion, self.file, self.line,
+        )
+    }
+}
+
+/// 一条公开类型缺 `Debug` derive 警告：pub struct/enum 未派生 `Debug`。
+/// `Debug` 是日志和错误报告的基础，公开类型几乎总是应该实现它。
+#[derive(Debug, Clone)]
+pub struct MissingDebugWarning {
+    pub name: String,
+    pub file: String,
+    pub line: usize,
+}
+
+impl fmt::Display for MissingDebugWarning {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "warning: public type '{}' is missing #[derive(Debug)]\n  at {}:{}",
+            self.name, self.file, self.line,
+        )
+    }
+}
+
+/// 一条 `rvs_` 函数带 `P` 标记但缺少 `/// # Panics` 文档警告。
+/// 与 `unsafe fn` 需要 `/// # Safety` 对称——可能 panic 的函数应文档化其 panic 条件。
+#[derive(Debug, Clone)]
+pub struct MissingPanicsDocWarning {
+    pub function: String,
+    pub file: String,
+    pub line: usize,
+}
+
+impl fmt::Display for MissingPanicsDocWarning {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "warning: function '{}' has P marker but is missing a `/// # Panics` doc section\n  at {}:{}",
+            self.function, self.file, self.line,
+        )
+    }
+}
+
+/// 一条直接实现 `Into` 的警告：应实现 `From` 代替，`Into` 会自动提供。
+#[derive(Debug, Clone)]
+pub struct IntoImplWarning {
+    pub impl_type: String,
+    pub target_type: String,
+    pub file: String,
+    pub line: usize,
+}
+
+impl fmt::Display for IntoImplWarning {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "warning: impl Into<{}> for {}—prefer impl From<{}> for {} instead\n  at {}:{}",
+            self.target_type,
+            self.impl_type,
+            self.impl_type,
+            self.target_type,
+            self.file,
+            self.line,
+        )
+    }
+}
+
+/// 一条消费参数未在错误中保留的警告：`fn(x: T) -> Result<(), E>` 在失败时丢失 `x`。
+#[derive(Debug, Clone)]
+pub struct ConsumedArgOnErrorWarning {
+    pub function: String,
+    pub param: String,
+    pub param_type: String,
+    pub file: String,
+    pub line: usize,
+}
+
+impl fmt::Display for ConsumedArgOnErrorWarning {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "warning: function '{}' consumes '{}' (type '{}') but the error type doesn't preserve it—consider returning it in the error\n  at {}:{}",
+            self.function, self.param, self.param_type, self.file, self.line,
+        )
+    }
+}
+
+/// 一条 Deref 多态反模式警告：`impl Deref for X { Target = Y }` 不应用于方法复用。
+#[derive(Debug, Clone)]
+pub struct DerefPolymorphismWarning {
+    pub impl_type: String,
+    pub target_type: String,
+    pub file: String,
+    pub line: usize,
+}
+
+impl fmt::Display for DerefPolymorphismWarning {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "warning: impl Deref for {} with Target = {} looks like Deref polymorphism—use composition instead of emulating inheritance\n  at {}:{}",
+            self.impl_type, self.target_type, self.file, self.line,
+        )
+    }
+}
+
+/// 一条反射使用警告：使用了 `std::any::Any` / `type_name` / `type_id`，应改用 trait 分发。
+#[derive(Debug, Clone)]
+pub struct ReflectionUsageWarning {
+    pub function: String,
+    pub path: String,
+    pub file: String,
+    pub line: usize,
+}
+
+impl fmt::Display for ReflectionUsageWarning {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "warning: function '{}' uses '{}'—prefer trait-based dispatch over reflection\n  at {}:{}",
+            self.function, self.path, self.file, self.line,
+        )
+    }
 }
 
 /// 一条缺断言警告：函数有参数却未对每个参数写 debug_assert。
@@ -182,6 +676,70 @@ impl fmt::Display for InferenceWarning {
     }
 }
 
+/// 一条缺 `#[allow(non_snake_case)]` 警告：函数名有大写后缀，却未豁免 snake_case 检查。
+/// 外层 impl/trait/mod/crate 级的 `#![allow(non_snake_case)]` 可以覆盖本函数。
+#[derive(Debug, Clone)]
+pub struct MissingAllowWarning {
+    pub function: String,
+    pub file: String,
+    pub line: usize,
+}
+
+impl fmt::Display for MissingAllowWarning {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "warning: {} has uppercase capability suffix but is not covered by #[allow(non_snake_case)]\n  at {}:{}",
+            self.function, self.file, self.line,
+        )
+    }
+}
+
+/// 一条 `#[test]` 命名格式警告：测试函数名不匹配 `^test_\d{{8}}_\w+$`。
+#[derive(Debug, Clone)]
+pub struct TestNameFormatWarning {
+    pub function: String,
+    pub file: String,
+    pub line: usize,
+}
+
+impl fmt::Display for TestNameFormatWarning {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "warning: test {} does not match required format ^test_\\d{{8}}_\\w+$\n  at {}:{}",
+            self.function, self.file, self.line,
+        )
+    }
+}
+
+/// 一条 `#[test]` 命名重复警告：同名测试函数出现多次。
+/// `occurrences` 列出每一处出现（文件 + 行）。
+#[derive(Debug, Clone)]
+pub struct DuplicateTestWarning {
+    pub name: String,
+    pub occurrences: Vec<(String, usize)>,
+}
+
+impl fmt::Display for DuplicateTestWarning {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(
+            f,
+            "warning: duplicate test name '{}' ({} occurrences):",
+            self.name,
+            self.occurrences.len()
+        )?;
+        for (i, (file, line)) in self.occurrences.iter().enumerate() {
+            if i + 1 == self.occurrences.len() {
+                write!(f, "  - {file}:{line}")?;
+            } else {
+                writeln!(f, "  - {file}:{line}")?;
+            }
+        }
+        Ok(())
+    }
+}
+
 /// 内部实现：检查函数调用合规性与静态引用合规性。
 fn rvs_check_functions_impl(functions: &[FnDef], file: &str, capsmap: &CapsMap) -> CheckOutput {
     let mut violations = Vec::new();
@@ -189,8 +747,16 @@ fn rvs_check_functions_impl(functions: &[FnDef], file: &str, capsmap: &CapsMap) 
     let mut assert_warnings = Vec::new();
     let mut dead_code_warnings = Vec::new();
     let mut inference_warnings = Vec::new();
+    let mut missing_allow_warnings = Vec::new();
 
     for func in functions {
+        if !func.raw_suffix.is_empty() && !func.has_allow_non_snake_case {
+            missing_allow_warnings.push(MissingAllowWarning {
+                function: func.name.clone(),
+                file: file.to_string(),
+                line: func.line,
+            });
+        }
         if func.allows_dead_code {
             dead_code_warnings.push(DeadCodeWarning {
                 function: func.name.clone(),
@@ -365,12 +931,90 @@ fn rvs_check_functions_impl(functions: &[FnDef], file: &str, capsmap: &CapsMap) 
         assert_warnings,
         dead_code_warnings,
         inference_warnings,
+        missing_allow_warnings,
+        test_name_warnings: Vec::new(),
+        duplicate_test_warnings: Vec::new(),
+        banned_import_warnings: Vec::new(),
+        private_fn_warnings: Vec::new(),
+        missing_doc_warnings: Vec::new(),
+        deny_warnings_warnings: Vec::new(),
+        wildcard_import_warnings: Vec::new(),
+        missing_safety_doc_warnings: Vec::new(),
+        borrowed_param_warnings: Vec::new(),
+        missing_debug_warnings: Vec::new(),
+        missing_panics_doc_warnings: Vec::new(),
+        into_impl_warnings: Vec::new(),
+        consumed_arg_on_error_warnings: Vec::new(),
+        deref_polymorphism_warnings: Vec::new(),
+        reflection_usage_warnings: Vec::new(),
     }
 }
 
 /// 纯函数：检查一组函数定义中的调用合规性与静态引用合规性。
 pub fn rvs_check_functions(functions: &[FnDef], file: &str) -> Vec<Violation> {
     rvs_check_functions_impl(functions, file, &CapsMap::rvs_new()).violations
+}
+
+/// 纯函数：判断一个测试函数名是否符合 `^test_\d{8}_\w+$`。
+/// `test_` 前缀 + 八位数字（YYYYMMDD）+ 下划线 + 至少一个字母数字或下划线。
+pub fn rvs_is_valid_test_name(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix("test_") else {
+        return false;
+    };
+    if rest.len() < 10 {
+        return false;
+    }
+    let (date, suffix) = rest.split_at(8);
+    if !date.chars().all(|c| c.is_ascii_digit()) {
+        return false;
+    }
+    let Some(tail) = suffix.strip_prefix('_') else {
+        return false;
+    };
+    if tail.is_empty() {
+        return false;
+    }
+    tail.chars().all(|c| c.is_alphanumeric() || c == '_')
+}
+
+/// 纯函数：从带文件信息的测试清单中找出重名的组，每组生成一条警告。
+/// 输入不要求排序；输出按测试名字典序。
+pub fn rvs_find_duplicate_tests(entries: &[(String, TestName)]) -> Vec<DuplicateTestWarning> {
+    use std::collections::BTreeMap;
+
+    let mut groups: BTreeMap<String, Vec<(String, usize)>> = BTreeMap::new();
+    for (file, t) in entries {
+        groups
+            .entry(t.name.clone())
+            .or_default()
+            .push((file.clone(), t.line));
+    }
+
+    groups
+        .into_iter()
+        .filter(|(_, occ)| occ.len() >= 2)
+        .map(|(name, occurrences)| DuplicateTestWarning { name, occurrences })
+        .collect()
+}
+
+/// 纯函数：为一批测试名计算格式警告与同源重复警告。
+/// 同源是指此次调用所覆盖的所有测试——单文件或整个路径。
+/// 返回两个 Vec：格式警告与重复警告。不改任何入参。
+fn rvs_test_warnings(
+    tests: &[(String, TestName)],
+) -> (Vec<TestNameFormatWarning>, Vec<DuplicateTestWarning>) {
+    let mut fmt_warnings = Vec::new();
+    for (file, t) in tests {
+        if !rvs_is_valid_test_name(&t.name) {
+            fmt_warnings.push(TestNameFormatWarning {
+                function: t.name.clone(),
+                file: file.clone(),
+                line: t.line,
+            });
+        }
+    }
+    let dup_warnings = rvs_find_duplicate_tests(tests);
+    (fmt_warnings, dup_warnings)
 }
 
 /// 从一段源码文本中检查违规，配合 CapsMap。
@@ -383,33 +1027,285 @@ pub fn rvs_check_source(
         source: e,
         file: file.to_string(),
     })?;
-    Ok(rvs_check_functions_impl(&functions, file, capsmap))
+    let tests = rvs_extract_tests(source).map_err(|e| CheckError::Extract {
+        source: e,
+        file: file.to_string(),
+    })?;
+    let imports = rvs_extract_imports(source).map_err(|e| CheckError::Extract {
+        source: e,
+        file: file.to_string(),
+    })?;
+    let private_fns = rvs_extract_private_fns(source).map_err(|e| CheckError::Extract {
+        source: e,
+        file: file.to_string(),
+    })?;
+    let pub_items = rvs_extract_pub_items(source).map_err(|e| CheckError::Extract {
+        source: e,
+        file: file.to_string(),
+    })?;
+
+    let mut output = rvs_check_functions_impl(&functions, file, capsmap);
+    let entries: Vec<(String, TestName)> =
+        tests.into_iter().map(|t| (file.to_string(), t)).collect();
+    let (fmt_warnings, dup_warnings) = rvs_test_warnings(&entries);
+    output.test_name_warnings.extend(fmt_warnings);
+    output.duplicate_test_warnings.extend(dup_warnings);
+
+    // 检查被禁导入
+    output
+        .banned_import_warnings
+        .extend(rvs_check_imports(&imports, file));
+
+    // 检查私有函数命名
+    output
+        .private_fn_warnings
+        .extend(rvs_check_private_fn_names(&private_fns, file));
+
+    // 检查 pub 函数/方法的文档注释
+    output
+        .missing_doc_warnings
+        .extend(rvs_check_missing_doc(&pub_items, file));
+
+    // 检查 wildcard import
+    output
+        .wildcard_import_warnings
+        .extend(rvs_check_wildcard_imports(&imports, file));
+
+    // 检查借用类型参数
+    let borrowed_params = rvs_extract_borrowed_params(source).map_err(|e| CheckError::Extract {
+        source: e,
+        file: file.to_string(),
+    })?;
+    output
+        .borrowed_param_warnings
+        .extend(rvs_check_borrowed_params(&borrowed_params, file));
+
+    // 检查 unsafe 函数缺 safety 文档
+    let unsafe_fns = rvs_extract_unsafe_fns(source).map_err(|e| CheckError::Extract {
+        source: e,
+        file: file.to_string(),
+    })?;
+    output
+        .missing_safety_doc_warnings
+        .extend(rvs_check_unsafe_safety_doc(&unsafe_fns, file));
+
+    // 检查 #![deny(warnings)] 反模式
+    let deny_line = rvs_extract_deny_warnings(source).map_err(|e| CheckError::Extract {
+        source: e,
+        file: file.to_string(),
+    })?;
+    output
+        .deny_warnings_warnings
+        .extend(rvs_check_deny_warnings(deny_line, file));
+
+    // 检查公开类型缺 Debug derive
+    let missing_debug = rvs_extract_missing_debug(source).map_err(|e| CheckError::Extract {
+        source: e,
+        file: file.to_string(),
+    })?;
+    output
+        .missing_debug_warnings
+        .extend(rvs_check_missing_debug(&missing_debug, file));
+
+    // 检查 P 标记函数缺 /// # Panics 文档
+    let missing_panics =
+        rvs_extract_missing_panics_doc(source).map_err(|e| CheckError::Extract {
+            source: e,
+            file: file.to_string(),
+        })?;
+    output
+        .missing_panics_doc_warnings
+        .extend(rvs_check_missing_panics_doc(&missing_panics, file));
+
+    // 检查直接实现 Into（应实现 From 代替）
+    let into_impls = rvs_extract_into_impls(source).map_err(|e| CheckError::Extract {
+        source: e,
+        file: file.to_string(),
+    })?;
+    output
+        .into_impl_warnings
+        .extend(rvs_check_into_impls(&into_impls, file));
+
+    // 检查消费参数未在错误中保留
+    let consumed_args =
+        rvs_extract_consumed_arg_on_error(source).map_err(|e| CheckError::Extract {
+            source: e,
+            file: file.to_string(),
+        })?;
+    output
+        .consumed_arg_on_error_warnings
+        .extend(rvs_check_consumed_arg_on_error(&consumed_args, file));
+
+    // 检查 Deref 多态反模式
+    let deref_poly = rvs_extract_deref_polymorphism(source).map_err(|e| CheckError::Extract {
+        source: e,
+        file: file.to_string(),
+    })?;
+    output
+        .deref_polymorphism_warnings
+        .extend(rvs_check_deref_polymorphism(&deref_poly, file));
+
+    // 检查反射使用（std::any::Any / type_name / type_id）
+    let reflection_usage = rvs_extract_reflection_usage(&functions);
+    output
+        .reflection_usage_warnings
+        .extend(rvs_check_reflection_usage(&reflection_usage, file));
+
+    Ok(output)
 }
 
 /// 从文件路径（或目录）出发，检查违规。
 /// CapsMap 用于查找非 rvs_ 函数的能力。
+/// 测试命名唯一性检查在整个路径内进行——跨文件同名亦会被抓。
 #[allow(non_snake_case)]
 pub fn rvs_check_path_BI(path: &Path, capsmap: &CapsMap) -> Result<CheckOutput, CheckError> {
     let sources = rvs_read_rust_sources_BI(path).map_err(|e| CheckError::Read { source: e })?;
-    let mut output = CheckOutput {
-        violations: Vec::new(),
-        warnings: Vec::new(),
-        assert_warnings: Vec::new(),
-        dead_code_warnings: Vec::new(),
-        inference_warnings: Vec::new(),
-    };
+    let mut output = CheckOutput::default();
+    let mut all_tests: Vec<(String, TestName)> = Vec::new();
+
     for sf in &sources {
         let functions = rvs_extract_functions(&sf.source).map_err(|e| CheckError::Extract {
             source: e,
             file: sf.path.clone(),
         })?;
+        let tests = rvs_extract_tests(&sf.source).map_err(|e| CheckError::Extract {
+            source: e,
+            file: sf.path.clone(),
+        })?;
+        let imports = rvs_extract_imports(&sf.source).map_err(|e| CheckError::Extract {
+            source: e,
+            file: sf.path.clone(),
+        })?;
+        let private_fns = rvs_extract_private_fns(&sf.source).map_err(|e| CheckError::Extract {
+            source: e,
+            file: sf.path.clone(),
+        })?;
+        let pub_items = rvs_extract_pub_items(&sf.source).map_err(|e| CheckError::Extract {
+            source: e,
+            file: sf.path.clone(),
+        })?;
+
         let result = rvs_check_functions_impl(&functions, &sf.path, capsmap);
         output.violations.extend(result.violations);
         output.warnings.extend(result.warnings);
         output.assert_warnings.extend(result.assert_warnings);
         output.dead_code_warnings.extend(result.dead_code_warnings);
         output.inference_warnings.extend(result.inference_warnings);
+        output
+            .missing_allow_warnings
+            .extend(result.missing_allow_warnings);
+
+        // 检查被禁导入
+        output
+            .banned_import_warnings
+            .extend(rvs_check_imports(&imports, &sf.path));
+
+        // 检查私有函数命名
+        output
+            .private_fn_warnings
+            .extend(rvs_check_private_fn_names(&private_fns, &sf.path));
+
+        // 检查 pub 函数/方法的文档注释
+        output
+            .missing_doc_warnings
+            .extend(rvs_check_missing_doc(&pub_items, &sf.path));
+
+        // 检查 wildcard import
+        output
+            .wildcard_import_warnings
+            .extend(rvs_check_wildcard_imports(&imports, &sf.path));
+
+        // 检查借用类型参数
+        let borrowed_params =
+            rvs_extract_borrowed_params(&sf.source).map_err(|e| CheckError::Extract {
+                source: e,
+                file: sf.path.clone(),
+            })?;
+        output
+            .borrowed_param_warnings
+            .extend(rvs_check_borrowed_params(&borrowed_params, &sf.path));
+
+        // 检查 unsafe 函数缺 safety 文档
+        let unsafe_fns = rvs_extract_unsafe_fns(&sf.source).map_err(|e| CheckError::Extract {
+            source: e,
+            file: sf.path.clone(),
+        })?;
+        output
+            .missing_safety_doc_warnings
+            .extend(rvs_check_unsafe_safety_doc(&unsafe_fns, &sf.path));
+
+        // 检查 #![deny(warnings)] 反模式
+        let deny_line = rvs_extract_deny_warnings(&sf.source).map_err(|e| CheckError::Extract {
+            source: e,
+            file: sf.path.clone(),
+        })?;
+        output
+            .deny_warnings_warnings
+            .extend(rvs_check_deny_warnings(deny_line, &sf.path));
+
+        // 检查公开类型缺 Debug derive
+        let missing_debug =
+            rvs_extract_missing_debug(&sf.source).map_err(|e| CheckError::Extract {
+                source: e,
+                file: sf.path.clone(),
+            })?;
+        output
+            .missing_debug_warnings
+            .extend(rvs_check_missing_debug(&missing_debug, &sf.path));
+
+        // 检查 P 标记函数缺 /// # Panics 文档
+        let missing_panics =
+            rvs_extract_missing_panics_doc(&sf.source).map_err(|e| CheckError::Extract {
+                source: e,
+                file: sf.path.clone(),
+            })?;
+        output
+            .missing_panics_doc_warnings
+            .extend(rvs_check_missing_panics_doc(&missing_panics, &sf.path));
+
+        // 检查直接实现 Into
+        let into_impls = rvs_extract_into_impls(&sf.source).map_err(|e| CheckError::Extract {
+            source: e,
+            file: sf.path.clone(),
+        })?;
+        output
+            .into_impl_warnings
+            .extend(rvs_check_into_impls(&into_impls, &sf.path));
+
+        // 检查消费参数未在错误中保留
+        let consumed_args =
+            rvs_extract_consumed_arg_on_error(&sf.source).map_err(|e| CheckError::Extract {
+                source: e,
+                file: sf.path.clone(),
+            })?;
+        output
+            .consumed_arg_on_error_warnings
+            .extend(rvs_check_consumed_arg_on_error(&consumed_args, &sf.path));
+
+        // 检查 Deref 多态反模式
+        let deref_poly =
+            rvs_extract_deref_polymorphism(&sf.source).map_err(|e| CheckError::Extract {
+                source: e,
+                file: sf.path.clone(),
+            })?;
+        output
+            .deref_polymorphism_warnings
+            .extend(rvs_check_deref_polymorphism(&deref_poly, &sf.path));
+
+        // 检查反射使用
+        let reflection_usage = rvs_extract_reflection_usage(&functions);
+        output
+            .reflection_usage_warnings
+            .extend(rvs_check_reflection_usage(&reflection_usage, &sf.path));
+
+        for t in tests {
+            all_tests.push((sf.path.clone(), t));
+        }
     }
+
+    let (fmt_warnings, dup_warnings) = rvs_test_warnings(&all_tests);
+    output.test_name_warnings.extend(fmt_warnings);
+    output.duplicate_test_warnings.extend(dup_warnings);
     Ok(output)
 }
 
@@ -437,6 +1333,7 @@ pub enum MirCheckError {
     },
 }
 
+/// 从目录中所有 `.mir` 文件中萃取函数定义，做跨文件合并后检查调用合规性。
 #[allow(non_snake_case)]
 pub fn rvs_check_mir_dir_BIM(
     mir_dir: &Path,
@@ -473,6 +1370,11 @@ pub fn rvs_check_mir_dir_BIM(
     ))
 }
 
+/// 先用 cargo 编译项目至 MIR，再对生成的 `.mir` 文件做能力检查。
+///
+/// # Panics
+///
+/// Panics if MIR compilation or file operations fail unexpectedly.
 #[allow(non_snake_case)]
 pub fn rvs_check_mir_path_BIMPS(
     project_dir: &Path,

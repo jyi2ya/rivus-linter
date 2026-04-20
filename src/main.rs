@@ -44,6 +44,9 @@ enum Command {
     },
 }
 
+/// # Panics
+///
+/// Panics on invalid CLI arguments or failed subcommand execution.
 #[allow(non_snake_case)]
 fn rvs_main_BIMPS() {
     let cli = Cli::parse();
@@ -95,6 +98,9 @@ fn rvs_main_BIMPS() {
     }
 }
 
+/// # Panics
+///
+/// Panics if the capsmap file is unreadable or contains invalid entries.
 #[allow(non_snake_case)]
 fn rvs_load_capsmap_BIPS(capsmap: Option<PathBuf>) -> CapsMap {
     match capsmap {
@@ -112,6 +118,9 @@ fn rvs_load_capsmap_BIPS(capsmap: Option<PathBuf>) -> CapsMap {
     }
 }
 
+/// # Panics
+///
+/// Panics on I/O errors when writing to stderr.
 #[allow(non_snake_case)]
 fn rvs_print_check_output_BIPS(output: &rivus_linter::CheckOutput) {
     for w in &output.warnings {
@@ -126,6 +135,54 @@ fn rvs_print_check_output_BIPS(output: &rivus_linter::CheckOutput) {
     for w in &output.inference_warnings {
         eprintln!("{w}");
     }
+    for w in &output.missing_allow_warnings {
+        eprintln!("{w}");
+    }
+    for w in &output.test_name_warnings {
+        eprintln!("{w}");
+    }
+    for w in &output.duplicate_test_warnings {
+        eprintln!("{w}");
+    }
+    for w in &output.banned_import_warnings {
+        eprintln!("{w}");
+    }
+    for w in &output.private_fn_warnings {
+        eprintln!("{w}");
+    }
+    for w in &output.missing_doc_warnings {
+        eprintln!("{w}");
+    }
+    for w in &output.deny_warnings_warnings {
+        eprintln!("{w}");
+    }
+    for w in &output.wildcard_import_warnings {
+        eprintln!("{w}");
+    }
+    for w in &output.missing_safety_doc_warnings {
+        eprintln!("{w}");
+    }
+    for w in &output.borrowed_param_warnings {
+        eprintln!("{w}");
+    }
+    for w in &output.missing_debug_warnings {
+        eprintln!("{w}");
+    }
+    for w in &output.missing_panics_doc_warnings {
+        eprintln!("{w}");
+    }
+    for w in &output.into_impl_warnings {
+        eprintln!("{w}");
+    }
+    for w in &output.consumed_arg_on_error_warnings {
+        eprintln!("{w}");
+    }
+    for w in &output.deref_polymorphism_warnings {
+        eprintln!("{w}");
+    }
+    for w in &output.reflection_usage_warnings {
+        eprintln!("{w}");
+    }
     for v in &output.violations {
         eprintln!("{v}");
     }
@@ -134,6 +191,7 @@ fn rvs_print_check_output_BIPS(output: &rivus_linter::CheckOutput) {
     }
 }
 
+#[allow(non_snake_case)]
 fn main() {
     rvs_main_BIMPS();
 }

@@ -22,6 +22,7 @@ pub enum CapsMapError {
 }
 
 impl CapsMap {
+    /// 构造一个空的能力映射表。
     pub fn rvs_new() -> Self {
         Self::default()
     }
@@ -60,7 +61,7 @@ impl CapsMap {
             return Some(caps);
         }
         for (key, caps) in &self.entries {
-            if key.ends_with(&format!("::{name}")) {
+            if name.ends_with(&format!("::{key}")) || key.ends_with(&format!("::{name}")) {
                 return Some(caps);
             }
         }

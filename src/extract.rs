@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 
 use crate::capability::{Capability, CapabilitySet, parse_rvs_function, rvs_extract_raw_suffix};
+use syn::spanned::Spanned;
 
 /// 被调用者的蛛丝马迹：名与行。
 #[derive(Debug, Clone)]
@@ -41,6 +42,22 @@ pub struct FnDef {
     pub raw_suffix: String,
     pub is_test: bool,
     pub allows_dead_code: bool,
+    pub has_allow_non_snake_case: bool,
+}
+
+/// 一项 `#[test]` 的简记：函数名与所在行。
+/// 用于命名规范与唯一性检查。
+#[derive(Debug, Clone)]
+pub struct TestName {
+    pub name: String,
+    pub line: usize,
+}
+
+/// 一条 use 导入语句的信息：路径与所在行。
+#[derive(Debug, Clone)]
+pub struct ImportInfo {
+    pub use_path: String,
+    pub line: usize,
 }
 
 /// 参数之名与类型。
@@ -70,15 +87,15 @@ struct Harvest {
 }
 
 impl Harvest {
-    fn empty() -> Self {
+    fn rvs_empty() -> Self {
         Harvest {
             calls: Vec::new(),
             static_refs: Vec::new(),
         }
     }
 
-    fn merge(parts: impl IntoIterator<Item = Harvest>) -> Self {
-        let mut result = Harvest::empty();
+    fn rvs_merge(parts: impl IntoIterator<Item = Harvest>) -> Self {
+        let mut result = Harvest::rvs_empty();
         for part in parts {
             result.calls.extend(part.calls);
             result.static_refs.extend(part.static_refs);
@@ -89,7 +106,7 @@ impl Harvest {
 
 /// 检查路径是否引用了已知的静态变量。
 /// 若路径末段与某声明同名，则认领之。
-fn check_path_for_static(path: &syn::Path, statics: &[StaticDecl]) -> Option<StaticRef> {
+fn rvs_check_path_for_static(path: &syn::Path, statics: &[StaticDecl]) -> Option<StaticRef> {
     let segment = path.segments.last()?;
     let name = segment.ident.to_string();
     statics
@@ -104,7 +121,7 @@ fn check_path_for_static(path: &syn::Path, statics: &[StaticDecl]) -> Option<Sta
 
 /// 从直接调用中捉拿函数调用与静态引用。
 fn rvs_harvest_from_expr_call(call: &syn::ExprCall, statics: &[StaticDecl]) -> Harvest {
-    let mut result = Harvest::empty();
+    let mut result = Harvest::rvs_empty();
     if let syn::Expr::Path(expr_path) = &*call.func {
         let name: String = expr_path
             .path
@@ -136,7 +153,7 @@ fn rvs_harvest_from_expr_method_call(
     call: &syn::ExprMethodCall,
     statics: &[StaticDecl],
 ) -> Harvest {
-    let mut result = Harvest::empty();
+    let mut result = Harvest::rvs_empty();
     let name = call.method.to_string();
     let line = call.method.span().start().line;
     result.calls.push(CalleeInfo { name, line });
@@ -157,21 +174,21 @@ fn rvs_harvest_from_expr(expr: &syn::Expr, statics: &[StaticDecl]) -> Harvest {
         syn::Expr::Call(call) => rvs_harvest_from_expr_call(call, statics),
         syn::Expr::MethodCall(call) => rvs_harvest_from_expr_method_call(call, statics),
         syn::Expr::Path(path) => {
-            let mut result = Harvest::empty();
-            if let Some(sr) = check_path_for_static(&path.path, statics) {
+            let mut result = Harvest::rvs_empty();
+            if let Some(sr) = rvs_check_path_for_static(&path.path, statics) {
                 result.static_refs.push(sr);
             }
             result
         }
         syn::Expr::Block(block) => rvs_harvest_from_block(&block.block, statics),
-        syn::Expr::If(if_expr) => Harvest::merge([
+        syn::Expr::If(if_expr) => Harvest::rvs_merge([
             rvs_harvest_from_expr(&if_expr.cond, statics),
             rvs_harvest_from_block(&if_expr.then_branch, statics),
             if_expr
                 .else_branch
                 .as_ref()
                 .map(|(_, e)| rvs_harvest_from_expr(e, statics))
-                .unwrap_or_else(Harvest::empty),
+                .unwrap_or_else(Harvest::rvs_empty),
         ]),
         syn::Expr::Match(match_expr) => {
             let mut result = rvs_harvest_from_expr(&match_expr.expr, statics);
@@ -188,32 +205,32 @@ fn rvs_harvest_from_expr(expr: &syn::Expr, statics: &[StaticDecl]) -> Harvest {
             result
         }
         syn::Expr::Loop(loop_expr) => rvs_harvest_from_block(&loop_expr.body, statics),
-        syn::Expr::While(while_expr) => Harvest::merge([
+        syn::Expr::While(while_expr) => Harvest::rvs_merge([
             rvs_harvest_from_expr(&while_expr.cond, statics),
             rvs_harvest_from_block(&while_expr.body, statics),
         ]),
-        syn::Expr::ForLoop(for_expr) => Harvest::merge([
+        syn::Expr::ForLoop(for_expr) => Harvest::rvs_merge([
             rvs_harvest_from_expr(&for_expr.expr, statics),
             rvs_harvest_from_block(&for_expr.body, statics),
         ]),
         syn::Expr::Closure(closure) => rvs_harvest_from_expr(&closure.body, statics),
-        syn::Expr::Assign(assign) => Harvest::merge([
+        syn::Expr::Assign(assign) => Harvest::rvs_merge([
             rvs_harvest_from_expr(&assign.left, statics),
             rvs_harvest_from_expr(&assign.right, statics),
         ]),
-        syn::Expr::Binary(binary) => Harvest::merge([
+        syn::Expr::Binary(binary) => Harvest::rvs_merge([
             rvs_harvest_from_expr(&binary.left, statics),
             rvs_harvest_from_expr(&binary.right, statics),
         ]),
         syn::Expr::Unary(unary) => rvs_harvest_from_expr(&unary.expr, statics),
         syn::Expr::Paren(paren) => rvs_harvest_from_expr(&paren.expr, statics),
-        syn::Expr::Tuple(tuple) => Harvest::merge(
+        syn::Expr::Tuple(tuple) => Harvest::rvs_merge(
             tuple
                 .elems
                 .iter()
                 .map(|e| rvs_harvest_from_expr(e, statics)),
         ),
-        syn::Expr::Array(array) => Harvest::merge(
+        syn::Expr::Array(array) => Harvest::rvs_merge(
             array
                 .elems
                 .iter()
@@ -228,9 +245,9 @@ fn rvs_harvest_from_expr(expr: &syn::Expr, statics: &[StaticDecl]) -> Harvest {
             if let Some(rest) = &struct_expr.rest {
                 parts.push(rvs_harvest_from_expr(rest, statics));
             }
-            Harvest::merge(parts)
+            Harvest::rvs_merge(parts)
         }
-        syn::Expr::Repeat(repeat) => Harvest::merge([
+        syn::Expr::Repeat(repeat) => Harvest::rvs_merge([
             rvs_harvest_from_expr(&repeat.expr, statics),
             rvs_harvest_from_expr(&repeat.len, statics),
         ]),
@@ -242,9 +259,9 @@ fn rvs_harvest_from_expr(expr: &syn::Expr, statics: &[StaticDecl]) -> Harvest {
             if let Some(end) = &range.end {
                 parts.push(rvs_harvest_from_expr(end, statics));
             }
-            Harvest::merge(parts)
+            Harvest::rvs_merge(parts)
         }
-        syn::Expr::Index(index) => Harvest::merge([
+        syn::Expr::Index(index) => Harvest::rvs_merge([
             rvs_harvest_from_expr(&index.expr, statics),
             rvs_harvest_from_expr(&index.index, statics),
         ]),
@@ -256,27 +273,27 @@ fn rvs_harvest_from_expr(expr: &syn::Expr, statics: &[StaticDecl]) -> Harvest {
             .expr
             .as_ref()
             .map(|e| rvs_harvest_from_expr(e, statics))
-            .unwrap_or_else(Harvest::empty),
+            .unwrap_or_else(Harvest::rvs_empty),
         syn::Expr::Break(brk) => brk
             .expr
             .as_ref()
             .map(|e| rvs_harvest_from_expr(e, statics))
-            .unwrap_or_else(Harvest::empty),
+            .unwrap_or_else(Harvest::rvs_empty),
         syn::Expr::Group(group) => rvs_harvest_from_expr(&group.expr, statics),
         syn::Expr::Let(let_expr) => rvs_harvest_from_expr(&let_expr.expr, statics),
         syn::Expr::Unsafe(unsafe_expr) => rvs_harvest_from_block(&unsafe_expr.block, statics),
         syn::Expr::Async(async_expr) => rvs_harvest_from_block(&async_expr.block, statics),
         syn::Expr::Cast(cast_expr) => rvs_harvest_from_expr(&cast_expr.expr, statics),
         syn::Expr::TryBlock(try_block) => rvs_harvest_from_block(&try_block.block, statics),
-        syn::Expr::Macro(_) => Harvest::empty(),
-        syn::Expr::Lit(_) | syn::Expr::Continue(_) | syn::Expr::Verbatim(_) => Harvest::empty(),
-        _ => Harvest::empty(),
+        syn::Expr::Macro(_) => Harvest::rvs_empty(),
+        syn::Expr::Lit(_) | syn::Expr::Continue(_) | syn::Expr::Verbatim(_) => Harvest::rvs_empty(),
+        _ => Harvest::rvs_empty(),
     }
 }
 
 /// 巡遍一个块中的每一条语句。
 fn rvs_harvest_from_block(block: &syn::Block, statics: &[StaticDecl]) -> Harvest {
-    let mut result = Harvest::empty();
+    let mut result = Harvest::rvs_empty();
     for stmt in &block.stmts {
         let sub = match stmt {
             syn::Stmt::Local(local) => {
@@ -287,10 +304,10 @@ fn rvs_harvest_from_block(block: &syn::Block, statics: &[StaticDecl]) -> Harvest
                         parts.push(rvs_harvest_from_expr(diverge, statics));
                     }
                 }
-                Harvest::merge(parts)
+                Harvest::rvs_merge(parts)
             }
             syn::Stmt::Expr(expr, _) => rvs_harvest_from_expr(expr, statics),
-            syn::Stmt::Item(_) | syn::Stmt::Macro(_) => Harvest::empty(),
+            syn::Stmt::Item(_) | syn::Stmt::Macro(_) => Harvest::rvs_empty(),
         };
         result.calls.extend(sub.calls);
         result.static_refs.extend(sub.static_refs);
@@ -355,14 +372,14 @@ fn rvs_collect_static_decls_from_items(items: &[syn::Item]) -> Vec<StaticDecl> {
     for item in items {
         match item {
             syn::Item::Static(s) => {
-                let mut caps = CapabilitySet::rvs_new();
-                if let syn::StaticMutability::Mut(_) = s.mutability {
-                    caps.insert(Capability::U);
-                }
-                caps.insert(Capability::S);
+                let suffix = if matches!(s.mutability, syn::StaticMutability::Mut(_)) {
+                    "SU"
+                } else {
+                    "S"
+                };
                 decls.push(StaticDecl {
                     name: s.ident.to_string(),
-                    required_caps: caps,
+                    required_caps: CapabilitySet::rvs_from_validated(suffix),
                 });
             }
             syn::Item::Macro(m) => {
@@ -376,12 +393,9 @@ fn rvs_collect_static_decls_from_items(items: &[syn::Item]) -> Vec<StaticDecl> {
                 if macro_name == "thread_local" {
                     let names = rvs_parse_thread_local_names(&m.mac.tokens);
                     for name in names {
-                        let mut caps = CapabilitySet::rvs_new();
-                        caps.insert(Capability::S);
-                        caps.insert(Capability::T);
                         decls.push(StaticDecl {
                             name,
-                            required_caps: caps,
+                            required_caps: CapabilitySet::rvs_from_validated("ST"),
                         });
                     }
                 }
@@ -488,12 +502,14 @@ fn rvs_collect_ident_tokens(tokens: &proc_macro2::TokenStream) -> BTreeSet<Strin
 
 /// 从一个块中搜集所有 debug_assert! 宏里出现的参数名。
 fn rvs_collect_debug_asserted_params(block: &syn::Block) -> BTreeSet<String> {
-    let mut ids = BTreeSet::new();
-    collect_assert_ids_from_block(block, &mut ids);
-    ids
+    rvs_collect_assert_ids_from_block(block)
+        .into_iter()
+        .collect()
 }
 
-fn collect_assert_ids_from_block(block: &syn::Block, ids: &mut BTreeSet<String>) {
+/// 纯函数：从块中收集所有 debug_assert! 参数名。
+fn rvs_collect_assert_ids_from_block(block: &syn::Block) -> Vec<String> {
+    let mut ids = Vec::new();
     for stmt in &block.stmts {
         match stmt {
             syn::Stmt::Macro(m) => {
@@ -501,121 +517,128 @@ fn collect_assert_ids_from_block(block: &syn::Block, ids: &mut BTreeSet<String>)
                     ids.extend(rvs_collect_ident_tokens(&m.mac.tokens));
                 }
             }
-            syn::Stmt::Expr(expr, _) => collect_assert_ids_from_expr(expr, ids),
+            syn::Stmt::Expr(expr, _) => {
+                ids.extend(rvs_collect_assert_ids_from_expr(expr));
+            }
             syn::Stmt::Local(l) => {
                 if let Some(init) = &l.init {
-                    collect_assert_ids_from_expr(&init.expr, ids);
+                    ids.extend(rvs_collect_assert_ids_from_expr(&init.expr));
                 }
             }
             syn::Stmt::Item(_) => {}
         }
     }
+    ids
 }
 
-fn collect_assert_ids_from_expr(expr: &syn::Expr, ids: &mut BTreeSet<String>) {
+/// 纯函数：从表达式中收集所有 debug_assert! 参数名。
+fn rvs_collect_assert_ids_from_expr(expr: &syn::Expr) -> Vec<String> {
+    let mut ids = Vec::new();
     match expr {
         syn::Expr::Macro(m) if rvs_is_debug_assert(&m.mac) => {
             ids.extend(rvs_collect_ident_tokens(&m.mac.tokens));
         }
-        syn::Expr::Block(b) => collect_assert_ids_from_block(&b.block, ids),
+        syn::Expr::Block(b) => ids.extend(rvs_collect_assert_ids_from_block(&b.block)),
         syn::Expr::If(e) => {
-            collect_assert_ids_from_expr(&e.cond, ids);
-            collect_assert_ids_from_block(&e.then_branch, ids);
+            ids.extend(rvs_collect_assert_ids_from_expr(&e.cond));
+            ids.extend(rvs_collect_assert_ids_from_block(&e.then_branch));
             if let Some((_, els)) = &e.else_branch {
-                collect_assert_ids_from_expr(els, ids);
+                ids.extend(rvs_collect_assert_ids_from_expr(els));
             }
         }
         syn::Expr::Match(e) => {
             for arm in &e.arms {
-                collect_assert_ids_from_expr(&arm.body, ids);
+                ids.extend(rvs_collect_assert_ids_from_expr(&arm.body));
             }
         }
-        syn::Expr::Loop(e) => collect_assert_ids_from_block(&e.body, ids),
+        syn::Expr::Loop(e) => ids.extend(rvs_collect_assert_ids_from_block(&e.body)),
         syn::Expr::While(e) => {
-            collect_assert_ids_from_expr(&e.cond, ids);
-            collect_assert_ids_from_block(&e.body, ids);
+            ids.extend(rvs_collect_assert_ids_from_expr(&e.cond));
+            ids.extend(rvs_collect_assert_ids_from_block(&e.body));
         }
         syn::Expr::ForLoop(e) => {
-            collect_assert_ids_from_expr(&e.expr, ids);
-            collect_assert_ids_from_block(&e.body, ids);
+            ids.extend(rvs_collect_assert_ids_from_expr(&e.expr));
+            ids.extend(rvs_collect_assert_ids_from_block(&e.body));
         }
-        syn::Expr::Unsafe(e) => collect_assert_ids_from_block(&e.block, ids),
-        syn::Expr::Closure(c) => collect_assert_ids_from_expr(&c.body, ids),
+        syn::Expr::Unsafe(e) => ids.extend(rvs_collect_assert_ids_from_block(&e.block)),
+        syn::Expr::Closure(c) => ids.extend(rvs_collect_assert_ids_from_expr(&c.body)),
         syn::Expr::Call(e) => {
-            collect_assert_ids_from_expr(&e.func, ids);
+            ids.extend(rvs_collect_assert_ids_from_expr(&e.func));
             for a in &e.args {
-                collect_assert_ids_from_expr(a, ids);
+                ids.extend(rvs_collect_assert_ids_from_expr(a));
             }
         }
         syn::Expr::MethodCall(e) => {
-            collect_assert_ids_from_expr(&e.receiver, ids);
+            ids.extend(rvs_collect_assert_ids_from_expr(&e.receiver));
             for a in &e.args {
-                collect_assert_ids_from_expr(a, ids);
+                ids.extend(rvs_collect_assert_ids_from_expr(a));
             }
         }
         syn::Expr::Assign(e) => {
-            collect_assert_ids_from_expr(&e.left, ids);
-            collect_assert_ids_from_expr(&e.right, ids);
+            ids.extend(rvs_collect_assert_ids_from_expr(&e.left));
+            ids.extend(rvs_collect_assert_ids_from_expr(&e.right));
         }
         syn::Expr::Binary(e) => {
-            collect_assert_ids_from_expr(&e.left, ids);
-            collect_assert_ids_from_expr(&e.right, ids);
+            ids.extend(rvs_collect_assert_ids_from_expr(&e.left));
+            ids.extend(rvs_collect_assert_ids_from_expr(&e.right));
         }
-        syn::Expr::Unary(e) => collect_assert_ids_from_expr(&e.expr, ids),
-        syn::Expr::Paren(e) => collect_assert_ids_from_expr(&e.expr, ids),
-        syn::Expr::Group(e) => collect_assert_ids_from_expr(&e.expr, ids),
-        syn::Expr::Reference(e) => collect_assert_ids_from_expr(&e.expr, ids),
-        syn::Expr::Try(e) => collect_assert_ids_from_expr(&e.expr, ids),
-        syn::Expr::Await(e) => collect_assert_ids_from_expr(&e.base, ids),
+        syn::Expr::Unary(e) => ids.extend(rvs_collect_assert_ids_from_expr(&e.expr)),
+        syn::Expr::Paren(e) => ids.extend(rvs_collect_assert_ids_from_expr(&e.expr)),
+        syn::Expr::Group(e) => ids.extend(rvs_collect_assert_ids_from_expr(&e.expr)),
+        syn::Expr::Reference(e) => ids.extend(rvs_collect_assert_ids_from_expr(&e.expr)),
+        syn::Expr::Try(e) => ids.extend(rvs_collect_assert_ids_from_expr(&e.expr)),
+        syn::Expr::Await(e) => ids.extend(rvs_collect_assert_ids_from_expr(&e.base)),
         syn::Expr::Return(e) => {
             if let Some(inner) = &e.expr {
-                collect_assert_ids_from_expr(inner, ids);
+                ids.extend(rvs_collect_assert_ids_from_expr(inner));
             }
         }
         syn::Expr::Break(e) => {
             if let Some(inner) = &e.expr {
-                collect_assert_ids_from_expr(inner, ids);
+                ids.extend(rvs_collect_assert_ids_from_expr(inner));
             }
         }
-        syn::Expr::Let(e) => collect_assert_ids_from_expr(&e.expr, ids),
+        syn::Expr::Let(e) => ids.extend(rvs_collect_assert_ids_from_expr(&e.expr)),
         syn::Expr::Index(e) => {
-            collect_assert_ids_from_expr(&e.expr, ids);
-            collect_assert_ids_from_expr(&e.index, ids);
+            ids.extend(rvs_collect_assert_ids_from_expr(&e.expr));
+            ids.extend(rvs_collect_assert_ids_from_expr(&e.index));
         }
-        syn::Expr::Field(e) => collect_assert_ids_from_expr(&e.base, ids),
+        syn::Expr::Field(e) => ids.extend(rvs_collect_assert_ids_from_expr(&e.base)),
         syn::Expr::Range(e) => {
             if let Some(s) = &e.start {
-                collect_assert_ids_from_expr(s, ids);
+                ids.extend(rvs_collect_assert_ids_from_expr(s));
             }
             if let Some(end) = &e.end {
-                collect_assert_ids_from_expr(end, ids);
+                ids.extend(rvs_collect_assert_ids_from_expr(end));
             }
         }
         syn::Expr::Repeat(e) => {
-            collect_assert_ids_from_expr(&e.expr, ids);
-            collect_assert_ids_from_expr(&e.len, ids);
+            ids.extend(rvs_collect_assert_ids_from_expr(&e.expr));
+            ids.extend(rvs_collect_assert_ids_from_expr(&e.len));
         }
         syn::Expr::Tuple(e) => {
             for el in &e.elems {
-                collect_assert_ids_from_expr(el, ids);
+                ids.extend(rvs_collect_assert_ids_from_expr(el));
             }
         }
         syn::Expr::Array(e) => {
             for el in &e.elems {
-                collect_assert_ids_from_expr(el, ids);
+                ids.extend(rvs_collect_assert_ids_from_expr(el));
             }
         }
         syn::Expr::Struct(e) => {
             for f in &e.fields {
-                collect_assert_ids_from_expr(&f.expr, ids);
+                ids.extend(rvs_collect_assert_ids_from_expr(&f.expr));
             }
         }
         _ => {}
     }
+    ids
 }
 
 /// 从顶层函数定义中萃取信息。
-fn extract_from_item_fn(item_fn: &syn::ItemFn, statics: &[StaticDecl]) -> Option<FnDef> {
+#[allow(non_snake_case)]
+fn rvs_extract_from_item_fn(item_fn: &syn::ItemFn, statics: &[StaticDecl]) -> Option<FnDef> {
     let name = item_fn.sig.ident.to_string();
     let (_, caps) = parse_rvs_function(&name)?;
     let raw_suffix = rvs_extract_raw_suffix(&name);
@@ -653,11 +676,13 @@ fn extract_from_item_fn(item_fn: &syn::ItemFn, statics: &[StaticDecl]) -> Option
         raw_suffix,
         is_test: false,
         allows_dead_code: false,
+        has_allow_non_snake_case: false,
     })
 }
 
 /// 从 impl 块中的方法萃取信息。
-fn extract_from_impl_fn(impl_fn: &syn::ImplItemFn, statics: &[StaticDecl]) -> Option<FnDef> {
+#[allow(non_snake_case)]
+fn rvs_extract_from_impl_fn(impl_fn: &syn::ImplItemFn, statics: &[StaticDecl]) -> Option<FnDef> {
     let name = impl_fn.sig.ident.to_string();
     let (_, caps) = parse_rvs_function(&name)?;
     let raw_suffix = rvs_extract_raw_suffix(&name);
@@ -695,11 +720,13 @@ fn extract_from_impl_fn(impl_fn: &syn::ImplItemFn, statics: &[StaticDecl]) -> Op
         raw_suffix,
         is_test: false,
         allows_dead_code: false,
+        has_allow_non_snake_case: false,
     })
 }
 
 /// 从 trait 定义中的方法签名萃取信息。
-fn extract_from_trait_fn(trait_fn: &syn::TraitItemFn, statics: &[StaticDecl]) -> Option<FnDef> {
+#[allow(non_snake_case)]
+fn rvs_extract_from_trait_fn(trait_fn: &syn::TraitItemFn, statics: &[StaticDecl]) -> Option<FnDef> {
     let name = trait_fn.sig.ident.to_string();
     let (_, caps) = parse_rvs_function(&name)?;
     let raw_suffix = rvs_extract_raw_suffix(&name);
@@ -756,6 +783,7 @@ fn extract_from_trait_fn(trait_fn: &syn::TraitItemFn, statics: &[StaticDecl]) ->
         raw_suffix,
         is_test: false,
         allows_dead_code: false,
+        has_allow_non_snake_case: false,
     })
 }
 
@@ -1032,10 +1060,35 @@ fn rvs_allows_dead_code(attrs: &[syn::Attribute]) -> bool {
     })
 }
 
+/// 判断属性列表中是否有 `#[allow(non_snake_case)]`（含 `#![allow(non_snake_case)]`）。
+/// `allow(a, non_snake_case, b)` 这类组合亦可识别。
+fn rvs_allows_non_snake_case(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|attr| {
+        if !attr
+            .path()
+            .segments
+            .last()
+            .is_some_and(|s| s.ident == "allow")
+        {
+            return false;
+        }
+        let Some(list) = attr.meta.require_list().ok() else {
+            return false;
+        };
+        let tokens = list.tokens.to_string();
+        tokens.contains("non_snake_case")
+    })
+}
+
 /// 从顶层项中萃取 rvs_ 函数定义，递归进入 mod 块。
 /// 跳过 #[cfg(test)] 模块和 #[test] 函数。
 /// 标记 #[allow(dead_code)] / #[allow(unused)] 的函数。
-fn rvs_extract_from_items(items: &[syn::Item], statics: &[StaticDecl]) -> Vec<FnDef> {
+/// `inherited_allow_snake` 自文件/外层 impl/trait/mod 传入，用于表达"外层已开过豁免"。
+fn rvs_extract_from_items(
+    items: &[syn::Item],
+    statics: &[StaticDecl],
+    inherited_allow_snake: bool,
+) -> Vec<FnDef> {
     let mut functions = Vec::new();
 
     for item in items {
@@ -1044,8 +1097,10 @@ fn rvs_extract_from_items(items: &[syn::Item], statics: &[StaticDecl]) -> Vec<Fn
                 if rvs_is_test_fn(&item_fn.attrs) {
                     continue;
                 }
-                if let Some(mut fn_def) = extract_from_item_fn(item_fn, statics) {
+                if let Some(mut fn_def) = rvs_extract_from_item_fn(item_fn, statics) {
                     fn_def.allows_dead_code = rvs_allows_dead_code(&item_fn.attrs);
+                    fn_def.has_allow_non_snake_case =
+                        inherited_allow_snake || rvs_allows_non_snake_case(&item_fn.attrs);
                     functions.push(fn_def);
                 }
             }
@@ -1054,24 +1109,32 @@ fn rvs_extract_from_items(items: &[syn::Item], statics: &[StaticDecl]) -> Vec<Fn
                     continue;
                 }
                 let impl_allows_dead_code = rvs_allows_dead_code(&item_impl.attrs);
+                let impl_allows_snake =
+                    inherited_allow_snake || rvs_allows_non_snake_case(&item_impl.attrs);
                 for impl_item in &item_impl.items {
                     if let syn::ImplItem::Fn(impl_fn) = impl_item
                         && !rvs_is_test_fn(&impl_fn.attrs)
-                        && let Some(mut fn_def) = extract_from_impl_fn(impl_fn, statics)
+                        && let Some(mut fn_def) = rvs_extract_from_impl_fn(impl_fn, statics)
                     {
                         fn_def.allows_dead_code =
                             impl_allows_dead_code || rvs_allows_dead_code(&impl_fn.attrs);
+                        fn_def.has_allow_non_snake_case =
+                            impl_allows_snake || rvs_allows_non_snake_case(&impl_fn.attrs);
                         functions.push(fn_def);
                     }
                 }
             }
             syn::Item::Trait(item_trait) => {
+                let trait_allows_snake =
+                    inherited_allow_snake || rvs_allows_non_snake_case(&item_trait.attrs);
                 for trait_item in &item_trait.items {
                     if let syn::TraitItem::Fn(trait_fn) = trait_item
                         && !rvs_is_test_fn(&trait_fn.attrs)
-                        && let Some(mut fn_def) = extract_from_trait_fn(trait_fn, statics)
+                        && let Some(mut fn_def) = rvs_extract_from_trait_fn(trait_fn, statics)
                     {
                         fn_def.allows_dead_code = rvs_allows_dead_code(&trait_fn.attrs);
+                        fn_def.has_allow_non_snake_case =
+                            trait_allows_snake || rvs_allows_non_snake_case(&trait_fn.attrs);
                         functions.push(fn_def);
                     }
                 }
@@ -1080,8 +1143,13 @@ fn rvs_extract_from_items(items: &[syn::Item], statics: &[StaticDecl]) -> Vec<Fn
                 if rvs_is_cfg_test(&m.attrs) {
                     continue;
                 }
+                let mod_allows_snake = inherited_allow_snake || rvs_allows_non_snake_case(&m.attrs);
                 if let Some((_, inner_items)) = &m.content {
-                    functions.extend(rvs_extract_from_items(inner_items, statics));
+                    functions.extend(rvs_extract_from_items(
+                        inner_items,
+                        statics,
+                        mod_allows_snake,
+                    ));
                 }
             }
             _ => {}
@@ -1089,6 +1157,104 @@ fn rvs_extract_from_items(items: &[syn::Item], statics: &[StaticDecl]) -> Vec<Fn
     }
 
     functions
+}
+
+/// 搜集源码中所有 `#[test]` 函数名与所在行。
+/// 递归进入 mod 块（含 `#[cfg(test)]`）与 impl 块，不漏一只。
+/// 纯函数：只看不改。
+fn rvs_collect_tests_from_items(items: &[syn::Item]) -> Vec<TestName> {
+    let mut tests = Vec::new();
+    for item in items {
+        match item {
+            syn::Item::Fn(item_fn) if rvs_is_test_fn(&item_fn.attrs) => {
+                let name = item_fn.sig.ident.to_string();
+                let line = item_fn.sig.ident.span().start().line;
+                tests.push(TestName { name, line });
+            }
+            syn::Item::Impl(item_impl) => {
+                for impl_item in &item_impl.items {
+                    if let syn::ImplItem::Fn(f) = impl_item
+                        && rvs_is_test_fn(&f.attrs)
+                    {
+                        let name = f.sig.ident.to_string();
+                        let line = f.sig.ident.span().start().line;
+                        tests.push(TestName { name, line });
+                    }
+                }
+            }
+            syn::Item::Mod(m) => {
+                if let Some((_, inner_items)) = &m.content {
+                    tests.extend(rvs_collect_tests_from_items(inner_items));
+                }
+            }
+            _ => {}
+        }
+    }
+    tests
+}
+
+/// 从顶层项中萃取 use 导入语句，递归进入 mod 块。
+fn rvs_collect_imports_from_items(items: &[syn::Item]) -> Vec<ImportInfo> {
+    let mut imports = Vec::new();
+    for item in items {
+        match item {
+            syn::Item::Use(item_use) => {
+                let line = item_use.span().start().line;
+                let paths = rvs_extract_use_paths(&item_use.tree);
+                for path in paths {
+                    imports.push(ImportInfo {
+                        use_path: path,
+                        line,
+                    });
+                }
+            }
+            syn::Item::Mod(m) => {
+                if let Some((_, inner_items)) = &m.content {
+                    imports.extend(rvs_collect_imports_from_items(inner_items));
+                }
+            }
+            _ => {}
+        }
+    }
+    imports
+}
+
+/// 从 use 树的单个项中提取完整路径。
+fn rvs_extract_use_paths(tree: &syn::UseTree) -> Vec<String> {
+    let mut paths = Vec::new();
+    match tree {
+        syn::UseTree::Path(path) => {
+            let prefix = path.ident.to_string();
+            let sub_paths = rvs_extract_use_paths(&path.tree);
+            for sub in sub_paths {
+                paths.push(format!("{}::{}", prefix, sub));
+            }
+        }
+        syn::UseTree::Name(name) => {
+            paths.push(name.ident.to_string());
+        }
+        syn::UseTree::Rename(rename) => {
+            paths.push(format!("{} as {}", rename.ident, rename.rename));
+        }
+        syn::UseTree::Glob(_) => {
+            paths.push("*".to_string());
+        }
+        syn::UseTree::Group(group) => {
+            for item in &group.items {
+                paths.extend(rvs_extract_use_paths(item));
+            }
+        }
+    }
+    paths
+}
+
+/// 从一段源码中萃取所有 use 导入语句。
+pub fn rvs_extract_imports(source: &str) -> Result<Vec<ImportInfo>, ExtractError> {
+    let file = syn::parse_file(source).map_err(|e| ExtractError::Parse {
+        message: e.to_string(),
+    })?;
+
+    Ok(rvs_collect_imports_from_items(&file.items))
 }
 
 /// 从一段源码中萃取所有 rvs_ 函数定义。
@@ -1101,8 +1267,872 @@ pub fn rvs_extract_functions(source: &str) -> Result<Vec<FnDef>, ExtractError> {
     })?;
 
     let statics = rvs_collect_static_decls_from_items(&file.items);
+    let file_allows_snake = rvs_allows_non_snake_case(&file.attrs);
 
-    Ok(rvs_extract_from_items(&file.items, &statics))
+    Ok(rvs_extract_from_items(
+        &file.items,
+        &statics,
+        file_allows_snake,
+    ))
+}
+
+/// 从一段源码中萃取所有 `#[test]` 函数的名字与行号。
+/// 不过滤 `#[cfg(test)]` 模块——测试函数往往正藏其中。
+pub fn rvs_extract_tests(source: &str) -> Result<Vec<TestName>, ExtractError> {
+    let file = syn::parse_file(source).map_err(|e| ExtractError::Parse {
+        message: e.to_string(),
+    })?;
+
+    Ok(rvs_collect_tests_from_items(&file.items))
+}
+
+/// 私有函数信息：用于检查非 rvs_ 前缀的私有函数。
+#[derive(Debug, Clone)]
+pub struct PrivateFnInfo {
+    pub name: String,
+    pub line: usize,
+    pub has_rvs_prefix: bool,
+}
+
+/// 从顶层项中收集所有私有函数（非 pub）信息。
+/// 包括顶层函数、impl 方法、mod 块内函数，递归收集。
+fn rvs_collect_private_fns_from_items(items: &[syn::Item]) -> Vec<PrivateFnInfo> {
+    let mut fns = Vec::new();
+    for item in items {
+        match item {
+            syn::Item::Fn(item_fn) => {
+                // 跳过 pub 函数（公开的）、test 函数和 main 函数
+                let is_pub = matches!(item_fn.vis, syn::Visibility::Public(_));
+                let is_test = rvs_is_test_fn(&item_fn.attrs);
+                let name = item_fn.sig.ident.to_string();
+                let is_main = name == "main";
+                if !is_pub && !is_test && !is_main {
+                    let line = item_fn.sig.ident.span().start().line;
+                    fns.push(PrivateFnInfo {
+                        has_rvs_prefix: name.starts_with("rvs_"),
+                        name,
+                        line,
+                    });
+                }
+            }
+            syn::Item::Impl(item_impl) => {
+                // 跳过 trait 实现块（impl Trait for Type）
+                // trait 实现的方法不需要 rvs_ 前缀
+                if item_impl.trait_.is_some() {
+                    continue;
+                }
+                // 只处理 impl Type {} 这种直接实现，不处理 trait 实现
+                for impl_item in &item_impl.items {
+                    if let syn::ImplItem::Fn(impl_fn) = impl_item {
+                        let is_pub = matches!(impl_fn.vis, syn::Visibility::Public(_));
+                        let is_test = rvs_is_test_fn(&impl_fn.attrs);
+                        if !is_pub && !is_test {
+                            let name = impl_fn.sig.ident.to_string();
+                            let line = impl_fn.sig.ident.span().start().line;
+                            fns.push(PrivateFnInfo {
+                                has_rvs_prefix: name.starts_with("rvs_"),
+                                name,
+                                line,
+                            });
+                        }
+                    }
+                }
+            }
+            syn::Item::Mod(m) => {
+                if let Some((_, inner_items)) = &m.content {
+                    fns.extend(rvs_collect_private_fns_from_items(inner_items));
+                }
+            }
+            _ => {}
+        }
+    }
+    fns
+}
+
+/// 从一段源码中萃取所有非 pub 的私有函数（用于检查 rvs_ 前缀）。
+/// 返回的函数名不包括 rvs_ 前缀的，用于生成警告。
+pub fn rvs_extract_private_fns(source: &str) -> Result<Vec<PrivateFnInfo>, ExtractError> {
+    let file = syn::parse_file(source).map_err(|e| ExtractError::Parse {
+        message: e.to_string(),
+    })?;
+
+    Ok(rvs_collect_private_fns_from_items(&file.items))
+}
+
+/// 公开项信息：用于检查 pub 函数/方法是否有文档注释。
+#[derive(Debug, Clone)]
+pub struct PubItemInfo {
+    pub name: String,
+    pub line: usize,
+    pub has_doc: bool,
+}
+
+/// 判断一组属性中是否含有文档注释（/// 或 #[doc = "..."]）。
+fn rvs_has_doc_attr(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|a| a.path().is_ident("doc"))
+}
+
+/// 从顶层项中收集所有 pub 函数/方法信息。
+/// 包括顶层 pub fn、pub mod 内的 pub fn、impl 块内的 pub fn；
+/// 跳过 trait 实现方法（由 trait 自身负责文档）、#[test] 函数。
+fn rvs_collect_pub_items_from_items(items: &[syn::Item]) -> Vec<PubItemInfo> {
+    let mut pubs = Vec::new();
+    for item in items {
+        match item {
+            syn::Item::Fn(item_fn) => {
+                let is_pub = matches!(item_fn.vis, syn::Visibility::Public(_));
+                let is_test = rvs_is_test_fn(&item_fn.attrs);
+                if is_pub && !is_test {
+                    let name = item_fn.sig.ident.to_string();
+                    let line = item_fn.sig.ident.span().start().line;
+                    pubs.push(PubItemInfo {
+                        has_doc: rvs_has_doc_attr(&item_fn.attrs),
+                        name,
+                        line,
+                    });
+                }
+            }
+            syn::Item::Impl(item_impl) => {
+                // trait 实现方法由 trait 提供文档，不做独立检查
+                if item_impl.trait_.is_some() {
+                    continue;
+                }
+                for impl_item in &item_impl.items {
+                    if let syn::ImplItem::Fn(impl_fn) = impl_item {
+                        let is_pub = matches!(impl_fn.vis, syn::Visibility::Public(_));
+                        let is_test = rvs_is_test_fn(&impl_fn.attrs);
+                        if is_pub && !is_test {
+                            let name = impl_fn.sig.ident.to_string();
+                            let line = impl_fn.sig.ident.span().start().line;
+                            pubs.push(PubItemInfo {
+                                has_doc: rvs_has_doc_attr(&impl_fn.attrs),
+                                name,
+                                line,
+                            });
+                        }
+                    }
+                }
+            }
+            syn::Item::Mod(m) => {
+                if let Some((_, inner_items)) = &m.content {
+                    pubs.extend(rvs_collect_pub_items_from_items(inner_items));
+                }
+            }
+            _ => {}
+        }
+    }
+    pubs
+}
+
+/// 从一段源码中萃取所有 pub 函数/方法（用于检查文档注释）。
+pub fn rvs_extract_pub_items(source: &str) -> Result<Vec<PubItemInfo>, ExtractError> {
+    let file = syn::parse_file(source).map_err(|e| ExtractError::Parse {
+        message: e.to_string(),
+    })?;
+
+    Ok(rvs_collect_pub_items_from_items(&file.items))
+}
+
+/// 借用类型参数信息：函数名、参数名、原类型、建议类型、行号。
+#[derive(Debug, Clone)]
+pub struct BorrowedParamInfo {
+    pub function: String,
+    pub param: String,
+    pub original: String,
+    pub suggestion: String,
+    pub line: usize,
+}
+
+/// unsafe 函数信息：名字、行号、是否有 `/// # Safety` 文档。
+#[derive(Debug, Clone)]
+pub struct UnsafeFnInfo {
+    pub name: String,
+    pub line: usize,
+    pub has_safety_doc: bool,
+}
+
+/// 检测类型是否为 `&String` / `&Vec<T>` / `&Box<T>`，返回 (原类型, 建议类型)。
+fn rvs_check_borrowed_type(ty: &syn::Type) -> Option<(String, String)> {
+    let syn::Type::Reference(ref_expr) = ty else {
+        return None;
+    };
+    if ref_expr.mutability.is_some() {
+        return None;
+    }
+    let syn::Type::Path(type_path) = &*ref_expr.elem else {
+        return None;
+    };
+    let last_ident = type_path.path.segments.last()?.ident.to_string();
+    match last_ident.as_str() {
+        "String" => Some(("&String".to_string(), "&str".to_string())),
+        "Vec" => Some(("&Vec<T>".to_string(), "&[T]".to_string())),
+        "Box" => Some(("&Box<T>".to_string(), "&T".to_string())),
+        _ => None,
+    }
+}
+
+/// 判断一组属性中是否含有 `/// # Safety` 文档小节。
+fn rvs_has_safety_doc(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|a| {
+        if !a.path().is_ident("doc") {
+            return false;
+        }
+        if let Ok(nv) = a.meta.require_name_value()
+            && let syn::Expr::Lit(expr_lit) = &nv.value
+            && let syn::Lit::Str(lit_str) = &expr_lit.lit
+        {
+            return lit_str.value().trim().starts_with("# Safety");
+        }
+        false
+    })
+}
+
+/// 从顶层项中收集所有借用类型参数（`&String`/`&Vec<T>`/`&Box<T>`）。
+fn rvs_collect_borrowed_params_from_items(items: &[syn::Item]) -> Vec<BorrowedParamInfo> {
+    let mut result = Vec::new();
+    for item in items {
+        match item {
+            syn::Item::Fn(item_fn) => {
+                let name = item_fn.sig.ident.to_string();
+                let line = item_fn.sig.ident.span().start().line;
+                for arg in &item_fn.sig.inputs {
+                    if let syn::FnArg::Typed(pt) = arg
+                        && let Some((original, suggestion)) = rvs_check_borrowed_type(&pt.ty)
+                        && let syn::Pat::Ident(pat_ident) = &*pt.pat
+                    {
+                        result.push(BorrowedParamInfo {
+                            function: name.clone(),
+                            param: pat_ident.ident.to_string(),
+                            original,
+                            suggestion,
+                            line,
+                        });
+                    }
+                }
+            }
+            syn::Item::Impl(item_impl) => {
+                if item_impl.trait_.is_some() {
+                    continue;
+                }
+                for impl_item in &item_impl.items {
+                    if let syn::ImplItem::Fn(impl_fn) = impl_item {
+                        let name = impl_fn.sig.ident.to_string();
+                        let line = impl_fn.sig.ident.span().start().line;
+                        for arg in &impl_fn.sig.inputs {
+                            if let syn::FnArg::Typed(pt) = arg
+                                && let Some((original, suggestion)) =
+                                    rvs_check_borrowed_type(&pt.ty)
+                                && let syn::Pat::Ident(pat_ident) = &*pt.pat
+                            {
+                                result.push(BorrowedParamInfo {
+                                    function: name.clone(),
+                                    param: pat_ident.ident.to_string(),
+                                    original,
+                                    suggestion,
+                                    line,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            syn::Item::Trait(item_trait) => {
+                for trait_item in &item_trait.items {
+                    if let syn::TraitItem::Fn(trait_fn) = trait_item {
+                        let name = trait_fn.sig.ident.to_string();
+                        let line = trait_fn.sig.ident.span().start().line;
+                        for arg in &trait_fn.sig.inputs {
+                            if let syn::FnArg::Typed(pt) = arg
+                                && let Some((original, suggestion)) =
+                                    rvs_check_borrowed_type(&pt.ty)
+                                && let syn::Pat::Ident(pat_ident) = &*pt.pat
+                            {
+                                result.push(BorrowedParamInfo {
+                                    function: name.clone(),
+                                    param: pat_ident.ident.to_string(),
+                                    original,
+                                    suggestion,
+                                    line,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            syn::Item::Mod(m) => {
+                if let Some((_, inner_items)) = &m.content {
+                    result.extend(rvs_collect_borrowed_params_from_items(inner_items));
+                }
+            }
+            _ => {}
+        }
+    }
+    result
+}
+
+/// 从顶层项中收集所有 unsafe 函数及其 `/// # Safety` 文档情况。
+fn rvs_collect_unsafe_fns_from_items(items: &[syn::Item]) -> Vec<UnsafeFnInfo> {
+    let mut result = Vec::new();
+    for item in items {
+        match item {
+            syn::Item::Fn(item_fn) if item_fn.sig.unsafety.is_some() => {
+                let name = item_fn.sig.ident.to_string();
+                let line = item_fn.sig.ident.span().start().line;
+                result.push(UnsafeFnInfo {
+                    name,
+                    line,
+                    has_safety_doc: rvs_has_safety_doc(&item_fn.attrs),
+                });
+            }
+            syn::Item::Impl(item_impl) => {
+                for impl_item in &item_impl.items {
+                    if let syn::ImplItem::Fn(impl_fn) = impl_item
+                        && impl_fn.sig.unsafety.is_some()
+                    {
+                        let name = impl_fn.sig.ident.to_string();
+                        let line = impl_fn.sig.ident.span().start().line;
+                        result.push(UnsafeFnInfo {
+                            name,
+                            line,
+                            has_safety_doc: rvs_has_safety_doc(&impl_fn.attrs),
+                        });
+                    }
+                }
+            }
+            syn::Item::Trait(item_trait) => {
+                for trait_item in &item_trait.items {
+                    if let syn::TraitItem::Fn(trait_fn) = trait_item
+                        && trait_fn.sig.unsafety.is_some()
+                    {
+                        let name = trait_fn.sig.ident.to_string();
+                        let line = trait_fn.sig.ident.span().start().line;
+                        result.push(UnsafeFnInfo {
+                            name,
+                            line,
+                            has_safety_doc: rvs_has_safety_doc(&trait_fn.attrs),
+                        });
+                    }
+                }
+            }
+            syn::Item::Mod(m) => {
+                if let Some((_, inner_items)) = &m.content {
+                    result.extend(rvs_collect_unsafe_fns_from_items(inner_items));
+                }
+            }
+            _ => {}
+        }
+    }
+    result
+}
+
+/// 检测文件级属性中是否有 `#![deny(warnings)]`，返回其行号。
+fn rvs_find_deny_warnings(attrs: &[syn::Attribute]) -> Option<usize> {
+    attrs.iter().find_map(|attr| {
+        if !attr
+            .path()
+            .segments
+            .last()
+            .is_some_and(|s| s.ident == "deny")
+        {
+            return None;
+        }
+        let Ok(list) = attr.meta.require_list() else {
+            return None;
+        };
+        let tokens = list.tokens.to_string();
+        if tokens.split(',').any(|t| t.trim() == "warnings") {
+            Some(attr.span().start().line)
+        } else {
+            None
+        }
+    })
+}
+
+/// 从一段源码中萃取所有借用类型参数（`&String`/`&Vec<T>`/`&Box<T>`）。
+pub fn rvs_extract_borrowed_params(source: &str) -> Result<Vec<BorrowedParamInfo>, ExtractError> {
+    let file = syn::parse_file(source).map_err(|e| ExtractError::Parse {
+        message: e.to_string(),
+    })?;
+
+    Ok(rvs_collect_borrowed_params_from_items(&file.items))
+}
+
+/// 从一段源码中萃取所有 unsafe 函数及其 `/// # Safety` 文档情况。
+pub fn rvs_extract_unsafe_fns(source: &str) -> Result<Vec<UnsafeFnInfo>, ExtractError> {
+    let file = syn::parse_file(source).map_err(|e| ExtractError::Parse {
+        message: e.to_string(),
+    })?;
+
+    Ok(rvs_collect_unsafe_fns_from_items(&file.items))
+}
+
+/// 检测源码中是否有 `#![deny(warnings)]`，返回其行号。
+pub fn rvs_extract_deny_warnings(source: &str) -> Result<Option<usize>, ExtractError> {
+    let file = syn::parse_file(source).map_err(|e| ExtractError::Parse {
+        message: e.to_string(),
+    })?;
+
+    Ok(rvs_find_deny_warnings(&file.attrs))
+}
+
+/// 公开类型缺少 `Debug` derive 的信息：类型名、行号。
+#[derive(Debug, Clone)]
+pub struct MissingDebugInfo {
+    pub name: String,
+    pub line: usize,
+}
+
+/// `rvs_` 函数带 `P` 标记但缺少 `/// # Panics` 文档的信息：函数名、行号。
+#[derive(Debug, Clone)]
+pub struct MissingPanicsDocInfo {
+    pub function: String,
+    pub line: usize,
+}
+
+/// 直接实现 `Into` 而非 `From` 的信息：实现类型、目标类型、行号。
+#[derive(Debug, Clone)]
+pub struct IntoImplInfo {
+    pub impl_type: String,
+    pub target_type: String,
+    pub line: usize,
+}
+
+/// 返回类型为 `Result<(), E>` 且消费了 `T` 类型参数但错误类型中不含 `T` 的信息。
+#[derive(Debug, Clone)]
+pub struct ConsumedArgOnErrorInfo {
+    pub function: String,
+    pub param: String,
+    pub param_type: String,
+    pub line: usize,
+}
+
+/// `impl Deref for X { Target = Y }` 反模式信息：实现类型、目标类型、行号。
+#[derive(Debug, Clone)]
+pub struct DerefPolymorphismInfo {
+    pub impl_type: String,
+    pub target_type: String,
+    pub line: usize,
+}
+
+/// 使用了 `std::any::Any` / `type_name` / `type_id` 的信息：函数名、调用的路径、行号。
+#[derive(Debug, Clone)]
+pub struct ReflectionUsageInfo {
+    pub function: String,
+    pub path: String,
+    pub line: usize,
+}
+
+const REFLECTION_PATHS: &[&str] = &[
+    "std::any::Any",
+    "std::any::type_name",
+    "std::any::type_id",
+    "any::Any",
+    "any::type_name",
+    "any::type_id",
+];
+
+fn rvs_has_debug_derive(attrs: &[syn::Attribute]) -> bool {
+    for a in attrs {
+        if a.path().is_ident("derive")
+            && let Ok(nested) = a.parse_args_with(
+                syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated,
+            )
+        {
+            for path in nested {
+                if path.is_ident("Debug") {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+fn rvs_has_panics_doc(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|a| {
+        if !a.path().is_ident("doc") {
+            return false;
+        }
+        if let Ok(nv) = a.meta.require_name_value()
+            && let syn::Expr::Lit(expr_lit) = &nv.value
+            && let syn::Lit::Str(lit_str) = &expr_lit.lit
+        {
+            return lit_str.value().trim().starts_with("# Panics");
+        }
+        false
+    })
+}
+
+fn rvs_collect_missing_debug_from_items(items: &[syn::Item]) -> Vec<MissingDebugInfo> {
+    let mut result = Vec::new();
+    for item in items {
+        match item {
+            syn::Item::Struct(s)
+                if matches!(s.vis, syn::Visibility::Public(_))
+                    && !rvs_has_debug_derive(&s.attrs) =>
+            {
+                result.push(MissingDebugInfo {
+                    name: s.ident.to_string(),
+                    line: s.ident.span().start().line,
+                });
+            }
+            syn::Item::Enum(e)
+                if matches!(e.vis, syn::Visibility::Public(_))
+                    && !rvs_has_debug_derive(&e.attrs) =>
+            {
+                result.push(MissingDebugInfo {
+                    name: e.ident.to_string(),
+                    line: e.ident.span().start().line,
+                });
+            }
+            syn::Item::Mod(m) => {
+                if let Some((_, inner_items)) = &m.content {
+                    result.extend(rvs_collect_missing_debug_from_items(inner_items));
+                }
+            }
+            _ => {}
+        }
+    }
+    result
+}
+
+fn rvs_collect_missing_panics_doc_from_items(items: &[syn::Item]) -> Vec<MissingPanicsDocInfo> {
+    let mut result = Vec::new();
+    for item in items {
+        match item {
+            syn::Item::Fn(item_fn) => {
+                let name = item_fn.sig.ident.to_string();
+                if let Some((_, caps)) = parse_rvs_function(&name)
+                    && caps.rvs_contains(Capability::P)
+                    && !rvs_has_panics_doc(&item_fn.attrs)
+                {
+                    result.push(MissingPanicsDocInfo {
+                        function: name,
+                        line: item_fn.sig.ident.span().start().line,
+                    });
+                }
+            }
+            syn::Item::Impl(item_impl) => {
+                if item_impl.trait_.is_some() {
+                    continue;
+                }
+                for impl_item in &item_impl.items {
+                    if let syn::ImplItem::Fn(impl_fn) = impl_item {
+                        let name = impl_fn.sig.ident.to_string();
+                        if let Some((_, caps)) = parse_rvs_function(&name)
+                            && caps.rvs_contains(Capability::P)
+                            && !rvs_has_panics_doc(&impl_fn.attrs)
+                        {
+                            result.push(MissingPanicsDocInfo {
+                                function: name,
+                                line: impl_fn.sig.ident.span().start().line,
+                            });
+                        }
+                    }
+                }
+            }
+            syn::Item::Mod(m) => {
+                if let Some((_, inner_items)) = &m.content {
+                    result.extend(rvs_collect_missing_panics_doc_from_items(inner_items));
+                }
+            }
+            _ => {}
+        }
+    }
+    result
+}
+
+fn rvs_collect_into_impls_from_items(items: &[syn::Item]) -> Vec<IntoImplInfo> {
+    let mut result = Vec::new();
+    for item in items {
+        if let syn::Item::Impl(impl_block) = item
+            && let Some((_, trait_path, _)) = &impl_block.trait_
+            && let Some(seg) = trait_path.segments.last()
+            && seg.ident == "Into"
+        {
+            let impl_type = rvs_type_name(&impl_block.self_ty);
+            let target_type = rvs_type_name_from_path(&seg.arguments);
+            result.push(IntoImplInfo {
+                impl_type,
+                target_type,
+                line: seg.ident.span().start().line,
+            });
+        }
+    }
+    result
+}
+
+fn rvs_type_name(ty: &syn::Type) -> String {
+    match ty {
+        syn::Type::Path(p) => p
+            .path
+            .segments
+            .last()
+            .map(|s| s.ident.to_string())
+            .unwrap_or_default(),
+        _ => String::new(),
+    }
+}
+
+fn rvs_type_name_from_path(args: &syn::PathArguments) -> String {
+    match args {
+        syn::PathArguments::AngleBracketed(ab) => ab.args.first().map_or_else(String::new, |arg| {
+            if let syn::GenericArgument::Type(ty) = arg {
+                rvs_type_name(ty)
+            } else {
+                String::new()
+            }
+        }),
+        _ => String::new(),
+    }
+}
+
+fn rvs_type_ident(ty: &syn::Type) -> Option<String> {
+    if let syn::Type::Path(p) = ty {
+        p.path.segments.last().map(|s| s.ident.to_string())
+    } else {
+        None
+    }
+}
+
+fn rvs_collect_consumed_arg_on_error_from_items(
+    items: &[syn::Item],
+) -> Vec<ConsumedArgOnErrorInfo> {
+    let mut result = Vec::new();
+    for item in items {
+        match item {
+            syn::Item::Fn(item_fn) => {
+                let name = item_fn.sig.ident.to_string();
+                let line = item_fn.sig.ident.span().start().line;
+                if let Some(info) = rvs_find_consumed_args(&item_fn.sig, &name, line) {
+                    result.push(info);
+                }
+            }
+            syn::Item::Impl(item_impl) => {
+                if item_impl.trait_.is_some() {
+                    continue;
+                }
+                for impl_item in &item_impl.items {
+                    if let syn::ImplItem::Fn(impl_fn) = impl_item {
+                        let name = impl_fn.sig.ident.to_string();
+                        let line = impl_fn.sig.ident.span().start().line;
+                        if let Some(info) = rvs_find_consumed_args(&impl_fn.sig, &name, line) {
+                            result.push(info);
+                        }
+                    }
+                }
+            }
+            syn::Item::Trait(item_trait) => {
+                for trait_item in &item_trait.items {
+                    if let syn::TraitItem::Fn(tfn) = trait_item {
+                        let name = tfn.sig.ident.to_string();
+                        let line = tfn.sig.ident.span().start().line;
+                        if let Some(info) = rvs_find_consumed_args(&tfn.sig, &name, line) {
+                            result.push(info);
+                        }
+                    }
+                }
+            }
+            syn::Item::Mod(m) => {
+                if let Some((_, inner_items)) = &m.content {
+                    result.extend(rvs_collect_consumed_arg_on_error_from_items(inner_items));
+                }
+            }
+            _ => {}
+        }
+    }
+    result
+}
+
+fn rvs_find_consumed_args(
+    sig: &syn::Signature,
+    name: &str,
+    line: usize,
+) -> Option<ConsumedArgOnErrorInfo> {
+    debug_assert!(line > 0);
+    let ret = &sig.output;
+    let syn::ReturnType::Type(_, ret_ty) = ret else {
+        return None;
+    };
+    let syn::Type::Path(type_path) = ret_ty.as_ref() else {
+        return None;
+    };
+    let last_seg = type_path.path.segments.last()?;
+    if last_seg.ident != "Result" {
+        return None;
+    }
+    let syn::PathArguments::AngleBracketed(ab) = &last_seg.arguments else {
+        return None;
+    };
+    if ab.args.len() != 2 {
+        return None;
+    };
+    let syn::GenericArgument::Type(ok_ty) = &ab.args[0] else {
+        return None;
+    };
+    let syn::GenericArgument::Type(err_ty) = &ab.args[1] else {
+        return None;
+    };
+    let is_unit = matches!(ok_ty, syn::Type::Tuple(t) if t.elems.is_empty());
+    if is_unit {
+        let err_idents = rvs_collect_type_idents(err_ty);
+        for arg in &sig.inputs {
+            if let syn::FnArg::Typed(pt) = arg
+                && !matches!(pt.ty.as_ref(), syn::Type::Reference(_))
+                && let syn::Pat::Ident(pat_ident) = &*pt.pat
+                && let Some(arg_ident) = rvs_type_ident(&pt.ty)
+                && !err_idents.contains(&arg_ident)
+            {
+                return Some(ConsumedArgOnErrorInfo {
+                    function: name.to_string(),
+                    param: pat_ident.ident.to_string(),
+                    param_type: arg_ident,
+                    line,
+                });
+            }
+        }
+    }
+    None
+}
+
+fn rvs_collect_type_idents(ty: &syn::Type) -> Vec<String> {
+    let mut idents = Vec::new();
+    match ty {
+        syn::Type::Path(p) => {
+            for seg in &p.path.segments {
+                idents.push(seg.ident.to_string());
+                if let syn::PathArguments::AngleBracketed(ab) = &seg.arguments {
+                    for arg in &ab.args {
+                        if let syn::GenericArgument::Type(inner) = arg {
+                            idents.extend(rvs_collect_type_idents(inner));
+                        }
+                    }
+                }
+            }
+        }
+        syn::Type::Tuple(t) => {
+            for inner in &t.elems {
+                idents.extend(rvs_collect_type_idents(inner));
+            }
+        }
+        syn::Type::Reference(r) => {
+            idents.extend(rvs_collect_type_idents(&r.elem));
+        }
+        _ => {}
+    }
+    idents
+}
+
+fn rvs_collect_deref_polymorphism_from_items(items: &[syn::Item]) -> Vec<DerefPolymorphismInfo> {
+    let mut result = Vec::new();
+    for item in items {
+        if let syn::Item::Impl(impl_block) = item
+            && let Some((_, trait_path, _)) = &impl_block.trait_
+            && let Some(seg) = trait_path.segments.last()
+            && seg.ident == "Deref"
+        {
+            let impl_type = rvs_type_name(&impl_block.self_ty);
+            for item in &impl_block.items {
+                if let syn::ImplItem::Const(assoc_const) = item
+                    && assoc_const.ident == "Target"
+                {
+                    let target_type = rvs_type_name_from_type_expr(&assoc_const.ty);
+                    result.push(DerefPolymorphismInfo {
+                        impl_type,
+                        target_type,
+                        line: seg.ident.span().start().line,
+                    });
+                    break;
+                }
+                if let syn::ImplItem::Type(assoc_type) = item
+                    && assoc_type.ident == "Target"
+                {
+                    let target_type = rvs_type_name(&assoc_type.ty);
+                    result.push(DerefPolymorphismInfo {
+                        impl_type,
+                        target_type,
+                        line: seg.ident.span().start().line,
+                    });
+                    break;
+                }
+            }
+        }
+    }
+    result
+}
+
+fn rvs_type_name_from_type_expr(ty: &syn::Type) -> String {
+    rvs_type_name(ty)
+}
+
+fn rvs_collect_reflection_usage_from_fns(functions: &[FnDef]) -> Vec<ReflectionUsageInfo> {
+    let mut result = Vec::new();
+    for func in functions {
+        for callee in &func.calls {
+            for &rp in REFLECTION_PATHS {
+                if callee.name == rp || callee.name.ends_with(&format!("::{rp}")) {
+                    result.push(ReflectionUsageInfo {
+                        function: func.name.clone(),
+                        path: callee.name.clone(),
+                        line: callee.line,
+                    });
+                    break;
+                }
+            }
+        }
+    }
+    result
+}
+
+/// Extract public structs/enums missing `#[derive(Debug)]`.
+pub fn rvs_extract_missing_debug(source: &str) -> Result<Vec<MissingDebugInfo>, ExtractError> {
+    let file = syn::parse_file(source).map_err(|e| ExtractError::Parse {
+        message: e.to_string(),
+    })?;
+    Ok(rvs_collect_missing_debug_from_items(&file.items))
+}
+
+/// Extract `rvs_` functions with `P` marker missing `/// # Panics` doc.
+pub fn rvs_extract_missing_panics_doc(
+    source: &str,
+) -> Result<Vec<MissingPanicsDocInfo>, ExtractError> {
+    let file = syn::parse_file(source).map_err(|e| ExtractError::Parse {
+        message: e.to_string(),
+    })?;
+    Ok(rvs_collect_missing_panics_doc_from_items(&file.items))
+}
+
+/// Extract `impl Into<T>` blocks (prefer `impl From<T>`).
+pub fn rvs_extract_into_impls(source: &str) -> Result<Vec<IntoImplInfo>, ExtractError> {
+    let file = syn::parse_file(source).map_err(|e| ExtractError::Parse {
+        message: e.to_string(),
+    })?;
+    Ok(rvs_collect_into_impls_from_items(&file.items))
+}
+
+/// Extract consumed owned arguments not preserved in error variants.
+pub fn rvs_extract_consumed_arg_on_error(
+    source: &str,
+) -> Result<Vec<ConsumedArgOnErrorInfo>, ExtractError> {
+    let file = syn::parse_file(source).map_err(|e| ExtractError::Parse {
+        message: e.to_string(),
+    })?;
+    Ok(rvs_collect_consumed_arg_on_error_from_items(&file.items))
+}
+
+/// Extract `impl Deref` for non-smart-pointer types (anti-pattern).
+pub fn rvs_extract_deref_polymorphism(
+    source: &str,
+) -> Result<Vec<DerefPolymorphismInfo>, ExtractError> {
+    let file = syn::parse_file(source).map_err(|e| ExtractError::Parse {
+        message: e.to_string(),
+    })?;
+    Ok(rvs_collect_deref_polymorphism_from_items(&file.items))
+}
+
+/// Extract usage of `std::any::Any`/`type_name`/`type_id` reflection APIs.
+pub fn rvs_extract_reflection_usage(functions: &[FnDef]) -> Vec<ReflectionUsageInfo> {
+    rvs_collect_reflection_usage_from_fns(functions)
 }
 
 #[derive(Debug, thiserror::Error)]

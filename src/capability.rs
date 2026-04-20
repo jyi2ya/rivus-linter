@@ -16,6 +16,7 @@ pub enum Capability {
 }
 
 impl Capability {
+    /// 从后缀字母解析出对应的 Capability。未知字符返回 None。
     pub fn rvs_from_char(c: char) -> Option<Self> {
         match c {
             'A' => Some(Self::A),
@@ -30,6 +31,7 @@ impl Capability {
         }
     }
 
+    /// 返回能力对应的大写后缀字母。
     pub fn rvs_as_char(self) -> char {
         match self {
             Self::A => 'A',
@@ -43,6 +45,7 @@ impl Capability {
         }
     }
 
+    /// 返回能力的英文语义名（用于报告显示）。
     pub fn rvs_description(self) -> &'static str {
         match self {
             Self::A => "Async",
@@ -72,10 +75,12 @@ pub struct CapabilitySet(BTreeSet<Capability>);
 
 #[allow(non_snake_case)]
 impl CapabilitySet {
+    /// 构造一个空的能力集。
     pub fn rvs_new() -> Self {
         Self(BTreeSet::new())
     }
 
+    /// 从后缀字符串解析能力集。遇到非法字母返回错误。
     pub fn rvs_from_str(s: &str) -> Result<Self, CapabilityParseError> {
         let mut set = BTreeSet::new();
         for c in s.chars() {
@@ -85,6 +90,7 @@ impl CapabilitySet {
         Ok(Self(set))
     }
 
+    /// 从已经校验过的后缀字符串解析能力集（预期任何字母都合法）。
     pub fn rvs_from_validated(s: &str) -> Self {
         let mut set = BTreeSet::new();
         for c in s.chars() {
@@ -132,23 +138,28 @@ impl CapabilitySet {
         )
     }
 
+    /// 判断能力集是否为空。
     pub fn rvs_is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
+    /// 判断能力集是否包含某项能力。
     pub fn rvs_contains(&self, cap: Capability) -> bool {
         self.0.contains(&cap)
     }
 
+    /// 遍历能力集中的所有能力。
     pub fn rvs_iter(&self) -> impl Iterator<Item = Capability> + '_ {
         self.0.iter().copied()
     }
 
+    /// 返回能力集中能力的个数。
     pub fn rvs_len(&self) -> usize {
         self.0.len()
     }
 
-    pub fn insert(&mut self, cap: Capability) {
+    /// 向能力集中插入一项能力。
+    pub fn rvs_insert_M(&mut self, cap: Capability) {
         self.0.insert(cap);
     }
 }
@@ -180,15 +191,16 @@ pub enum CapabilityParseError {
 pub fn parse_rvs_function(name: &str) -> Option<(&str, CapabilitySet)> {
     debug_assert!(!name.is_empty());
 
-    if let Some(result) = parse_rvs_segment(name) {
+    if let Some(result) = rvs_parse_segment(name) {
         return Some(result);
     }
     let last_segment = name.rsplit("::").next()?;
-    parse_rvs_segment(last_segment)
+    rvs_parse_segment(last_segment)
 }
 
 /// 拆解单个片段：去掉 rvs_ 前缀后，萃取能力后缀。
-fn parse_rvs_segment(name: &str) -> Option<(&str, CapabilitySet)> {
+#[allow(non_snake_case)]
+fn rvs_parse_segment(name: &str) -> Option<(&str, CapabilitySet)> {
     let rest = name.strip_prefix("rvs_")?;
 
     if let Some(pos) = rest.rfind('_') {

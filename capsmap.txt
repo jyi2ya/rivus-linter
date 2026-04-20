@@ -315,3 +315,32 @@ Result::is_ok_and=
 Result::require_list=
 Attribute::path=
 Meta::require_list=
+
+# ─── 标准库：str 切分（补充）─────────────────────────
+core::str::split_at=
+str::split_at=
+
+# ─── 外部库：syn（补充）─────────────────────────────
+syn::Path::is_ident=
+
+# ─── 标准库：字符串方法（补充）─────────────────────────
+alloc::string::String::replace=
+std::str::replace=
+
+# ─── syn 方法（补充）─────────────────────────────────
+syn::Meta::require_name_value=
+LitStr::value=
+core::iter::Iterator::next=
+syn::Expr::value=
+
+# ─── 标准库：迭代器方法（补充）─────────────────────────
+core::iter::Iterator::find_map=
+
+# ─── syn 方法（补充2）─────────────────────────────────
+Attribute::parse_args_with=
+Punctuated::first=
+Option::map_or_else=
+AsRef::as_ref=
+Punctuated::len=
+Punctuated::is_empty=
+IntoIterator::next=

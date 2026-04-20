@@ -1,0 +1,3 @@
+deny_warnings_warnings: 1
+warning: `#![deny(warnings)]` is an anti-pattern—use named lints instead
+  at test.rs:2

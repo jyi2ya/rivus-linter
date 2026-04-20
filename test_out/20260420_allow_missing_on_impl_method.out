@@ -1,0 +1,3 @@
+missing_allow_warnings: 1
+warning: rvs_run_AI has uppercase capability suffix but is not covered by #[allow(non_snake_case)]
+  at test.rs:5

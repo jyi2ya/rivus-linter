@@ -1,0 +1,4 @@
+duplicate_test_warnings: 1
+warning: duplicate test name 'test_20260420_dup_case' (2 occurrences):
+  - test.rs:3
+  - test.rs:7

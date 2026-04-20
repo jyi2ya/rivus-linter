@@ -22,6 +22,11 @@ pub enum MirCompileError {
     SpawnFailed(String),
 }
 
+/// 调用 `cargo rustc` 编译项目并将 MIR 写出到 `target/mir-dump`，返回 MIR 目录路径。
+///
+/// # Panics
+///
+/// Panics if `project_dir` does not exist.
 #[allow(non_snake_case)]
 pub fn rvs_compile_to_mir_BIMPS(project_dir: &Path) -> Result<PathBuf, MirCompileError> {
     debug_assert!(project_dir.exists(), "项目目录必须存在");
@@ -315,6 +320,7 @@ fn rvs_scan_mir_has_panic(mir_fn: &MirFnDef) -> bool {
     false
 }
 
+/// 从 MIR 文本中萃取函数定义（函数体、调用关系、元信息）。
 pub fn rvs_extract_from_mir(mir_text: &str) -> Result<Vec<FnDef>, MirError> {
     let mir_functions = rvs_parse_mir_functions(mir_text);
 
@@ -371,6 +377,7 @@ pub fn rvs_extract_from_mir(mir_text: &str) -> Result<Vec<FnDef>, MirError> {
             raw_suffix,
             is_test: false,
             allows_dead_code: false,
+            has_allow_non_snake_case: true,
         });
     }
 
