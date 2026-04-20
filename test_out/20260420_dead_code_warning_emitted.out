@@ -1,0 +1,3 @@
+dead_code_warnings: 1
+warning: rvs_never_called is marked #[allow(dead_code)] or #[allow(unused)] and excluded from report
+  at test.rs:3

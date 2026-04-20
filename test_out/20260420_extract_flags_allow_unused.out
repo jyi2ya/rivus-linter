@@ -1,0 +1,3 @@
+functions: 2
+0: rvs_dead allows_dead_code=true
+1: rvs_real allows_dead_code=false

@@ -256,6 +256,7 @@ rivus-linter check src/ -m capsmap.txt
 | 违规 | `error` | 调用链能力冲突（函数调用越权或静态变量引用越权） | 是 |
 | 警告 | `warning` | 调用了既非 `rvs_` 前缀也不在 capsmap 中的函数 | 否 |
 | 缺断言警告 | `warning` | `rvs_` 函数有原始数值类型参数却未写 `debug_assert!` | 否 |
+| 死代码警告 | `warning` | `rvs_` 函数被 `#[allow(dead_code)]` 或 `#[allow(unused)]` 标记 | 否 |
 | 推断提示 | `hint` | 函数的实际行为暗示应有某能力但名字里没写 | 否 |
 
 **违规（violation）**分两种：函数调用越权（`calls`）和静态变量引用越权（`references`）。后者指函数引用了 `static` 或 `thread_local!` 变量但缺少相应的能力：`static` 不可变引用需要 `S`，`static mut` 引用需要 `S` + `U`，`thread_local!` 引用需要 `S` + `T`。
@@ -281,6 +282,11 @@ rivus-linter mir-check . -m capsmap.txt --mir-dir target/debug/deps
 统计 `path` 下所有 `.rs` 文件中 `rvs_` 函数的能力分布，输出各能力标记的函数数量和行数占比。好函数（能力 ≤ ABM）应该越多越好。
 
 **报告中的百分比和柱状图均基于行数占比，而非函数数量占比。** 因此优化报告指标的方向是减少非好函数的代码行数——将逻辑从高能力函数抽出到低能力/纯函数中，比单纯增加纯函数数量更有效。
+
+**以下函数会被排除在统计之外，不计入报告**（防止通过写死代码刷指标）：
+- `#[test]` 函数
+- `#[cfg(test)]` 模块内的函数
+- `#[allow(dead_code)]` 或 `#[allow(unused)]` 标记的函数
 
 ```bash
 rivus-linter report src/
@@ -318,7 +324,7 @@ use rivus_linter::{
     rvs_check_source, rvs_check_functions, rvs_check_path_BI,
     rvs_check_mir_dir_BIM, rvs_check_mir_path_BIMPS,
     CheckOutput, Violation, ViolationKind, Warning, InferenceWarning, InferenceKind,
-    MissingAssertWarning, MirCheckError,
+    MissingAssertWarning, DeadCodeWarning, MirCheckError,
     // 报告
     rvs_build_report, rvs_report_path_BI, Report,
     // CapsMap
@@ -365,6 +371,7 @@ core::panicking::panic=P       # 可能 panic
 1. **写代码时**：确保每个 `rvs_` 函数名的后缀与其实际行为一致
 2. **交付前必跑**（全部通过才算交付完成）：
    ```bash
+   cargo fmt            # 格式化代码
    cargo build          # 编译通过
    cargo clippy         # 无警告
    cargo test           # 测试通过
@@ -605,6 +612,7 @@ impl From<Order> for OrderRow {
 * 多用泛型少用 dyn
 * 汇报任务完成之前，必须运行以下命令确保全部通过：
   ```bash
+  cargo fmt
   cargo build
   cargo clippy
   cargo test

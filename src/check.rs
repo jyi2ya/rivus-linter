@@ -3,9 +3,9 @@ use std::collections::HashMap;
 use std::fmt;
 use std::path::Path;
 
-use crate::capability::{parse_rvs_function, Capability, CapabilitySet};
+use crate::capability::{Capability, CapabilitySet, parse_rvs_function};
 use crate::capsmap::CapsMap;
-use crate::extract::{rvs_extract_functions, FnDef};
+use crate::extract::{FnDef, rvs_extract_functions};
 use crate::source::rvs_read_rust_sources_BI;
 
 /// 违规之别：调用越权与静态引用越权。
@@ -79,12 +79,13 @@ impl fmt::Display for Warning {
     }
 }
 
-/// 检查结果：违规、警告、缺断言警告、推断警告。
+/// 检查结果：违规、警告、缺断言警告、死代码警告、推断警告。
 #[derive(Debug, Clone)]
 pub struct CheckOutput {
     pub violations: Vec<Violation>,
     pub warnings: Vec<Warning>,
     pub assert_warnings: Vec<MissingAssertWarning>,
+    pub dead_code_warnings: Vec<DeadCodeWarning>,
     pub inference_warnings: Vec<InferenceWarning>,
 }
 
@@ -110,6 +111,24 @@ impl fmt::Display for MissingAssertWarning {
     }
 }
 
+/// 一条死代码警告：函数被 #[allow(dead_code)] 或 #[allow(unused)] 标记。
+#[derive(Debug, Clone)]
+pub struct DeadCodeWarning {
+    pub function: String,
+    pub file: String,
+    pub line: usize,
+}
+
+impl fmt::Display for DeadCodeWarning {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "warning: {} is marked #[allow(dead_code)] or #[allow(unused)] and excluded from report\n  at {}:{}",
+            self.function, self.file, self.line,
+        )
+    }
+}
+
 /// 推断警告之别：函数的实际行为与其声明的能力后缀不符。
 #[derive(Debug, Clone, PartialEq)]
 pub enum InferenceKind {
@@ -130,10 +149,16 @@ impl fmt::Display for InferenceKind {
             InferenceKind::MissingUnsafe => write!(f, "contains unsafe but missing U"),
             InferenceKind::MissingMutable => write!(f, "has &mut parameter but missing M"),
             InferenceKind::MissingPanic => write!(f, "calls panic macro but missing P"),
-            InferenceKind::MissingSideEffect => write!(f, "reads static/thread_local but missing S"),
+            InferenceKind::MissingSideEffect => {
+                write!(f, "reads static/thread_local but missing S")
+            }
             InferenceKind::MissingThreadLocal => write!(f, "reads thread_local but missing T"),
-            InferenceKind::NonAlphabeticalSuffix => write!(f, "capability suffix not in alphabetical order"),
-            InferenceKind::DuplicateSuffixLetter => write!(f, "duplicate capability letter in suffix"),
+            InferenceKind::NonAlphabeticalSuffix => {
+                write!(f, "capability suffix not in alphabetical order")
+            }
+            InferenceKind::DuplicateSuffixLetter => {
+                write!(f, "duplicate capability letter in suffix")
+            }
         }
     }
 }
@@ -152,26 +177,27 @@ impl fmt::Display for InferenceWarning {
         write!(
             f,
             "hint: {} {} in its name\n  at {}:{}",
-            self.function,
-            self.kind,
-            self.file,
-            self.line,
+            self.function, self.kind, self.file, self.line,
         )
     }
 }
 
 /// 内部实现：检查函数调用合规性与静态引用合规性。
-fn rvs_check_functions_impl(
-    functions: &[FnDef],
-    file: &str,
-    capsmap: &CapsMap,
-) -> CheckOutput {
+fn rvs_check_functions_impl(functions: &[FnDef], file: &str, capsmap: &CapsMap) -> CheckOutput {
     let mut violations = Vec::new();
     let mut warnings = Vec::new();
     let mut assert_warnings = Vec::new();
+    let mut dead_code_warnings = Vec::new();
     let mut inference_warnings = Vec::new();
 
     for func in functions {
+        if func.allows_dead_code {
+            dead_code_warnings.push(DeadCodeWarning {
+                function: func.name.clone(),
+                file: file.to_string(),
+                line: func.line,
+            });
+        }
         if func.has_body && !func.params.is_empty() {
             let missing: Vec<String> = func
                 .params
@@ -248,7 +274,9 @@ fn rvs_check_functions_impl(
                 line: func.line,
             });
         }
-        if (func.has_unsafe_block || func.is_unsafe_fn) && !func.capabilities.rvs_contains(Capability::U) {
+        if (func.has_unsafe_block || func.is_unsafe_fn)
+            && !func.capabilities.rvs_contains(Capability::U)
+        {
             inference_warnings.push(InferenceWarning {
                 function: func.name.clone(),
                 kind: InferenceKind::MissingUnsafe,
@@ -256,7 +284,9 @@ fn rvs_check_functions_impl(
                 line: func.line,
             });
         }
-        if (func.has_mut_param || func.has_mut_self) && !func.capabilities.rvs_contains(Capability::M) {
+        if (func.has_mut_param || func.has_mut_self)
+            && !func.capabilities.rvs_contains(Capability::M)
+        {
             inference_warnings.push(InferenceWarning {
                 function: func.name.clone(),
                 kind: InferenceKind::MissingMutable,
@@ -273,7 +303,9 @@ fn rvs_check_functions_impl(
             });
         }
         for sr in &func.static_refs {
-            if sr.required_caps.rvs_contains(Capability::S) && !func.capabilities.rvs_contains(Capability::S) {
+            if sr.required_caps.rvs_contains(Capability::S)
+                && !func.capabilities.rvs_contains(Capability::S)
+            {
                 inference_warnings.push(InferenceWarning {
                     function: func.name.clone(),
                     kind: InferenceKind::MissingSideEffect,
@@ -284,7 +316,9 @@ fn rvs_check_functions_impl(
             }
         }
         for sr in &func.static_refs {
-            if sr.required_caps.rvs_contains(Capability::T) && !func.capabilities.rvs_contains(Capability::T) {
+            if sr.required_caps.rvs_contains(Capability::T)
+                && !func.capabilities.rvs_contains(Capability::T)
+            {
                 inference_warnings.push(InferenceWarning {
                     function: func.name.clone(),
                     kind: InferenceKind::MissingThreadLocal,
@@ -325,7 +359,13 @@ fn rvs_check_functions_impl(
         }
     }
 
-    CheckOutput { violations, warnings, assert_warnings, inference_warnings }
+    CheckOutput {
+        violations,
+        warnings,
+        assert_warnings,
+        dead_code_warnings,
+        inference_warnings,
+    }
 }
 
 /// 纯函数：检查一组函数定义中的调用合规性与静态引用合规性。
@@ -339,11 +379,10 @@ pub fn rvs_check_source(
     file: &str,
     capsmap: &CapsMap,
 ) -> Result<CheckOutput, CheckError> {
-    let functions = rvs_extract_functions(source)
-        .map_err(|e| CheckError::Extract {
-            source: e,
-            file: file.to_string(),
-        })?;
+    let functions = rvs_extract_functions(source).map_err(|e| CheckError::Extract {
+        source: e,
+        file: file.to_string(),
+    })?;
     Ok(rvs_check_functions_impl(&functions, file, capsmap))
 }
 
@@ -351,24 +390,24 @@ pub fn rvs_check_source(
 /// CapsMap 用于查找非 rvs_ 函数的能力。
 #[allow(non_snake_case)]
 pub fn rvs_check_path_BI(path: &Path, capsmap: &CapsMap) -> Result<CheckOutput, CheckError> {
-    let sources = rvs_read_rust_sources_BI(path)
-        .map_err(|e| CheckError::Read { source: e })?;
+    let sources = rvs_read_rust_sources_BI(path).map_err(|e| CheckError::Read { source: e })?;
     let mut output = CheckOutput {
         violations: Vec::new(),
         warnings: Vec::new(),
         assert_warnings: Vec::new(),
+        dead_code_warnings: Vec::new(),
         inference_warnings: Vec::new(),
     };
     for sf in &sources {
-        let functions = rvs_extract_functions(&sf.source)
-            .map_err(|e| CheckError::Extract {
-                source: e,
-                file: sf.path.clone(),
-            })?;
+        let functions = rvs_extract_functions(&sf.source).map_err(|e| CheckError::Extract {
+            source: e,
+            file: sf.path.clone(),
+        })?;
         let result = rvs_check_functions_impl(&functions, &sf.path, capsmap);
         output.violations.extend(result.violations);
         output.warnings.extend(result.warnings);
         output.assert_warnings.extend(result.assert_warnings);
+        output.dead_code_warnings.extend(result.dead_code_warnings);
         output.inference_warnings.extend(result.inference_warnings);
     }
     Ok(output)
@@ -377,9 +416,7 @@ pub fn rvs_check_path_BI(path: &Path, capsmap: &CapsMap) -> Result<CheckOutput, 
 #[derive(Debug, thiserror::Error)]
 pub enum CheckError {
     #[error("failed to read: {source}")]
-    Read {
-        source: crate::source::ReadError,
-    },
+    Read { source: crate::source::ReadError },
     #[error("failed to extract from '{file}': {source}")]
     Extract {
         file: String,
@@ -394,7 +431,10 @@ pub enum MirCheckError {
     #[error("failed to read MIR files: {source}")]
     Read { source: crate::source::ReadError },
     #[error("failed to extract MIR from '{file}': {source}")]
-    MirExtract { file: String, source: crate::mir::MirError },
+    MirExtract {
+        file: String,
+        source: crate::mir::MirError,
+    },
 }
 
 #[allow(non_snake_case)]

@@ -2,11 +2,11 @@
 
 use std::collections::BTreeSet;
 
-use rivus_linter::capsmap::CapsMap;
 use rivus_linter::capability::{
-    parse_rvs_function, Capability, CapabilityParseError, CapabilitySet,
+    Capability, CapabilityParseError, CapabilitySet, parse_rvs_function,
 };
-use rivus_linter::check::{rvs_check_source, InferenceKind};
+use rivus_linter::capsmap::CapsMap;
+use rivus_linter::check::{InferenceKind, rvs_check_source};
 use rivus_linter::extract::rvs_extract_functions;
 use rivus_linter::report::rvs_build_report;
 
@@ -100,7 +100,10 @@ fn test_20260418_parse_non_rvs() {
     let result = parse_rvs_function("not_rvs_function");
     assert!(result.is_none());
 
-    rvs_snapshot_BI("20260418_parse_non_rvs", "input: not_rvs_function\nresult: None\n");
+    rvs_snapshot_BI(
+        "20260418_parse_non_rvs",
+        "input: not_rvs_function\nresult: None\n",
+    );
 }
 
 #[test]
@@ -177,9 +180,7 @@ fn test_20260418_compliance_superset_can_call_subset() {
 
     rvs_snapshot_BI(
         "20260418_compliance_superset_can_call_subset",
-        format!(
-            "caller: {caller}\ncallee: {callee}\ncan_call: true\nmissing: {{}}\n",
-        ),
+        format!("caller: {caller}\ncallee: {callee}\ncan_call: true\nmissing: {{}}\n",),
     );
 }
 
@@ -230,9 +231,7 @@ fn test_20260418_compliance_cap_can_call_empty() {
 
     rvs_snapshot_BI(
         "20260418_compliance_cap_can_call_empty",
-        format!(
-            "caller: {caller}\ncallee: {callee}\ncan_call: true\n",
-        ),
+        format!("caller: {caller}\ncallee: {callee}\ncan_call: true\n",),
     );
 }
 
@@ -244,9 +243,7 @@ fn test_20260418_compliance_empty_can_call_empty() {
 
     rvs_snapshot_BI(
         "20260418_compliance_empty_can_call_empty",
-        format!(
-            "caller: {caller}\ncallee: {callee}\ncan_call: true\n",
-        ),
+        format!("caller: {caller}\ncallee: {callee}\ncan_call: true\n",),
     );
 }
 
@@ -258,9 +255,7 @@ fn test_20260418_compliance_same_set_can_call() {
 
     rvs_snapshot_BI(
         "20260418_compliance_same_set_can_call",
-        format!(
-            "caller: {caller}\ncallee: {callee}\ncan_call: true\n",
-        ),
+        format!("caller: {caller}\ncallee: {callee}\ncan_call: true\n",),
     );
 }
 
@@ -281,7 +276,12 @@ fn rvs_add(a: i32, b: i32) -> i32 {
 
     rvs_snapshot_BI(
         "20260418_syn_parse_single_fn",
-        format!("functions: 1\nname: {}\ncaps: {}\ncalls: {}\n", fns[0].name, fns[0].capabilities, fns[0].calls.len()),
+        format!(
+            "functions: 1\nname: {}\ncaps: {}\ncalls: {}\n",
+            fns[0].name,
+            fns[0].capabilities,
+            fns[0].calls.len()
+        ),
     );
 }
 
@@ -396,8 +396,12 @@ impl Service {
         format!(
             "functions: {}\n1: {} caps={} calls={}\n2: {} caps={} calls={}\n",
             fns.len(),
-            fns[0].name, fns[0].capabilities, fns[0].calls.len(),
-            fns[1].name, fns[1].capabilities, fns[1].calls.len(),
+            fns[0].name,
+            fns[0].capabilities,
+            fns[0].calls.len(),
+            fns[1].name,
+            fns[1].capabilities,
+            fns[1].calls.len(),
         ),
     );
 }
@@ -420,8 +424,10 @@ trait Repository {
         format!(
             "functions: {}\n1: {} caps={}\n2: {} caps={}\n",
             fns.len(),
-            fns[0].name, fns[0].capabilities,
-            fns[1].name, fns[1].capabilities,
+            fns[0].name,
+            fns[0].capabilities,
+            fns[1].name,
+            fns[1].capabilities,
         ),
     );
 }
@@ -491,10 +497,7 @@ fn rvs_outer_ABI() {
     let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
     assert!(output.violations.is_empty());
 
-    rvs_snapshot_BI(
-        "20260418_linter_compliant_code",
-        "violations: 0\n",
-    );
+    rvs_snapshot_BI("20260418_linter_compliant_code", "violations: 0\n");
 }
 
 #[test]
@@ -534,7 +537,11 @@ fn rvs_add(a: i32, b: i32) -> i32 {
 
     rvs_snapshot_BI(
         "20260418_linter_pure_calls_mutable",
-        format!("violations: {}\n{}", output.violations.len(), &output.violations[0]),
+        format!(
+            "violations: {}\n{}",
+            output.violations.len(),
+            &output.violations[0]
+        ),
     );
 }
 
@@ -548,10 +555,7 @@ fn rvs_sort_inplace_M(data: &mut [i32]) {
     let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
     assert!(output.violations.is_empty());
 
-    rvs_snapshot_BI(
-        "20260418_linter_mutable_calls_pure_ok",
-        "violations: 0\n",
-    );
+    rvs_snapshot_BI("20260418_linter_mutable_calls_pure_ok", "violations: 0\n");
 }
 
 #[test]
@@ -581,7 +585,10 @@ fn rvs_pure() {
 
     rvs_snapshot_BI(
         "20260418_linter_multiple_functions",
-        format!("violations: {}\n{violation_text}\n", output.violations.len()),
+        format!(
+            "violations: {}\n{violation_text}\n",
+            output.violations.len()
+        ),
     );
 }
 
@@ -601,7 +608,11 @@ impl Foo {
 
     rvs_snapshot_BI(
         "20260418_linter_method_call_violation",
-        format!("violations: {}\n{}", output.violations.len(), &output.violations[0]),
+        format!(
+            "violations: {}\n{}",
+            output.violations.len(),
+            &output.violations[0]
+        ),
     );
 }
 
@@ -623,10 +634,7 @@ fn rvs_nuclear_ABIMPSTU() {
     let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
     assert!(output.violations.is_empty());
 
-    rvs_snapshot_BI(
-        "20260418_linter_all_caps_compliant",
-        "violations: 0\n",
-    );
+    rvs_snapshot_BI("20260418_linter_all_caps_compliant", "violations: 0\n");
 }
 
 // ─── CapabilitySet::rvs_from_str ──────────────────────────
@@ -648,7 +656,10 @@ fn test_20260418_capset_from_str_valid() {
 #[test]
 fn test_20260418_capset_from_str_invalid() {
     let result = CapabilitySet::rvs_from_str("ABX");
-    assert!(matches!(result, Err(CapabilityParseError::InvalidLetter('X'))));
+    assert!(matches!(
+        result,
+        Err(CapabilityParseError::InvalidLetter('X'))
+    ));
 
     rvs_snapshot_BI(
         "20260418_capset_from_str_invalid",
@@ -700,10 +711,7 @@ fn rvs_write_file_BI(path: &str) {
     assert_eq!(report.total_fn_count, 3);
     assert_eq!(report.pure_fn_count, 1);
 
-    rvs_snapshot_BI(
-        "20260418_report_basic",
-        format!("{report}"),
-    );
+    rvs_snapshot_BI("20260418_report_basic", format!("{report}"));
 }
 
 #[test]
@@ -715,10 +723,7 @@ fn test_20260418_report_empty() {
     assert_eq!(report.total_fn_count, 0);
     assert_eq!(report.total_line_count, 0);
 
-    rvs_snapshot_BI(
-        "20260418_report_empty",
-        format!("{report}"),
-    );
+    rvs_snapshot_BI("20260418_report_empty", format!("{report}"));
 }
 
 #[test]
@@ -742,10 +747,7 @@ fn rvs_mega_ABIMPSTU() {
         assert_eq!(cap.line_count, report.total_line_count);
     }
 
-    rvs_snapshot_BI(
-        "20260418_report_overlapping_caps",
-        format!("{report}"),
-    );
+    rvs_snapshot_BI("20260418_report_overlapping_caps", format!("{report}"));
 }
 
 // ─── CapsMap 解析与查找 ─────────────────────────────────
@@ -870,7 +872,11 @@ fn rvs_simple() {
 
     rvs_snapshot_BI(
         "20260419_capsmap_known_non_rvs_violation",
-        format!("violations: {}\n{}\n", output.violations.len(), output.violations[0]),
+        format!(
+            "violations: {}\n{}\n",
+            output.violations.len(),
+            output.violations[0]
+        ),
     );
 }
 
@@ -887,13 +893,20 @@ fn rvs_read_counter() -> i32 {
 "#;
     let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
     assert_eq!(output.violations.len(), 1);
-    assert_eq!(output.violations[0].kind, rivus_linter::check::ViolationKind::StaticRef);
+    assert_eq!(
+        output.violations[0].kind,
+        rivus_linter::check::ViolationKind::StaticRef
+    );
     assert!(output.violations[0].missing.contains(&Capability::S));
     assert_eq!(output.violations[0].target, "COUNTER");
 
     rvs_snapshot_BI(
         "20260418_static_ref_requires_S",
-        format!("violations: {}\n{}\n", output.violations.len(), output.violations[0]),
+        format!(
+            "violations: {}\n{}\n",
+            output.violations.len(),
+            output.violations[0]
+        ),
     );
 }
 
@@ -909,10 +922,7 @@ fn rvs_read_counter_S() -> i32 {
     let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
     assert!(output.violations.is_empty());
 
-    rvs_snapshot_BI(
-        "20260418_static_ref_with_S_ok",
-        "violations: 0\n",
-    );
+    rvs_snapshot_BI("20260418_static_ref_with_S_ok", "violations: 0\n");
 }
 
 #[test]
@@ -930,7 +940,11 @@ fn rvs_read_state_U() -> i32 {
 
     rvs_snapshot_BI(
         "20260418_static_mut_ref_requires_SU",
-        format!("violations: {}\n{}\n", output.violations.len(), output.violations[0]),
+        format!(
+            "violations: {}\n{}\n",
+            output.violations.len(),
+            output.violations[0]
+        ),
     );
 }
 
@@ -946,10 +960,7 @@ fn rvs_read_state_SU() -> i32 {
     let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
     assert!(output.violations.is_empty());
 
-    rvs_snapshot_BI(
-        "20260418_static_mut_ref_with_SU_ok",
-        "violations: 0\n",
-    );
+    rvs_snapshot_BI("20260418_static_mut_ref_with_SU_ok", "violations: 0\n");
 }
 
 #[test]
@@ -965,13 +976,21 @@ fn rvs_read_tls() -> i32 {
 "#;
     let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
     assert!(output.violations.len() >= 1);
-    let tls_violation = output.violations.iter().find(|v| v.target == "TLS").unwrap();
+    let tls_violation = output
+        .violations
+        .iter()
+        .find(|v| v.target == "TLS")
+        .unwrap();
     assert!(tls_violation.missing.contains(&Capability::S));
     assert!(tls_violation.missing.contains(&Capability::T));
 
     rvs_snapshot_BI(
         "20260418_thread_local_ref_requires_ST",
-        format!("violations: {}\n{}\n", output.violations.len(), tls_violation),
+        format!(
+            "violations: {}\n{}\n",
+            output.violations.len(),
+            tls_violation
+        ),
     );
 }
 
@@ -989,10 +1008,7 @@ fn rvs_read_tls_ST() -> i32 {
     let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
     assert!(output.violations.is_empty());
 
-    rvs_snapshot_BI(
-        "20260418_thread_local_ref_with_ST_ok",
-        "violations: 0\n",
-    );
+    rvs_snapshot_BI("20260418_thread_local_ref_with_ST_ok", "violations: 0\n");
 }
 
 #[test]
@@ -1015,7 +1031,11 @@ impl Service {
 
     rvs_snapshot_BI(
         "20260418_static_in_method_usage",
-        format!("violations: {}\n{}\n", output.violations.len(), output.violations[0]),
+        format!(
+            "violations: {}\n{}\n",
+            output.violations.len(),
+            output.violations[0]
+        ),
     );
 }
 
@@ -1078,8 +1098,12 @@ fn main() -> () {
         format!(
             "functions: {}\n1: {} caps={} calls={}\n2: {} caps={} calls={}\n  - {}\n",
             fns.len(),
-            fns[0].name, fns[0].capabilities, fns[0].calls.len(),
-            fns[1].name, fns[1].capabilities, fns[1].calls.len(),
+            fns[0].name,
+            fns[0].capabilities,
+            fns[0].calls.len(),
+            fns[1].name,
+            fns[1].capabilities,
+            fns[1].calls.len(),
             fns[1].calls[0].name,
         ),
     );
@@ -1117,9 +1141,21 @@ fn rvs_process_BI(_1: &str) -> Result<Vec<i32>, std::io::Error> {
     assert_eq!(func.name, "rvs_process_BI");
 
     let call_names: Vec<&str> = func.calls.iter().map(|c| c.name.as_str()).collect();
-    assert!(call_names.iter().any(|n| n.contains("Iterator") && n.contains("map")));
-    assert!(call_names.iter().any(|n| n.contains("Iterator") && n.contains("collect")));
-    assert!(call_names.iter().any(|n| n.contains("core::str") && n.contains("lines")));
+    assert!(
+        call_names
+            .iter()
+            .any(|n| n.contains("Iterator") && n.contains("map"))
+    );
+    assert!(
+        call_names
+            .iter()
+            .any(|n| n.contains("Iterator") && n.contains("collect"))
+    );
+    assert!(
+        call_names
+            .iter()
+            .any(|n| n.contains("core::str") && n.contains("lines"))
+    );
 
     rvs_snapshot_BI(
         "20260419_mir_trait_dispatch",
@@ -1127,7 +1163,11 @@ fn rvs_process_BI(_1: &str) -> Result<Vec<i32>, std::io::Error> {
             "name: {}\ncalls: {}\n{}\n",
             func.name,
             func.calls.len(),
-            func.calls.iter().map(|c| format!("  - {}", c.name)).collect::<Vec<_>>().join("\n"),
+            func.calls
+                .iter()
+                .map(|c| format!("  - {}", c.name))
+                .collect::<Vec<_>>()
+                .join("\n"),
         ),
     );
 }
@@ -1157,8 +1197,16 @@ fn rvs_init() -> HashMap<String, i32> {
     let func = &fns[0];
 
     let call_names: Vec<&str> = func.calls.iter().map(|c| c.name.as_str()).collect();
-    assert!(call_names.iter().any(|n| n.contains("HashMap") && n.contains("new")));
-    assert!(call_names.iter().any(|n| n.contains("Clone") && n.contains("clone")));
+    assert!(
+        call_names
+            .iter()
+            .any(|n| n.contains("HashMap") && n.contains("new"))
+    );
+    assert!(
+        call_names
+            .iter()
+            .any(|n| n.contains("Clone") && n.contains("clone"))
+    );
 
     rvs_snapshot_BI(
         "20260419_mir_inherent_method",
@@ -1166,7 +1214,11 @@ fn rvs_init() -> HashMap<String, i32> {
             "name: {}\ncalls: {}\n{}\n",
             func.name,
             func.calls.len(),
-            func.calls.iter().map(|c| format!("  - {}", c.name)).collect::<Vec<_>>().join("\n"),
+            func.calls
+                .iter()
+                .map(|c| format!("  - {}", c.name))
+                .collect::<Vec<_>>()
+                .join("\n"),
         ),
     );
 }
@@ -1202,7 +1254,11 @@ fn rvs_outer_ABI::{closure#0}(_1: &mut {closure@src/main.rs:5:20: 5:23}, _2: &st
 
     let call_names: Vec<&str> = fns[0].calls.iter().map(|c| c.name.as_str()).collect();
     assert!(call_names.contains(&"rvs_inner"));
-    assert!(call_names.iter().any(|n| n.contains("core::str") && n.contains("len")));
+    assert!(
+        call_names
+            .iter()
+            .any(|n| n.contains("core::str") && n.contains("len"))
+    );
 
     rvs_snapshot_BI(
         "20260419_mir_closures_skipped",
@@ -1211,7 +1267,12 @@ fn rvs_outer_ABI::{closure#0}(_1: &mut {closure@src/main.rs:5:20: 5:23}, _2: &st
             fns.len(),
             fns[0].name,
             fns[0].calls.len(),
-            fns[0].calls.iter().map(|c| format!("  - {}", c.name)).collect::<Vec<_>>().join("\n"),
+            fns[0]
+                .calls
+                .iter()
+                .map(|c| format!("  - {}", c.name))
+                .collect::<Vec<_>>()
+                .join("\n"),
         ),
     );
 }
@@ -1251,7 +1312,12 @@ fn rvs_process(_1: &str) -> Result<i32, ()> {
             "name: {}\ncalls: {}\n{}\n",
             fns[0].name,
             fns[0].calls.len(),
-            fns[0].calls.iter().map(|c| format!("  - {}", c.name)).collect::<Vec<_>>().join("\n"),
+            fns[0]
+                .calls
+                .iter()
+                .map(|c| format!("  - {}", c.name))
+                .collect::<Vec<_>>()
+                .join("\n"),
         ),
     );
 }
@@ -1286,7 +1352,12 @@ fn rvs_harvest_from_expr(_1: &str) -> Harvest {
             "name: {}\ncalls: {}\n{}\n",
             fns[0].name,
             fns[0].calls.len(),
-            fns[0].calls.iter().map(|c| format!("  - {}", c.name)).collect::<Vec<_>>().join("\n"),
+            fns[0]
+                .calls
+                .iter()
+                .map(|c| format!("  - {}", c.name))
+                .collect::<Vec<_>>()
+                .join("\n"),
         ),
     );
 }
@@ -1363,7 +1434,11 @@ fn rvs_io_BI() -> () {
 
     rvs_snapshot_BI(
         "20260419_mir_check_dir_violation",
-        format!("violations: {}\n{}\n", output.violations.len(), output.violations[0]),
+        format!(
+            "violations: {}\n{}\n",
+            output.violations.len(),
+            output.violations[0]
+        ),
     );
 }
 
@@ -1394,7 +1469,11 @@ fn rvs_simple() -> () {
 
     rvs_snapshot_BI(
         "20260419_mir_check_dir_with_capsmap",
-        format!("violations: {}\n{}\n", output.violations.len(), output.violations[0]),
+        format!(
+            "violations: {}\n{}\n",
+            output.violations.len(),
+            output.violations[0]
+        ),
     );
 }
 
@@ -1441,7 +1520,8 @@ fn rvs_outer(_1: i32) -> () {
                 all.extend(fns);
             }
         }
-        let mut map: std::collections::HashMap<String, rivus_linter::FnDef> = std::collections::HashMap::new();
+        let mut map: std::collections::HashMap<String, rivus_linter::FnDef> =
+            std::collections::HashMap::new();
         for f in all {
             match map.entry(f.name.clone()) {
                 std::collections::hash_map::Entry::Occupied(mut e) => {
@@ -1537,7 +1617,11 @@ fn rvs_do_thing() -> () {
 
     rvs_snapshot_BI(
         "20260419_mir_check_dir_unknown_non_rvs_warning",
-        format!("violations: 0\nwarnings: {}\n{}\n", output.warnings.len(), output.warnings[0]),
+        format!(
+            "violations: 0\nwarnings: {}\n{}\n",
+            output.warnings.len(),
+            output.warnings[0]
+        ),
     );
 }
 
@@ -1554,7 +1638,10 @@ fn rvs_add(a: i32, b: i32) -> i32 {
     assert!(output.violations.is_empty());
     assert_eq!(output.assert_warnings.len(), 1);
     assert_eq!(output.assert_warnings[0].function, "rvs_add");
-    assert_eq!(output.assert_warnings[0].missing_params, vec!["a".to_string(), "b".to_string()]);
+    assert_eq!(
+        output.assert_warnings[0].missing_params,
+        vec!["a".to_string(), "b".to_string()]
+    );
 
     rvs_snapshot_BI(
         "20260419_assert_warning_missing_all",
@@ -1577,7 +1664,10 @@ fn rvs_div(a: i32, b: i32) -> i32 {
     let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
     assert!(output.violations.is_empty());
     assert_eq!(output.assert_warnings.len(), 1);
-    assert_eq!(output.assert_warnings[0].missing_params, vec!["a".to_string()]);
+    assert_eq!(
+        output.assert_warnings[0].missing_params,
+        vec!["a".to_string()]
+    );
 
     rvs_snapshot_BI(
         "20260419_assert_warning_partial",
@@ -1619,10 +1709,7 @@ fn rvs_pure() -> i32 {
     assert!(output.violations.is_empty());
     assert!(output.assert_warnings.is_empty());
 
-    rvs_snapshot_BI(
-        "20260419_assert_warning_no_params",
-        "assert_warnings: 0\n",
-    );
+    rvs_snapshot_BI("20260419_assert_warning_no_params", "assert_warnings: 0\n");
 }
 
 #[test]
@@ -1639,7 +1726,10 @@ impl Foo {
     let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
     assert!(output.violations.is_empty());
     assert_eq!(output.assert_warnings.len(), 1);
-    assert_eq!(output.assert_warnings[0].missing_params, vec!["x".to_string()]);
+    assert_eq!(
+        output.assert_warnings[0].missing_params,
+        vec!["x".to_string()]
+    );
 
     rvs_snapshot_BI(
         "20260419_assert_warning_self_excluded",
@@ -1713,7 +1803,10 @@ fn rvs_compute(x: i32, name: &str) -> i32 {
     let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
     assert!(output.violations.is_empty());
     assert_eq!(output.assert_warnings.len(), 1);
-    assert_eq!(output.assert_warnings[0].missing_params, vec!["x".to_string()]);
+    assert_eq!(
+        output.assert_warnings[0].missing_params,
+        vec!["x".to_string()]
+    );
 
     rvs_snapshot_BI(
         "20260419_assert_warning_numeric_unasserted",
@@ -1772,8 +1865,10 @@ fn rvs_outer_ABI() {
         format!(
             "functions: {}\n1: {} calls={}\n2: {} calls={}\n",
             fns.len(),
-            helper.name, helper.calls.len(),
-            outer.name, outer.calls.len(),
+            helper.name,
+            helper.calls.len(),
+            outer.name,
+            outer.calls.len(),
         ),
     );
 }
@@ -1795,7 +1890,11 @@ mod inner {
 
     rvs_snapshot_BI(
         "20260420_mod_nested_static_ref",
-        format!("violations: {}\n{}\n", output.violations.len(), output.violations[0]),
+        format!(
+            "violations: {}\n{}\n",
+            output.violations.len(),
+            output.violations[0]
+        ),
     );
 }
 
@@ -1816,7 +1915,9 @@ fn rvs_outer() {
         "20260420_async_block_calls",
         format!(
             "name: {}\ncalls: {}\n  - {}\n",
-            fns[0].name, fns[0].calls.len(), fns[0].calls[0].name,
+            fns[0].name,
+            fns[0].calls.len(),
+            fns[0].calls[0].name,
         ),
     );
 }
@@ -1836,7 +1937,9 @@ fn rvs_outer() {
         "20260420_cast_expr_calls",
         format!(
             "name: {}\ncalls: {}\n  - {}\n",
-            fns[0].name, fns[0].calls.len(), fns[0].calls[0].name,
+            fns[0].name,
+            fns[0].calls.len(),
+            fns[0].calls[0].name,
         ),
     );
 }
@@ -1856,7 +1959,9 @@ fn rvs_outer() {
         "20260420_try_block_calls",
         format!(
             "name: {}\ncalls: {}\n  - {}\n",
-            fns[0].name, fns[0].calls.len(), fns[0].calls[0].name,
+            fns[0].name,
+            fns[0].calls.len(),
+            fns[0].calls[0].name,
         ),
     );
 }
@@ -1881,7 +1986,9 @@ fn rvs_outer(x: i32) {
         "20260420_match_guard_calls",
         format!(
             "name: {}\ncalls: {}\n  - {}\n",
-            fns[0].name, fns[0].calls.len(), fns[0].calls[0].name,
+            fns[0].name,
+            fns[0].calls.len(),
+            fns[0].calls[0].name,
         ),
     );
 }
@@ -1903,7 +2010,12 @@ fn rvs_outer(x: Option<i32>) {
             "name: {}\ncalls: {}\n{}\n",
             fns[0].name,
             fns[0].calls.len(),
-            fns[0].calls.iter().map(|c| format!("  - {}", c.name)).collect::<Vec<_>>().join("\n"),
+            fns[0]
+                .calls
+                .iter()
+                .map(|c| format!("  - {}", c.name))
+                .collect::<Vec<_>>()
+                .join("\n"),
         ),
     );
 }
@@ -1926,7 +2038,12 @@ fn rvs_outer() {
             "name: {}\ncalls: {}\n{}\n",
             fns[0].name,
             fns[0].calls.len(),
-            fns[0].calls.iter().map(|c| format!("  - {}", c.name)).collect::<Vec<_>>().join("\n"),
+            fns[0]
+                .calls
+                .iter()
+                .map(|c| format!("  - {}", c.name))
+                .collect::<Vec<_>>()
+                .join("\n"),
         ),
     );
 }
@@ -1943,11 +2060,18 @@ fn rvs_read_raw() -> i32 {
     let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
     assert!(output.violations.is_empty());
     assert_eq!(output.inference_warnings.len(), 1);
-    assert_eq!(output.inference_warnings[0].kind, InferenceKind::MissingUnsafe);
+    assert_eq!(
+        output.inference_warnings[0].kind,
+        InferenceKind::MissingUnsafe
+    );
 
     rvs_snapshot_BI(
         "20260420_infer_unsafe_block_missing_U",
-        format!("inference_warnings: {}\n{}\n", output.inference_warnings.len(), output.inference_warnings[0]),
+        format!(
+            "inference_warnings: {}\n{}\n",
+            output.inference_warnings.len(),
+            output.inference_warnings[0]
+        ),
     );
 }
 
@@ -1975,7 +2099,12 @@ unsafe fn rvs_dangerous() {
 }
 "#;
     let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
-    assert!(output.inference_warnings.iter().any(|w| w.kind == InferenceKind::MissingUnsafe));
+    assert!(
+        output
+            .inference_warnings
+            .iter()
+            .any(|w| w.kind == InferenceKind::MissingUnsafe)
+    );
 
     rvs_snapshot_BI(
         "20260420_infer_unsafe_fn_missing_U",
@@ -1993,7 +2122,12 @@ async fn rvs_fetch() {
 }
 "#;
     let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
-    assert!(output.inference_warnings.iter().any(|w| w.kind == InferenceKind::MissingAsync));
+    assert!(
+        output
+            .inference_warnings
+            .iter()
+            .any(|w| w.kind == InferenceKind::MissingAsync)
+    );
 
     rvs_snapshot_BI(
         "20260420_infer_async_fn_missing_A",
@@ -2009,7 +2143,12 @@ async fn rvs_fetch_A() {
 }
 "#;
     let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
-    assert!(output.inference_warnings.iter().all(|w| w.kind != InferenceKind::MissingAsync));
+    assert!(
+        output
+            .inference_warnings
+            .iter()
+            .all(|w| w.kind != InferenceKind::MissingAsync)
+    );
 
     rvs_snapshot_BI(
         "20260420_infer_async_fn_with_A_ok",
@@ -2027,7 +2166,12 @@ fn rvs_update(data: &mut i32) {
 }
 "#;
     let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
-    assert!(output.inference_warnings.iter().any(|w| w.kind == InferenceKind::MissingMutable));
+    assert!(
+        output
+            .inference_warnings
+            .iter()
+            .any(|w| w.kind == InferenceKind::MissingMutable)
+    );
 
     rvs_snapshot_BI(
         "20260420_infer_mut_param_missing_M",
@@ -2046,7 +2190,12 @@ impl Foo {
 }
 "#;
     let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
-    assert!(output.inference_warnings.iter().any(|w| w.kind == InferenceKind::MissingMutable));
+    assert!(
+        output
+            .inference_warnings
+            .iter()
+            .any(|w| w.kind == InferenceKind::MissingMutable)
+    );
 
     rvs_snapshot_BI(
         "20260420_infer_mut_self_missing_M",
@@ -2062,12 +2211,14 @@ fn rvs_update_M(data: &mut i32) {
 }
 "#;
     let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
-    assert!(output.inference_warnings.iter().all(|w| w.kind != InferenceKind::MissingMutable));
-
-    rvs_snapshot_BI(
-        "20260420_infer_mut_with_M_ok",
-        "inference_warnings: 0\n",
+    assert!(
+        output
+            .inference_warnings
+            .iter()
+            .all(|w| w.kind != InferenceKind::MissingMutable)
     );
+
+    rvs_snapshot_BI("20260420_infer_mut_with_M_ok", "inference_warnings: 0\n");
 }
 
 // ─── B6: static/thread_local 读取 → 应有 S 检测 ──────────
@@ -2082,7 +2233,12 @@ fn rvs_read_counter() -> i32 {
 }
 "#;
     let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
-    assert!(output.inference_warnings.iter().any(|w| w.kind == InferenceKind::MissingSideEffect));
+    assert!(
+        output
+            .inference_warnings
+            .iter()
+            .any(|w| w.kind == InferenceKind::MissingSideEffect)
+    );
 
     rvs_snapshot_BI(
         "20260420_infer_static_read_missing_S",
@@ -2102,7 +2258,12 @@ fn rvs_read_tls_T() -> i32 {
 }
 "#;
     let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
-    assert!(output.inference_warnings.iter().any(|w| w.kind == InferenceKind::MissingSideEffect));
+    assert!(
+        output
+            .inference_warnings
+            .iter()
+            .any(|w| w.kind == InferenceKind::MissingSideEffect)
+    );
 
     rvs_snapshot_BI(
         "20260420_infer_thread_local_read_missing_S",
@@ -2120,7 +2281,12 @@ fn rvs_bail(msg: &str) {
 }
 "#;
     let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
-    assert!(output.inference_warnings.iter().any(|w| w.kind == InferenceKind::MissingPanic));
+    assert!(
+        output
+            .inference_warnings
+            .iter()
+            .any(|w| w.kind == InferenceKind::MissingPanic)
+    );
 
     rvs_snapshot_BI(
         "20260420_infer_panic_macro_missing_P",
@@ -2136,7 +2302,12 @@ fn rvs_check_valid(x: i32) {
 }
 "#;
     let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
-    assert!(output.inference_warnings.iter().any(|w| w.kind == InferenceKind::MissingPanic));
+    assert!(
+        output
+            .inference_warnings
+            .iter()
+            .any(|w| w.kind == InferenceKind::MissingPanic)
+    );
 
     rvs_snapshot_BI(
         "20260420_infer_assert_macro_missing_P",
@@ -2152,7 +2323,12 @@ fn rvs_check_valid(x: i32) {
 }
 "#;
     let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
-    assert!(output.inference_warnings.iter().all(|w| w.kind != InferenceKind::MissingPanic));
+    assert!(
+        output
+            .inference_warnings
+            .iter()
+            .all(|w| w.kind != InferenceKind::MissingPanic)
+    );
 
     rvs_snapshot_BI(
         "20260420_infer_debug_assert_no_P",
@@ -2168,12 +2344,14 @@ fn rvs_bail_P(msg: &str) {
 }
 "#;
     let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
-    assert!(output.inference_warnings.iter().all(|w| w.kind != InferenceKind::MissingPanic));
-
-    rvs_snapshot_BI(
-        "20260420_infer_panic_with_P_ok",
-        "inference_warnings: 0\n",
+    assert!(
+        output
+            .inference_warnings
+            .iter()
+            .all(|w| w.kind != InferenceKind::MissingPanic)
     );
+
+    rvs_snapshot_BI("20260420_infer_panic_with_P_ok", "inference_warnings: 0\n");
 }
 
 #[test]
@@ -2184,7 +2362,12 @@ fn rvs_get_value(x: Option<i32>) -> i32 {
 }
 "#;
     let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
-    assert!(output.inference_warnings.iter().any(|w| w.kind == InferenceKind::MissingPanic));
+    assert!(
+        output
+            .inference_warnings
+            .iter()
+            .any(|w| w.kind == InferenceKind::MissingPanic)
+    );
 
     rvs_snapshot_BI(
         "20260420_infer_unwrap_missing_P",
@@ -2200,7 +2383,12 @@ fn rvs_get_value(x: Result<i32, String>) -> i32 {
 }
 "#;
     let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
-    assert!(output.inference_warnings.iter().any(|w| w.kind == InferenceKind::MissingPanic));
+    assert!(
+        output
+            .inference_warnings
+            .iter()
+            .any(|w| w.kind == InferenceKind::MissingPanic)
+    );
 
     rvs_snapshot_BI(
         "20260420_infer_expect_missing_P",
@@ -2216,12 +2404,14 @@ fn rvs_get_value_P(x: Option<i32>) -> i32 {
 }
 "#;
     let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
-    assert!(output.inference_warnings.iter().all(|w| w.kind != InferenceKind::MissingPanic));
-
-    rvs_snapshot_BI(
-        "20260420_infer_unwrap_with_P_ok",
-        "inference_warnings: 0\n",
+    assert!(
+        output
+            .inference_warnings
+            .iter()
+            .all(|w| w.kind != InferenceKind::MissingPanic)
     );
+
+    rvs_snapshot_BI("20260420_infer_unwrap_with_P_ok", "inference_warnings: 0\n");
 }
 
 #[test]
@@ -2232,12 +2422,14 @@ fn rvs_get_value_P(x: Result<i32, String>) -> i32 {
 }
 "#;
     let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
-    assert!(output.inference_warnings.iter().all(|w| w.kind != InferenceKind::MissingPanic));
-
-    rvs_snapshot_BI(
-        "20260420_infer_expect_with_P_ok",
-        "inference_warnings: 0\n",
+    assert!(
+        output
+            .inference_warnings
+            .iter()
+            .all(|w| w.kind != InferenceKind::MissingPanic)
     );
+
+    rvs_snapshot_BI("20260420_infer_expect_with_P_ok", "inference_warnings: 0\n");
 }
 
 // ─── C4: 能力字母非字母序检查 ────────────────────────────────
@@ -2248,11 +2440,20 @@ fn test_20260420_suffix_non_alphabetical() {
 fn rvs_foo_BA() {}
 "#;
     let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
-    assert!(output.inference_warnings.iter().any(|w| w.kind == InferenceKind::NonAlphabeticalSuffix));
+    assert!(
+        output
+            .inference_warnings
+            .iter()
+            .any(|w| w.kind == InferenceKind::NonAlphabeticalSuffix)
+    );
 
     rvs_snapshot_BI(
         "20260420_suffix_non_alphabetical",
-        format!("inference_warnings: {}\n{}\n", output.inference_warnings.len(), output.inference_warnings[0]),
+        format!(
+            "inference_warnings: {}\n{}\n",
+            output.inference_warnings.len(),
+            output.inference_warnings[0]
+        ),
     );
 }
 
@@ -2262,12 +2463,14 @@ fn test_20260420_suffix_alphabetical_ok() {
 fn rvs_foo_AB() {}
 "#;
     let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
-    assert!(output.inference_warnings.iter().all(|w| w.kind != InferenceKind::NonAlphabeticalSuffix));
-
-    rvs_snapshot_BI(
-        "20260420_suffix_alphabetical_ok",
-        "inference_warnings: 0\n",
+    assert!(
+        output
+            .inference_warnings
+            .iter()
+            .all(|w| w.kind != InferenceKind::NonAlphabeticalSuffix)
     );
+
+    rvs_snapshot_BI("20260420_suffix_alphabetical_ok", "inference_warnings: 0\n");
 }
 
 // ─── C5: 重复能力字母检查 ────────────────────────────────────
@@ -2278,11 +2481,20 @@ fn test_20260420_suffix_duplicate_letter() {
 fn rvs_foo_PP() {}
 "#;
     let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
-    assert!(output.inference_warnings.iter().any(|w| w.kind == InferenceKind::DuplicateSuffixLetter));
+    assert!(
+        output
+            .inference_warnings
+            .iter()
+            .any(|w| w.kind == InferenceKind::DuplicateSuffixLetter)
+    );
 
     rvs_snapshot_BI(
         "20260420_suffix_duplicate_letter",
-        format!("inference_warnings: {}\n{}\n", output.inference_warnings.len(), output.inference_warnings[0]),
+        format!(
+            "inference_warnings: {}\n{}\n",
+            output.inference_warnings.len(),
+            output.inference_warnings[0]
+        ),
     );
 }
 
@@ -2292,12 +2504,14 @@ fn test_20260420_suffix_no_duplicate_ok() {
 fn rvs_foo_P() {}
 "#;
     let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
-    assert!(output.inference_warnings.iter().all(|w| w.kind != InferenceKind::DuplicateSuffixLetter));
-
-    rvs_snapshot_BI(
-        "20260420_suffix_no_duplicate_ok",
-        "inference_warnings: 0\n",
+    assert!(
+        output
+            .inference_warnings
+            .iter()
+            .all(|w| w.kind != InferenceKind::DuplicateSuffixLetter)
     );
+
+    rvs_snapshot_BI("20260420_suffix_no_duplicate_ok", "inference_warnings: 0\n");
 }
 
 // ─── rvs_extract_raw_suffix ──────────────────────────────────
@@ -2336,12 +2550,21 @@ fn rvs_read_tls_S() -> i32 {
 }
 "#;
     let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
-    assert!(output.inference_warnings.iter().any(|w| w.kind == InferenceKind::MissingThreadLocal),
-        "should produce MissingThreadLocal hint for thread_local ref without T");
+    assert!(
+        output
+            .inference_warnings
+            .iter()
+            .any(|w| w.kind == InferenceKind::MissingThreadLocal),
+        "should produce MissingThreadLocal hint for thread_local ref without T"
+    );
 
     rvs_snapshot_BI(
         "20260420_infer_thread_local_has_S_missing_T",
-        format!("violations: {}\ninference_warnings: {}\n", output.violations.len(), output.inference_warnings.len()),
+        format!(
+            "violations: {}\ninference_warnings: {}\n",
+            output.violations.len(),
+            output.inference_warnings.len()
+        ),
     );
 }
 
@@ -2358,7 +2581,12 @@ fn rvs_read_tls_ST() -> i32 {
 "#;
     let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
     assert!(output.violations.is_empty());
-    assert!(output.inference_warnings.iter().all(|w| w.kind != InferenceKind::MissingThreadLocal));
+    assert!(
+        output
+            .inference_warnings
+            .iter()
+            .all(|w| w.kind != InferenceKind::MissingThreadLocal)
+    );
 
     rvs_snapshot_BI(
         "20260420_infer_thread_local_with_ST_ok",
@@ -2383,8 +2611,13 @@ fn rvs_update(_1: &mut i32) -> () {
 
     let cm = CapsMap::rvs_new();
     let output = rivus_linter::rvs_check_mir_dir_BIM(&dir, &cm).unwrap();
-    assert!(output.inference_warnings.iter().any(|w| w.kind == InferenceKind::MissingMutable),
-        "MIR should produce MissingMutable hint for &mut param without M");
+    assert!(
+        output
+            .inference_warnings
+            .iter()
+            .any(|w| w.kind == InferenceKind::MissingMutable),
+        "MIR should produce MissingMutable hint for &mut param without M"
+    );
 
     std::fs::remove_dir_all(&dir).unwrap();
 
@@ -2409,7 +2642,12 @@ fn rvs_update_M(_1: &mut i32) -> () {
 
     let cm = CapsMap::rvs_new();
     let output = rivus_linter::rvs_check_mir_dir_BIM(&dir, &cm).unwrap();
-    assert!(output.inference_warnings.iter().all(|w| w.kind != InferenceKind::MissingMutable));
+    assert!(
+        output
+            .inference_warnings
+            .iter()
+            .all(|w| w.kind != InferenceKind::MissingMutable)
+    );
 
     std::fs::remove_dir_all(&dir).unwrap();
 
@@ -2442,8 +2680,13 @@ fn rvs_bail(_1: &str) -> () {
 
     let cm = CapsMap::rvs_new();
     let output = rivus_linter::rvs_check_mir_dir_BIM(&dir, &cm).unwrap();
-    assert!(output.inference_warnings.iter().any(|w| w.kind == InferenceKind::MissingPanic),
-        "MIR should produce MissingPanic hint for panic call without P");
+    assert!(
+        output
+            .inference_warnings
+            .iter()
+            .any(|w| w.kind == InferenceKind::MissingPanic),
+        "MIR should produce MissingPanic hint for panic call without P"
+    );
 
     std::fs::remove_dir_all(&dir).unwrap();
 
@@ -2475,8 +2718,13 @@ fn rvs_scan_mir_has_panic(_1: &MirFnDef) -> bool {
 
     let cm = CapsMap::rvs_new();
     let output = rivus_linter::rvs_check_mir_dir_BIM(&dir, &cm).unwrap();
-    assert!(output.inference_warnings.iter().all(|w| w.kind != InferenceKind::MissingPanic),
-        "MIR should NOT produce MissingPanic for panicking::panic in string constant args");
+    assert!(
+        output
+            .inference_warnings
+            .iter()
+            .all(|w| w.kind != InferenceKind::MissingPanic),
+        "MIR should NOT produce MissingPanic for panicking::panic in string constant args"
+    );
 
     std::fs::remove_dir_all(&dir).unwrap();
 
@@ -2507,7 +2755,12 @@ fn rvs_bail_P(_1: &str) -> () {
 
     let cm = CapsMap::rvs_new();
     let output = rivus_linter::rvs_check_mir_dir_BIM(&dir, &cm).unwrap();
-    assert!(output.inference_warnings.iter().all(|w| w.kind != InferenceKind::MissingPanic));
+    assert!(
+        output
+            .inference_warnings
+            .iter()
+            .all(|w| w.kind != InferenceKind::MissingPanic)
+    );
 
     std::fs::remove_dir_all(&dir).unwrap();
 
@@ -2544,8 +2797,13 @@ fn rvs_is_subset_of::{closure#0}(_1: &mut {closure@rvs_is_subset_of}, _2: &Capab
 
     let cm = CapsMap::rvs_new();
     let output = rivus_linter::rvs_check_mir_dir_BIM(&dir, &cm).unwrap();
-    assert!(output.inference_warnings.iter().all(|w| w.kind != InferenceKind::MissingMutable),
-        "MIR should NOT produce MissingMutable for FnMut closure &mut self");
+    assert!(
+        output
+            .inference_warnings
+            .iter()
+            .all(|w| w.kind != InferenceKind::MissingMutable),
+        "MIR should NOT produce MissingMutable for FnMut closure &mut self"
+    );
 
     std::fs::remove_dir_all(&dir).unwrap();
 
@@ -2553,4 +2811,272 @@ fn rvs_is_subset_of::{closure#0}(_1: &mut {closure@rvs_is_subset_of}, _2: &Capab
         "20260420_mir_closure_mut_self_no_false_positive",
         "inference_warnings: 0\n",
     );
+}
+
+// ─── E1: #[cfg(test)] 和 #[test] 过滤 ──────────────────────
+
+#[test]
+fn test_20260420_extract_skips_cfg_test_mod() {
+    let source = r#"
+#[cfg(test)]
+mod tests {
+    fn rvs_helper() {
+        rvs_inner();
+    }
+}
+
+fn rvs_outer() {
+    rvs_inner();
+}
+"#;
+    let fns = rvs_extract_functions(source).unwrap();
+    assert_eq!(fns.len(), 1);
+    assert_eq!(fns[0].name, "rvs_outer");
+
+    rvs_snapshot_BI(
+        "20260420_extract_skips_cfg_test_mod",
+        format!("functions: {}\n0: {}\n", fns.len(), fns[0].name),
+    );
+}
+
+#[test]
+fn test_20260420_extract_skips_test_fn() {
+    let source = r#"
+#[test]
+fn rvs_check_something() {
+    rvs_helper();
+}
+
+fn rvs_helper() {}
+"#;
+    let fns = rvs_extract_functions(source).unwrap();
+    assert_eq!(fns.len(), 1);
+    assert_eq!(fns[0].name, "rvs_helper");
+
+    rvs_snapshot_BI(
+        "20260420_extract_skips_test_fn",
+        format!("functions: {}\n0: {}\n", fns.len(), fns[0].name),
+    );
+}
+
+#[test]
+fn test_20260420_extract_skips_test_method_in_impl() {
+    let source = r#"
+struct Foo;
+
+impl Foo {
+    #[test]
+    fn rvs_check_behavior(&self) {
+        rvs_inner();
+    }
+
+    fn rvs_inner(&self) {}
+}
+"#;
+    let fns = rvs_extract_functions(source).unwrap();
+    assert_eq!(fns.len(), 1);
+    assert_eq!(fns[0].name, "rvs_inner");
+
+    rvs_snapshot_BI(
+        "20260420_extract_skips_test_method_in_impl",
+        format!("functions: {}\n0: {}\n", fns.len(), fns[0].name),
+    );
+}
+
+// ─── E2: #[allow(dead_code)] / #[allow(unused)] 过滤 ─────
+
+#[test]
+fn test_20260420_extract_flags_allow_dead_code() {
+    let source = r#"
+#[allow(dead_code)]
+fn rvs_never_called() {
+    rvs_helper();
+}
+
+fn rvs_helper() {}
+"#;
+    let fns = rvs_extract_functions(source).unwrap();
+    assert_eq!(fns.len(), 2);
+    let never_called = fns.iter().find(|f| f.name == "rvs_never_called").unwrap();
+    let helper = fns.iter().find(|f| f.name == "rvs_helper").unwrap();
+    assert!(never_called.allows_dead_code);
+    assert!(!helper.allows_dead_code);
+
+    rvs_snapshot_BI(
+        "20260420_extract_flags_allow_dead_code",
+        format!(
+            "functions: {}\n0: {} allows_dead_code={}\n1: {} allows_dead_code={}\n",
+            fns.len(),
+            never_called.name,
+            never_called.allows_dead_code,
+            helper.name,
+            helper.allows_dead_code,
+        ),
+    );
+}
+
+#[test]
+fn test_20260420_extract_flags_allow_unused() {
+    let source = r#"
+#[allow(unused)]
+fn rvs_dead() {
+    rvs_real();
+}
+
+fn rvs_real() {}
+"#;
+    let fns = rvs_extract_functions(source).unwrap();
+    assert_eq!(fns.len(), 2);
+    let dead = fns.iter().find(|f| f.name == "rvs_dead").unwrap();
+    let real = fns.iter().find(|f| f.name == "rvs_real").unwrap();
+    assert!(dead.allows_dead_code);
+    assert!(!real.allows_dead_code);
+
+    rvs_snapshot_BI(
+        "20260420_extract_flags_allow_unused",
+        format!(
+            "functions: {}\n0: {} allows_dead_code={}\n1: {} allows_dead_code={}\n",
+            fns.len(),
+            dead.name,
+            dead.allows_dead_code,
+            real.name,
+            real.allows_dead_code,
+        ),
+    );
+}
+
+#[test]
+fn test_20260420_extract_flags_allow_dead_code_method() {
+    let source = r#"
+struct Foo;
+
+impl Foo {
+    #[allow(dead_code)]
+    fn rvs_orphan(&self) {}
+
+    fn rvs_used(&self) {}
+}
+"#;
+    let fns = rvs_extract_functions(source).unwrap();
+    assert_eq!(fns.len(), 2);
+    let orphan = fns.iter().find(|f| f.name == "rvs_orphan").unwrap();
+    let used = fns.iter().find(|f| f.name == "rvs_used").unwrap();
+    assert!(orphan.allows_dead_code);
+    assert!(!used.allows_dead_code);
+
+    rvs_snapshot_BI(
+        "20260420_extract_flags_allow_dead_code_method",
+        format!(
+            "functions: {}\n0: {} allows_dead_code={}\n1: {} allows_dead_code={}\n",
+            fns.len(),
+            orphan.name,
+            orphan.allows_dead_code,
+            used.name,
+            used.allows_dead_code,
+        ),
+    );
+}
+
+// ─── E3: DeadCodeWarning 检查输出 ────────────────────────
+
+#[test]
+fn test_20260420_dead_code_warning_emitted() {
+    let source = r#"
+#[allow(dead_code)]
+fn rvs_never_called(x: i32) -> i32 {
+    x + 1
+}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.dead_code_warnings.len(), 1);
+    assert_eq!(output.dead_code_warnings[0].function, "rvs_never_called");
+
+    rvs_snapshot_BI(
+        "20260420_dead_code_warning_emitted",
+        format!(
+            "dead_code_warnings: {}\n{}\n",
+            output.dead_code_warnings.len(),
+            output.dead_code_warnings[0],
+        ),
+    );
+}
+
+#[test]
+fn test_20260420_dead_code_warning_unused() {
+    let source = r#"
+#[allow(unused)]
+fn rvs_dead_fn() {}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.dead_code_warnings.len(), 1);
+    assert_eq!(output.dead_code_warnings[0].function, "rvs_dead_fn");
+
+    rvs_snapshot_BI(
+        "20260420_dead_code_warning_unused",
+        format!(
+            "dead_code_warnings: {}\n{}\n",
+            output.dead_code_warnings.len(),
+            output.dead_code_warnings[0],
+        ),
+    );
+}
+
+#[test]
+fn test_20260420_no_dead_code_warning_without_attr() {
+    let source = r#"
+fn rvs_normal() {}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.dead_code_warnings.is_empty());
+
+    rvs_snapshot_BI(
+        "20260420_no_dead_code_warning_without_attr",
+        "dead_code_warnings: 0\n",
+    );
+}
+
+// ─── E4: Report excludes allows_dead_code functions ──────
+
+#[test]
+fn test_20260420_report_excludes_dead_code() {
+    let source = r#"
+fn rvs_add(a: i32, b: i32) -> i32 {
+    a + b
+}
+
+#[allow(dead_code)]
+fn rvs_dead_M(s: &str) {
+    // dead code
+}
+
+fn rvs_write_file_BI(path: &str) {
+    rvs_add(1, 2);
+}
+"#;
+    let fns = rvs_extract_functions(source).unwrap();
+    let report = rvs_build_report(&fns);
+
+    assert_eq!(report.total_fn_count, 2);
+    assert_eq!(report.pure_fn_count, 1);
+
+    rvs_snapshot_BI("20260420_report_excludes_dead_code", format!("{report}"));
+}
+
+#[test]
+fn test_20260420_report_excludes_unused() {
+    let source = r#"
+#[allow(unused)]
+fn rvs_dead_pure() -> i32 {
+    42
+}
+
+fn rvs_real_M() {}
+"#;
+    let fns = rvs_extract_functions(source).unwrap();
+    let report = rvs_build_report(&fns);
+
+    assert_eq!(report.total_fn_count, 1);
+    assert_eq!(report.pure_fn_count, 0);
+
+    rvs_snapshot_BI("20260420_report_excludes_unused", format!("{report}"));
 }

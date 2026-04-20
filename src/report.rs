@@ -3,8 +3,8 @@ use std::fmt;
 use std::path::Path;
 
 use crate::capability::{Capability, CapabilitySet};
-use crate::extract::{rvs_extract_functions, FnDef};
-use crate::source::{rvs_read_rust_sources_BI, SourceFile};
+use crate::extract::{FnDef, rvs_extract_functions};
+use crate::source::{SourceFile, rvs_read_rust_sources_BI};
 
 /// 一种能力所占的份量：函数数、行数。
 #[derive(Debug, Clone, Default)]
@@ -42,6 +42,10 @@ pub fn rvs_build_report(functions: &[FnDef]) -> Report {
     let good_allowed = CapabilitySet::rvs_from_good_caps();
 
     for func in functions {
+        if func.is_test || func.allows_dead_code {
+            continue;
+        }
+
         total_fn_count += 1;
         total_line_count += func.line_count;
 
@@ -78,11 +82,10 @@ pub fn rvs_build_report(functions: &[FnDef]) -> Report {
 pub fn rvs_report_sources(sources: &[SourceFile]) -> Result<Report, ReportError> {
     let mut all_functions = Vec::new();
     for sf in sources {
-        let functions = rvs_extract_functions(&sf.source)
-            .map_err(|e| ReportError::Extract {
-                file: sf.path.clone(),
-                source: e,
-            })?;
+        let functions = rvs_extract_functions(&sf.source).map_err(|e| ReportError::Extract {
+            file: sf.path.clone(),
+            source: e,
+        })?;
         all_functions.extend(functions);
     }
     Ok(rvs_build_report(&all_functions))
@@ -139,8 +142,7 @@ impl fmt::Display for Report {
         for (label, fn_count, line_count) in &rows {
             let pct = *line_count as f64 / self.total_line_count as f64 * 100.0;
             let bar_len = (pct / 100.0 * bar_width as f64).round() as usize;
-            let bar: String = "█".repeat(bar_len)
-                + &"░".repeat(bar_width - bar_len);
+            let bar: String = "█".repeat(bar_len) + &"░".repeat(bar_width - bar_len);
             writeln!(
                 f,
                 "  {:<12} {:>5} fns {:>6} lines {:>6}% |{}|",
@@ -160,17 +162,14 @@ impl fmt::Display for Report {
 /// 薄薄一层壳：只管读文件，真正的事交给纯函数。
 #[allow(non_snake_case)]
 pub fn rvs_report_path_BI(path: &Path) -> Result<Report, ReportError> {
-    let sources = rvs_read_rust_sources_BI(path)
-        .map_err(|e| ReportError::Read { source: e })?;
+    let sources = rvs_read_rust_sources_BI(path).map_err(|e| ReportError::Read { source: e })?;
     rvs_report_sources(&sources)
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum ReportError {
     #[error("failed to read: {source}")]
-    Read {
-        source: crate::source::ReadError,
-    },
+    Read { source: crate::source::ReadError },
     #[error("failed to extract from '{file}': {source}")]
     Extract {
         file: String,

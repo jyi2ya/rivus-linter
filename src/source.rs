@@ -23,11 +23,7 @@ pub fn rvs_read_rust_sources_BI(path: &Path) -> Result<Vec<SourceFile>, ReadErro
             .into_iter()
             .filter_map(|e| e.ok())
             .filter(|e| e.file_type().is_file())
-            .filter(|e| {
-                e.path()
-                    .extension()
-                    .is_some_and(|ext| ext == "rs")
-            })
+            .filter(|e| e.path().extension().is_some_and(|ext| ext == "rs"))
             .map(|e| e.into_path())
             .collect::<Vec<_>>()
     } else {
@@ -36,11 +32,10 @@ pub fn rvs_read_rust_sources_BI(path: &Path) -> Result<Vec<SourceFile>, ReadErro
 
     let mut sources = Vec::new();
     for file_path in file_paths {
-        let source = std::fs::read_to_string(&file_path)
-            .map_err(|e| ReadError::FileRead {
-                path: file_path.display().to_string(),
-                source: e,
-            })?;
+        let source = std::fs::read_to_string(&file_path).map_err(|e| ReadError::FileRead {
+            path: file_path.display().to_string(),
+            source: e,
+        })?;
         sources.push(SourceFile {
             path: file_path.display().to_string(),
             source,
@@ -68,11 +63,7 @@ pub fn rvs_read_mir_sources_BI(path: &Path) -> Result<Vec<SourceFile>, ReadError
             .into_iter()
             .filter_map(|e| e.ok())
             .filter(|e| e.file_type().is_file())
-            .filter(|e| {
-                e.path()
-                    .extension()
-                    .is_some_and(|ext| ext == "mir")
-            })
+            .filter(|e| e.path().extension().is_some_and(|ext| ext == "mir"))
             .map(|e| e.into_path())
             .collect::<Vec<_>>()
     } else {
@@ -81,11 +72,10 @@ pub fn rvs_read_mir_sources_BI(path: &Path) -> Result<Vec<SourceFile>, ReadError
 
     let mut sources = Vec::new();
     for file_path in file_paths {
-        let source = std::fs::read_to_string(&file_path)
-            .map_err(|e| ReadError::FileRead {
-                path: file_path.display().to_string(),
-                source: e,
-            })?;
+        let source = std::fs::read_to_string(&file_path).map_err(|e| ReadError::FileRead {
+            path: file_path.display().to_string(),
+            source: e,
+        })?;
         sources.push(SourceFile {
             path: file_path.display().to_string(),
             source,

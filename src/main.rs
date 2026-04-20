@@ -120,6 +120,9 @@ fn rvs_print_check_output_BIPS(output: &rivus_linter::CheckOutput) {
     for w in &output.assert_warnings {
         eprintln!("{w}");
     }
+    for w in &output.dead_code_warnings {
+        eprintln!("{w}");
+    }
     for w in &output.inference_warnings {
         eprintln!("{w}");
     }

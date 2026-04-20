@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use crate::capability::{parse_rvs_function, rvs_extract_raw_suffix, Capability, CapabilitySet};
+use crate::capability::{Capability, CapabilitySet, parse_rvs_function, rvs_extract_raw_suffix};
 
 /// 被调用者的蛛丝马迹：名与行。
 #[derive(Debug, Clone)]
@@ -39,6 +39,8 @@ pub struct FnDef {
     pub has_mut_self: bool,
     pub has_panic_macro: bool,
     pub raw_suffix: String,
+    pub is_test: bool,
+    pub allows_dead_code: bool,
 }
 
 /// 参数之名与类型。
@@ -262,16 +264,12 @@ fn rvs_harvest_from_expr(expr: &syn::Expr, statics: &[StaticDecl]) -> Harvest {
             .unwrap_or_else(Harvest::empty),
         syn::Expr::Group(group) => rvs_harvest_from_expr(&group.expr, statics),
         syn::Expr::Let(let_expr) => rvs_harvest_from_expr(&let_expr.expr, statics),
-        syn::Expr::Unsafe(unsafe_expr) => {
-            rvs_harvest_from_block(&unsafe_expr.block, statics)
-        }
+        syn::Expr::Unsafe(unsafe_expr) => rvs_harvest_from_block(&unsafe_expr.block, statics),
         syn::Expr::Async(async_expr) => rvs_harvest_from_block(&async_expr.block, statics),
         syn::Expr::Cast(cast_expr) => rvs_harvest_from_expr(&cast_expr.expr, statics),
         syn::Expr::TryBlock(try_block) => rvs_harvest_from_block(&try_block.block, statics),
         syn::Expr::Macro(_) => Harvest::empty(),
-        syn::Expr::Lit(_)
-        | syn::Expr::Continue(_)
-        | syn::Expr::Verbatim(_) => Harvest::empty(),
+        syn::Expr::Lit(_) | syn::Expr::Continue(_) | syn::Expr::Verbatim(_) => Harvest::empty(),
         _ => Harvest::empty(),
     }
 }
@@ -327,9 +325,7 @@ fn rvs_parse_thread_local_names(tokens: &proc_macro2::TokenStream) -> Vec<String
             proc_macro2::TokenTree::Group(group) => {
                 names.extend(rvs_parse_thread_local_names(&group.stream()));
             }
-            proc_macro2::TokenTree::Ident(ident)
-                if ident == "static" =>
-            {
+            proc_macro2::TokenTree::Ident(ident) if ident == "static" => {
                 while let Some(next) = tokens.peek() {
                     match next {
                         proc_macro2::TokenTree::Ident(name) => {
@@ -402,10 +398,8 @@ fn rvs_collect_static_decls_from_items(items: &[syn::Item]) -> Vec<StaticDecl> {
 }
 
 const PRIMITIVE_NUMERIC_TYPES: &[&str] = &[
-    "i8", "i16", "i32", "i64", "i128",
-    "u8", "u16", "u32", "u64", "u128",
-    "f32", "f64",
-    "isize", "usize",
+    "i8", "i16", "i32", "i64", "i128", "u8", "u16", "u32", "u64", "u128", "f32", "f64", "isize",
+    "usize",
 ];
 
 fn rvs_classify_param_type(ty: &syn::Type) -> ParamType {
@@ -421,7 +415,9 @@ fn rvs_classify_param_type(ty: &syn::Type) -> ParamType {
 }
 
 /// 判断参数列表中是否有 &mut self 接收者。
-fn rvs_has_mut_receiver(inputs: &syn::punctuated::Punctuated<syn::FnArg, syn::token::Comma>) -> bool {
+fn rvs_has_mut_receiver(
+    inputs: &syn::punctuated::Punctuated<syn::FnArg, syn::token::Comma>,
+) -> bool {
     inputs.iter().any(|arg| match arg {
         syn::FnArg::Receiver(r) => r.mutability.is_some(),
         _ => false,
@@ -429,9 +425,13 @@ fn rvs_has_mut_receiver(inputs: &syn::punctuated::Punctuated<syn::FnArg, syn::to
 }
 
 /// 判断参数列表中是否有 &mut T 参数（不含 self/&self/&mut self）。
-fn rvs_has_mut_typed_param(inputs: &syn::punctuated::Punctuated<syn::FnArg, syn::token::Comma>) -> bool {
+fn rvs_has_mut_typed_param(
+    inputs: &syn::punctuated::Punctuated<syn::FnArg, syn::token::Comma>,
+) -> bool {
     inputs.iter().any(|arg| match arg {
-        syn::FnArg::Typed(pt) => matches!(&*pt.ty, syn::Type::Reference(r) if r.mutability.is_some()),
+        syn::FnArg::Typed(pt) => {
+            matches!(&*pt.ty, syn::Type::Reference(r) if r.mutability.is_some())
+        }
         _ => false,
     })
 }
@@ -615,10 +615,7 @@ fn collect_assert_ids_from_expr(expr: &syn::Expr, ids: &mut BTreeSet<String>) {
 }
 
 /// 从顶层函数定义中萃取信息。
-fn extract_from_item_fn(
-    item_fn: &syn::ItemFn,
-    statics: &[StaticDecl],
-) -> Option<FnDef> {
+fn extract_from_item_fn(item_fn: &syn::ItemFn, statics: &[StaticDecl]) -> Option<FnDef> {
     let name = item_fn.sig.ident.to_string();
     let (_, caps) = parse_rvs_function(&name)?;
     let raw_suffix = rvs_extract_raw_suffix(&name);
@@ -654,14 +651,13 @@ fn extract_from_item_fn(
         has_mut_self,
         has_panic_macro,
         raw_suffix,
+        is_test: false,
+        allows_dead_code: false,
     })
 }
 
 /// 从 impl 块中的方法萃取信息。
-fn extract_from_impl_fn(
-    impl_fn: &syn::ImplItemFn,
-    statics: &[StaticDecl],
-) -> Option<FnDef> {
+fn extract_from_impl_fn(impl_fn: &syn::ImplItemFn, statics: &[StaticDecl]) -> Option<FnDef> {
     let name = impl_fn.sig.ident.to_string();
     let (_, caps) = parse_rvs_function(&name)?;
     let raw_suffix = rvs_extract_raw_suffix(&name);
@@ -697,14 +693,13 @@ fn extract_from_impl_fn(
         has_mut_self,
         has_panic_macro,
         raw_suffix,
+        is_test: false,
+        allows_dead_code: false,
     })
 }
 
 /// 从 trait 定义中的方法签名萃取信息。
-fn extract_from_trait_fn(
-    trait_fn: &syn::TraitItemFn,
-    statics: &[StaticDecl],
-) -> Option<FnDef> {
+fn extract_from_trait_fn(trait_fn: &syn::TraitItemFn, statics: &[StaticDecl]) -> Option<FnDef> {
     let name = trait_fn.sig.ident.to_string();
     let (_, caps) = parse_rvs_function(&name)?;
     let raw_suffix = rvs_extract_raw_suffix(&name);
@@ -717,12 +712,7 @@ fn extract_from_trait_fn(
     let line_count = trait_fn
         .default
         .as_ref()
-        .map(|block| {
-            rvs_calc_line_count(
-                trait_fn.sig.fn_token.span,
-                block.brace_token.span.join(),
-            )
-        })
+        .map(|block| rvs_calc_line_count(trait_fn.sig.fn_token.span, block.brace_token.span.join()))
         .unwrap_or(1);
     let has_body = trait_fn.default.is_some();
     let (params, debug_asserted_params) = trait_fn
@@ -764,6 +754,8 @@ fn extract_from_trait_fn(
         has_mut_self,
         has_panic_macro,
         raw_suffix,
+        is_test: false,
+        allows_dead_code: false,
     })
 }
 
@@ -781,8 +773,7 @@ fn rvs_is_panic_macro(mac: &syn::Macro) -> bool {
         .unwrap_or_default();
     matches!(
         name.as_str(),
-        "panic" | "assert" | "assert_eq" | "assert_ne"
-            | "unreachable" | "todo" | "unimplemented"
+        "panic" | "assert" | "assert_eq" | "assert_ne" | "unreachable" | "todo" | "unimplemented"
     )
 }
 
@@ -835,29 +826,23 @@ fn rvs_scan_expr_has_unsafe(expr: &syn::Expr) -> bool {
         }
         syn::Expr::Loop(e) => rvs_scan_block_has_unsafe(&e.body),
         syn::Expr::While(e) => {
-            rvs_scan_expr_has_unsafe(&e.cond)
-                || rvs_scan_block_has_unsafe(&e.body)
+            rvs_scan_expr_has_unsafe(&e.cond) || rvs_scan_block_has_unsafe(&e.body)
         }
         syn::Expr::ForLoop(e) => {
-            rvs_scan_expr_has_unsafe(&e.expr)
-                || rvs_scan_block_has_unsafe(&e.body)
+            rvs_scan_expr_has_unsafe(&e.expr) || rvs_scan_block_has_unsafe(&e.body)
         }
         syn::Expr::Closure(c) => rvs_scan_expr_has_unsafe(&c.body),
         syn::Expr::Call(c) => {
-            rvs_scan_expr_has_unsafe(&c.func)
-                || c.args.iter().any(rvs_scan_expr_has_unsafe)
+            rvs_scan_expr_has_unsafe(&c.func) || c.args.iter().any(rvs_scan_expr_has_unsafe)
         }
         syn::Expr::MethodCall(c) => {
-            rvs_scan_expr_has_unsafe(&c.receiver)
-                || c.args.iter().any(rvs_scan_expr_has_unsafe)
+            rvs_scan_expr_has_unsafe(&c.receiver) || c.args.iter().any(rvs_scan_expr_has_unsafe)
         }
         syn::Expr::Assign(a) => {
-            rvs_scan_expr_has_unsafe(&a.left)
-                || rvs_scan_expr_has_unsafe(&a.right)
+            rvs_scan_expr_has_unsafe(&a.left) || rvs_scan_expr_has_unsafe(&a.right)
         }
         syn::Expr::Binary(b) => {
-            rvs_scan_expr_has_unsafe(&b.left)
-                || rvs_scan_expr_has_unsafe(&b.right)
+            rvs_scan_expr_has_unsafe(&b.left) || rvs_scan_expr_has_unsafe(&b.right)
         }
         syn::Expr::Unary(u) => rvs_scan_expr_has_unsafe(&u.expr),
         syn::Expr::Paren(p) => rvs_scan_expr_has_unsafe(&p.expr),
@@ -865,27 +850,21 @@ fn rvs_scan_expr_has_unsafe(expr: &syn::Expr) -> bool {
         syn::Expr::Reference(r) => rvs_scan_expr_has_unsafe(&r.expr),
         syn::Expr::Try(t) => rvs_scan_expr_has_unsafe(&t.expr),
         syn::Expr::Await(a) => rvs_scan_expr_has_unsafe(&a.base),
-        syn::Expr::Return(r) => r
-            .expr
-            .as_ref()
-            .is_some_and(|e| rvs_scan_expr_has_unsafe(e)),
-        syn::Expr::Break(b) => b
-            .expr
-            .as_ref()
-            .is_some_and(|e| rvs_scan_expr_has_unsafe(e)),
+        syn::Expr::Return(r) => r.expr.as_ref().is_some_and(|e| rvs_scan_expr_has_unsafe(e)),
+        syn::Expr::Break(b) => b.expr.as_ref().is_some_and(|e| rvs_scan_expr_has_unsafe(e)),
         syn::Expr::Let(l) => rvs_scan_expr_has_unsafe(&l.expr),
         syn::Expr::Index(i) => {
-            rvs_scan_expr_has_unsafe(&i.expr)
-                || rvs_scan_expr_has_unsafe(&i.index)
+            rvs_scan_expr_has_unsafe(&i.expr) || rvs_scan_expr_has_unsafe(&i.index)
         }
         syn::Expr::Field(f) => rvs_scan_expr_has_unsafe(&f.base),
         syn::Expr::Range(r) => {
-            r.start.as_ref().is_some_and(|s| rvs_scan_expr_has_unsafe(s))
+            r.start
+                .as_ref()
+                .is_some_and(|s| rvs_scan_expr_has_unsafe(s))
                 || r.end.as_ref().is_some_and(|e| rvs_scan_expr_has_unsafe(e))
         }
         syn::Expr::Repeat(r) => {
-            rvs_scan_expr_has_unsafe(&r.expr)
-                || rvs_scan_expr_has_unsafe(&r.len)
+            rvs_scan_expr_has_unsafe(&r.expr) || rvs_scan_expr_has_unsafe(&r.len)
         }
         syn::Expr::Tuple(t) => t.elems.iter().any(rvs_scan_expr_has_unsafe),
         syn::Expr::Array(a) => a.elems.iter().any(rvs_scan_expr_has_unsafe),
@@ -955,17 +934,14 @@ fn rvs_scan_expr_has_panic(expr: &syn::Expr) -> bool {
         }
         syn::Expr::Loop(e) => rvs_scan_block_has_panic(&e.body),
         syn::Expr::While(e) => {
-            rvs_scan_expr_has_panic(&e.cond)
-                || rvs_scan_block_has_panic(&e.body)
+            rvs_scan_expr_has_panic(&e.cond) || rvs_scan_block_has_panic(&e.body)
         }
         syn::Expr::ForLoop(e) => {
-            rvs_scan_expr_has_panic(&e.expr)
-                || rvs_scan_block_has_panic(&e.body)
+            rvs_scan_expr_has_panic(&e.expr) || rvs_scan_block_has_panic(&e.body)
         }
         syn::Expr::Closure(c) => rvs_scan_expr_has_panic(&c.body),
         syn::Expr::Call(c) => {
-            rvs_scan_expr_has_panic(&c.func)
-                || c.args.iter().any(rvs_scan_expr_has_panic)
+            rvs_scan_expr_has_panic(&c.func) || c.args.iter().any(rvs_scan_expr_has_panic)
         }
         syn::Expr::MethodCall(c) => {
             let is_panic_method = matches!(c.method.to_string().as_str(), "unwrap" | "expect");
@@ -974,12 +950,10 @@ fn rvs_scan_expr_has_panic(expr: &syn::Expr) -> bool {
                 || c.args.iter().any(rvs_scan_expr_has_panic)
         }
         syn::Expr::Assign(a) => {
-            rvs_scan_expr_has_panic(&a.left)
-                || rvs_scan_expr_has_panic(&a.right)
+            rvs_scan_expr_has_panic(&a.left) || rvs_scan_expr_has_panic(&a.right)
         }
         syn::Expr::Binary(b) => {
-            rvs_scan_expr_has_panic(&b.left)
-                || rvs_scan_expr_has_panic(&b.right)
+            rvs_scan_expr_has_panic(&b.left) || rvs_scan_expr_has_panic(&b.right)
         }
         syn::Expr::Unary(u) => rvs_scan_expr_has_panic(&u.expr),
         syn::Expr::Paren(p) => rvs_scan_expr_has_panic(&p.expr),
@@ -987,28 +961,18 @@ fn rvs_scan_expr_has_panic(expr: &syn::Expr) -> bool {
         syn::Expr::Reference(r) => rvs_scan_expr_has_panic(&r.expr),
         syn::Expr::Try(t) => rvs_scan_expr_has_panic(&t.expr),
         syn::Expr::Await(a) => rvs_scan_expr_has_panic(&a.base),
-        syn::Expr::Return(r) => r
-            .expr
-            .as_ref()
-            .is_some_and(|e| rvs_scan_expr_has_panic(e)),
-        syn::Expr::Break(b) => b
-            .expr
-            .as_ref()
-            .is_some_and(|e| rvs_scan_expr_has_panic(e)),
+        syn::Expr::Return(r) => r.expr.as_ref().is_some_and(|e| rvs_scan_expr_has_panic(e)),
+        syn::Expr::Break(b) => b.expr.as_ref().is_some_and(|e| rvs_scan_expr_has_panic(e)),
         syn::Expr::Let(l) => rvs_scan_expr_has_panic(&l.expr),
         syn::Expr::Index(i) => {
-            rvs_scan_expr_has_panic(&i.expr)
-                || rvs_scan_expr_has_panic(&i.index)
+            rvs_scan_expr_has_panic(&i.expr) || rvs_scan_expr_has_panic(&i.index)
         }
         syn::Expr::Field(f) => rvs_scan_expr_has_panic(&f.base),
         syn::Expr::Range(r) => {
             r.start.as_ref().is_some_and(|s| rvs_scan_expr_has_panic(s))
                 || r.end.as_ref().is_some_and(|e| rvs_scan_expr_has_panic(e))
         }
-        syn::Expr::Repeat(r) => {
-            rvs_scan_expr_has_panic(&r.expr)
-                || rvs_scan_expr_has_panic(&r.len)
-        }
+        syn::Expr::Repeat(r) => rvs_scan_expr_has_panic(&r.expr) || rvs_scan_expr_has_panic(&r.len),
         syn::Expr::Tuple(t) => t.elems.iter().any(rvs_scan_expr_has_panic),
         syn::Expr::Array(a) => a.elems.iter().any(rvs_scan_expr_has_panic),
         syn::Expr::Struct(s) => {
@@ -1028,22 +992,75 @@ fn rvs_scan_expr_has_panic(expr: &syn::Expr) -> bool {
     }
 }
 
+fn rvs_is_test_fn(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|attr| {
+        attr.path()
+            .segments
+            .last()
+            .is_some_and(|s| s.ident == "test")
+    })
+}
+
+fn rvs_is_cfg_test(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|attr| {
+        attr.path()
+            .segments
+            .last()
+            .is_some_and(|s| s.ident == "cfg")
+            && attr
+                .meta
+                .require_list()
+                .is_ok_and(|list| list.tokens.to_string().contains("test"))
+    })
+}
+
+fn rvs_allows_dead_code(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|attr| {
+        if !attr
+            .path()
+            .segments
+            .last()
+            .is_some_and(|s| s.ident == "allow")
+        {
+            return false;
+        }
+        let Some(list) = attr.meta.require_list().ok() else {
+            return false;
+        };
+        let tokens = list.tokens.to_string();
+        tokens.contains("dead_code") || tokens.contains("unused")
+    })
+}
+
 /// 从顶层项中萃取 rvs_ 函数定义，递归进入 mod 块。
+/// 跳过 #[cfg(test)] 模块和 #[test] 函数。
+/// 标记 #[allow(dead_code)] / #[allow(unused)] 的函数。
 fn rvs_extract_from_items(items: &[syn::Item], statics: &[StaticDecl]) -> Vec<FnDef> {
     let mut functions = Vec::new();
 
     for item in items {
         match item {
             syn::Item::Fn(item_fn) => {
-                if let Some(fn_def) = extract_from_item_fn(item_fn, statics) {
+                if rvs_is_test_fn(&item_fn.attrs) {
+                    continue;
+                }
+                if let Some(mut fn_def) = extract_from_item_fn(item_fn, statics) {
+                    fn_def.allows_dead_code = rvs_allows_dead_code(&item_fn.attrs);
                     functions.push(fn_def);
                 }
             }
             syn::Item::Impl(item_impl) => {
+                if rvs_is_cfg_test(&item_impl.attrs) {
+                    continue;
+                }
+                let impl_allows_dead_code = rvs_allows_dead_code(&item_impl.attrs);
                 for impl_item in &item_impl.items {
                     if let syn::ImplItem::Fn(impl_fn) = impl_item
-                        && let Some(fn_def) = extract_from_impl_fn(impl_fn, statics)
+                        && !rvs_is_test_fn(&impl_fn.attrs)
+                        && let Some(mut fn_def) = extract_from_impl_fn(impl_fn, statics)
                     {
+                        fn_def.allows_dead_code =
+                            impl_allows_dead_code || rvs_allows_dead_code(&impl_fn.attrs);
                         functions.push(fn_def);
                     }
                 }
@@ -1051,13 +1068,18 @@ fn rvs_extract_from_items(items: &[syn::Item], statics: &[StaticDecl]) -> Vec<Fn
             syn::Item::Trait(item_trait) => {
                 for trait_item in &item_trait.items {
                     if let syn::TraitItem::Fn(trait_fn) = trait_item
-                        && let Some(fn_def) = extract_from_trait_fn(trait_fn, statics)
+                        && !rvs_is_test_fn(&trait_fn.attrs)
+                        && let Some(mut fn_def) = extract_from_trait_fn(trait_fn, statics)
                     {
+                        fn_def.allows_dead_code = rvs_allows_dead_code(&trait_fn.attrs);
                         functions.push(fn_def);
                     }
                 }
             }
             syn::Item::Mod(m) => {
+                if rvs_is_cfg_test(&m.attrs) {
+                    continue;
+                }
                 if let Some((_, inner_items)) = &m.content {
                     functions.extend(rvs_extract_from_items(inner_items, statics));
                 }
@@ -1074,8 +1096,9 @@ fn rvs_extract_from_items(items: &[syn::Item], statics: &[StaticDecl]) -> Vec<Fn
 /// 同时搜集文件中的 static 与 thread_local! 声明，
 /// 据此检查函数体内的静态变量引用。
 pub fn rvs_extract_functions(source: &str) -> Result<Vec<FnDef>, ExtractError> {
-    let file = syn::parse_file(source)
-        .map_err(|e| ExtractError::Parse { message: e.to_string() })?;
+    let file = syn::parse_file(source).map_err(|e| ExtractError::Parse {
+        message: e.to_string(),
+    })?;
 
     let statics = rvs_collect_static_decls_from_items(&file.items);
 

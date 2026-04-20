@@ -52,13 +52,11 @@ pub fn rvs_compile_to_mir_BIMPS(project_dir: &Path) -> Result<PathBuf, MirCompil
         });
     }
 
-    let has_mir = std::fs::read_dir(&deps_dir)
-        .ok()
-        .is_some_and(|entries| entries.filter_map(|e| e.ok()).any(|e| {
-            e.path()
-                .extension()
-                .is_some_and(|ext| ext == "mir")
-        }));
+    let has_mir = std::fs::read_dir(&deps_dir).ok().is_some_and(|entries| {
+        entries
+            .filter_map(|e| e.ok())
+            .any(|e| e.path().extension().is_some_and(|ext| ext == "mir"))
+    });
 
     if !has_mir {
         return Err(MirCompileError::NoMirFiles {
@@ -212,18 +210,20 @@ fn rvs_extract_call_target(line: &str) -> Option<String> {
         let paren_pos = rvs_find_call_open_paren(rest)?;
         let path = &rest[..paren_pos];
         let clean = rvs_strip_generics(path);
-        if clean.contains("::") || (!clean.is_empty() && clean.chars().all(|c| c.is_alphanumeric() || c == '_')) {
+        if clean.contains("::")
+            || (!clean.is_empty() && clean.chars().all(|c| c.is_alphanumeric() || c == '_'))
+        {
             Some(clean)
         } else {
             None
         }
     } else if rest.starts_with("rvs_") {
-        let paren_pos = rvs_find_call_open_paren(rest)
-            .unwrap_or_else(|| rest.find(' ').unwrap_or(rest.len()));
+        let paren_pos =
+            rvs_find_call_open_paren(rest).unwrap_or_else(|| rest.find(' ').unwrap_or(rest.len()));
         Some(rest[..paren_pos].to_string())
     } else if rvs_find_call_open_paren(rest).is_some() && rest.contains("->") {
-        let paren_pos = rvs_find_call_open_paren(rest)
-            .unwrap_or_else(|| rest.find(' ').unwrap_or(rest.len()));
+        let paren_pos =
+            rvs_find_call_open_paren(rest).unwrap_or_else(|| rest.find(' ').unwrap_or(rest.len()));
         if paren_pos > 0 {
             Some(rest[..paren_pos].to_string())
         } else {
@@ -327,7 +327,10 @@ pub fn rvs_extract_from_mir(mir_text: &str) -> Result<Vec<FnDef>, MirError> {
         let calls = rvs_extract_calls_from_body(&mir_fn.body_lines);
 
         if let Some(parent) = rvs_extract_parent_fn_name(&mir_fn.name) {
-            fn_calls.entry(parent.to_string()).or_default().extend(calls);
+            fn_calls
+                .entry(parent.to_string())
+                .or_default()
+                .extend(calls);
             let entry = fn_meta.entry(parent.to_string()).or_insert((false, false));
             entry.0 = entry.0 || has_mut_param;
             entry.1 = entry.1 || has_panic_macro;
@@ -366,6 +369,8 @@ pub fn rvs_extract_from_mir(mir_text: &str) -> Result<Vec<FnDef>, MirError> {
             has_mut_self: false,
             has_panic_macro,
             raw_suffix,
+            is_test: false,
+            allows_dead_code: false,
         });
     }
 

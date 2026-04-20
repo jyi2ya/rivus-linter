@@ -1,0 +1,3 @@
+functions: 2
+0: rvs_orphan allows_dead_code=true
+1: rvs_used allows_dead_code=false

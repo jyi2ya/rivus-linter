@@ -309,3 +309,9 @@ alloc::string::String::as_str=
 # ─── 标准库：HashMap Entry（补充）─────────────────────────
 std::collections::hash_map::Entry::or_insert=
 std::collections::HashMap::remove=
+
+# ─── 标准库：Result/Option 方法（补充）─────────────────────
+Result::is_ok_and=
+Result::require_list=
+Attribute::path=
+Meta::require_list=
