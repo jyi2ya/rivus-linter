@@ -196,23 +196,34 @@ fn rvs_check_reflection_usage(
         .collect()
 }
 
-fn rvs_check_stub_macros(items: &[StubMacroInfo], file: &str) -> Vec<StubWarning> {
+fn rvs_check_stub_macros(items: &[StubMacroInfo], file: &str) -> Vec<Violation> {
     items
         .iter()
-        .map(|i| StubWarning {
-            function: i.function.clone(),
-            macro_name: i.macro_name.clone(),
+        .map(|i| Violation {
+            kind: ViolationKind::StubMacro {
+                macro_name: i.macro_name.clone(),
+            },
+            caller: i.function.clone(),
+            caller_caps: CapabilitySet::rvs_new(),
+            target: i.macro_name.clone(),
+            target_caps: CapabilitySet::rvs_new(),
+            missing: BTreeSet::new(),
             file: file.to_string(),
             line: i.line,
         })
         .collect()
 }
 
-fn rvs_check_empty_fns(items: &[EmptyFnInfo], file: &str) -> Vec<EmptyFnWarning> {
+fn rvs_check_empty_fns(items: &[EmptyFnInfo], file: &str) -> Vec<Violation> {
     items
         .iter()
-        .map(|i| EmptyFnWarning {
-            function: i.function.clone(),
+        .map(|i| Violation {
+            kind: ViolationKind::EmptyFn,
+            caller: i.function.clone(),
+            caller_caps: CapabilitySet::rvs_new(),
+            target: String::new(),
+            target_caps: CapabilitySet::rvs_new(),
+            missing: BTreeSet::new(),
             file: file.to_string(),
             line: i.line,
         })
@@ -287,11 +298,13 @@ pub fn rvs_check_missing_doc(pubs: &[PubItemInfo], file: &str) -> Vec<MissingDoc
     warnings
 }
 
-/// 违规之别：调用越权与静态引用越权。
+/// 违规之别。
 #[derive(Debug, Clone, PartialEq)]
 pub enum ViolationKind {
     Call,
     StaticRef,
+    StubMacro { macro_name: String },
+    EmptyFn,
 }
 
 impl fmt::Display for ViolationKind {
@@ -299,6 +312,10 @@ impl fmt::Display for ViolationKind {
         match self {
             ViolationKind::Call => write!(f, "calls"),
             ViolationKind::StaticRef => write!(f, "references"),
+            ViolationKind::StubMacro { macro_name } => {
+                write!(f, "contains {macro_name}!() stub macro")
+            }
+            ViolationKind::EmptyFn => write!(f, "has empty body (no logic beyond debug_assert)"),
         }
     }
 }
@@ -318,24 +335,35 @@ pub struct Violation {
 
 impl fmt::Display for Violation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let missing_str = self
-            .missing
-            .iter()
-            .map(|c| c.to_string())
-            .collect::<Vec<_>>()
-            .join(", ");
-        write!(
-            f,
-            "error: {} {} {} but is missing capabilities [{}]\n  at {}:{}\n  caller has: {}\n  target needs: {}",
-            self.caller,
-            self.kind,
-            self.target,
-            missing_str,
-            self.file,
-            self.line,
-            self.caller_caps,
-            self.target_caps,
-        )
+        match &self.kind {
+            ViolationKind::StubMacro { .. } | ViolationKind::EmptyFn => {
+                write!(
+                    f,
+                    "error: {} {} \n  at {}:{}",
+                    self.caller, self.kind, self.file, self.line,
+                )
+            }
+            ViolationKind::Call | ViolationKind::StaticRef => {
+                let missing_str = self
+                    .missing
+                    .iter()
+                    .map(|c| c.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(
+                    f,
+                    "error: {} {} {} but is missing capabilities [{}]\n  at {}:{}\n  caller has: {}\n  target needs: {}",
+                    self.caller,
+                    self.kind,
+                    self.target,
+                    missing_str,
+                    self.file,
+                    self.line,
+                    self.caller_caps,
+                    self.target_caps,
+                )
+            }
+        }
     }
 }
 
@@ -441,8 +469,6 @@ pub struct CheckOutput {
     pub consumed_arg_on_error_warnings: Vec<ConsumedArgOnErrorWarning>,
     pub deref_polymorphism_warnings: Vec<DerefPolymorphismWarning>,
     pub reflection_usage_warnings: Vec<ReflectionUsageWarning>,
-    pub stub_warnings: Vec<StubWarning>,
-    pub empty_fn_warnings: Vec<EmptyFnWarning>,
     pub todo_comment_warnings: Vec<TodoCommentWarning>,
     pub untested_good_fn_warnings: Vec<UntestedGoodFnWarning>,
 }
@@ -641,43 +667,6 @@ impl fmt::Display for ReflectionUsageWarning {
             f,
             "warning: function '{}' uses '{}'—prefer trait-based dispatch over reflection\n  at {}:{}",
             self.function, self.path, self.file, self.line,
-        )
-    }
-}
-
-/// 一条 stub 警告：函数体中包含 `todo!()` 或 `unimplemented!()`，属于未实现逻辑。
-#[derive(Debug, Clone)]
-pub struct StubWarning {
-    pub function: String,
-    pub macro_name: String,
-    pub file: String,
-    pub line: usize,
-}
-
-impl fmt::Display for StubWarning {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "warning: function '{}' contains {}!()—unimplemented stub\n  at {}:{}",
-            self.function, self.macro_name, self.file, self.line,
-        )
-    }
-}
-
-/// 一条空函数体警告：函数体无任何逻辑（仅含 debug_assert!）。
-#[derive(Debug, Clone)]
-pub struct EmptyFnWarning {
-    pub function: String,
-    pub file: String,
-    pub line: usize,
-}
-
-impl fmt::Display for EmptyFnWarning {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "warning: function '{}' has an empty body—no logic implemented\n  at {}:{}",
-            self.function, self.file, self.line,
         )
     }
 }
@@ -1087,8 +1076,6 @@ fn rvs_check_functions_impl(functions: &[FnDef], file: &str, capsmap: &CapsMap) 
         consumed_arg_on_error_warnings: Vec::new(),
         deref_polymorphism_warnings: Vec::new(),
         reflection_usage_warnings: Vec::new(),
-        stub_warnings: Vec::new(),
-        empty_fn_warnings: Vec::new(),
         todo_comment_warnings: Vec::new(),
         untested_good_fn_warnings: Vec::new(),
     }
@@ -1295,22 +1282,22 @@ pub fn rvs_check_source(
         .reflection_usage_warnings
         .extend(rvs_check_reflection_usage(&reflection_usage, file));
 
-    // 检查 stub 宏（todo! / unimplemented!）
+    // 检查 stub 宏（todo! / unimplemented!）→ 违规
     let stub_macros = rvs_extract_stub_macros(source).map_err(|e| CheckError::Extract {
         source: e,
         file: file.to_string(),
     })?;
     output
-        .stub_warnings
+        .violations
         .extend(rvs_check_stub_macros(&stub_macros, file));
 
-    // 检查空函数体
+    // 检查空函数体 → 违规
     let empty_fns = rvs_extract_empty_fns(source).map_err(|e| CheckError::Extract {
         source: e,
         file: file.to_string(),
     })?;
     output
-        .empty_fn_warnings
+        .violations
         .extend(rvs_check_empty_fns(&empty_fns, file));
 
     // 检查 TODO/FIXME 注释
@@ -1481,22 +1468,22 @@ pub fn rvs_check_path_BI(path: &Path, capsmap: &CapsMap) -> Result<CheckOutput, 
             .reflection_usage_warnings
             .extend(rvs_check_reflection_usage(&reflection_usage, &sf.path));
 
-        // 检查 stub 宏（todo! / unimplemented!）
+        // 检查 stub 宏（todo! / unimplemented!）→ 违规
         let stub_macros = rvs_extract_stub_macros(&sf.source).map_err(|e| CheckError::Extract {
             source: e,
             file: sf.path.clone(),
         })?;
         output
-            .stub_warnings
+            .violations
             .extend(rvs_check_stub_macros(&stub_macros, &sf.path));
 
-        // 检查空函数体
+        // 检查空函数体 → 违规
         let empty_fns = rvs_extract_empty_fns(&sf.source).map_err(|e| CheckError::Extract {
             source: e,
             file: sf.path.clone(),
         })?;
         output
-            .empty_fn_warnings
+            .violations
             .extend(rvs_check_empty_fns(&empty_fns, &sf.path));
 
         // 检查 TODO/FIXME 注释

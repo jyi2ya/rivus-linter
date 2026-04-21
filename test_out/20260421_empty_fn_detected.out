@@ -1,3 +1,3 @@
-empty_fn_warnings: 1
-warning: function 'rvs_placeholder' has an empty body—no logic implemented
+empty_fn_violations: 1
+error: rvs_placeholder has empty body (no logic beyond debug_assert) 
   at test.rs:3

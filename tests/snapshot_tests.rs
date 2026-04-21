@@ -4358,16 +4358,20 @@ fn test_20260421_stub_todo_detected() {
 fn rvs_fetch_AI() { todo!() }
 "#;
     let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
-    assert_eq!(output.stub_warnings.len(), 1);
-    assert_eq!(output.stub_warnings[0].macro_name, "todo");
-    assert_eq!(output.stub_warnings[0].function, "rvs_fetch_AI");
+    let stub_violations: Vec<_> = output
+        .violations
+        .iter()
+        .filter(|v| matches!(v.kind, rivus_linter::ViolationKind::StubMacro { .. }))
+        .collect();
+    assert_eq!(stub_violations.len(), 1);
+    assert_eq!(stub_violations[0].caller, "rvs_fetch_AI");
 
     rvs_snapshot_BI(
         "20260421_stub_todo_detected",
         format!(
-            "stub_warnings: {}\n{}\n",
-            output.stub_warnings.len(),
-            output.stub_warnings[0],
+            "stub_violations: {}\n{}\n",
+            stub_violations.len(),
+            stub_violations[0],
         ),
     );
 }
@@ -4379,15 +4383,19 @@ fn test_20260421_stub_unimplemented_detected() {
 fn rvs_parse_P() -> i32 { unimplemented!() }
 "#;
     let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
-    assert_eq!(output.stub_warnings.len(), 1);
-    assert_eq!(output.stub_warnings[0].macro_name, "unimplemented");
+    let stub_violations: Vec<_> = output
+        .violations
+        .iter()
+        .filter(|v| matches!(v.kind, rivus_linter::ViolationKind::StubMacro { .. }))
+        .collect();
+    assert_eq!(stub_violations.len(), 1);
 
     rvs_snapshot_BI(
         "20260421_stub_unimplemented_detected",
         format!(
-            "stub_warnings: {}\n{}\n",
-            output.stub_warnings.len(),
-            output.stub_warnings[0],
+            "stub_violations: {}\n{}\n",
+            stub_violations.len(),
+            stub_violations[0],
         ),
     );
 }
@@ -4399,9 +4407,14 @@ fn test_20260421_stub_no_stub_ok() {
 fn rvs_add(a: i32, b: i32) -> i32 { a + b }
 "#;
     let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
-    assert!(output.stub_warnings.is_empty());
+    let stub_violations: Vec<_> = output
+        .violations
+        .iter()
+        .filter(|v| matches!(v.kind, rivus_linter::ViolationKind::StubMacro { .. }))
+        .collect();
+    assert!(stub_violations.is_empty());
 
-    rvs_snapshot_BI("20260421_stub_no_stub_ok", "stub_warnings: 0\n");
+    rvs_snapshot_BI("20260421_stub_no_stub_ok", "stub_violations: 0\n");
 }
 
 #[test]
@@ -4414,15 +4427,20 @@ impl Svc {
 }
 "#;
     let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
-    assert_eq!(output.stub_warnings.len(), 1);
-    assert_eq!(output.stub_warnings[0].function, "rvs_run_AI");
+    let stub_violations: Vec<_> = output
+        .violations
+        .iter()
+        .filter(|v| matches!(v.kind, rivus_linter::ViolationKind::StubMacro { .. }))
+        .collect();
+    assert_eq!(stub_violations.len(), 1);
+    assert_eq!(stub_violations[0].caller, "rvs_run_AI");
 
     rvs_snapshot_BI(
         "20260421_stub_in_impl_method",
         format!(
-            "stub_warnings: {}\n{}\n",
-            output.stub_warnings.len(),
-            output.stub_warnings[0],
+            "stub_violations: {}\n{}\n",
+            stub_violations.len(),
+            stub_violations[0],
         ),
     );
 }
@@ -4436,15 +4454,20 @@ fn test_20260421_empty_fn_detected() {
 fn rvs_placeholder() {}
 "#;
     let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
-    assert_eq!(output.empty_fn_warnings.len(), 1);
-    assert_eq!(output.empty_fn_warnings[0].function, "rvs_placeholder");
+    let empty_violations: Vec<_> = output
+        .violations
+        .iter()
+        .filter(|v| matches!(v.kind, rivus_linter::ViolationKind::EmptyFn))
+        .collect();
+    assert_eq!(empty_violations.len(), 1);
+    assert_eq!(empty_violations[0].caller, "rvs_placeholder");
 
     rvs_snapshot_BI(
         "20260421_empty_fn_detected",
         format!(
-            "empty_fn_warnings: {}\n{}\n",
-            output.empty_fn_warnings.len(),
-            output.empty_fn_warnings[0],
+            "empty_fn_violations: {}\n{}\n",
+            empty_violations.len(),
+            empty_violations[0],
         ),
     );
 }
@@ -4458,15 +4481,20 @@ fn rvs_check_M(n: i32) {
 }
 "#;
     let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
-    assert_eq!(output.empty_fn_warnings.len(), 1);
-    assert_eq!(output.empty_fn_warnings[0].function, "rvs_check_M");
+    let empty_violations: Vec<_> = output
+        .violations
+        .iter()
+        .filter(|v| matches!(v.kind, rivus_linter::ViolationKind::EmptyFn))
+        .collect();
+    assert_eq!(empty_violations.len(), 1);
+    assert_eq!(empty_violations[0].caller, "rvs_check_M");
 
     rvs_snapshot_BI(
         "20260421_empty_fn_only_debug_assert_warned",
         format!(
-            "empty_fn_warnings: {}\n{}\n",
-            output.empty_fn_warnings.len(),
-            output.empty_fn_warnings[0],
+            "empty_fn_violations: {}\n{}\n",
+            empty_violations.len(),
+            empty_violations[0],
         ),
     );
 }
@@ -4478,9 +4506,17 @@ fn test_20260421_empty_fn_with_logic_ok() {
 fn rvs_add(a: i32, b: i32) -> i32 { a + b }
 "#;
     let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
-    assert!(output.empty_fn_warnings.is_empty());
+    let empty_violations: Vec<_> = output
+        .violations
+        .iter()
+        .filter(|v| matches!(v.kind, rivus_linter::ViolationKind::EmptyFn))
+        .collect();
+    assert!(empty_violations.is_empty());
 
-    rvs_snapshot_BI("20260421_empty_fn_with_logic_ok", "empty_fn_warnings: 0\n");
+    rvs_snapshot_BI(
+        "20260421_empty_fn_with_logic_ok",
+        "empty_fn_violations: 0\n",
+    );
 }
 
 #[test]
@@ -4492,15 +4528,20 @@ impl Svc {
 }
 "#;
     let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
-    assert_eq!(output.empty_fn_warnings.len(), 1);
-    assert_eq!(output.empty_fn_warnings[0].function, "rvs_empty_method");
+    let empty_violations: Vec<_> = output
+        .violations
+        .iter()
+        .filter(|v| matches!(v.kind, rivus_linter::ViolationKind::EmptyFn))
+        .collect();
+    assert_eq!(empty_violations.len(), 1);
+    assert_eq!(empty_violations[0].caller, "rvs_empty_method");
 
     rvs_snapshot_BI(
         "20260421_empty_fn_in_impl",
         format!(
-            "empty_fn_warnings: {}\n{}\n",
-            output.empty_fn_warnings.len(),
-            output.empty_fn_warnings[0],
+            "empty_fn_violations: {}\n{}\n",
+            empty_violations.len(),
+            empty_violations[0],
         ),
     );
 }

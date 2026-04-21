@@ -11,13 +11,13 @@ pub use capsmap::CapsMap;
 pub use check::{
     BannedImportWarning, BorrowedParamWarning, CheckOutput, ConsumedArgOnErrorWarning,
     DeadCodeWarning, DenyWarningsWarning, DerefPolymorphismWarning, DuplicateTestWarning,
-    EmptyFnWarning, InferenceKind, InferenceWarning, IntoImplWarning, MirCheckError,
-    MissingAllowWarning, MissingAssertWarning, MissingDebugWarning, MissingDocWarning,
-    MissingPanicsDocWarning, MissingSafetyDocWarning, NonRvsFnWarning, ReflectionUsageWarning,
-    StubWarning, TestNameFormatWarning, TodoCommentWarning, UntestedGoodFnWarning, Violation,
-    ViolationKind, Warning, rvs_check_functions, rvs_check_imports, rvs_check_mir_dir_BIM,
-    rvs_check_mir_path_BIMPS, rvs_check_missing_doc, rvs_check_path_BI, rvs_check_source,
-    rvs_find_duplicate_tests, rvs_is_valid_test_name,
+    InferenceKind, InferenceWarning, IntoImplWarning, MirCheckError, MissingAllowWarning,
+    MissingAssertWarning, MissingDebugWarning, MissingDocWarning, MissingPanicsDocWarning,
+    MissingSafetyDocWarning, NonRvsFnWarning, ReflectionUsageWarning, TestNameFormatWarning,
+    TodoCommentWarning, UntestedGoodFnWarning, Violation, ViolationKind, Warning,
+    rvs_check_functions, rvs_check_imports, rvs_check_mir_dir_BIM, rvs_check_mir_path_BIMPS,
+    rvs_check_missing_doc, rvs_check_path_BI, rvs_check_source, rvs_find_duplicate_tests,
+    rvs_is_valid_test_name,
 };
 pub use extract::{
     BorrowedParamInfo, CalleeInfo, ConsumedArgOnErrorInfo, DerefPolymorphismInfo, EmptyFnInfo,

@@ -183,12 +183,6 @@ fn rvs_print_check_output_BIPS(output: &rivus_linter::CheckOutput) {
     for w in &output.reflection_usage_warnings {
         eprintln!("{w}");
     }
-    for w in &output.stub_warnings {
-        eprintln!("{w}");
-    }
-    for w in &output.empty_fn_warnings {
-        eprintln!("{w}");
-    }
     for w in &output.todo_comment_warnings {
         eprintln!("{w}");
     }
