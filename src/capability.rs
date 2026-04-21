@@ -188,7 +188,7 @@ pub enum CapabilityParseError {
 /// 例：rvs_write_db_ABI     → 基名 write_db，能力 {A, B, I}
 /// 例：rvs_add               → 基名 add，能力 {}
 /// 例：CapsMap::rvs_parse  → 基名 parse，能力 {}
-pub fn parse_rvs_function(name: &str) -> Option<(&str, CapabilitySet)> {
+pub fn rvs_parse_function(name: &str) -> Option<(&str, CapabilitySet)> {
     debug_assert!(!name.is_empty());
 
     if let Some(result) = rvs_parse_segment(name) {

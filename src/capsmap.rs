@@ -56,7 +56,7 @@ impl CapsMap {
     /// 按名索骥：先查全名，再查尾名。
     /// 全名若 `std::fs::read_to_string`，尾名即 `read_to_string`。
     /// 路径调用如 `Vec::new` 亦可匹配 `alloc::vec::Vec::new`。
-    pub fn lookup(&self, name: &str) -> Option<&CapabilitySet> {
+    pub fn rvs_lookup(&self, name: &str) -> Option<&CapabilitySet> {
         if let Some(caps) = self.entries.get(name) {
             return Some(caps);
         }

@@ -1,7 +1,7 @@
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
-use crate::capability::{parse_rvs_function, rvs_extract_raw_suffix};
+use crate::capability::{rvs_extract_raw_suffix, rvs_parse_function};
 use crate::extract::{CalleeInfo, FnDef};
 
 #[derive(Debug, thiserror::Error)]
@@ -95,7 +95,7 @@ fn rvs_extract_calls_from_body(body_lines: &[String]) -> Vec<CalleeInfo> {
 fn rvs_extract_parent_fn_name(closure_name: &str) -> Option<&str> {
     let brace_pos = closure_name.find("::{")?;
     let parent = &closure_name[..brace_pos];
-    parse_rvs_function(parent)?;
+    rvs_parse_function(parent)?;
     Some(parent)
 }
 
@@ -340,7 +340,7 @@ pub fn rvs_extract_from_mir(mir_text: &str) -> Result<Vec<FnDef>, MirError> {
             let entry = fn_meta.entry(parent.to_string()).or_insert((false, false));
             entry.0 = entry.0 || has_mut_param;
             entry.1 = entry.1 || has_panic_macro;
-        } else if parse_rvs_function(&mir_fn.name).is_some() {
+        } else if rvs_parse_function(&mir_fn.name).is_some() {
             fn_calls
                 .entry(mir_fn.name.clone())
                 .or_default()
@@ -353,7 +353,7 @@ pub fn rvs_extract_from_mir(mir_text: &str) -> Result<Vec<FnDef>, MirError> {
 
     let mut result = Vec::new();
     for (name, calls) in fn_calls {
-        let Some((_, caps)) = parse_rvs_function(&name) else {
+        let Some((_, caps)) = rvs_parse_function(&name) else {
             continue;
         };
         let raw_suffix = rvs_extract_raw_suffix(&name);

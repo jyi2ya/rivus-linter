@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use crate::capability::{Capability, CapabilitySet, parse_rvs_function, rvs_extract_raw_suffix};
+use crate::capability::{Capability, CapabilitySet, rvs_extract_raw_suffix, rvs_parse_function};
 use syn::spanned::Spanned;
 
 /// 被调用者的蛛丝马迹：名与行。
@@ -641,7 +641,7 @@ fn rvs_collect_assert_ids_from_expr(expr: &syn::Expr) -> Vec<String> {
 #[allow(non_snake_case)]
 fn rvs_extract_from_item_fn(item_fn: &syn::ItemFn, statics: &[StaticDecl]) -> Option<FnDef> {
     let name = item_fn.sig.ident.to_string();
-    let (_, caps) = parse_rvs_function(&name)?;
+    let (_, caps) = rvs_parse_function(&name)?;
     let raw_suffix = rvs_extract_raw_suffix(&name);
     let line = item_fn.sig.ident.span().start().line;
     let line_count = rvs_calc_line_count(
@@ -685,7 +685,7 @@ fn rvs_extract_from_item_fn(item_fn: &syn::ItemFn, statics: &[StaticDecl]) -> Op
 #[allow(non_snake_case)]
 fn rvs_extract_from_impl_fn(impl_fn: &syn::ImplItemFn, statics: &[StaticDecl]) -> Option<FnDef> {
     let name = impl_fn.sig.ident.to_string();
-    let (_, caps) = parse_rvs_function(&name)?;
+    let (_, caps) = rvs_parse_function(&name)?;
     let raw_suffix = rvs_extract_raw_suffix(&name);
     let line = impl_fn.sig.ident.span().start().line;
     let line_count = rvs_calc_line_count(
@@ -729,7 +729,7 @@ fn rvs_extract_from_impl_fn(impl_fn: &syn::ImplItemFn, statics: &[StaticDecl]) -
 #[allow(non_snake_case)]
 fn rvs_extract_from_trait_fn(trait_fn: &syn::TraitItemFn, statics: &[StaticDecl]) -> Option<FnDef> {
     let name = trait_fn.sig.ident.to_string();
-    let (_, caps) = parse_rvs_function(&name)?;
+    let (_, caps) = rvs_parse_function(&name)?;
     let raw_suffix = rvs_extract_raw_suffix(&name);
     let line = trait_fn.sig.ident.span().start().line;
     let (calls, static_refs) = trait_fn
@@ -1287,29 +1287,28 @@ pub fn rvs_extract_tests(source: &str) -> Result<Vec<TestName>, ExtractError> {
     Ok(rvs_collect_tests_from_items(&file.items))
 }
 
-/// 私有函数信息：用于检查非 rvs_ 前缀的私有函数。
+/// 非 rvs_ 前缀函数信息：用于检查缺少 rvs_ 前缀的函数。
 #[derive(Debug, Clone)]
-pub struct PrivateFnInfo {
+pub struct NonRvsFnInfo {
     pub name: String,
     pub line: usize,
     pub has_rvs_prefix: bool,
 }
 
-/// 从顶层项中收集所有私有函数（非 pub）信息。
+/// 从顶层项中收集所有函数（pub 和非 pub）信息。
 /// 包括顶层函数、impl 方法、mod 块内函数，递归收集。
-fn rvs_collect_private_fns_from_items(items: &[syn::Item]) -> Vec<PrivateFnInfo> {
+/// 跳过 #[test] 函数、main 函数、trait impl 方法。
+fn rvs_collect_non_rvs_fns_from_items(items: &[syn::Item]) -> Vec<NonRvsFnInfo> {
     let mut fns = Vec::new();
     for item in items {
         match item {
             syn::Item::Fn(item_fn) => {
-                // 跳过 pub 函数（公开的）、test 函数和 main 函数
-                let is_pub = matches!(item_fn.vis, syn::Visibility::Public(_));
                 let is_test = rvs_is_test_fn(&item_fn.attrs);
                 let name = item_fn.sig.ident.to_string();
                 let is_main = name == "main";
-                if !is_pub && !is_test && !is_main {
+                if !is_test && !is_main {
                     let line = item_fn.sig.ident.span().start().line;
-                    fns.push(PrivateFnInfo {
+                    fns.push(NonRvsFnInfo {
                         has_rvs_prefix: name.starts_with("rvs_"),
                         name,
                         line,
@@ -1317,20 +1316,16 @@ fn rvs_collect_private_fns_from_items(items: &[syn::Item]) -> Vec<PrivateFnInfo>
                 }
             }
             syn::Item::Impl(item_impl) => {
-                // 跳过 trait 实现块（impl Trait for Type）
-                // trait 实现的方法不需要 rvs_ 前缀
                 if item_impl.trait_.is_some() {
                     continue;
                 }
-                // 只处理 impl Type {} 这种直接实现，不处理 trait 实现
                 for impl_item in &item_impl.items {
                     if let syn::ImplItem::Fn(impl_fn) = impl_item {
-                        let is_pub = matches!(impl_fn.vis, syn::Visibility::Public(_));
                         let is_test = rvs_is_test_fn(&impl_fn.attrs);
-                        if !is_pub && !is_test {
+                        if !is_test {
                             let name = impl_fn.sig.ident.to_string();
                             let line = impl_fn.sig.ident.span().start().line;
-                            fns.push(PrivateFnInfo {
+                            fns.push(NonRvsFnInfo {
                                 has_rvs_prefix: name.starts_with("rvs_"),
                                 name,
                                 line,
@@ -1341,7 +1336,7 @@ fn rvs_collect_private_fns_from_items(items: &[syn::Item]) -> Vec<PrivateFnInfo>
             }
             syn::Item::Mod(m) => {
                 if let Some((_, inner_items)) = &m.content {
-                    fns.extend(rvs_collect_private_fns_from_items(inner_items));
+                    fns.extend(rvs_collect_non_rvs_fns_from_items(inner_items));
                 }
             }
             _ => {}
@@ -1350,14 +1345,14 @@ fn rvs_collect_private_fns_from_items(items: &[syn::Item]) -> Vec<PrivateFnInfo>
     fns
 }
 
-/// 从一段源码中萃取所有非 pub 的私有函数（用于检查 rvs_ 前缀）。
+/// 从一段源码中萃取所有函数（pub 和非 pub），用于检查 rvs_ 前缀。
 /// 返回的函数名不包括 rvs_ 前缀的，用于生成警告。
-pub fn rvs_extract_private_fns(source: &str) -> Result<Vec<PrivateFnInfo>, ExtractError> {
+pub fn rvs_extract_non_rvs_fns(source: &str) -> Result<Vec<NonRvsFnInfo>, ExtractError> {
     let file = syn::parse_file(source).map_err(|e| ExtractError::Parse {
         message: e.to_string(),
     })?;
 
-    Ok(rvs_collect_private_fns_from_items(&file.items))
+    Ok(rvs_collect_non_rvs_fns_from_items(&file.items))
 }
 
 /// 公开项信息：用于检查 pub 函数/方法是否有文档注释。
@@ -1803,7 +1798,7 @@ fn rvs_collect_missing_panics_doc_from_items(items: &[syn::Item]) -> Vec<Missing
         match item {
             syn::Item::Fn(item_fn) => {
                 let name = item_fn.sig.ident.to_string();
-                if let Some((_, caps)) = parse_rvs_function(&name)
+                if let Some((_, caps)) = rvs_parse_function(&name)
                     && caps.rvs_contains(Capability::P)
                     && !rvs_has_panics_doc(&item_fn.attrs)
                 {
@@ -1820,7 +1815,7 @@ fn rvs_collect_missing_panics_doc_from_items(items: &[syn::Item]) -> Vec<Missing
                 for impl_item in &item_impl.items {
                     if let syn::ImplItem::Fn(impl_fn) = impl_item {
                         let name = impl_fn.sig.ident.to_string();
-                        if let Some((_, caps)) = parse_rvs_function(&name)
+                        if let Some((_, caps)) = rvs_parse_function(&name)
                             && caps.rvs_contains(Capability::P)
                             && !rvs_has_panics_doc(&impl_fn.attrs)
                         {

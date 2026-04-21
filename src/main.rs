@@ -147,7 +147,7 @@ fn rvs_print_check_output_BIPS(output: &rivus_linter::CheckOutput) {
     for w in &output.banned_import_warnings {
         eprintln!("{w}");
     }
-    for w in &output.private_fn_warnings {
+    for w in &output.non_rvs_fn_warnings {
         eprintln!("{w}");
     }
     for w in &output.missing_doc_warnings {

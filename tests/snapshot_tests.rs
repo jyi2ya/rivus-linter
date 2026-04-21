@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 
 use rivus_linter::capability::{
-    Capability, CapabilityParseError, CapabilitySet, parse_rvs_function,
+    Capability, CapabilityParseError, CapabilitySet, rvs_parse_function,
 };
 use rivus_linter::capsmap::CapsMap;
 use rivus_linter::check::{InferenceKind, rvs_check_source};
@@ -31,7 +31,7 @@ fn rvs_format_caps(set: &BTreeSet<Capability>) -> String {
 
 #[test]
 fn test_20260418_parse_no_suffix() {
-    let (base, caps) = parse_rvs_function("rvs_add").unwrap();
+    let (base, caps) = rvs_parse_function("rvs_add").unwrap();
     assert_eq!(base, "add");
     assert!(caps.rvs_is_empty());
 
@@ -43,7 +43,7 @@ fn test_20260418_parse_no_suffix() {
 
 #[test]
 fn test_20260418_parse_single_cap() {
-    let (base, caps) = parse_rvs_function("rvs_validate_M").unwrap();
+    let (base, caps) = rvs_parse_function("rvs_validate_M").unwrap();
     assert_eq!(base, "validate");
     assert_eq!(caps.rvs_len(), 1);
     assert!(caps.rvs_contains(Capability::M));
@@ -56,7 +56,7 @@ fn test_20260418_parse_single_cap() {
 
 #[test]
 fn test_20260418_parse_multi_cap() {
-    let (base, caps) = parse_rvs_function("rvs_write_db_ABI").unwrap();
+    let (base, caps) = rvs_parse_function("rvs_write_db_ABI").unwrap();
     assert_eq!(base, "write_db");
     assert!(caps.rvs_contains(Capability::A));
     assert!(caps.rvs_contains(Capability::B));
@@ -71,7 +71,7 @@ fn test_20260418_parse_multi_cap() {
 
 #[test]
 fn test_20260418_parse_no_cap_tricky_name() {
-    let (base, caps) = parse_rvs_function("rvs_cache_lookup").unwrap();
+    let (base, caps) = rvs_parse_function("rvs_cache_lookup").unwrap();
     assert_eq!(base, "cache_lookup");
     assert!(caps.rvs_is_empty());
 
@@ -83,7 +83,7 @@ fn test_20260418_parse_no_cap_tricky_name() {
 
 #[test]
 fn test_20260418_parse_two_caps() {
-    let (base, caps) = parse_rvs_function("rvs_random_uuid_ST").unwrap();
+    let (base, caps) = rvs_parse_function("rvs_random_uuid_ST").unwrap();
     assert_eq!(base, "random_uuid");
     assert!(caps.rvs_contains(Capability::S));
     assert!(caps.rvs_contains(Capability::T));
@@ -97,7 +97,7 @@ fn test_20260418_parse_two_caps() {
 
 #[test]
 fn test_20260418_parse_non_rvs() {
-    let result = parse_rvs_function("not_rvs_function");
+    let result = rvs_parse_function("not_rvs_function");
     assert!(result.is_none());
 
     rvs_snapshot_BI(
@@ -108,7 +108,7 @@ fn test_20260418_parse_non_rvs() {
 
 #[test]
 fn test_20260418_parse_bare_rvs() {
-    let (base, caps) = parse_rvs_function("rvs_").unwrap();
+    let (base, caps) = rvs_parse_function("rvs_").unwrap();
     assert_eq!(base, "");
     assert!(caps.rvs_is_empty());
 
@@ -120,7 +120,7 @@ fn test_20260418_parse_bare_rvs() {
 
 #[test]
 fn test_20260418_parse_no_underscore_after_rvs() {
-    let (base, caps) = parse_rvs_function("rvs_P").unwrap();
+    let (base, caps) = rvs_parse_function("rvs_P").unwrap();
     assert_eq!(base, "P");
     assert!(caps.rvs_is_empty());
 
@@ -132,7 +132,7 @@ fn test_20260418_parse_no_underscore_after_rvs() {
 
 #[test]
 fn test_20260418_parse_short_base_with_cap() {
-    let (base, caps) = parse_rvs_function("rvs_a_B").unwrap();
+    let (base, caps) = rvs_parse_function("rvs_a_B").unwrap();
     assert_eq!(base, "a");
     assert!(caps.rvs_contains(Capability::B));
     assert_eq!(caps.rvs_len(), 1);
@@ -145,7 +145,7 @@ fn test_20260418_parse_short_base_with_cap() {
 
 #[test]
 fn test_20260418_parse_lowercase_suffix() {
-    let (base, caps) = parse_rvs_function("rvs_foo_e").unwrap();
+    let (base, caps) = rvs_parse_function("rvs_foo_e").unwrap();
     assert_eq!(base, "foo_e");
     assert!(caps.rvs_is_empty());
 
@@ -157,7 +157,7 @@ fn test_20260418_parse_lowercase_suffix() {
 
 #[test]
 fn test_20260418_parse_all_eight_caps() {
-    let (base, caps) = parse_rvs_function("rvs_nuclear_ABIMPSTU").unwrap();
+    let (base, caps) = rvs_parse_function("rvs_nuclear_ABIMPSTU").unwrap();
     assert_eq!(base, "nuclear");
     assert_eq!(caps.rvs_len(), 8);
 
@@ -757,20 +757,20 @@ fn test_20260419_capsmap_parse_basic() {
     let content = "std::fs::read_to_string=BI\nVec::new=\n";
     let cm = CapsMap::rvs_parse(content).unwrap();
 
-    let caps = cm.lookup("std::fs::read_to_string").unwrap();
+    let caps = cm.rvs_lookup("std::fs::read_to_string").unwrap();
     assert!(caps.rvs_contains(Capability::B));
     assert!(caps.rvs_contains(Capability::I));
     assert_eq!(caps.rvs_len(), 2);
 
-    let caps = cm.lookup("Vec::new").unwrap();
+    let caps = cm.rvs_lookup("Vec::new").unwrap();
     assert!(caps.rvs_is_empty());
 
     rvs_snapshot_BI(
         "20260419_capsmap_parse_basic",
         format!(
             "entries: 2\nstd::fs::read_to_string: {}\nVec::new: {}\n",
-            cm.lookup("std::fs::read_to_string").unwrap(),
-            cm.lookup("Vec::new").unwrap(),
+            cm.rvs_lookup("std::fs::read_to_string").unwrap(),
+            cm.rvs_lookup("Vec::new").unwrap(),
         ),
     );
 }
@@ -779,7 +779,7 @@ fn test_20260419_capsmap_parse_basic() {
 fn test_20260419_capsmap_parse_comments() {
     let content = "# 这是一个注释\nstd::process::exit=S # 终止进程\n\n";
     let cm = CapsMap::rvs_parse(content).unwrap();
-    let caps = cm.lookup("std::process::exit").unwrap();
+    let caps = cm.rvs_lookup("std::process::exit").unwrap();
     assert!(caps.rvs_contains(Capability::S));
 
     rvs_snapshot_BI(
@@ -793,20 +793,20 @@ fn test_20260419_capsmap_suffix_match() {
     let content = "alloc::vec::Vec::new=\nstd::process::exit=S\n";
     let cm = CapsMap::rvs_parse(content).unwrap();
 
-    let caps = cm.lookup("Vec::new").unwrap();
+    let caps = cm.rvs_lookup("Vec::new").unwrap();
     assert!(caps.rvs_is_empty());
 
-    let caps = cm.lookup("exit").unwrap();
+    let caps = cm.rvs_lookup("exit").unwrap();
     assert!(caps.rvs_contains(Capability::S));
 
-    assert!(cm.lookup("nonexistent").is_none());
+    assert!(cm.rvs_lookup("nonexistent").is_none());
 
     rvs_snapshot_BI(
         "20260419_capsmap_suffix_match",
         format!(
             "Vec::new: {}\nexit: {}\nnonexistent: None\n",
-            cm.lookup("Vec::new").unwrap(),
-            cm.lookup("exit").unwrap(),
+            cm.rvs_lookup("Vec::new").unwrap(),
+            cm.rvs_lookup("exit").unwrap(),
         ),
     );
 }
@@ -3526,67 +3526,64 @@ mod inner {
     );
 }
 
-// ─── G2: 私有函数命名检查 ─────────────────────────────────────
+// ─── 函数命名检查（缺少 rvs_ 前缀）──────────────────────────
 
 #[test]
-fn test_20260420_private_fn_missing_rvs() {
+fn test_20260421_non_rvs_fn_missing_prefix() {
     let source = r#"
-fn bad_private_fn() {}
+fn bad_fn() {}
 "#;
     let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
-    assert_eq!(output.private_fn_warnings.len(), 1);
-    assert_eq!(output.private_fn_warnings[0].function, "bad_private_fn");
+    assert_eq!(output.non_rvs_fn_warnings.len(), 1);
+    assert_eq!(output.non_rvs_fn_warnings[0].function, "bad_fn");
 
     rvs_snapshot_BI(
-        "20260420_private_fn_missing_rvs",
+        "20260421_non_rvs_fn_missing_prefix",
         format!(
-            "private_fn_warnings: {}\n{}\n",
-            output.private_fn_warnings.len(),
-            output.private_fn_warnings[0],
+            "non_rvs_fn_warnings: {}\n{}\n",
+            output.non_rvs_fn_warnings.len(),
+            output.non_rvs_fn_warnings[0],
         ),
     );
 }
 
 #[test]
-fn test_20260420_private_fn_with_rvs_ok() {
+fn test_20260421_fn_with_rvs_ok() {
     let source = r#"
-fn rvs_good_private_P() { panic!("test"); }
+fn rvs_good_fn_P() { panic!("test"); }
 "#;
     let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
-    assert!(output.private_fn_warnings.is_empty());
+    assert!(output.non_rvs_fn_warnings.is_empty());
 
-    rvs_snapshot_BI(
-        "20260420_private_fn_with_rvs_ok",
-        "private_fn_warnings: 0\n",
-    );
+    rvs_snapshot_BI("20260421_fn_with_rvs_ok", "non_rvs_fn_warnings: 0\n");
 }
 
 #[test]
-fn test_20260420_private_fn_in_impl() {
+fn test_20260421_non_rvs_fn_in_impl() {
     let source = r#"
 struct Svc;
 
 impl Svc {
-    fn bad_private(&self) {}
-    fn rvs_good_private_M(&mut self) {}
+    fn bad_method(&self) {}
+    fn rvs_good_method_M(&mut self) {}
 }
 "#;
     let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
-    assert_eq!(output.private_fn_warnings.len(), 1);
-    assert_eq!(output.private_fn_warnings[0].function, "bad_private");
+    assert_eq!(output.non_rvs_fn_warnings.len(), 1);
+    assert_eq!(output.non_rvs_fn_warnings[0].function, "bad_method");
 
     rvs_snapshot_BI(
-        "20260420_private_fn_in_impl",
+        "20260421_non_rvs_fn_in_impl",
         format!(
-            "private_fn_warnings: {}\n{}\n",
-            output.private_fn_warnings.len(),
-            output.private_fn_warnings[0],
+            "non_rvs_fn_warnings: {}\n{}\n",
+            output.non_rvs_fn_warnings.len(),
+            output.non_rvs_fn_warnings[0],
         ),
     );
 }
 
 #[test]
-fn test_20260420_private_fn_in_mod() {
+fn test_20260421_non_rvs_fn_in_mod() {
     let source = r#"
 mod inner {
     fn bad_fn() {}
@@ -3594,15 +3591,34 @@ mod inner {
 }
 "#;
     let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
-    assert_eq!(output.private_fn_warnings.len(), 1);
-    assert_eq!(output.private_fn_warnings[0].function, "bad_fn");
+    assert_eq!(output.non_rvs_fn_warnings.len(), 1);
+    assert_eq!(output.non_rvs_fn_warnings[0].function, "bad_fn");
 
     rvs_snapshot_BI(
-        "20260420_private_fn_in_mod",
+        "20260421_non_rvs_fn_in_mod",
         format!(
-            "private_fn_warnings: {}\n{}\n",
-            output.private_fn_warnings.len(),
-            output.private_fn_warnings[0],
+            "non_rvs_fn_warnings: {}\n{}\n",
+            output.non_rvs_fn_warnings.len(),
+            output.non_rvs_fn_warnings[0],
+        ),
+    );
+}
+
+#[test]
+fn test_20260421_pub_fn_missing_rvs_prefix() {
+    let source = r#"
+pub fn bad_pub_fn() {}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.non_rvs_fn_warnings.len(), 1);
+    assert_eq!(output.non_rvs_fn_warnings[0].function, "bad_pub_fn");
+
+    rvs_snapshot_BI(
+        "20260421_pub_fn_missing_rvs_prefix",
+        format!(
+            "non_rvs_fn_warnings: {}\n{}\n",
+            output.non_rvs_fn_warnings.len(),
+            output.non_rvs_fn_warnings[0],
         ),
     );
 }
@@ -3721,16 +3737,15 @@ pub mod inner {
 }
 
 #[test]
-fn test_20260420_private_fn_doc_optional() {
-    // 私有函数不检查文档
+fn test_20260420_non_pub_fn_doc_optional() {
     let source = r#"
-fn rvs_private() {}
+fn rvs_internal() {}
 "#;
     let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
     assert!(output.missing_doc_warnings.is_empty());
 
     rvs_snapshot_BI(
-        "20260420_private_fn_doc_optional",
+        "20260420_non_pub_fn_doc_optional",
         "missing_doc_warnings: 0\n",
     );
 }

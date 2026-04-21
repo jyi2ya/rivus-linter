@@ -3,16 +3,16 @@ use std::collections::HashMap;
 use std::fmt;
 use std::path::Path;
 
-use crate::capability::{Capability, CapabilitySet, parse_rvs_function};
+use crate::capability::{Capability, CapabilitySet, rvs_parse_function};
 use crate::capsmap::CapsMap;
 use crate::extract::{
     BorrowedParamInfo, ConsumedArgOnErrorInfo, DerefPolymorphismInfo, EmptyFnInfo, FnDef,
-    ImportInfo, IntoImplInfo, MissingDebugInfo, MissingPanicsDocInfo, PrivateFnInfo, PubItemInfo,
+    ImportInfo, IntoImplInfo, MissingDebugInfo, MissingPanicsDocInfo, NonRvsFnInfo, PubItemInfo,
     ReflectionUsageInfo, StubMacroInfo, TestName, TodoCommentInfo, UnsafeFnInfo,
     rvs_extract_borrowed_params, rvs_extract_consumed_arg_on_error, rvs_extract_deny_warnings,
     rvs_extract_deref_polymorphism, rvs_extract_empty_fns, rvs_extract_functions,
     rvs_extract_imports, rvs_extract_into_impls, rvs_extract_missing_debug,
-    rvs_extract_missing_panics_doc, rvs_extract_private_fns, rvs_extract_pub_items,
+    rvs_extract_missing_panics_doc, rvs_extract_non_rvs_fns, rvs_extract_pub_items,
     rvs_extract_reflection_usage, rvs_extract_stub_macros, rvs_extract_test_call_names,
     rvs_extract_tests, rvs_extract_todo_comments, rvs_extract_unsafe_fns,
 };
@@ -256,17 +256,13 @@ fn rvs_check_untested_good_fns(
         .collect()
 }
 
-/// 纯函数：检查私有函数列表中是否缺少 rvs_ 前缀。
-/// 返回所有缺少前缀的私有函数警告。
-fn rvs_check_private_fn_names(
-    private_fns: &[PrivateFnInfo],
-    file: &str,
-) -> Vec<PrivateFnNamingWarning> {
+/// 纯函数：检查函数列表中是否缺少 rvs_ 前缀。
+/// 返回所有缺少前缀的函数警告。
+fn rvs_check_non_rvs_fn_names(non_rvs_fns: &[NonRvsFnInfo], file: &str) -> Vec<NonRvsFnWarning> {
     let mut warnings = Vec::new();
-    for func in private_fns {
-        // 只报告没有 rvs_ 前缀的私有函数
+    for func in non_rvs_fns {
         if !func.has_rvs_prefix {
-            warnings.push(PrivateFnNamingWarning {
+            warnings.push(NonRvsFnWarning {
                 function: func.name.clone(),
                 file: file.to_string(),
                 line: func.line,
@@ -382,19 +378,19 @@ impl fmt::Display for BannedImportWarning {
 }
 
 /// 一条私有函数命名警告：非 rvs_ 前缀的私有函数。
-/// 私有函数（无 `pub` 关键字）应以 rvs_ 开头以便追踪。
+/// 函数应以 rvs_ 开头以便追踪能力标记。
 #[derive(Debug, Clone)]
-pub struct PrivateFnNamingWarning {
+pub struct NonRvsFnWarning {
     pub function: String,
     pub file: String,
     pub line: usize,
 }
 
-impl fmt::Display for PrivateFnNamingWarning {
+impl fmt::Display for NonRvsFnWarning {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "warning: private function '{}' should have rvs_ prefix\n  at {}:{}",
+            "warning: function '{}' should have rvs_ prefix\n  at {}:{}",
             self.function, self.file, self.line,
         )
     }
@@ -433,7 +429,7 @@ pub struct CheckOutput {
     pub test_name_warnings: Vec<TestNameFormatWarning>,
     pub duplicate_test_warnings: Vec<DuplicateTestWarning>,
     pub banned_import_warnings: Vec<BannedImportWarning>,
-    pub private_fn_warnings: Vec<PrivateFnNamingWarning>,
+    pub non_rvs_fn_warnings: Vec<NonRvsFnWarning>,
     pub missing_doc_warnings: Vec<MissingDocWarning>,
     pub deny_warnings_warnings: Vec<DenyWarningsWarning>,
     pub wildcard_import_warnings: Vec<WildcardImportWarning>,
@@ -927,10 +923,10 @@ fn rvs_check_functions_impl(functions: &[FnDef], file: &str, capsmap: &CapsMap) 
         }
 
         for call in &func.calls {
-            let callee_caps = match parse_rvs_function(&call.name) {
+            let callee_caps = match rvs_parse_function(&call.name) {
                 Some((_, caps)) => caps,
                 None => {
-                    if let Some(caps) = capsmap.lookup(&call.name) {
+                    if let Some(caps) = capsmap.rvs_lookup(&call.name) {
                         caps.clone()
                     } else {
                         warnings.push(Warning {
@@ -1079,7 +1075,7 @@ fn rvs_check_functions_impl(functions: &[FnDef], file: &str, capsmap: &CapsMap) 
         test_name_warnings: Vec::new(),
         duplicate_test_warnings: Vec::new(),
         banned_import_warnings: Vec::new(),
-        private_fn_warnings: Vec::new(),
+        non_rvs_fn_warnings: Vec::new(),
         missing_doc_warnings: Vec::new(),
         deny_warnings_warnings: Vec::new(),
         wildcard_import_warnings: Vec::new(),
@@ -1183,7 +1179,7 @@ pub fn rvs_check_source(
         source: e,
         file: file.to_string(),
     })?;
-    let private_fns = rvs_extract_private_fns(source).map_err(|e| CheckError::Extract {
+    let non_rvs_fns = rvs_extract_non_rvs_fns(source).map_err(|e| CheckError::Extract {
         source: e,
         file: file.to_string(),
     })?;
@@ -1204,10 +1200,10 @@ pub fn rvs_check_source(
         .banned_import_warnings
         .extend(rvs_check_imports(&imports, file));
 
-    // 检查私有函数命名
+    // 检查函数命名（缺少 rvs_ 前缀）
     output
-        .private_fn_warnings
-        .extend(rvs_check_private_fn_names(&private_fns, file));
+        .non_rvs_fn_warnings
+        .extend(rvs_check_non_rvs_fn_names(&non_rvs_fns, file));
 
     // 检查 pub 函数/方法的文档注释
     output
@@ -1363,7 +1359,7 @@ pub fn rvs_check_path_BI(path: &Path, capsmap: &CapsMap) -> Result<CheckOutput, 
             source: e,
             file: sf.path.clone(),
         })?;
-        let private_fns = rvs_extract_private_fns(&sf.source).map_err(|e| CheckError::Extract {
+        let non_rvs_fns = rvs_extract_non_rvs_fns(&sf.source).map_err(|e| CheckError::Extract {
             source: e,
             file: sf.path.clone(),
         })?;
@@ -1389,8 +1385,8 @@ pub fn rvs_check_path_BI(path: &Path, capsmap: &CapsMap) -> Result<CheckOutput, 
 
         // 检查私有函数命名
         output
-            .private_fn_warnings
-            .extend(rvs_check_private_fn_names(&private_fns, &sf.path));
+            .non_rvs_fn_warnings
+            .extend(rvs_check_non_rvs_fn_names(&non_rvs_fns, &sf.path));
 
         // 检查 pub 函数/方法的文档注释
         output
