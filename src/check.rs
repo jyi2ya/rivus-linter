@@ -6,13 +6,15 @@ use std::path::Path;
 use crate::capability::{Capability, CapabilitySet, parse_rvs_function};
 use crate::capsmap::CapsMap;
 use crate::extract::{
-    BorrowedParamInfo, ConsumedArgOnErrorInfo, DerefPolymorphismInfo, FnDef, ImportInfo,
-    IntoImplInfo, MissingDebugInfo, MissingPanicsDocInfo, PrivateFnInfo, PubItemInfo,
-    ReflectionUsageInfo, TestName, UnsafeFnInfo, rvs_extract_borrowed_params,
-    rvs_extract_consumed_arg_on_error, rvs_extract_deny_warnings, rvs_extract_deref_polymorphism,
-    rvs_extract_functions, rvs_extract_imports, rvs_extract_into_impls, rvs_extract_missing_debug,
+    BorrowedParamInfo, ConsumedArgOnErrorInfo, DerefPolymorphismInfo, EmptyFnInfo, FnDef,
+    ImportInfo, IntoImplInfo, MissingDebugInfo, MissingPanicsDocInfo, PrivateFnInfo, PubItemInfo,
+    ReflectionUsageInfo, StubMacroInfo, TestName, TodoCommentInfo, UnsafeFnInfo,
+    rvs_extract_borrowed_params, rvs_extract_consumed_arg_on_error, rvs_extract_deny_warnings,
+    rvs_extract_deref_polymorphism, rvs_extract_empty_fns, rvs_extract_functions,
+    rvs_extract_imports, rvs_extract_into_impls, rvs_extract_missing_debug,
     rvs_extract_missing_panics_doc, rvs_extract_private_fns, rvs_extract_pub_items,
-    rvs_extract_reflection_usage, rvs_extract_tests, rvs_extract_unsafe_fns,
+    rvs_extract_reflection_usage, rvs_extract_stub_macros, rvs_extract_test_call_names,
+    rvs_extract_tests, rvs_extract_todo_comments, rvs_extract_unsafe_fns,
 };
 use crate::source::rvs_read_rust_sources_BI;
 
@@ -190,6 +192,66 @@ fn rvs_check_reflection_usage(
             path: i.path.clone(),
             file: file.to_string(),
             line: i.line,
+        })
+        .collect()
+}
+
+fn rvs_check_stub_macros(items: &[StubMacroInfo], file: &str) -> Vec<StubWarning> {
+    items
+        .iter()
+        .map(|i| StubWarning {
+            function: i.function.clone(),
+            macro_name: i.macro_name.clone(),
+            file: file.to_string(),
+            line: i.line,
+        })
+        .collect()
+}
+
+fn rvs_check_empty_fns(items: &[EmptyFnInfo], file: &str) -> Vec<EmptyFnWarning> {
+    items
+        .iter()
+        .map(|i| EmptyFnWarning {
+            function: i.function.clone(),
+            file: file.to_string(),
+            line: i.line,
+        })
+        .collect()
+}
+
+fn rvs_check_todo_comments(items: &[TodoCommentInfo], file: &str) -> Vec<TodoCommentWarning> {
+    items
+        .iter()
+        .map(|i| TodoCommentWarning {
+            kind: i.kind.clone(),
+            text: i.text.clone(),
+            file: file.to_string(),
+            line: i.line,
+        })
+        .collect()
+}
+
+fn rvs_check_untested_good_fns(
+    functions: &[FnDef],
+    test_call_names: &[String],
+    file: &str,
+) -> Vec<UntestedGoodFnWarning> {
+    let good_allowed = CapabilitySet::rvs_from_good_caps();
+    functions
+        .iter()
+        .filter(|f| {
+            f.capabilities.rvs_is_subset_of(&good_allowed) && !f.allows_dead_code && !f.is_test
+        })
+        .filter(|f| {
+            let name = f.name.as_str();
+            !test_call_names
+                .iter()
+                .any(|tc| tc == name || tc.ends_with(&format!("::{name}")))
+        })
+        .map(|f| UntestedGoodFnWarning {
+            function: f.name.clone(),
+            file: file.to_string(),
+            line: f.line,
         })
         .collect()
 }
@@ -383,6 +445,10 @@ pub struct CheckOutput {
     pub consumed_arg_on_error_warnings: Vec<ConsumedArgOnErrorWarning>,
     pub deref_polymorphism_warnings: Vec<DerefPolymorphismWarning>,
     pub reflection_usage_warnings: Vec<ReflectionUsageWarning>,
+    pub stub_warnings: Vec<StubWarning>,
+    pub empty_fn_warnings: Vec<EmptyFnWarning>,
+    pub todo_comment_warnings: Vec<TodoCommentWarning>,
+    pub untested_good_fn_warnings: Vec<UntestedGoodFnWarning>,
 }
 
 /// 一条 `#![deny(warnings)]` 反模式警告：这种粗粒度 deny 会随编译器升级意外破坏构建。
@@ -579,6 +645,84 @@ impl fmt::Display for ReflectionUsageWarning {
             f,
             "warning: function '{}' uses '{}'—prefer trait-based dispatch over reflection\n  at {}:{}",
             self.function, self.path, self.file, self.line,
+        )
+    }
+}
+
+/// 一条 stub 警告：函数体中包含 `todo!()` 或 `unimplemented!()`，属于未实现逻辑。
+#[derive(Debug, Clone)]
+pub struct StubWarning {
+    pub function: String,
+    pub macro_name: String,
+    pub file: String,
+    pub line: usize,
+}
+
+impl fmt::Display for StubWarning {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "warning: function '{}' contains {}!()—unimplemented stub\n  at {}:{}",
+            self.function, self.macro_name, self.file, self.line,
+        )
+    }
+}
+
+/// 一条空函数体警告：函数体无任何逻辑（仅含 debug_assert!）。
+#[derive(Debug, Clone)]
+pub struct EmptyFnWarning {
+    pub function: String,
+    pub file: String,
+    pub line: usize,
+}
+
+impl fmt::Display for EmptyFnWarning {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "warning: function '{}' has an empty body—no logic implemented\n  at {}:{}",
+            self.function, self.file, self.line,
+        )
+    }
+}
+
+/// 一条 TODO/FIXME 注释警告：代码中留有未完成标记。
+#[derive(Debug, Clone)]
+pub struct TodoCommentWarning {
+    pub kind: String,
+    pub text: String,
+    pub file: String,
+    pub line: usize,
+}
+
+impl fmt::Display for TodoCommentWarning {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "warning: {} comment found: {}{}\n  at {}:{}",
+            self.kind,
+            if self.text.is_empty() { "" } else { &self.text },
+            if self.text.is_empty() { "" } else { " " },
+            self.file,
+            self.line,
+        )
+    }
+}
+
+/// 一条好函数未被测试覆盖的警告：好函数（能力 ≤ ABM）应有对应测试。
+#[derive(Debug, Clone)]
+pub struct UntestedGoodFnWarning {
+    pub function: String,
+    pub file: String,
+    pub line: usize,
+}
+
+impl fmt::Display for UntestedGoodFnWarning {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "warning: good function '{}' is not called by any test\n  at {}:{}",
+            self.function, self.file, self.line,
         )
     }
 }
@@ -947,6 +1091,10 @@ fn rvs_check_functions_impl(functions: &[FnDef], file: &str, capsmap: &CapsMap) 
         consumed_arg_on_error_warnings: Vec::new(),
         deref_polymorphism_warnings: Vec::new(),
         reflection_usage_warnings: Vec::new(),
+        stub_warnings: Vec::new(),
+        empty_fn_warnings: Vec::new(),
+        todo_comment_warnings: Vec::new(),
+        untested_good_fn_warnings: Vec::new(),
     }
 }
 
@@ -1151,6 +1299,43 @@ pub fn rvs_check_source(
         .reflection_usage_warnings
         .extend(rvs_check_reflection_usage(&reflection_usage, file));
 
+    // 检查 stub 宏（todo! / unimplemented!）
+    let stub_macros = rvs_extract_stub_macros(source).map_err(|e| CheckError::Extract {
+        source: e,
+        file: file.to_string(),
+    })?;
+    output
+        .stub_warnings
+        .extend(rvs_check_stub_macros(&stub_macros, file));
+
+    // 检查空函数体
+    let empty_fns = rvs_extract_empty_fns(source).map_err(|e| CheckError::Extract {
+        source: e,
+        file: file.to_string(),
+    })?;
+    output
+        .empty_fn_warnings
+        .extend(rvs_check_empty_fns(&empty_fns, file));
+
+    // 检查 TODO/FIXME 注释
+    let todo_comments = rvs_extract_todo_comments(source);
+    output
+        .todo_comment_warnings
+        .extend(rvs_check_todo_comments(&todo_comments, file));
+
+    // 检查好函数未被测试覆盖
+    let test_call_names = rvs_extract_test_call_names(source).map_err(|e| CheckError::Extract {
+        source: e,
+        file: file.to_string(),
+    })?;
+    output
+        .untested_good_fn_warnings
+        .extend(rvs_check_untested_good_fns(
+            &functions,
+            &test_call_names,
+            file,
+        ));
+
     Ok(output)
 }
 
@@ -1162,6 +1347,8 @@ pub fn rvs_check_path_BI(path: &Path, capsmap: &CapsMap) -> Result<CheckOutput, 
     let sources = rvs_read_rust_sources_BI(path).map_err(|e| CheckError::Read { source: e })?;
     let mut output = CheckOutput::default();
     let mut all_tests: Vec<(String, TestName)> = Vec::new();
+    let mut all_test_call_names: Vec<String> = Vec::new();
+    let mut all_file_functions: Vec<(String, Vec<FnDef>)> = Vec::new();
 
     for sf in &sources {
         let functions = rvs_extract_functions(&sf.source).map_err(|e| CheckError::Extract {
@@ -1298,9 +1485,56 @@ pub fn rvs_check_path_BI(path: &Path, capsmap: &CapsMap) -> Result<CheckOutput, 
             .reflection_usage_warnings
             .extend(rvs_check_reflection_usage(&reflection_usage, &sf.path));
 
+        // 检查 stub 宏（todo! / unimplemented!）
+        let stub_macros = rvs_extract_stub_macros(&sf.source).map_err(|e| CheckError::Extract {
+            source: e,
+            file: sf.path.clone(),
+        })?;
+        output
+            .stub_warnings
+            .extend(rvs_check_stub_macros(&stub_macros, &sf.path));
+
+        // 检查空函数体
+        let empty_fns = rvs_extract_empty_fns(&sf.source).map_err(|e| CheckError::Extract {
+            source: e,
+            file: sf.path.clone(),
+        })?;
+        output
+            .empty_fn_warnings
+            .extend(rvs_check_empty_fns(&empty_fns, &sf.path));
+
+        // 检查 TODO/FIXME 注释
+        let todo_comments = rvs_extract_todo_comments(&sf.source);
+        output
+            .todo_comment_warnings
+            .extend(rvs_check_todo_comments(&todo_comments, &sf.path));
+
         for t in tests {
             all_tests.push((sf.path.clone(), t));
         }
+
+        // 收集测试调用名和函数定义，供后续跨文件交叉检查
+        let test_call_names =
+            rvs_extract_test_call_names(&sf.source).map_err(|e| CheckError::Extract {
+                source: e,
+                file: sf.path.clone(),
+            })?;
+        all_test_call_names.extend(test_call_names);
+
+        all_file_functions.push((sf.path.clone(), functions));
+    }
+
+    // 跨文件检查：好函数未被测试覆盖
+    all_test_call_names.sort();
+    all_test_call_names.dedup();
+    for (file, functions) in &all_file_functions {
+        output
+            .untested_good_fn_warnings
+            .extend(rvs_check_untested_good_fns(
+                functions,
+                &all_test_call_names,
+                file,
+            ));
     }
 
     let (fmt_warnings, dup_warnings) = rvs_test_warnings(&all_tests);

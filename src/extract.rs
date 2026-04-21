@@ -75,6 +75,7 @@ pub enum ParamType {
 }
 
 /// 文件中声明的静态变量：名字与所需能力。
+#[derive(Clone)]
 struct StaticDecl {
     name: String,
     required_caps: CapabilitySet,
@@ -2133,6 +2134,420 @@ pub fn rvs_extract_deref_polymorphism(
 /// Extract usage of `std::any::Any`/`type_name`/`type_id` reflection APIs.
 pub fn rvs_extract_reflection_usage(functions: &[FnDef]) -> Vec<ReflectionUsageInfo> {
     rvs_collect_reflection_usage_from_fns(functions)
+}
+
+/// 一项 stub 宏使用信息：`todo!()` 或 `unimplemented!()`。
+#[derive(Debug, Clone)]
+pub struct StubMacroInfo {
+    pub function: String,
+    pub macro_name: String,
+    pub line: usize,
+}
+
+/// 一项空函数体信息：函数体中除了 debug_assert! 外无其他逻辑。
+#[derive(Debug, Clone)]
+pub struct EmptyFnInfo {
+    pub function: String,
+    pub line: usize,
+}
+
+/// 一项 TODO/FIXME 注释信息。
+#[derive(Debug, Clone)]
+pub struct TodoCommentInfo {
+    pub kind: String,
+    pub text: String,
+    pub line: usize,
+}
+
+/// Extract `todo!()` / `unimplemented!()` stub macro usage from source.
+pub fn rvs_extract_stub_macros(source: &str) -> Result<Vec<StubMacroInfo>, ExtractError> {
+    let file = syn::parse_file(source).map_err(|e| ExtractError::Parse {
+        message: e.to_string(),
+    })?;
+    Ok(rvs_collect_stub_macros_from_items(&file.items))
+}
+
+const STUB_MACROS: &[&str] = &["todo", "unimplemented"];
+
+fn rvs_is_stub_macro(mac: &syn::Macro) -> bool {
+    let name = mac
+        .path
+        .segments
+        .last()
+        .map(|s| s.ident.to_string())
+        .unwrap_or_default();
+    STUB_MACROS.contains(&name.as_str())
+}
+
+fn rvs_collect_stub_macros_from_items(items: &[syn::Item]) -> Vec<StubMacroInfo> {
+    let mut result = Vec::new();
+    for item in items {
+        match item {
+            syn::Item::Fn(item_fn) => {
+                let fn_name = item_fn.sig.ident.to_string();
+                result.extend(rvs_scan_block_for_stubs(&item_fn.block, &fn_name));
+            }
+            syn::Item::Impl(impl_block) => {
+                for impl_item in &impl_block.items {
+                    if let syn::ImplItem::Fn(impl_fn) = impl_item {
+                        let fn_name = impl_fn.sig.ident.to_string();
+                        result.extend(rvs_scan_block_for_stubs(&impl_fn.block, &fn_name));
+                    }
+                }
+            }
+            syn::Item::Mod(m) => {
+                if let Some((_, inner_items)) = &m.content {
+                    result.extend(rvs_collect_stub_macros_from_items(inner_items));
+                }
+            }
+            _ => {}
+        }
+    }
+    result
+}
+
+fn rvs_scan_block_for_stubs(block: &syn::Block, fn_name: &str) -> Vec<StubMacroInfo> {
+    let mut result = Vec::new();
+    for stmt in &block.stmts {
+        match stmt {
+            syn::Stmt::Macro(m) if rvs_is_stub_macro(&m.mac) => {
+                let macro_name = m
+                    .mac
+                    .path
+                    .segments
+                    .last()
+                    .map(|s| s.ident.to_string())
+                    .unwrap_or_default();
+                let line = m
+                    .mac
+                    .path
+                    .segments
+                    .last()
+                    .map(|s| s.ident.span().start().line)
+                    .unwrap_or(0);
+                result.push(StubMacroInfo {
+                    function: fn_name.to_string(),
+                    macro_name,
+                    line,
+                });
+            }
+            syn::Stmt::Expr(expr, _) => {
+                result.extend(rvs_scan_expr_for_stubs(expr, fn_name));
+            }
+            syn::Stmt::Local(local) => {
+                if let Some(init) = &local.init {
+                    result.extend(rvs_scan_expr_for_stubs(&init.expr, fn_name));
+                    if let Some((_, diverge)) = &init.diverge {
+                        result.extend(rvs_scan_expr_for_stubs(diverge, fn_name));
+                    }
+                }
+            }
+            syn::Stmt::Item(_) | syn::Stmt::Macro(_) => {}
+        }
+    }
+    result
+}
+
+fn rvs_scan_expr_for_stubs(expr: &syn::Expr, fn_name: &str) -> Vec<StubMacroInfo> {
+    match expr {
+        syn::Expr::Macro(m) if rvs_is_stub_macro(&m.mac) => {
+            let macro_name = m
+                .mac
+                .path
+                .segments
+                .last()
+                .map(|s| s.ident.to_string())
+                .unwrap_or_default();
+            let line = m
+                .mac
+                .path
+                .segments
+                .last()
+                .map(|s| s.ident.span().start().line)
+                .unwrap_or(0);
+            vec![StubMacroInfo {
+                function: fn_name.to_string(),
+                macro_name,
+                line,
+            }]
+        }
+        syn::Expr::Block(b) => rvs_scan_block_for_stubs(&b.block, fn_name),
+        syn::Expr::If(e) => {
+            let mut r = Vec::new();
+            r.extend(rvs_scan_expr_for_stubs(&e.cond, fn_name));
+            r.extend(rvs_scan_block_for_stubs(&e.then_branch, fn_name));
+            if let Some((_, els)) = &e.else_branch {
+                r.extend(rvs_scan_expr_for_stubs(els, fn_name));
+            }
+            r
+        }
+        syn::Expr::Match(e) => {
+            let mut r = rvs_scan_expr_for_stubs(&e.expr, fn_name);
+            for arm in &e.arms {
+                if let Some((_, guard)) = &arm.guard {
+                    r.extend(rvs_scan_expr_for_stubs(guard, fn_name));
+                }
+                r.extend(rvs_scan_expr_for_stubs(&arm.body, fn_name));
+            }
+            r
+        }
+        syn::Expr::Loop(e) => rvs_scan_block_for_stubs(&e.body, fn_name),
+        syn::Expr::While(e) => {
+            let mut r = rvs_scan_expr_for_stubs(&e.cond, fn_name);
+            r.extend(rvs_scan_block_for_stubs(&e.body, fn_name));
+            r
+        }
+        syn::Expr::ForLoop(e) => {
+            let mut r = rvs_scan_expr_for_stubs(&e.expr, fn_name);
+            r.extend(rvs_scan_block_for_stubs(&e.body, fn_name));
+            r
+        }
+        syn::Expr::Closure(c) => rvs_scan_expr_for_stubs(&c.body, fn_name),
+        syn::Expr::Call(c) => {
+            let mut r = rvs_scan_expr_for_stubs(&c.func, fn_name);
+            for arg in &c.args {
+                r.extend(rvs_scan_expr_for_stubs(arg, fn_name));
+            }
+            r
+        }
+        syn::Expr::MethodCall(c) => {
+            let mut r = rvs_scan_expr_for_stubs(&c.receiver, fn_name);
+            for arg in &c.args {
+                r.extend(rvs_scan_expr_for_stubs(arg, fn_name));
+            }
+            r
+        }
+        syn::Expr::Assign(a) => {
+            let mut r = rvs_scan_expr_for_stubs(&a.left, fn_name);
+            r.extend(rvs_scan_expr_for_stubs(&a.right, fn_name));
+            r
+        }
+        syn::Expr::Binary(b) => {
+            let mut r = rvs_scan_expr_for_stubs(&b.left, fn_name);
+            r.extend(rvs_scan_expr_for_stubs(&b.right, fn_name));
+            r
+        }
+        syn::Expr::Unary(u) => rvs_scan_expr_for_stubs(&u.expr, fn_name),
+        syn::Expr::Paren(p) => rvs_scan_expr_for_stubs(&p.expr, fn_name),
+        syn::Expr::Tuple(t) => t
+            .elems
+            .iter()
+            .flat_map(|e| rvs_scan_expr_for_stubs(e, fn_name))
+            .collect(),
+        syn::Expr::Array(a) => a
+            .elems
+            .iter()
+            .flat_map(|e| rvs_scan_expr_for_stubs(e, fn_name))
+            .collect(),
+        syn::Expr::Struct(s) => s
+            .fields
+            .iter()
+            .flat_map(|f| rvs_scan_expr_for_stubs(&f.expr, fn_name))
+            .collect(),
+        syn::Expr::Repeat(r) => {
+            let mut res = rvs_scan_expr_for_stubs(&r.expr, fn_name);
+            res.extend(rvs_scan_expr_for_stubs(&r.len, fn_name));
+            res
+        }
+        syn::Expr::Range(r) => {
+            let mut res = Vec::new();
+            if let Some(s) = &r.start {
+                res.extend(rvs_scan_expr_for_stubs(s, fn_name));
+            }
+            if let Some(e) = &r.end {
+                res.extend(rvs_scan_expr_for_stubs(e, fn_name));
+            }
+            res
+        }
+        syn::Expr::Index(i) => {
+            let mut r = rvs_scan_expr_for_stubs(&i.expr, fn_name);
+            r.extend(rvs_scan_expr_for_stubs(&i.index, fn_name));
+            r
+        }
+        syn::Expr::Field(f) => rvs_scan_expr_for_stubs(&f.base, fn_name),
+        syn::Expr::Reference(r) => rvs_scan_expr_for_stubs(&r.expr, fn_name),
+        syn::Expr::Try(t) => rvs_scan_expr_for_stubs(&t.expr, fn_name),
+        syn::Expr::Await(a) => rvs_scan_expr_for_stubs(&a.base, fn_name),
+        syn::Expr::Return(r) => r
+            .expr
+            .as_ref()
+            .map(|e| rvs_scan_expr_for_stubs(e, fn_name))
+            .unwrap_or_default(),
+        syn::Expr::Break(b) => b
+            .expr
+            .as_ref()
+            .map(|e| rvs_scan_expr_for_stubs(e, fn_name))
+            .unwrap_or_default(),
+        syn::Expr::Group(g) => rvs_scan_expr_for_stubs(&g.expr, fn_name),
+        syn::Expr::Let(l) => rvs_scan_expr_for_stubs(&l.expr, fn_name),
+        syn::Expr::Unsafe(u) => rvs_scan_block_for_stubs(&u.block, fn_name),
+        syn::Expr::Async(a) => rvs_scan_block_for_stubs(&a.block, fn_name),
+        syn::Expr::Cast(c) => rvs_scan_expr_for_stubs(&c.expr, fn_name),
+        syn::Expr::TryBlock(t) => rvs_scan_block_for_stubs(&t.block, fn_name),
+        syn::Expr::Macro(_)
+        | syn::Expr::Lit(_)
+        | syn::Expr::Continue(_)
+        | syn::Expr::Verbatim(_)
+        | syn::Expr::Path(_) => Vec::new(),
+        _ => Vec::new(),
+    }
+}
+
+/// Extract functions with empty bodies (only debug_assert! statements, no logic).
+pub fn rvs_extract_empty_fns(source: &str) -> Result<Vec<EmptyFnInfo>, ExtractError> {
+    let file = syn::parse_file(source).map_err(|e| ExtractError::Parse {
+        message: e.to_string(),
+    })?;
+    Ok(rvs_collect_empty_fns_from_items(&file.items))
+}
+
+fn rvs_collect_empty_fns_from_items(items: &[syn::Item]) -> Vec<EmptyFnInfo> {
+    let mut result = Vec::new();
+    for item in items {
+        match item {
+            syn::Item::Fn(item_fn) => {
+                let name = item_fn.sig.ident.to_string();
+                let line = item_fn.sig.ident.span().start().line;
+                if rvs_is_empty_block(&item_fn.block) {
+                    result.push(EmptyFnInfo {
+                        function: name,
+                        line,
+                    });
+                }
+            }
+            syn::Item::Impl(impl_block) => {
+                for impl_item in &impl_block.items {
+                    if let syn::ImplItem::Fn(impl_fn) = impl_item {
+                        let name = impl_fn.sig.ident.to_string();
+                        let line = impl_fn.sig.ident.span().start().line;
+                        if rvs_is_empty_block(&impl_fn.block) {
+                            result.push(EmptyFnInfo {
+                                function: name,
+                                line,
+                            });
+                        }
+                    }
+                }
+            }
+            syn::Item::Mod(m) => {
+                if let Some((_, inner_items)) = &m.content {
+                    result.extend(rvs_collect_empty_fns_from_items(inner_items));
+                }
+            }
+            _ => {}
+        }
+    }
+    result
+}
+
+fn rvs_is_empty_block(block: &syn::Block) -> bool {
+    if block.stmts.is_empty() {
+        return true;
+    }
+    for stmt in &block.stmts {
+        match stmt {
+            syn::Stmt::Macro(m) if rvs_is_debug_assert(&m.mac) => continue,
+            syn::Stmt::Macro(_) => return false,
+            syn::Stmt::Expr(expr, _) => {
+                if rvs_is_only_debug_asserts_expr(expr) {
+                    continue;
+                }
+                return false;
+            }
+            syn::Stmt::Local(_) | syn::Stmt::Item(_) => return false,
+        }
+    }
+    true
+}
+
+fn rvs_is_only_debug_asserts_expr(expr: &syn::Expr) -> bool {
+    match expr {
+        syn::Expr::Macro(m) if rvs_is_debug_assert(&m.mac) => true,
+        syn::Expr::Block(b) => rvs_is_empty_block(&b.block),
+        _ => false,
+    }
+}
+
+/// Extract TODO/FIXME comments from source (string scanning, not AST).
+pub fn rvs_extract_todo_comments(source: &str) -> Vec<TodoCommentInfo> {
+    let mut result = Vec::new();
+    for (i, line) in source.lines().enumerate() {
+        let trimmed = line.trim_start();
+        let rest = if let Some(after_line_comment) = trimmed.strip_prefix("//") {
+            after_line_comment
+        } else if let Some(after_block_comment) = trimmed.strip_prefix("/*") {
+            after_block_comment
+                .trim_end_matches('*')
+                .trim_end_matches('/')
+        } else {
+            continue;
+        };
+        let rest = rest.trim_start();
+        if let Some(text) = rest.strip_prefix("TODO") {
+            result.push(TodoCommentInfo {
+                kind: "TODO".to_string(),
+                text: text.trim().to_string(),
+                line: i + 1,
+            });
+        } else if let Some(text) = rest.strip_prefix("FIXME") {
+            result.push(TodoCommentInfo {
+                kind: "FIXME".to_string(),
+                text: text.trim().to_string(),
+                line: i + 1,
+            });
+        }
+    }
+    result
+}
+
+/// 从 `#[test]` 函数体中提取所有调用目标名（去重排序）。
+/// 用于交叉比对哪些 `rvs_` 好函数被测试覆盖。
+pub fn rvs_extract_test_call_names(source: &str) -> Result<Vec<String>, ExtractError> {
+    let file = syn::parse_file(source).map_err(|e| ExtractError::Parse {
+        message: e.to_string(),
+    })?;
+    let statics = rvs_collect_static_decls_from_items(&file.items);
+    let calls = rvs_collect_test_calls_from_items(&file.items, &statics);
+    let mut names: Vec<String> = calls
+        .into_iter()
+        .map(|c| c.name.rsplit("::").next().unwrap_or(&c.name).to_string())
+        .collect();
+    names.sort();
+    names.dedup();
+    Ok(names)
+}
+
+fn rvs_collect_test_calls_from_items(
+    items: &[syn::Item],
+    statics: &[StaticDecl],
+) -> Vec<CalleeInfo> {
+    let mut result = Vec::new();
+    for item in items {
+        match item {
+            syn::Item::Fn(item_fn) if rvs_is_test_fn(&item_fn.attrs) => {
+                let (calls, _) = rvs_collect_calls_and_statics(&item_fn.block, statics);
+                result.extend(calls);
+            }
+            syn::Item::Mod(m) => {
+                let inner_statics = rvs_collect_static_decls_from_items(
+                    m.content
+                        .as_ref()
+                        .map(|(_, i)| i)
+                        .map_or(&[] as &[syn::Item], |v| v),
+                );
+                let mut merged_statics = statics.to_vec();
+                merged_statics.extend(inner_statics);
+                if let Some((_, inner_items)) = &m.content {
+                    result.extend(rvs_collect_test_calls_from_items(
+                        inner_items,
+                        &merged_statics,
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+    result
 }
 
 #[derive(Debug, thiserror::Error)]

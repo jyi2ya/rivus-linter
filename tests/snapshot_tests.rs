@@ -4333,3 +4333,331 @@ pub fn rvs_process(value: &dyn std::fmt::Debug) -> String { format!("{value:?}")
         "reflection_usage_warnings: 0\n",
     );
 }
+
+// ─── Stub 检测：todo!() / unimplemented!() ─────────────────
+
+#[test]
+fn test_20260421_stub_todo_detected() {
+    let source = r#"
+#[allow(non_snake_case)]
+fn rvs_fetch_AI() { todo!() }
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.stub_warnings.len(), 1);
+    assert_eq!(output.stub_warnings[0].macro_name, "todo");
+    assert_eq!(output.stub_warnings[0].function, "rvs_fetch_AI");
+
+    rvs_snapshot_BI(
+        "20260421_stub_todo_detected",
+        format!(
+            "stub_warnings: {}\n{}\n",
+            output.stub_warnings.len(),
+            output.stub_warnings[0],
+        ),
+    );
+}
+
+#[test]
+fn test_20260421_stub_unimplemented_detected() {
+    let source = r#"
+#[allow(non_snake_case)]
+fn rvs_parse_P() -> i32 { unimplemented!() }
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.stub_warnings.len(), 1);
+    assert_eq!(output.stub_warnings[0].macro_name, "unimplemented");
+
+    rvs_snapshot_BI(
+        "20260421_stub_unimplemented_detected",
+        format!(
+            "stub_warnings: {}\n{}\n",
+            output.stub_warnings.len(),
+            output.stub_warnings[0],
+        ),
+    );
+}
+
+#[test]
+fn test_20260421_stub_no_stub_ok() {
+    let source = r#"
+#[allow(non_snake_case)]
+fn rvs_add(a: i32, b: i32) -> i32 { a + b }
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.stub_warnings.is_empty());
+
+    rvs_snapshot_BI("20260421_stub_no_stub_ok", "stub_warnings: 0\n");
+}
+
+#[test]
+fn test_20260421_stub_in_impl_method() {
+    let source = r#"
+struct Svc;
+#[allow(non_snake_case)]
+impl Svc {
+    fn rvs_run_AI(&self) { todo!("implement async run") }
+}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.stub_warnings.len(), 1);
+    assert_eq!(output.stub_warnings[0].function, "rvs_run_AI");
+
+    rvs_snapshot_BI(
+        "20260421_stub_in_impl_method",
+        format!(
+            "stub_warnings: {}\n{}\n",
+            output.stub_warnings.len(),
+            output.stub_warnings[0],
+        ),
+    );
+}
+
+// ─── 空函数体检测 ────────────────────────────────────────
+
+#[test]
+fn test_20260421_empty_fn_detected() {
+    let source = r#"
+#[allow(non_snake_case)]
+fn rvs_placeholder() {}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.empty_fn_warnings.len(), 1);
+    assert_eq!(output.empty_fn_warnings[0].function, "rvs_placeholder");
+
+    rvs_snapshot_BI(
+        "20260421_empty_fn_detected",
+        format!(
+            "empty_fn_warnings: {}\n{}\n",
+            output.empty_fn_warnings.len(),
+            output.empty_fn_warnings[0],
+        ),
+    );
+}
+
+#[test]
+fn test_20260421_empty_fn_only_debug_assert_warned() {
+    let source = r#"
+#[allow(non_snake_case)]
+fn rvs_check_M(n: i32) {
+    debug_assert!(n > 0);
+}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.empty_fn_warnings.len(), 1);
+    assert_eq!(output.empty_fn_warnings[0].function, "rvs_check_M");
+
+    rvs_snapshot_BI(
+        "20260421_empty_fn_only_debug_assert_warned",
+        format!(
+            "empty_fn_warnings: {}\n{}\n",
+            output.empty_fn_warnings.len(),
+            output.empty_fn_warnings[0],
+        ),
+    );
+}
+
+#[test]
+fn test_20260421_empty_fn_with_logic_ok() {
+    let source = r#"
+#[allow(non_snake_case)]
+fn rvs_add(a: i32, b: i32) -> i32 { a + b }
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.empty_fn_warnings.is_empty());
+
+    rvs_snapshot_BI("20260421_empty_fn_with_logic_ok", "empty_fn_warnings: 0\n");
+}
+
+#[test]
+fn test_20260421_empty_fn_in_impl() {
+    let source = r#"
+struct Svc;
+impl Svc {
+    fn rvs_empty_method(&self) {}
+}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.empty_fn_warnings.len(), 1);
+    assert_eq!(output.empty_fn_warnings[0].function, "rvs_empty_method");
+
+    rvs_snapshot_BI(
+        "20260421_empty_fn_in_impl",
+        format!(
+            "empty_fn_warnings: {}\n{}\n",
+            output.empty_fn_warnings.len(),
+            output.empty_fn_warnings[0],
+        ),
+    );
+}
+
+// ─── TODO/FIXME 注释检测 ─────────────────────────────────
+
+#[test]
+fn test_20260421_todo_comment_detected() {
+    let source = r#"
+// TODO implement this later
+#[allow(non_snake_case)]
+fn rvs_stub() {}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.todo_comment_warnings.len(), 1);
+    assert_eq!(output.todo_comment_warnings[0].kind, "TODO");
+
+    rvs_snapshot_BI(
+        "20260421_todo_comment_detected",
+        format!(
+            "todo_comment_warnings: {}\n{}\n",
+            output.todo_comment_warnings.len(),
+            output.todo_comment_warnings[0],
+        ),
+    );
+}
+
+#[test]
+fn test_20260421_fixme_comment_detected() {
+    let source = r#"
+// FIXME this is broken
+#[allow(non_snake_case)]
+fn rvs_broken_P() { panic!() }
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.todo_comment_warnings.len(), 1);
+    assert_eq!(output.todo_comment_warnings[0].kind, "FIXME");
+
+    rvs_snapshot_BI(
+        "20260421_fixme_comment_detected",
+        format!(
+            "todo_comment_warnings: {}\n{}\n",
+            output.todo_comment_warnings.len(),
+            output.todo_comment_warnings[0],
+        ),
+    );
+}
+
+#[test]
+fn test_20260421_no_todo_comment_ok() {
+    let source = r#"
+// This is a normal comment
+#[allow(non_snake_case)]
+fn rvs_done() {}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.todo_comment_warnings.is_empty());
+
+    rvs_snapshot_BI("20260421_no_todo_comment_ok", "todo_comment_warnings: 0\n");
+}
+
+#[test]
+fn test_20260421_todo_in_block_comment() {
+    let source = r#"
+/* TODO: revisit this */
+#[allow(non_snake_case)]
+fn rvs_legacy() {}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.todo_comment_warnings.len(), 1);
+    assert_eq!(output.todo_comment_warnings[0].kind, "TODO");
+
+    rvs_snapshot_BI(
+        "20260421_todo_in_block_comment",
+        format!(
+            "todo_comment_warnings: {}\n{}\n",
+            output.todo_comment_warnings.len(),
+            output.todo_comment_warnings[0],
+        ),
+    );
+}
+
+// ─── 好函数未被测试覆盖检测 ──────────────────────────────
+
+#[test]
+fn test_20260421_untested_good_fn_detected() {
+    let source = r#"
+#[allow(non_snake_case)]
+fn rvs_add(a: i32, b: i32) -> i32 { a + b }
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.untested_good_fn_warnings.len(), 1);
+    assert_eq!(output.untested_good_fn_warnings[0].function, "rvs_add");
+
+    rvs_snapshot_BI(
+        "20260421_untested_good_fn_detected",
+        format!(
+            "untested_good_fn_warnings: {}\n{}\n",
+            output.untested_good_fn_warnings.len(),
+            output.untested_good_fn_warnings[0],
+        ),
+    );
+}
+
+#[test]
+fn test_20260421_good_fn_with_test_ok() {
+    let source = r#"
+#[allow(non_snake_case)]
+fn rvs_add(a: i32, b: i32) -> i32 { a + b }
+
+#[test]
+fn test_20260421_add_works() {
+    rvs_add(1, 2);
+}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.untested_good_fn_warnings.is_empty());
+
+    rvs_snapshot_BI(
+        "20260421_good_fn_with_test_ok",
+        "untested_good_fn_warnings: 0\n",
+    );
+}
+
+#[test]
+fn test_20260421_non_good_fn_untested_ok() {
+    let source = r#"
+#[allow(non_snake_case)]
+fn rvs_fetch_ABI() { todo!() }
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.untested_good_fn_warnings.is_empty());
+
+    rvs_snapshot_BI(
+        "20260421_non_good_fn_untested_ok",
+        "untested_good_fn_warnings: 0\n",
+    );
+}
+
+#[test]
+fn test_20260421_good_fn_dead_code_exempt() {
+    let source = r#"
+#[allow(dead_code)]
+#[allow(non_snake_case)]
+fn rvs_helper() {}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.untested_good_fn_warnings.is_empty());
+
+    rvs_snapshot_BI(
+        "20260421_good_fn_dead_code_exempt",
+        "untested_good_fn_warnings: 0\n",
+    );
+}
+
+#[test]
+fn test_20260421_good_fn_mutable_with_test_ok() {
+    let source = r#"
+#[allow(non_snake_case)]
+fn rvs_sort_M(arr: &mut [i32]) { arr.sort(); }
+
+#[test]
+fn test_20260421_sort_works() {
+    let mut v = [3, 1, 2];
+    rvs_sort_M(&mut v);
+}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.untested_good_fn_warnings.is_empty());
+
+    rvs_snapshot_BI(
+        "20260421_good_fn_mutable_with_test_ok",
+        "untested_good_fn_warnings: 0\n",
+    );
+}

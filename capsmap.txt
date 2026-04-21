@@ -344,3 +344,11 @@ AsRef::as_ref=
 Punctuated::len=
 Punctuated::is_empty=
 IntoIterator::next=
+core::str::trim_end_matches=
+
+# ─── 标准库：切片/Vec 方法（补充）─────────────────────
+alloc::vec::Vec::dedup=
+alloc::slice::sort=
+Option::map_or=
+alloc::vec::Vec::to_vec=
+std::slice::to_vec=
