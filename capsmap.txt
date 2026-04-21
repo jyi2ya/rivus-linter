@@ -352,3 +352,20 @@ alloc::slice::sort=
 Option::map_or=
 alloc::vec::Vec::to_vec=
 std::slice::to_vec=
+
+# ─── 标准库：容器方法（补充2）─────────────────────────
+Vec::clear=
+
+# ─── syn/proc_macro2 方法（补充3）─────────────────────────
+proc_macro2::TokenTree::Punct=
+proc_macro2::Group::span_open=
+
+# ─── syn 类型构造器 ──────────────────────────────────
+syn::Visibility::Public=
+syn::Type::Reference=
+syn::Type::Tuple=
+syn::StaticMutability::Mut=
+
+# ─── 本项目：结构体构造器 ────────────────────────────
+DenyWarningsWarning=
+StubMacroInfo=

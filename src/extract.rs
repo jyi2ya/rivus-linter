@@ -120,6 +120,67 @@ fn rvs_check_path_for_static(path: &syn::Path, statics: &[StaticDecl]) -> Option
         })
 }
 
+/// 从宏的 token 流中提取函数调用。
+/// 宏体无法被 syn 解析为 AST，只能做 token 级扫描：
+/// 收集所有形如 `path::to::func(` 或 `method(` 的调用路径。
+fn rvs_harvest_calls_from_tokens(tokens: proc_macro2::TokenStream) -> Harvest {
+    let mut result = Harvest::rvs_empty();
+    let mut tokens = tokens.into_iter().peekable();
+    let mut path_parts: Vec<String> = Vec::new();
+    while let Some(tt) = tokens.next() {
+        match tt {
+            proc_macro2::TokenTree::Ident(ident) => {
+                path_parts.push(ident.to_string());
+            }
+            proc_macro2::TokenTree::Punct(punct) => {
+                if punct.as_char() == ':' {
+                    if tokens
+                        .peek()
+                        .map(
+                            |t| matches!(t, proc_macro2::TokenTree::Punct(p) if p.as_char() == ':'),
+                        )
+                        .unwrap_or(false)
+                    {
+                        tokens.next();
+                    } else {
+                        path_parts.clear();
+                    }
+                } else if punct.as_char() == '(' {
+                    if !path_parts.is_empty() {
+                        let name = path_parts.join("::");
+                        let line = punct.span().start().line;
+                        result.calls.push(CalleeInfo { name, line });
+                    }
+                    path_parts.clear();
+                } else if punct.as_char() == '.' {
+                    if let Some(last) = path_parts.last()
+                        && last != &"::".to_string()
+                    {
+                        path_parts.clear();
+                    }
+                } else {
+                    path_parts.clear();
+                }
+            }
+            proc_macro2::TokenTree::Group(group) => {
+                if !path_parts.is_empty() {
+                    let name = path_parts.join("::");
+                    let line = group.span_open().start().line;
+                    result.calls.push(CalleeInfo { name, line });
+                }
+                path_parts.clear();
+                let sub = rvs_harvest_calls_from_tokens(group.stream());
+                result.calls.extend(sub.calls);
+                result.static_refs.extend(sub.static_refs);
+            }
+            proc_macro2::TokenTree::Literal(_) => {
+                path_parts.clear();
+            }
+        }
+    }
+    result
+}
+
 /// 从直接调用中捉拿函数调用与静态引用。
 fn rvs_harvest_from_expr_call(call: &syn::ExprCall, statics: &[StaticDecl]) -> Harvest {
     let mut result = Harvest::rvs_empty();
@@ -286,7 +347,13 @@ fn rvs_harvest_from_expr(expr: &syn::Expr, statics: &[StaticDecl]) -> Harvest {
         syn::Expr::Async(async_expr) => rvs_harvest_from_block(&async_expr.block, statics),
         syn::Expr::Cast(cast_expr) => rvs_harvest_from_expr(&cast_expr.expr, statics),
         syn::Expr::TryBlock(try_block) => rvs_harvest_from_block(&try_block.block, statics),
-        syn::Expr::Macro(_) => Harvest::rvs_empty(),
+        syn::Expr::Macro(mac) => {
+            let mut result = rvs_harvest_calls_from_tokens(mac.mac.tokens.clone());
+            if let Some(sr) = rvs_check_path_for_static(&mac.mac.path, statics) {
+                result.static_refs.push(sr);
+            }
+            result
+        }
         syn::Expr::Lit(_) | syn::Expr::Continue(_) | syn::Expr::Verbatim(_) => Harvest::rvs_empty(),
         _ => Harvest::rvs_empty(),
     }
@@ -308,7 +375,10 @@ fn rvs_harvest_from_block(block: &syn::Block, statics: &[StaticDecl]) -> Harvest
                 Harvest::rvs_merge(parts)
             }
             syn::Stmt::Expr(expr, _) => rvs_harvest_from_expr(expr, statics),
-            syn::Stmt::Item(_) | syn::Stmt::Macro(_) => Harvest::rvs_empty(),
+            syn::Stmt::Item(_) => Harvest::rvs_empty(),
+            syn::Stmt::Macro(stmt_mac) => {
+                rvs_harvest_calls_from_tokens(stmt_mac.mac.tokens.clone())
+            }
         };
         result.calls.extend(sub.calls);
         result.static_refs.extend(sub.static_refs);

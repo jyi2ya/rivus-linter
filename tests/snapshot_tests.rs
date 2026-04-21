@@ -4676,3 +4676,91 @@ fn test_20260421_sort_works() {
         "untested_good_fn_warnings: 0\n",
     );
 }
+
+// ─── 宏内调用提取 ──────────────────────────────────────
+
+#[test]
+fn test_20260421_assert_eq_macro_call_detected() {
+    let source = r#"
+#[allow(non_snake_case)]
+fn rvs_add(a: i32, b: i32) -> i32 { a + b }
+
+#[test]
+fn test_20260421_add_works() {
+    assert_eq!(rvs_add(1, 2), 3);
+}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.untested_good_fn_warnings.is_empty());
+
+    rvs_snapshot_BI(
+        "20260421_assert_eq_macro_call_detected",
+        "untested_good_fn_warnings: 0\n",
+    );
+}
+
+#[test]
+fn test_20260421_format_macro_call_detected() {
+    let source = r#"
+#[allow(non_snake_case)]
+fn rvs_add(a: i32, b: i32) -> i32 { a + b }
+
+#[test]
+fn test_20260421_add_works() {
+    let _ = format!("result: {}", rvs_add(1, 2));
+}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.untested_good_fn_warnings.is_empty());
+
+    rvs_snapshot_BI(
+        "20260421_format_macro_call_detected",
+        "untested_good_fn_warnings: 0\n",
+    );
+}
+
+#[test]
+fn test_20260421_method_call_in_macro_detected() {
+    let source = r#"
+struct S;
+#[allow(non_snake_case)]
+impl S {
+    fn rvs_compute(&self) -> i32 { 42 }
+}
+
+#[test]
+fn test_20260421_compute_works() {
+    let s = S;
+    println!("got {}", s.rvs_compute());
+}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.untested_good_fn_warnings.is_empty());
+
+    rvs_snapshot_BI(
+        "20260421_method_call_in_macro_detected",
+        "untested_good_fn_warnings: 0\n",
+    );
+}
+
+#[test]
+fn test_20260421_violation_in_macro_detected() {
+    let source = r#"
+#[allow(non_snake_case)]
+fn rvs_pure_fn() {
+    let _ = format!("calling {}", std::fs::read_to_string("x").unwrap());
+}
+"#;
+    let output = rvs_check_source(
+        source,
+        "test.rs",
+        &CapsMap::rvs_parse("std::fs::read_to_string=BI\n").unwrap(),
+    )
+    .unwrap();
+    assert!(!output.violations.is_empty());
+
+    rvs_snapshot_BI(
+        "20260421_violation_in_macro_detected",
+        format!("violations: {}\n", output.violations.len()),
+    );
+}
