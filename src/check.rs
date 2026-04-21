@@ -797,10 +797,15 @@ pub struct InferenceWarning {
 
 impl fmt::Display for InferenceWarning {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let severity = if self.kind == InferenceKind::MissingPanic {
+            "warning"
+        } else {
+            "hint"
+        };
         write!(
             f,
-            "hint: {} {} in its name\n  at {}:{}",
-            self.function, self.kind, self.file, self.line,
+            "{}: {} {} in its name\n  at {}:{}",
+            severity, self.function, self.kind, self.file, self.line,
         )
     }
 }

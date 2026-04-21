@@ -4805,3 +4805,57 @@ fn rvs_pure_fn() {
         format!("violations: {}\n", output.violations.len()),
     );
 }
+
+#[test]
+fn test_20260422_missing_panic_shows_warning_severity() {
+    let source = r#"
+fn rvs_bail(msg: &str) {
+    panic!("{}", msg);
+}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    let missing_panic = output
+        .inference_warnings
+        .iter()
+        .find(|w| w.kind == InferenceKind::MissingPanic)
+        .unwrap();
+
+    let displayed = format!("{missing_panic}");
+    assert!(
+        displayed.starts_with("warning:"),
+        "MissingPanic should display as warning, got: {displayed}"
+    );
+
+    rvs_snapshot_BI(
+        "20260422_missing_panic_shows_warning_severity",
+        format!("display: {displayed}\n"),
+    );
+}
+
+#[test]
+fn test_20260422_non_panic_inference_still_hint() {
+    let source = r#"
+async fn rvs_fetch(url: &str) {
+    rvs_do_nothing();
+}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    let non_panic: Vec<_> = output
+        .inference_warnings
+        .iter()
+        .filter(|w| w.kind != InferenceKind::MissingPanic)
+        .collect();
+
+    for inf in &non_panic {
+        let displayed = format!("{inf}");
+        assert!(
+            displayed.starts_with("hint:"),
+            "non-MissingPanic inference should still be hint, got: {displayed}",
+        );
+    }
+
+    rvs_snapshot_BI(
+        "20260422_non_panic_inference_still_hint",
+        format!("non_panic_inferences: {}\n", non_panic.len()),
+    );
+}

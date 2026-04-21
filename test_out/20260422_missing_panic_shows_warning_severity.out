@@ -1,0 +1,2 @@
+display: warning: rvs_bail calls panic macro but missing P in its name
+  at test.rs:2
