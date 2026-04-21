@@ -271,6 +271,7 @@ std::collections::hash_map::OccupiedEntry::get_mut=
 # ─── MIR 可见：标准库迭代器/切片方法 ────────────
 Iterator::take_while=
 core::slice::iter=
+core::slice::last=
 core::slice::contains=
 std::slice::join=
 std::slice::sort=
@@ -298,6 +299,7 @@ syn::punctuated::Punctuated::last=
 DelimSpan::join=
 proc_macro2::Group::stream=
 proc_macro2::Punct::as_char=
+proc_macro2::Punct::span=
 
 # ─── MIR 可见：编译器内部属性展开 ──────────────────
 must_use=
