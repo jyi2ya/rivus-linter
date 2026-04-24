@@ -488,161 +488,159 @@ docs/theory/
 
 `order-lifecycle.md` 的内容应该是纯领域语言，不涉及具体的数据库表或 API 设计。
 
-### 六边形架构（推荐）
+### 增加好函数率的架构手法
 
-你采用六边形架构（Ports & Adapters）作为推荐的系统组织方式。核心原则：**领域在正中央，一切外部依赖通过端口（trait）接入，方向永远向内。**
+以下手法通过分离关注点，将高能力（I/S/P/U）代码限制在薄薄一层适配器中，把大量业务逻辑拉入纯函数。
 
-```
-                     ┌──────────────────────────────────────────┐
-                     │              Infrastructure              │
-                     │  ┌──────┐  ┌──────┐  ┌──────┐  ┌──────┐ │
-  HTTP ─────────────►│  │ REST │  │ gRPC │  │  DB  │  │ MQ   │ │
-  request            │  │Adapter│  │Adapter│  │Adapter│  │Adapter│ │
-                     │  └──┬───┘  └──┬───┘  └──┬───┘  └──┬───┘ │
-                     │     │         │         │         │      │
-                     │  ┌──▼─────────▼─────────▼─────────▼──┐  │
-                     │  │        Inbound / Outbound Ports     │  │
-                     │  │         (trait definitions)         │  │
-                     │  └──────────────────┬─────────────────┘  │
-                     └─────────────────────┼────────────────────┘
-                                           │
-                     ┌─────────────────────▼────────────────────┐
-                     │                 Domain                    │
-                     │  ┌──────────┐  ┌──────────┐  ┌────────┐ │
-                     │  │ Entities │  │Use Cases │  │ Domain │ │
-                     │  │          │  │(app svc) │  │ Events │ │
-                     │  └──────────┘  └──────────┘  └────────┘ │
-                     └──────────────────────────────────────────┘
-```
+#### 六边形架构（Ports & Adapters）
 
-**依赖方向：外层可依赖内层，内层绝不依赖外层。** Domain 模块没有对任何框架、数据库或 HTTP 库的 import。
-
-目录结构示例：
+核心原则：**领域在正中央，一切外部依赖通过端口（trait）接入，依赖方向永远向内。** Domain 模块没有任何对框架、数据库或 HTTP 库的 import。
 
 ```
-src/
-├── domain/
-│   ├── mod.rs              # 领域实体、值对象、领域事件
-│   ├── ports.rs            # 端口定义（trait）：Repository, EventPublisher, ...
-│   └── services.rs         # 领域服务 / 用例（只依赖 ports）
-├── adapters/
-│   ├── inbound/
-│   │   ├── rest.rs         # HTTP handler → 调用 domain services
-│   │   └── grpc.rs         # gRPC handler
-│   └── outbound/
-│       ├── db_repo.rs      # 实现 domain::ports::Repository
-│       ├── cache.rs        # 实现 domain::ports::Cache
-│       └── mq_publisher.rs # 实现 domain::ports::EventPublisher
-└── main.rs                 # 组装层：注入 adapter 到 domain
+┌─────────────────────────────────────┐
+│          Infrastructure             │
+│  REST / gRPC / DB / MQ adapters     │
+│         ──implements──►             │
+│  Ports (trait definitions)          │
+└──────────────┬──────────────────────┘
+               │
+┌──────────────▼──────────────────────┐
+│              Domain                  │
+│  Entities / Use Cases / Events       │
+│  （纯函数 / 好函数，能力 ≤ ABM）      │
+└─────────────────────────────────────┘
 ```
 
-#### 端口（Port）
-
-端口是领域定义的接口（trait），描述领域**需要什么能力**，而非如何实现：
+端口是领域定义的 trait，描述**需要什么能力**；适配器是基础设施对端口的实现，领域不知道适配器的存在。组装在 `main.rs` 完成——依赖关系在程序入口才具体化。
 
 ```rust
-// domain/ports.rs —— 领域定义自己需要什么
-// 出站端口：领域通过这些 trait 与外部世界交互，但不知道背后是什么。
+// domain/ports.rs
 trait UserRepository {
     async fn rvs_find_by_id_ABI(&self, id: UserId) -> Result<Option<User>, RepoError>;
-    async fn rvs_save_ABM(&self, user: &User) -> Result<(), RepoError>;
 }
 
-trait EventPublisher {
-    async fn rvs_publish_AIS(&self, event: DomainEvent) -> Result<(), PublishError>;
-}
-```
-
-#### 适配器（Adapter）
-
-适配器是基础设施对端口的实现，**领域不知道适配器的存在**：
-
-```rust
-// adapters/outbound/db_repo.rs
-struct PostgresUserRepo { pool: PgPool }
-
-impl UserRepository for PostgresUserRepo {
-    async fn rvs_find_by_id_ABI(&self, id: UserId) -> Result<Option<User>, RepoError> {
-        // 数据库查询：异步(A)、可能阻塞(B)、有I/O(I)
-        let row: Option<UserRow> = sqlx::query_as(...)
-            .bind(id).fetch_optional(&self.pool).await?;
-        Ok(row.map(User::from))
-    }
-
-    async fn rvs_save_ABM(&self, user: &User) -> Result<(), RepoError> {
-        let row = OrderRow::from(user);
-        sqlx::query("INSERT INTO ...")
-            .bind(row).execute(&self.pool).await?;
-        Ok(())
-    }
-}
-```
-
-#### 组装（Composition）
-
-你在程序入口处将适配器注入领域，依赖关系在此刻才具体化：
-
-```rust
-// main.rs —— 组装层：把真实的适配器塞进领域的端口里。
-let repo = PostgresUserRepo::new(pool);
-let publisher = MqEventPublisher::new(channel);
-let order_service = OrderService::new(repo, publisher);
-let router = rvs_create_router_ABIS(order_service);
-```
-
-领域服务调用端口时，标记必须覆盖端口方法：领域服务 `_ABIS` 可以调用端口 `_ABI`（每个字母都有，合规）：
-
-```rust
-// domain/services.rs —— 用例：创建订单
+// domain/services.rs — 调用端口时，标记覆盖端口方法即可
 impl OrderService {
-    pub async fn rvs_create_order_ABIS(
-        &self,
-        cmd: CreateOrderCmd,
-    ) -> Result<Order, OrderError> {
-        // ABIS 可调用 ABI ✅ (每个字母都覆盖)
+    pub async fn rvs_create_order_ABIS(&self, cmd: CreateOrderCmd) -> Result<Order, OrderError> {
         let user = self.repo.rvs_find_by_id_ABI(cmd.user_id)?;
-        let order = Order::new(user, cmd.items);
-        self.repo.rvs_save_ABM(&order)?;
-        self.publisher.rvs_publish_AIS(OrderCreatedEvent::from(&order))?;
+        let order = Order::rvs_new(user, cmd.items); // 纯函数，无标记
         Ok(order)
     }
 }
 ```
 
-#### 边界处的数据转换
+每层有独立的数据模型，层间通过 `From` / `TryFrom` 显式转换。用 `TryFrom`（parse）而非 `validate`，在边界处一次性完成验证并转换为目标类型。
 
-每层有独立的数据模型，层间通过 `From` / `TryFrom` 显式转换：
+#### State + Free Functions（Actor 模式）
 
-| 层 | 数据模型 | 职责 |
-|----|---------|------|
-| 入站适配器 | `CreateOrderRequest` / `OrderResponse` | HTTP/gRPC 协议细节 |
-| 领域层 | `Order` / `OrderId` / `Money` | 纯业务规则，不依赖任何框架 |
-| 出站适配器 | `OrderRow` / `OrderMessage` | 映射数据库列 / 消息格式 |
-
-转换规则：
-- 层间交换的只能是纯数据（可安全序列化的数据）
-- 除非十分必要，禁止交换文件描述符、锁等特殊作用的数据
-- 用 `TryFrom`（parse）而非 `validate`，在边界处一次性完成验证并转换为目标类型
+将状态和逻辑分离：`XxxState` 是纯数据结构体，功能由 free function 实现，而非 `impl` 方法。源自 Erlang/OTP actor 模式。
 
 ```rust
-// 入站边界：HTTP request → 领域命令，parse 而非 validate
-impl TryFrom<CreateOrderRequest> for CreateOrderCmd {
-    type Error = ValidationError;
-    fn try_from(req: CreateOrderRequest) -> Result<Self, Self::Error> { ... }
+struct ConnectionState {
+    buffer: Vec<u8>,
+    seq: u64,
+    window_size: usize,
 }
 
-// 领域层内部：纯计算，无任何标记
-impl Order {
-    pub fn rvs_new(user: User, items: Vec<OrderItem>) -> Self {
-        debug_assert!(!items.is_empty());
-        // 计算总价、生成 ID、应用规则……
-        Order { user, items, ... }
+// 纯函数：输入旧状态 + 事件，输出新状态 + 副作用指令
+fn rvs_handle_packet(state: &ConnectionState, packet: &[u8]) -> (ConnectionState, Vec<Action>) {
+    // 纯计算，无 I/O、无副作用、无 &mut
+    let mut new_state = state.clone();
+    new_state.seq += 1;
+    (new_state, vec![Action::Ack(new_state.seq)])
+}
+
+// 薄适配器：执行副作用
+async fn rvs_process_packet_ABM(conn: &mut Connection, packet: &[u8]) -> Result<(), ConnError> {
+    let (new_state, actions) = rvs_handle_packet(&conn.state, packet);
+    for action in actions {
+        rvs_execute_action_ABI(action).await?; // I/O 在这里
+    }
+    conn.state = new_state;
+    Ok(())
+}
+```
+
+好处：`rvs_handle_packet` 是纯函数，能力无标记，可以穷举测试；`rvs_process_packet_ABM` 是薄壳，几乎不含业务逻辑。
+
+#### Decision / Effect 分离
+
+将"做什么决定"和"执行决定"分成两个函数。决策是纯函数，执行才带 I/O。
+
+```rust
+// 纯函数：决定要做什么，返回指令
+fn rvs_plan_retry(policy: &RetryPolicy, attempt: u32, last_error: &str) -> RetryDecision {
+    if attempt >= policy.max_retries {
+        RetryDecision::GiveUp
+    } else {
+        let delay = rvs_calculate_backoff(policy.base_delay, attempt); // 纯函数
+        RetryDecision::RetryAfter(delay)
     }
 }
 
-// 出站边界：领域类型 → 数据库行，纯转换
-impl From<Order> for OrderRow {
-    fn from(order: Order) -> Self { ... }
+// 执行层：拿到决策后才做 I/O
+async fn rvs_execute_with_retry_ABIS(...) -> Result<(), Error> {
+    loop {
+        match rvs_plan_retry(&policy, attempt, &last_error) {
+            RetryDecision::RetryAfter(delay) => tokio::time::sleep(delay).await,
+            RetryDecision::GiveUp => return Err(last_error.into()),
+        }
+    }
+}
+```
+
+#### Builder / Interpreter 分离
+
+Builder 构造纯数据描述（AST/IR），Interpreter 执行。构造过程是纯函数，执行过程才带副作用。
+
+```rust
+// 纯函数：构造查询描述
+fn rvs_build_query(filter: &Filter) -> QueryPlan {
+    let conditions = rvs_parse_conditions(filter); // 纯函数
+    let optimized = rvs_optimize_plan(conditions);  // 纯函数
+    optimized
+}
+
+// 执行层：拿到查询计划后才做 I/O
+async fn rvs_execute_query_ABI(plan: &QueryPlan, pool: &PgPool) -> Result<ResultSet, DbError> {
+    let sql = rvs_plan_to_sql(plan); // 纯函数
+    sqlx::query(&sql).fetch_all(pool).await
+}
+```
+
+#### Serialize-first（先序列化再传输）
+
+在系统边界处立即将外部数据反序列化为纯 Rust 结构体（`FromStr` / `TryFrom`），之后所有处理都基于纯数据。绝不在业务逻辑中直接操作流、连接、句柄。
+
+```rust
+// 入站边界：立即反序列化
+fn rvs_parse_request(raw: &str) -> Result<CreateOrderCmd, ParseError> { ... } // 纯函数
+
+// 全部业务逻辑基于纯数据
+fn rvs_validate_order(cmd: &CreateOrderCmd) -> Result<ValidatedOrder, ValidationError> { ... }
+fn rvs_calculate_total(items: &[OrderItem]) -> Money { ... }
+fn rvs_apply_discount(order: &mut ValidatedOrder, coupon: &Coupon) { ... } // M，好函数
+```
+
+#### Fake 对象（用于测试 I/O 函数）
+
+为端口 trait 提供基于内存的纯实现，使得上层的好函数在测试中可以用 fake 而不碰真实 I/O。
+
+```rust
+struct InMemoryUserRepo { users: RefCell<HashMap<UserId, User>> }
+
+impl UserRepository for InMemoryUserRepo {
+    async fn rvs_find_by_id_ABI(&self, id: UserId) -> Result<Option<User>, RepoError> {
+        Ok(self.users.borrow().get(&id).cloned())
+    }
+}
+
+// 测试中注入 fake，被测函数的真实能力标记不变
+#[test]
+fn test_20260422_create_order_ok() {
+    let repo = InMemoryUserRepo::rvs_new();
+    let service = OrderService::rvs_new(repo, FakePublisher);
+    let result = service.rvs_create_order_ABIS(cmd); // 测试中同步调用，Fake 内部不真正 await
 }
 ```
 
