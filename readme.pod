@@ -1,5 +1,15 @@
 =encoding utf8
 
-rivus-coding-skill 的辅助工具
+具体详见项目目录下 rivus.md
 
-具体详见项目目录下 rivus-coding.skill
+使用方法：
+
+=over
+
+=item 1. 将 rivus.md 复制到项目根目录，命名为 AGENTS.md
+
+=item 2. 将编译产物重命名为 rivus-linter，放到 C<$PATH> 中。
+
+=item 3. 在 llm 交付的时候，运行 rivus-linter，并且根据结果训斥它们。
+
+=back
