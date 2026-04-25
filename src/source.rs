@@ -21,7 +21,10 @@ pub fn rvs_read_rust_sources_BI(path: &Path) -> Result<Vec<SourceFile>, ReadErro
     let file_paths = if path.is_dir() {
         WalkDir::new(path)
             .into_iter()
-            .filter_map(|e| e.ok())
+            .filter_map(|e| match e {
+                Ok(entry) => Some(entry),
+                Err(_) => None,
+            })
             .filter(|e| e.file_type().is_file())
             .filter(|e| e.path().extension().is_some_and(|ext| ext == "rs"))
             .map(|e| e.into_path())
@@ -62,7 +65,10 @@ pub fn rvs_read_mir_sources_BI(path: &Path) -> Result<Vec<SourceFile>, ReadError
     let file_paths = if path.is_dir() {
         WalkDir::new(path)
             .into_iter()
-            .filter_map(|e| e.ok())
+            .filter_map(|e| match e {
+                Ok(entry) => Some(entry),
+                Err(_) => None,
+            })
             .filter(|e| e.file_type().is_file())
             .filter(|e| e.path().extension().is_some_and(|ext| ext == "mir"))
             .map(|e| e.into_path())

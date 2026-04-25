@@ -109,6 +109,7 @@ core::str::strip_prefix=
 core::str::rfind=
 
 # ─── 标准库：路径 ──────────────────────────────
+std::path::Path::new=
 std::path::Path::is_dir=
 std::path::Path::is_file=
 std::path::Path::extension=

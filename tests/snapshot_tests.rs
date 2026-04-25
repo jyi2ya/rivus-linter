@@ -6,7 +6,7 @@ use rivus_linter::capability::{
     Capability, CapabilityParseError, CapabilitySet, rvs_parse_function,
 };
 use rivus_linter::capsmap::CapsMap;
-use rivus_linter::check::{InferenceKind, rvs_check_source};
+use rivus_linter::check::{InferenceKind, rvs_check_path_BI, rvs_check_source};
 use rivus_linter::extract::rvs_extract_functions;
 use rivus_linter::report::rvs_build_report;
 
@@ -4857,5 +4857,200 @@ async fn rvs_fetch(url: &str) {
     rvs_snapshot_BI(
         "20260422_non_panic_inference_still_hint",
         format!("non_panic_inferences: {}\n", non_panic.len()),
+    );
+}
+
+#[test]
+fn test_20260425_error_swallow_ok_detected() {
+    let source = r#"
+#![allow(non_snake_case)]
+fn rvs_foo() {
+    let _ = bar().ok();
+}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(!output.error_swallow_warnings.is_empty());
+    let w = &output.error_swallow_warnings[0];
+    assert_eq!(w.method, "ok");
+    assert_eq!(w.function, "rvs_foo");
+
+    rvs_snapshot_BI(
+        "20260425_error_swallow_ok_detected",
+        format!("warnings: {}\n", output.error_swallow_warnings.len()),
+    );
+}
+
+#[test]
+fn test_20260425_error_swallow_unwrap_or_default_detected() {
+    let source = r#"
+#![allow(non_snake_case)]
+fn rvs_bar() {
+    let x = baz().unwrap_or_default();
+}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(!output.error_swallow_warnings.is_empty());
+    let w = &output.error_swallow_warnings[0];
+    assert_eq!(w.method, "unwrap_or_default");
+
+    rvs_snapshot_BI(
+        "20260425_error_swallow_unwrap_or_default_detected",
+        format!("warnings: {}\n", output.error_swallow_warnings.len()),
+    );
+}
+
+#[test]
+fn test_20260425_error_swallow_none_ok() {
+    let source = r#"
+#![allow(non_snake_case)]
+fn rvs_baz() {
+    let _ = bar().unwrap();
+}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.error_swallow_warnings.is_empty());
+
+    rvs_snapshot_BI(
+        "20260425_error_swallow_none_ok",
+        "error_swallow_warnings: 0\n".to_string(),
+    );
+}
+
+#[test]
+fn test_20260425_catch_unwind_detected() {
+    let source = r#"
+#![allow(non_snake_case)]
+fn rvs_safe_call() {
+    let _ = std::panic::catch_unwind(|| dangerous());
+}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(!output.catch_unwind_warnings.is_empty());
+    assert_eq!(output.catch_unwind_warnings[0].function, "rvs_safe_call");
+
+    rvs_snapshot_BI(
+        "20260425_catch_unwind_detected",
+        format!("warnings: {}\n", output.catch_unwind_warnings.len()),
+    );
+}
+
+#[test]
+fn test_20260425_catch_unwind_none_ok() {
+    let source = r#"
+#![allow(non_snake_case)]
+fn rvs_normal() {
+    let _ = foo();
+}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.catch_unwind_warnings.is_empty());
+
+    rvs_snapshot_BI(
+        "20260425_catch_unwind_none_ok",
+        "catch_unwind_warnings: 0\n".to_string(),
+    );
+}
+
+#[test]
+fn test_20260425_catch_all_error_variant_unknown() {
+    let source = r#"
+#![allow(non_snake_case)]
+#[derive(Debug, thiserror::Error)]
+enum MyError {
+    #[error("not found")]
+    NotFound,
+    #[error("unknown")]
+    Unknown,
+}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(!output.catch_all_error_variant_warnings.is_empty());
+    let w = &output.catch_all_error_variant_warnings[0];
+    assert_eq!(w.enum_name, "MyError");
+    assert_eq!(w.variant, "Unknown");
+
+    rvs_snapshot_BI(
+        "20260425_catch_all_error_variant_unknown",
+        format!(
+            "warnings: {}\n",
+            output.catch_all_error_variant_warnings.len()
+        ),
+    );
+}
+
+#[test]
+fn test_20260425_catch_all_error_variant_other() {
+    let source = r#"
+#![allow(non_snake_case)]
+#[derive(Debug, thiserror::Error)]
+enum RepoError {
+    #[error("io")]
+    Io(#[from] std::io::Error),
+    #[error("other")]
+    Other(String),
+}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(!output.catch_all_error_variant_warnings.is_empty());
+    assert_eq!(output.catch_all_error_variant_warnings[0].variant, "Other");
+
+    rvs_snapshot_BI(
+        "20260425_catch_all_error_variant_other",
+        format!(
+            "warnings: {}\n",
+            output.catch_all_error_variant_warnings.len()
+        ),
+    );
+}
+
+#[test]
+fn test_20260425_catch_all_error_variant_none_ok() {
+    let source = r#"
+#![allow(non_snake_case)]
+#[derive(Debug, thiserror::Error)]
+enum GoodError {
+    #[error("not found")]
+    NotFound,
+    #[error("permission denied")]
+    PermissionDenied,
+}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.catch_all_error_variant_warnings.is_empty());
+
+    rvs_snapshot_BI(
+        "20260425_catch_all_error_variant_none_ok",
+        "catch_all_error_variant_warnings: 0\n".to_string(),
+    );
+}
+
+#[test]
+fn test_20260425_catch_all_error_variant_non_error_enum_ok() {
+    let source = r#"
+#![allow(non_snake_case)]
+enum Color {
+    Unknown,
+    Other,
+}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.catch_all_error_variant_warnings.is_empty());
+
+    rvs_snapshot_BI(
+        "20260425_catch_all_error_variant_non_error_enum_ok",
+        "catch_all_error_variant_warnings: 0\n".to_string(),
+    );
+}
+
+#[test]
+fn test_20260425_missing_test_output_self_check() {
+    let output = rvs_check_path_BI(std::path::Path::new("src/"), &CapsMap::rvs_new()).unwrap();
+
+    rvs_snapshot_BI(
+        "20260425_missing_test_output_self_check",
+        format!(
+            "src has {} tests with missing snapshots\n",
+            output.missing_test_output_warnings.len()
+        ),
     );
 }

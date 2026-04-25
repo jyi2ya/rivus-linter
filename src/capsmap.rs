@@ -33,7 +33,7 @@ impl CapsMap {
         let mut entries = BTreeMap::new();
         for (i, raw_line) in content.lines().enumerate() {
             let line_num = i + 1;
-            let line = raw_line.split('#').next().unwrap_or_default().trim();
+            let line = raw_line.split('#').next().unwrap_or("").trim();
             if line.is_empty() {
                 continue;
             }
@@ -41,7 +41,7 @@ impl CapsMap {
                 .split_once('=')
                 .ok_or(CapsMapError::MissingSeparator { line: line_num })?;
             let key = key.trim().to_string();
-            let value = value.split('#').next().unwrap_or_default().trim();
+            let value = value.split('#').next().unwrap_or("").trim();
             let caps =
                 CapabilitySet::rvs_from_str(value).map_err(|_| CapsMapError::InvalidCaps {
                     key: key.clone(),
@@ -66,5 +66,79 @@ impl CapsMap {
             }
         }
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::capability::Capability;
+
+    #[test]
+    fn test_20260425_capsmap_new_empty() {
+        let cm = CapsMap::rvs_new();
+        assert!(cm.rvs_lookup("anything").is_none());
+    }
+
+    #[test]
+    fn test_20260425_capsmap_parse_single() {
+        let cm = CapsMap::rvs_parse("std::fs::read=BI").unwrap();
+        let caps = cm.rvs_lookup("std::fs::read").unwrap();
+        assert!(caps.rvs_contains(Capability::B));
+        assert!(caps.rvs_contains(Capability::I));
+        assert_eq!(caps.rvs_len(), 2);
+    }
+
+    #[test]
+    fn test_20260425_capsmap_parse_empty_value() {
+        let cm = CapsMap::rvs_parse("HashMap::new=").unwrap();
+        let caps = cm.rvs_lookup("HashMap::new").unwrap();
+        assert!(caps.rvs_is_empty());
+    }
+
+    #[test]
+    fn test_20260425_capsmap_parse_comments() {
+        let content = "# comment\nstd::fs::read=BI # inline\n\nstd::process::exit=S\n";
+        let cm = CapsMap::rvs_parse(content).unwrap();
+        assert!(cm.rvs_lookup("std::fs::read").is_some());
+        assert!(cm.rvs_lookup("std::process::exit").is_some());
+    }
+
+    #[test]
+    fn test_20260425_capsmap_parse_missing_separator() {
+        let result = CapsMap::rvs_parse("no_equals");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_20260425_capsmap_parse_invalid_caps() {
+        let result = CapsMap::rvs_parse("func=XYZ");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_20260425_capsmap_lookup_suffix_match() {
+        let cm = CapsMap::rvs_parse("HashMap::new=").unwrap();
+        let caps = cm.rvs_lookup("std::collections::HashMap::new");
+        assert!(caps.is_some());
+    }
+
+    #[test]
+    fn test_20260425_capsmap_lookup_no_match() {
+        let cm = CapsMap::rvs_parse("HashMap::new=").unwrap();
+        assert!(cm.rvs_lookup("HashMap::insert").is_none());
+    }
+
+    #[test]
+    fn test_20260425_capsmap_parse_empty_content() {
+        let cm = CapsMap::rvs_parse("").unwrap();
+        assert!(cm.rvs_lookup("anything").is_none());
+    }
+
+    #[test]
+    fn test_20260425_capsmap_parse_all_caps() {
+        let cm = CapsMap::rvs_parse("danger=ABIMPSTU").unwrap();
+        let caps = cm.rvs_lookup("danger").unwrap();
+        assert_eq!(caps.rvs_len(), 8);
     }
 }

@@ -57,11 +57,20 @@ pub fn rvs_compile_to_mir_BIMPS(project_dir: &Path) -> Result<PathBuf, MirCompil
         });
     }
 
-    let has_mir = std::fs::read_dir(&deps_dir).ok().is_some_and(|entries| {
-        entries
-            .filter_map(|e| e.ok())
-            .any(|e| e.path().extension().is_some_and(|ext| ext == "mir"))
-    });
+    let dir_entries = match std::fs::read_dir(&deps_dir) {
+        Ok(entries) => entries,
+        Err(_) => {
+            return Err(MirCompileError::NoMirFiles {
+                path: deps_dir.display().to_string(),
+            });
+        }
+    };
+    let has_mir = dir_entries
+        .filter_map(|e| match e {
+            Ok(entry) => Some(entry),
+            Err(_) => None,
+        })
+        .any(|e| e.path().extension().is_some_and(|ext| ext == "mir"));
 
     if !has_mir {
         return Err(MirCompileError::NoMirFiles {
@@ -388,4 +397,331 @@ pub fn rvs_extract_from_mir(mir_text: &str) -> Result<Vec<FnDef>, MirError> {
     }
 
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[allow(unused_imports)]
+    use crate::extract::FnDef;
+
+    fn mir_fn(name: &str, sig_line: &str, body_lines: &[&str]) -> MirFnDef {
+        MirFnDef {
+            name: name.to_string(),
+            sig_line: sig_line.to_string(),
+            body_lines: body_lines.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn test_20260425_extract_calls_from_body_basic() {
+        let line1 = "        _0 = core::panicking::panic(const \"explicit panic\" -> [1: return]) -> [return]";
+        let line2 = "        _1 = rvs_helper() -> [2: bb1]";
+        let line3 = "        _2 = alloc::vec::Vec::<i32>::new() -> [3: bb2]";
+        let line4 = "        return";
+        let body: Vec<String> = vec![
+            line1.to_string(),
+            line2.to_string(),
+            line3.to_string(),
+            line4.to_string(),
+        ];
+        let calls = rvs_extract_calls_from_body(&body);
+        assert!(calls.iter().any(|c| c.name.contains("panicking::panic")));
+        assert!(calls.iter().any(|c| c.name == "rvs_helper"));
+        assert!(calls.iter().any(|c| c.name == "alloc::vec::Vec::new"));
+    }
+
+    #[test]
+    fn test_20260425_extract_calls_from_body_empty() {
+        let body: Vec<String> = vec!["return".to_string()];
+        let calls = rvs_extract_calls_from_body(&body);
+        assert!(calls.is_empty());
+    }
+
+    #[test]
+    fn test_20260425_extract_parent_fn_name_valid() {
+        let name = "rivus_linter::check::rvs_check_source_M::{closure#0}";
+        let result = rvs_extract_parent_fn_name(name);
+        assert_eq!(result, Some("rivus_linter::check::rvs_check_source_M"));
+    }
+
+    #[test]
+    fn test_20260425_extract_parent_fn_name_not_rvs() {
+        let name = "rivus_linter::check::helper::{closure#0}";
+        let result = rvs_extract_parent_fn_name(name);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_20260425_extract_parent_fn_name_no_closure() {
+        let result = rvs_extract_parent_fn_name("rvs_foo_M");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_20260425_strip_generics_no_generics() {
+        assert_eq!(rvs_strip_generics("std::fs::read"), "std::fs::read");
+    }
+
+    #[test]
+    fn test_20260425_strip_generics_with_args() {
+        assert_eq!(
+            rvs_strip_generics("alloc::vec::Vec::<i32>::new"),
+            "alloc::vec::Vec::new"
+        );
+    }
+
+    #[test]
+    fn test_20260425_strip_generics_nested() {
+        assert_eq!(
+            rvs_strip_generics("alloc::collections::BTreeMap::<String, Vec::<u8>>::insert"),
+            "alloc::collections::BTreeMap::insert"
+        );
+    }
+
+    #[test]
+    fn test_20260425_strip_generics_arrow() {
+        assert_eq!(
+            rvs_strip_generics("core::result::Result::<T, E>::unwrap"),
+            "core::result::Result::unwrap"
+        );
+    }
+
+    #[test]
+    fn test_20260425_find_call_open_paren_simple() {
+        assert_eq!(rvs_find_call_open_paren("foo()"), Some(3));
+    }
+
+    #[test]
+    fn test_20260425_find_call_open_paren_with_generics() {
+        assert_eq!(rvs_find_call_open_paren("Vec::<i32>::new()"), Some(15));
+    }
+
+    #[test]
+    fn test_20260425_find_call_open_paren_space_before() {
+        assert_eq!(rvs_find_call_open_paren("foo bar("), None);
+    }
+
+    #[test]
+    fn test_20260425_find_call_open_paren_no_paren() {
+        assert_eq!(rvs_find_call_open_paren("foo"), None);
+    }
+
+    #[test]
+    fn test_20260425_find_matching_angle_basic() {
+        assert_eq!(rvs_find_matching_angle("abc>"), Some(3));
+    }
+
+    #[test]
+    fn test_20260425_find_matching_angle_nested() {
+        assert_eq!(rvs_find_matching_angle("a<b>>"), Some(4));
+    }
+
+    #[test]
+    fn test_20260425_find_matching_angle_no_close() {
+        assert_eq!(rvs_find_matching_angle("abc"), None);
+    }
+
+    #[test]
+    fn test_20260425_extract_call_target_simple_call() {
+        let line = "        _1 = rvs_helper() -> [2: bb1]";
+        assert_eq!(
+            rvs_extract_call_target(line),
+            Some("rvs_helper".to_string())
+        );
+    }
+
+    #[test]
+    fn test_20260425_extract_call_target_qualified() {
+        let line = "        _2 = alloc::vec::Vec::<i32>::new() -> [3: bb2]";
+        assert_eq!(
+            rvs_extract_call_target(line),
+            Some("alloc::vec::Vec::new".to_string())
+        );
+    }
+
+    #[test]
+    fn test_20260425_extract_call_target_panic() {
+        let line = "        _0 = core::panicking::panic(const \"msg\" -> [1: return]) -> [return]";
+        assert_eq!(
+            rvs_extract_call_target(line),
+            Some("core::panicking::panic".to_string())
+        );
+    }
+
+    #[test]
+    fn test_20260425_extract_call_target_return() {
+        let line = "        return";
+        assert_eq!(rvs_extract_call_target(line), None);
+    }
+
+    #[test]
+    fn test_20260425_extract_call_target_trait_method() {
+        let line = "        _3 = <std::io::Error as core::fmt::Display>::fmt(move _4, move _5) -> [6: bb3]";
+        assert_eq!(
+            rvs_extract_call_target(line),
+            Some("core::fmt::Display::fmt".to_string())
+        );
+    }
+
+    #[test]
+    fn test_20260425_parse_mir_functions_single() {
+        let mir = "fn rvs_foo_M() -> () {\n    _0 = rvs_bar() -> [1: return]\n    return\n}\n";
+        let fns = rvs_parse_mir_functions(mir);
+        assert_eq!(fns.len(), 1);
+        assert_eq!(fns[0].name, "rvs_foo_M");
+        assert_eq!(fns[0].body_lines.len(), 2);
+    }
+
+    #[test]
+    fn test_20260425_parse_mir_functions_multiple() {
+        let mir = "fn rvs_foo() -> () {\n    return\n}\n\nfn rvs_bar_M() -> () {\n    return\n}\n";
+        let fns = rvs_parse_mir_functions(mir);
+        assert_eq!(fns.len(), 2);
+        assert_eq!(fns[0].name, "rvs_foo");
+        assert_eq!(fns[1].name, "rvs_bar_M");
+    }
+
+    #[test]
+    fn test_20260425_parse_mir_functions_empty() {
+        let fns = rvs_parse_mir_functions("");
+        assert!(fns.is_empty());
+    }
+
+    #[test]
+    fn test_20260425_scan_mir_has_mut_param_true() {
+        let f = mir_fn(
+            "rvs_foo_M",
+            "fn rvs_foo_M(_1: &mut i32) -> () {",
+            &["    return"],
+        );
+        assert!(rvs_scan_mir_has_mut_param(&f));
+    }
+
+    #[test]
+    fn test_20260425_scan_mir_has_mut_param_false() {
+        let f = mir_fn("rvs_foo", "fn rvs_foo(_1: i32) -> () {", &["    return"]);
+        assert!(!rvs_scan_mir_has_mut_param(&f));
+    }
+
+    #[test]
+    fn test_20260425_scan_mir_has_mut_param_closure_skipped() {
+        let f = mir_fn(
+            "rvs_foo_M::{closure#0}",
+            "fn rvs_foo_M::{closure#0}(_1: &mut i32) -> () {",
+            &["    return"],
+        );
+        assert!(!rvs_scan_mir_has_mut_param(&f));
+    }
+
+    #[test]
+    fn test_20260425_scan_mir_has_panic_true() {
+        let f = mir_fn(
+            "rvs_foo_P",
+            "fn rvs_foo_P() -> () {",
+            &["    _0 = core::panicking::panic(move _1, move _2) -> [return]"],
+        );
+        assert!(rvs_scan_mir_has_panic(&f));
+    }
+
+    #[test]
+    fn test_20260425_scan_mir_has_panic_assert() {
+        let f = mir_fn(
+            "rvs_check_P",
+            "fn rvs_check_P() -> () {",
+            &["    _0 = core::panicking::assert(move _1, move _2) -> [return]"],
+        );
+        assert!(rvs_scan_mir_has_panic(&f));
+    }
+
+    #[test]
+    fn test_20260425_scan_mir_has_panic_false() {
+        let f = mir_fn("rvs_foo", "fn rvs_foo() -> () {", &["    return"]);
+        assert!(!rvs_scan_mir_has_panic(&f));
+    }
+
+    #[test]
+    fn test_20260425_scan_mir_has_panic_fmt() {
+        let f = mir_fn(
+            "rvs_foo_P",
+            "fn rvs_foo_P() -> () {",
+            &["    _0 = core::panicking::panic_fmt(move _1, move _2) -> [return]"],
+        );
+        assert!(rvs_scan_mir_has_panic(&f));
+    }
+
+    #[test]
+    fn test_20260425_extract_from_mir_basic() {
+        let mir = "\
+fn rvs_foo_M() -> () {
+    _0 = rvs_bar() -> [1: return]
+    return
+}
+";
+        let result = rvs_extract_from_mir(mir).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].name, "rvs_foo_M");
+        assert!(result[0].has_body);
+        assert!(result[0].calls.iter().any(|c| c.name == "rvs_bar"));
+    }
+
+    #[test]
+    fn test_20260425_extract_from_mir_with_closure() {
+        let mir = "\
+fn rvs_process_AI() -> () {
+    _0 = rvs_read_file_BI() -> [1: bb1]
+    return
+}
+
+fn rvs_process_AI::{closure#0}() -> () {
+    _0 = core::panicking::panic(move _1, move _2) -> [return]
+    return
+}
+";
+        let result = rvs_extract_from_mir(mir).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].name, "rvs_process_AI");
+        assert!(result[0].has_panic_macro);
+    }
+
+    #[test]
+    fn test_20260425_extract_from_mir_mut_param() {
+        let mir = "\
+fn rvs_modify_M(_1: &mut i32) -> () {
+    return
+}
+";
+        let result = rvs_extract_from_mir(mir).unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(result[0].has_mut_param);
+    }
+
+    #[test]
+    fn test_20260425_extract_from_mir_no_rvs_functions() {
+        let mir = "\
+fn helper() -> () {
+    return
+}
+";
+        let result = rvs_extract_from_mir(mir);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_20260425_extract_from_mir_multiple() {
+        let mir = "\
+fn rvs_foo() -> () {
+    _0 = rvs_bar() -> [1: return]
+    return
+}
+
+fn rvs_bar_M() -> () {
+    return
+}
+";
+        let result = rvs_extract_from_mir(mir).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].name, "rvs_bar_M");
+        assert_eq!(result[1].name, "rvs_foo");
+    }
 }

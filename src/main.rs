@@ -189,6 +189,18 @@ fn rvs_print_check_output_BIPS(output: &rivus_linter::CheckOutput) {
     for w in &output.untested_good_fn_warnings {
         eprintln!("{w}");
     }
+    for w in &output.error_swallow_warnings {
+        eprintln!("{w}");
+    }
+    for w in &output.catch_unwind_warnings {
+        eprintln!("{w}");
+    }
+    for w in &output.catch_all_error_variant_warnings {
+        eprintln!("{w}");
+    }
+    for w in &output.missing_test_output_warnings {
+        eprintln!("{w}");
+    }
     for v in &output.violations {
         eprintln!("{v}");
     }

@@ -460,7 +460,7 @@ fn rvs_collect_static_decls_from_items(items: &[syn::Item]) -> Vec<StaticDecl> {
                     .segments
                     .last()
                     .map(|s| s.ident.to_string())
-                    .unwrap_or_default();
+                    .unwrap_or(String::new());
                 if macro_name == "thread_local" {
                     let names = rvs_parse_thread_local_names(&m.mac.tokens);
                     for name in names {
@@ -472,6 +472,9 @@ fn rvs_collect_static_decls_from_items(items: &[syn::Item]) -> Vec<StaticDecl> {
                 }
             }
             syn::Item::Mod(m) => {
+                if rvs_is_cfg_test(&m.attrs) {
+                    continue;
+                }
                 if let Some((_, items)) = &m.content {
                     decls.extend(rvs_collect_static_decls_from_items(items));
                 }
@@ -806,7 +809,7 @@ fn rvs_extract_from_trait_fn(trait_fn: &syn::TraitItemFn, statics: &[StaticDecl]
         .default
         .as_ref()
         .map(|block| rvs_collect_calls_and_statics(block, statics))
-        .unwrap_or_default();
+        .unwrap_or((Vec::new(), Vec::new()));
     let line_count = trait_fn
         .default
         .as_ref()
@@ -821,7 +824,7 @@ fn rvs_extract_from_trait_fn(trait_fn: &syn::TraitItemFn, statics: &[StaticDecl]
             let debug_asserted_params = rvs_collect_debug_asserted_params(block);
             (params, debug_asserted_params)
         })
-        .unwrap_or_default();
+        .unwrap_or((Vec::new(), BTreeSet::new()));
     let is_async_fn = trait_fn.sig.asyncness.is_some();
     let is_unsafe_fn = trait_fn.sig.unsafety.is_some();
     let has_unsafe_block = trait_fn
@@ -869,7 +872,7 @@ fn rvs_is_panic_macro(mac: &syn::Macro) -> bool {
         .segments
         .last()
         .map(|s| s.ident.to_string())
-        .unwrap_or_default();
+        .unwrap_or(String::new());
     matches!(
         name.as_str(),
         "panic" | "assert" | "assert_eq" | "assert_ne" | "unreachable" | "todo" | "unimplemented"
@@ -1123,7 +1126,7 @@ fn rvs_allows_dead_code(attrs: &[syn::Attribute]) -> bool {
         {
             return false;
         }
-        let Some(list) = attr.meta.require_list().ok() else {
+        let Ok(list) = attr.meta.require_list() else {
             return false;
         };
         let tokens = list.tokens.to_string();
@@ -1143,7 +1146,7 @@ fn rvs_allows_non_snake_case(attrs: &[syn::Attribute]) -> bool {
         {
             return false;
         }
-        let Some(list) = attr.meta.require_list().ok() else {
+        let Ok(list) = attr.meta.require_list() else {
             return false;
         };
         let tokens = list.tokens.to_string();
@@ -1280,6 +1283,9 @@ fn rvs_collect_imports_from_items(items: &[syn::Item]) -> Vec<ImportInfo> {
                 }
             }
             syn::Item::Mod(m) => {
+                if rvs_is_cfg_test(&m.attrs) {
+                    continue;
+                }
                 if let Some((_, inner_items)) = &m.content {
                     imports.extend(rvs_collect_imports_from_items(inner_items));
                 }
@@ -1405,6 +1411,9 @@ fn rvs_collect_non_rvs_fns_from_items(items: &[syn::Item]) -> Vec<NonRvsFnInfo> 
                 }
             }
             syn::Item::Mod(m) => {
+                if rvs_is_cfg_test(&m.attrs) {
+                    continue;
+                }
                 if let Some((_, inner_items)) = &m.content {
                     fns.extend(rvs_collect_non_rvs_fns_from_items(inner_items));
                 }
@@ -1480,6 +1489,9 @@ fn rvs_collect_pub_items_from_items(items: &[syn::Item]) -> Vec<PubItemInfo> {
                 }
             }
             syn::Item::Mod(m) => {
+                if rvs_is_cfg_test(&m.attrs) {
+                    continue;
+                }
                 if let Some((_, inner_items)) = &m.content {
                     pubs.extend(rvs_collect_pub_items_from_items(inner_items));
                 }
@@ -1626,6 +1638,9 @@ fn rvs_collect_borrowed_params_from_items(items: &[syn::Item]) -> Vec<BorrowedPa
                 }
             }
             syn::Item::Mod(m) => {
+                if rvs_is_cfg_test(&m.attrs) {
+                    continue;
+                }
                 if let Some((_, inner_items)) = &m.content {
                     result.extend(rvs_collect_borrowed_params_from_items(inner_items));
                 }
@@ -1681,6 +1696,9 @@ fn rvs_collect_unsafe_fns_from_items(items: &[syn::Item]) -> Vec<UnsafeFnInfo> {
                 }
             }
             syn::Item::Mod(m) => {
+                if rvs_is_cfg_test(&m.attrs) {
+                    continue;
+                }
                 if let Some((_, inner_items)) = &m.content {
                     result.extend(rvs_collect_unsafe_fns_from_items(inner_items));
                 }
@@ -1852,6 +1870,9 @@ fn rvs_collect_missing_debug_from_items(items: &[syn::Item]) -> Vec<MissingDebug
                 });
             }
             syn::Item::Mod(m) => {
+                if rvs_is_cfg_test(&m.attrs) {
+                    continue;
+                }
                 if let Some((_, inner_items)) = &m.content {
                     result.extend(rvs_collect_missing_debug_from_items(inner_items));
                 }
@@ -1898,6 +1919,9 @@ fn rvs_collect_missing_panics_doc_from_items(items: &[syn::Item]) -> Vec<Missing
                 }
             }
             syn::Item::Mod(m) => {
+                if rvs_is_cfg_test(&m.attrs) {
+                    continue;
+                }
                 if let Some((_, inner_items)) = &m.content {
                     result.extend(rvs_collect_missing_panics_doc_from_items(inner_items));
                 }
@@ -1935,7 +1959,7 @@ fn rvs_type_name(ty: &syn::Type) -> String {
             .segments
             .last()
             .map(|s| s.ident.to_string())
-            .unwrap_or_default(),
+            .unwrap_or(String::new()),
         _ => String::new(),
     }
 }
@@ -2000,6 +2024,9 @@ fn rvs_collect_consumed_arg_on_error_from_items(
                 }
             }
             syn::Item::Mod(m) => {
+                if rvs_is_cfg_test(&m.attrs) {
+                    continue;
+                }
                 if let Some((_, inner_items)) = &m.content {
                     result.extend(rvs_collect_consumed_arg_on_error_from_items(inner_items));
                 }
@@ -2240,7 +2267,7 @@ fn rvs_is_stub_macro(mac: &syn::Macro) -> bool {
         .segments
         .last()
         .map(|s| s.ident.to_string())
-        .unwrap_or_default();
+        .unwrap_or(String::new());
     STUB_MACROS.contains(&name.as_str())
 }
 
@@ -2261,6 +2288,9 @@ fn rvs_collect_stub_macros_from_items(items: &[syn::Item]) -> Vec<StubMacroInfo>
                 }
             }
             syn::Item::Mod(m) => {
+                if rvs_is_cfg_test(&m.attrs) {
+                    continue;
+                }
                 if let Some((_, inner_items)) = &m.content {
                     result.extend(rvs_collect_stub_macros_from_items(inner_items));
                 }
@@ -2282,7 +2312,7 @@ fn rvs_scan_block_for_stubs(block: &syn::Block, fn_name: &str) -> Vec<StubMacroI
                     .segments
                     .last()
                     .map(|s| s.ident.to_string())
-                    .unwrap_or_default();
+                    .unwrap_or(String::new());
                 let line = m
                     .mac
                     .path
@@ -2322,7 +2352,7 @@ fn rvs_scan_expr_for_stubs(expr: &syn::Expr, fn_name: &str) -> Vec<StubMacroInfo
                 .segments
                 .last()
                 .map(|s| s.ident.to_string())
-                .unwrap_or_default();
+                .unwrap_or(String::new());
             let line = m
                 .mac
                 .path
@@ -2433,16 +2463,14 @@ fn rvs_scan_expr_for_stubs(expr: &syn::Expr, fn_name: &str) -> Vec<StubMacroInfo
         syn::Expr::Reference(r) => rvs_scan_expr_for_stubs(&r.expr, fn_name),
         syn::Expr::Try(t) => rvs_scan_expr_for_stubs(&t.expr, fn_name),
         syn::Expr::Await(a) => rvs_scan_expr_for_stubs(&a.base, fn_name),
-        syn::Expr::Return(r) => r
-            .expr
-            .as_ref()
-            .map(|e| rvs_scan_expr_for_stubs(e, fn_name))
-            .unwrap_or_default(),
-        syn::Expr::Break(b) => b
-            .expr
-            .as_ref()
-            .map(|e| rvs_scan_expr_for_stubs(e, fn_name))
-            .unwrap_or_default(),
+        syn::Expr::Return(r) => match &r.expr {
+            Some(e) => rvs_scan_expr_for_stubs(e, fn_name),
+            None => Vec::new(),
+        },
+        syn::Expr::Break(b) => match &b.expr {
+            Some(e) => rvs_scan_expr_for_stubs(e, fn_name),
+            None => Vec::new(),
+        },
         syn::Expr::Group(g) => rvs_scan_expr_for_stubs(&g.expr, fn_name),
         syn::Expr::Let(l) => rvs_scan_expr_for_stubs(&l.expr, fn_name),
         syn::Expr::Unsafe(u) => rvs_scan_block_for_stubs(&u.block, fn_name),
@@ -2495,6 +2523,9 @@ fn rvs_collect_empty_fns_from_items(items: &[syn::Item]) -> Vec<EmptyFnInfo> {
                 }
             }
             syn::Item::Mod(m) => {
+                if rvs_is_cfg_test(&m.attrs) {
+                    continue;
+                }
                 if let Some((_, inner_items)) = &m.content {
                     result.extend(rvs_collect_empty_fns_from_items(inner_items));
                 }
@@ -2615,8 +2646,1383 @@ fn rvs_collect_test_calls_from_items(
     result
 }
 
+#[derive(Debug, Clone)]
+pub struct ErrorSwallowInfo {
+    pub function: String,
+    pub method: String,
+    pub line: usize,
+}
+
+const ERROR_SWALLOW_METHODS: &[&str] = &["ok", "unwrap_or_default"];
+
+fn rvs_collect_error_swallows_from_items(items: &[syn::Item]) -> Vec<ErrorSwallowInfo> {
+    let mut result = Vec::new();
+    for item in items {
+        match item {
+            syn::Item::Fn(item_fn) => {
+                let fn_name = item_fn.sig.ident.to_string();
+                result.extend(rvs_scan_block_for_error_swallows(&item_fn.block, &fn_name));
+            }
+            syn::Item::Impl(impl_block) => {
+                for impl_item in &impl_block.items {
+                    if let syn::ImplItem::Fn(impl_fn) = impl_item {
+                        let fn_name = impl_fn.sig.ident.to_string();
+                        result.extend(rvs_scan_block_for_error_swallows(&impl_fn.block, &fn_name));
+                    }
+                }
+            }
+            syn::Item::Trait(item_trait) => {
+                for trait_item in &item_trait.items {
+                    if let syn::TraitItem::Fn(trait_fn) = trait_item
+                        && let Some(block) = &trait_fn.default
+                    {
+                        let fn_name = trait_fn.sig.ident.to_string();
+                        result.extend(rvs_scan_block_for_error_swallows(block, &fn_name));
+                    }
+                }
+            }
+            syn::Item::Mod(m) => {
+                if rvs_is_cfg_test(&m.attrs) {
+                    continue;
+                }
+                if let Some((_, inner_items)) = &m.content {
+                    result.extend(rvs_collect_error_swallows_from_items(inner_items));
+                }
+            }
+            _ => {}
+        }
+    }
+    result
+}
+
+fn rvs_scan_block_for_error_swallows(block: &syn::Block, fn_name: &str) -> Vec<ErrorSwallowInfo> {
+    let mut result = Vec::new();
+    for stmt in &block.stmts {
+        match stmt {
+            syn::Stmt::Expr(expr, _) => {
+                result.extend(rvs_scan_expr_for_error_swallows(expr, fn_name));
+            }
+            syn::Stmt::Local(local) => {
+                if let Some(init) = &local.init {
+                    result.extend(rvs_scan_expr_for_error_swallows(&init.expr, fn_name));
+                    if let Some((_, diverge)) = &init.diverge {
+                        result.extend(rvs_scan_expr_for_error_swallows(diverge, fn_name));
+                    }
+                }
+            }
+            syn::Stmt::Macro(_) | syn::Stmt::Item(_) => {}
+        }
+    }
+    result
+}
+
+fn rvs_scan_expr_for_error_swallows(expr: &syn::Expr, fn_name: &str) -> Vec<ErrorSwallowInfo> {
+    match expr {
+        syn::Expr::MethodCall(call) => {
+            let method = call.method.to_string();
+            let mut result = Vec::new();
+            if ERROR_SWALLOW_METHODS.contains(&method.as_str()) {
+                result.push(ErrorSwallowInfo {
+                    function: fn_name.to_string(),
+                    method,
+                    line: call.method.span().start().line,
+                });
+            }
+            result.extend(rvs_scan_expr_for_error_swallows(&call.receiver, fn_name));
+            for arg in &call.args {
+                result.extend(rvs_scan_expr_for_error_swallows(arg, fn_name));
+            }
+            result
+        }
+        syn::Expr::Block(b) => rvs_scan_block_for_error_swallows(&b.block, fn_name),
+        syn::Expr::If(e) => {
+            let mut r = Vec::new();
+            r.extend(rvs_scan_expr_for_error_swallows(&e.cond, fn_name));
+            r.extend(rvs_scan_block_for_error_swallows(&e.then_branch, fn_name));
+            if let Some((_, els)) = &e.else_branch {
+                r.extend(rvs_scan_expr_for_error_swallows(els, fn_name));
+            }
+            r
+        }
+        syn::Expr::Match(e) => {
+            let mut r = rvs_scan_expr_for_error_swallows(&e.expr, fn_name);
+            for arm in &e.arms {
+                if let Some((_, guard)) = &arm.guard {
+                    r.extend(rvs_scan_expr_for_error_swallows(guard, fn_name));
+                }
+                r.extend(rvs_scan_expr_for_error_swallows(&arm.body, fn_name));
+            }
+            r
+        }
+        syn::Expr::Loop(e) => rvs_scan_block_for_error_swallows(&e.body, fn_name),
+        syn::Expr::While(e) => {
+            let mut r = rvs_scan_expr_for_error_swallows(&e.cond, fn_name);
+            r.extend(rvs_scan_block_for_error_swallows(&e.body, fn_name));
+            r
+        }
+        syn::Expr::ForLoop(e) => {
+            let mut r = rvs_scan_expr_for_error_swallows(&e.expr, fn_name);
+            r.extend(rvs_scan_block_for_error_swallows(&e.body, fn_name));
+            r
+        }
+        syn::Expr::Closure(c) => rvs_scan_expr_for_error_swallows(&c.body, fn_name),
+        syn::Expr::Call(c) => {
+            let mut r = rvs_scan_expr_for_error_swallows(&c.func, fn_name);
+            for arg in &c.args {
+                r.extend(rvs_scan_expr_for_error_swallows(arg, fn_name));
+            }
+            r
+        }
+        syn::Expr::Assign(a) => {
+            let mut r = rvs_scan_expr_for_error_swallows(&a.left, fn_name);
+            r.extend(rvs_scan_expr_for_error_swallows(&a.right, fn_name));
+            r
+        }
+        syn::Expr::Binary(b) => {
+            let mut r = rvs_scan_expr_for_error_swallows(&b.left, fn_name);
+            r.extend(rvs_scan_expr_for_error_swallows(&b.right, fn_name));
+            r
+        }
+        syn::Expr::Unary(u) => rvs_scan_expr_for_error_swallows(&u.expr, fn_name),
+        syn::Expr::Paren(p) => rvs_scan_expr_for_error_swallows(&p.expr, fn_name),
+        syn::Expr::Group(g) => rvs_scan_expr_for_error_swallows(&g.expr, fn_name),
+        syn::Expr::Reference(r) => rvs_scan_expr_for_error_swallows(&r.expr, fn_name),
+        syn::Expr::Try(t) => rvs_scan_expr_for_error_swallows(&t.expr, fn_name),
+        syn::Expr::Await(a) => rvs_scan_expr_for_error_swallows(&a.base, fn_name),
+        syn::Expr::Return(r) => match &r.expr {
+            Some(e) => rvs_scan_expr_for_error_swallows(e, fn_name),
+            None => Vec::new(),
+        },
+        syn::Expr::Break(b) => match &b.expr {
+            Some(e) => rvs_scan_expr_for_error_swallows(e, fn_name),
+            None => Vec::new(),
+        },
+        syn::Expr::Let(l) => rvs_scan_expr_for_error_swallows(&l.expr, fn_name),
+        syn::Expr::Index(i) => {
+            let mut r = rvs_scan_expr_for_error_swallows(&i.expr, fn_name);
+            r.extend(rvs_scan_expr_for_error_swallows(&i.index, fn_name));
+            r
+        }
+        syn::Expr::Field(f) => rvs_scan_expr_for_error_swallows(&f.base, fn_name),
+        syn::Expr::Range(r) => {
+            let mut res = Vec::new();
+            if let Some(s) = &r.start {
+                res.extend(rvs_scan_expr_for_error_swallows(s, fn_name));
+            }
+            if let Some(e) = &r.end {
+                res.extend(rvs_scan_expr_for_error_swallows(e, fn_name));
+            }
+            res
+        }
+        syn::Expr::Repeat(r) => {
+            let mut res = rvs_scan_expr_for_error_swallows(&r.expr, fn_name);
+            res.extend(rvs_scan_expr_for_error_swallows(&r.len, fn_name));
+            res
+        }
+        syn::Expr::Tuple(t) => t
+            .elems
+            .iter()
+            .flat_map(|e| rvs_scan_expr_for_error_swallows(e, fn_name))
+            .collect(),
+        syn::Expr::Array(a) => a
+            .elems
+            .iter()
+            .flat_map(|e| rvs_scan_expr_for_error_swallows(e, fn_name))
+            .collect(),
+        syn::Expr::Struct(s) => s
+            .fields
+            .iter()
+            .flat_map(|f| rvs_scan_expr_for_error_swallows(&f.expr, fn_name))
+            .collect(),
+        syn::Expr::Unsafe(u) => rvs_scan_block_for_error_swallows(&u.block, fn_name),
+        syn::Expr::Async(a) => rvs_scan_block_for_error_swallows(&a.block, fn_name),
+        syn::Expr::Cast(c) => rvs_scan_expr_for_error_swallows(&c.expr, fn_name),
+        syn::Expr::TryBlock(t) => rvs_scan_block_for_error_swallows(&t.block, fn_name),
+        syn::Expr::Macro(_)
+        | syn::Expr::Lit(_)
+        | syn::Expr::Continue(_)
+        | syn::Expr::Path(_)
+        | syn::Expr::Verbatim(_) => Vec::new(),
+        _ => Vec::new(),
+    }
+}
+
+/// Extract `.ok()` / `.unwrap_or_default()` error-swallows from Rust source.
+pub fn rvs_extract_error_swallows(source: &str) -> Result<Vec<ErrorSwallowInfo>, ExtractError> {
+    let file = syn::parse_file(source).map_err(|e| ExtractError::Parse {
+        message: e.to_string(),
+    })?;
+    Ok(rvs_collect_error_swallows_from_items(&file.items))
+}
+
+#[derive(Debug, Clone)]
+pub struct CatchUnwindInfo {
+    pub function: String,
+    pub line: usize,
+}
+
+fn rvs_collect_catch_unwind_from_items(items: &[syn::Item]) -> Vec<CatchUnwindInfo> {
+    let mut result = Vec::new();
+    for item in items {
+        match item {
+            syn::Item::Fn(item_fn) => {
+                let fn_name = item_fn.sig.ident.to_string();
+                result.extend(rvs_scan_block_for_catch_unwind(&item_fn.block, &fn_name));
+            }
+            syn::Item::Impl(impl_block) => {
+                for impl_item in &impl_block.items {
+                    if let syn::ImplItem::Fn(impl_fn) = impl_item {
+                        let fn_name = impl_fn.sig.ident.to_string();
+                        result.extend(rvs_scan_block_for_catch_unwind(&impl_fn.block, &fn_name));
+                    }
+                }
+            }
+            syn::Item::Trait(item_trait) => {
+                for trait_item in &item_trait.items {
+                    if let syn::TraitItem::Fn(trait_fn) = trait_item
+                        && let Some(block) = &trait_fn.default
+                    {
+                        let fn_name = trait_fn.sig.ident.to_string();
+                        result.extend(rvs_scan_block_for_catch_unwind(block, &fn_name));
+                    }
+                }
+            }
+            syn::Item::Mod(m) => {
+                if rvs_is_cfg_test(&m.attrs) {
+                    continue;
+                }
+                if let Some((_, inner_items)) = &m.content {
+                    result.extend(rvs_collect_catch_unwind_from_items(inner_items));
+                }
+            }
+            _ => {}
+        }
+    }
+    result
+}
+
+const CATCH_UNWIND_NAMES: &[&str] = &["catch_unwind"];
+
+fn rvs_scan_block_for_catch_unwind(block: &syn::Block, fn_name: &str) -> Vec<CatchUnwindInfo> {
+    let mut result = Vec::new();
+    for stmt in &block.stmts {
+        match stmt {
+            syn::Stmt::Expr(expr, _) => {
+                result.extend(rvs_scan_expr_for_catch_unwind(expr, fn_name));
+            }
+            syn::Stmt::Local(local) => {
+                if let Some(init) = &local.init {
+                    result.extend(rvs_scan_expr_for_catch_unwind(&init.expr, fn_name));
+                    if let Some((_, diverge)) = &init.diverge {
+                        result.extend(rvs_scan_expr_for_catch_unwind(diverge, fn_name));
+                    }
+                }
+            }
+            syn::Stmt::Macro(_) | syn::Stmt::Item(_) => {}
+        }
+    }
+    result
+}
+
+fn rvs_scan_expr_for_catch_unwind(expr: &syn::Expr, fn_name: &str) -> Vec<CatchUnwindInfo> {
+    match expr {
+        syn::Expr::Call(c) => {
+            let mut result = Vec::new();
+            if let syn::Expr::Path(expr_path) = &*c.func {
+                let last = expr_path.path.segments.last().map(|s| s.ident.to_string());
+                if last.is_some_and(|l| CATCH_UNWIND_NAMES.contains(&l.as_str())) {
+                    let line = expr_path
+                        .path
+                        .segments
+                        .last()
+                        .map(|s| s.ident.span().start().line)
+                        .unwrap_or(0);
+                    result.push(CatchUnwindInfo {
+                        function: fn_name.to_string(),
+                        line,
+                    });
+                }
+            }
+            result.extend(rvs_scan_expr_for_catch_unwind(&c.func, fn_name));
+            for arg in &c.args {
+                result.extend(rvs_scan_expr_for_catch_unwind(arg, fn_name));
+            }
+            result
+        }
+        syn::Expr::MethodCall(c) => {
+            let method = c.method.to_string();
+            let mut result = Vec::new();
+            if CATCH_UNWIND_NAMES.contains(&method.as_str()) {
+                result.push(CatchUnwindInfo {
+                    function: fn_name.to_string(),
+                    line: c.method.span().start().line,
+                });
+            }
+            result.extend(rvs_scan_expr_for_catch_unwind(&c.receiver, fn_name));
+            for arg in &c.args {
+                result.extend(rvs_scan_expr_for_catch_unwind(arg, fn_name));
+            }
+            result
+        }
+        syn::Expr::Block(b) => rvs_scan_block_for_catch_unwind(&b.block, fn_name),
+        syn::Expr::If(e) => {
+            let mut r = Vec::new();
+            r.extend(rvs_scan_expr_for_catch_unwind(&e.cond, fn_name));
+            r.extend(rvs_scan_block_for_catch_unwind(&e.then_branch, fn_name));
+            if let Some((_, els)) = &e.else_branch {
+                r.extend(rvs_scan_expr_for_catch_unwind(els, fn_name));
+            }
+            r
+        }
+        syn::Expr::Match(e) => {
+            let mut r = rvs_scan_expr_for_catch_unwind(&e.expr, fn_name);
+            for arm in &e.arms {
+                if let Some((_, guard)) = &arm.guard {
+                    r.extend(rvs_scan_expr_for_catch_unwind(guard, fn_name));
+                }
+                r.extend(rvs_scan_expr_for_catch_unwind(&arm.body, fn_name));
+            }
+            r
+        }
+        syn::Expr::Loop(e) => rvs_scan_block_for_catch_unwind(&e.body, fn_name),
+        syn::Expr::While(e) => {
+            let mut r = rvs_scan_expr_for_catch_unwind(&e.cond, fn_name);
+            r.extend(rvs_scan_block_for_catch_unwind(&e.body, fn_name));
+            r
+        }
+        syn::Expr::ForLoop(e) => {
+            let mut r = rvs_scan_expr_for_catch_unwind(&e.expr, fn_name);
+            r.extend(rvs_scan_block_for_catch_unwind(&e.body, fn_name));
+            r
+        }
+        syn::Expr::Closure(c) => rvs_scan_expr_for_catch_unwind(&c.body, fn_name),
+        syn::Expr::Assign(a) => {
+            let mut r = rvs_scan_expr_for_catch_unwind(&a.left, fn_name);
+            r.extend(rvs_scan_expr_for_catch_unwind(&a.right, fn_name));
+            r
+        }
+        syn::Expr::Binary(b) => {
+            let mut r = rvs_scan_expr_for_catch_unwind(&b.left, fn_name);
+            r.extend(rvs_scan_expr_for_catch_unwind(&b.right, fn_name));
+            r
+        }
+        syn::Expr::Unary(u) => rvs_scan_expr_for_catch_unwind(&u.expr, fn_name),
+        syn::Expr::Paren(p) => rvs_scan_expr_for_catch_unwind(&p.expr, fn_name),
+        syn::Expr::Group(g) => rvs_scan_expr_for_catch_unwind(&g.expr, fn_name),
+        syn::Expr::Reference(r) => rvs_scan_expr_for_catch_unwind(&r.expr, fn_name),
+        syn::Expr::Try(t) => rvs_scan_expr_for_catch_unwind(&t.expr, fn_name),
+        syn::Expr::Await(a) => rvs_scan_expr_for_catch_unwind(&a.base, fn_name),
+        syn::Expr::Return(r) => match &r.expr {
+            Some(e) => rvs_scan_expr_for_catch_unwind(e, fn_name),
+            None => Vec::new(),
+        },
+        syn::Expr::Break(b) => match &b.expr {
+            Some(e) => rvs_scan_expr_for_catch_unwind(e, fn_name),
+            None => Vec::new(),
+        },
+        syn::Expr::Let(l) => rvs_scan_expr_for_catch_unwind(&l.expr, fn_name),
+        syn::Expr::Index(i) => {
+            let mut r = rvs_scan_expr_for_catch_unwind(&i.expr, fn_name);
+            r.extend(rvs_scan_expr_for_catch_unwind(&i.index, fn_name));
+            r
+        }
+        syn::Expr::Field(f) => rvs_scan_expr_for_catch_unwind(&f.base, fn_name),
+        syn::Expr::Range(r) => {
+            let mut res = Vec::new();
+            if let Some(s) = &r.start {
+                res.extend(rvs_scan_expr_for_catch_unwind(s, fn_name));
+            }
+            if let Some(e) = &r.end {
+                res.extend(rvs_scan_expr_for_catch_unwind(e, fn_name));
+            }
+            res
+        }
+        syn::Expr::Repeat(r) => {
+            let mut res = rvs_scan_expr_for_catch_unwind(&r.expr, fn_name);
+            res.extend(rvs_scan_expr_for_catch_unwind(&r.len, fn_name));
+            res
+        }
+        syn::Expr::Tuple(t) => t
+            .elems
+            .iter()
+            .flat_map(|e| rvs_scan_expr_for_catch_unwind(e, fn_name))
+            .collect(),
+        syn::Expr::Array(a) => a
+            .elems
+            .iter()
+            .flat_map(|e| rvs_scan_expr_for_catch_unwind(e, fn_name))
+            .collect(),
+        syn::Expr::Struct(s) => s
+            .fields
+            .iter()
+            .flat_map(|f| rvs_scan_expr_for_catch_unwind(&f.expr, fn_name))
+            .collect(),
+        syn::Expr::Unsafe(u) => rvs_scan_block_for_catch_unwind(&u.block, fn_name),
+        syn::Expr::Async(a) => rvs_scan_block_for_catch_unwind(&a.block, fn_name),
+        syn::Expr::Cast(c) => rvs_scan_expr_for_catch_unwind(&c.expr, fn_name),
+        syn::Expr::TryBlock(t) => rvs_scan_block_for_catch_unwind(&t.block, fn_name),
+        syn::Expr::Macro(_)
+        | syn::Expr::Lit(_)
+        | syn::Expr::Continue(_)
+        | syn::Expr::Path(_)
+        | syn::Expr::Verbatim(_) => Vec::new(),
+        _ => Vec::new(),
+    }
+}
+
+/// Extract `catch_unwind` usage from Rust source.
+pub fn rvs_extract_catch_unwind(source: &str) -> Result<Vec<CatchUnwindInfo>, ExtractError> {
+    let file = syn::parse_file(source).map_err(|e| ExtractError::Parse {
+        message: e.to_string(),
+    })?;
+    Ok(rvs_collect_catch_unwind_from_items(&file.items))
+}
+
+#[derive(Debug, Clone)]
+pub struct CatchAllErrorVariantInfo {
+    pub enum_name: String,
+    pub variant: String,
+    pub line: usize,
+}
+
+const CATCH_ALL_VARIANT_NAMES: &[&str] = &["Unknown", "Other", "UnknownError", "OtherError"];
+
+fn rvs_collect_catch_all_variants_from_items(items: &[syn::Item]) -> Vec<CatchAllErrorVariantInfo> {
+    let mut result = Vec::new();
+    for item in items {
+        match item {
+            syn::Item::Enum(e) => {
+                let name = e.ident.to_string();
+                let looks_like_error = name.contains("Error")
+                    || e.attrs
+                        .iter()
+                        .any(|a| a.path().segments.last().is_some_and(|s| s.ident == "error"));
+                if !looks_like_error {
+                    continue;
+                }
+                for variant in &e.variants {
+                    let vname = variant.ident.to_string();
+                    if CATCH_ALL_VARIANT_NAMES.contains(&vname.as_str()) {
+                        result.push(CatchAllErrorVariantInfo {
+                            enum_name: name.clone(),
+                            variant: vname,
+                            line: variant.ident.span().start().line,
+                        });
+                    }
+                }
+            }
+            syn::Item::Mod(m) => {
+                if rvs_is_cfg_test(&m.attrs) {
+                    continue;
+                }
+                if let Some((_, inner_items)) = &m.content {
+                    result.extend(rvs_collect_catch_all_variants_from_items(inner_items));
+                }
+            }
+            _ => {}
+        }
+    }
+    result
+}
+
+/// Extract `Unknown`/`Other` catch-all variants from error enums in Rust source.
+pub fn rvs_extract_catch_all_error_variants(
+    source: &str,
+) -> Result<Vec<CatchAllErrorVariantInfo>, ExtractError> {
+    let file = syn::parse_file(source).map_err(|e| ExtractError::Parse {
+        message: e.to_string(),
+    })?;
+    Ok(rvs_collect_catch_all_variants_from_items(&file.items))
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ExtractError {
     #[error("parse error: {message}")]
     Parse { message: String },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    fn parse_block(source: &str) -> syn::Block {
+        let src = format!("fn _wrap() {{ {source} }}");
+        let file = syn::parse_file(&src).unwrap();
+        match &file.items[0] {
+            syn::Item::Fn(f) => (*f.block).clone(),
+            _ => panic!("expected fn"),
+        }
+    }
+
+    fn parse_items(source: &str) -> Vec<syn::Item> {
+        syn::parse_file(source).unwrap().items
+    }
+
+    fn parse_fn_sig(source: &str) -> syn::Signature {
+        let src = format!("{source} {{}}");
+        let item_fn: syn::ItemFn = syn::parse_str(&src).unwrap();
+        item_fn.sig
+    }
+
+    fn parse_type(source: &str) -> syn::Type {
+        syn::parse_str(source).unwrap()
+    }
+
+    fn parse_macro(source: &str) -> syn::Macro {
+        let src = format!("fn _m() {{ {source} }}");
+        let file = syn::parse_file(&src).unwrap();
+        match &file.items[0] {
+            syn::Item::Fn(f) => match &f.block.stmts[0] {
+                syn::Stmt::Macro(m) => m.mac.clone(),
+                _ => panic!("expected macro stmt"),
+            },
+            _ => panic!("expected fn"),
+        }
+    }
+
+    #[test]
+    fn test_20260425_harvest_empty() {
+        let h = Harvest::rvs_empty();
+        assert!(h.calls.is_empty());
+        assert!(h.static_refs.is_empty());
+    }
+
+    #[test]
+    fn test_20260425_harvest_merge() {
+        let mut a = Harvest::rvs_empty();
+        a.calls.push(CalleeInfo {
+            name: "a".into(),
+            line: 1,
+        });
+        let mut b = Harvest::rvs_empty();
+        b.calls.push(CalleeInfo {
+            name: "b".into(),
+            line: 2,
+        });
+        let merged = Harvest::rvs_merge([a, b]);
+        assert_eq!(merged.calls.len(), 2);
+        assert!(merged.static_refs.is_empty());
+    }
+
+    #[test]
+    fn test_20260425_check_path_for_static() {
+        let statics = vec![StaticDecl {
+            name: "COUNTER".into(),
+            required_caps: CapabilitySet::rvs_from_validated("S"),
+        }];
+        let path: syn::Path = syn::parse_quote!(COUNTER);
+        let result = rvs_check_path_for_static(&path, &statics);
+        assert!(result.is_some());
+        let path2: syn::Path = syn::parse_quote!(OTHER);
+        assert!(rvs_check_path_for_static(&path2, &statics).is_none());
+    }
+
+    #[test]
+    fn test_20260425_harvest_calls_from_tokens() {
+        let tokens: proc_macro2::TokenStream = "foo(bar)".parse().unwrap();
+        let h = rvs_harvest_calls_from_tokens(tokens);
+        assert!(h.calls.iter().any(|c| c.name == "foo"));
+    }
+
+    #[test]
+    fn test_20260425_harvest_from_expr_call() {
+        let block = parse_block("foo(42);");
+        match &block.stmts[0] {
+            syn::Stmt::Expr(syn::Expr::Call(call), _) => {
+                let h = rvs_harvest_from_expr_call(call, &[]);
+                assert!(h.calls.iter().any(|c| c.name == "foo"));
+            }
+            _ => panic!("expected call"),
+        }
+    }
+
+    #[test]
+    fn test_20260425_harvest_from_expr_method_call() {
+        let block = parse_block("obj.method(42);");
+        match &block.stmts[0] {
+            syn::Stmt::Expr(syn::Expr::MethodCall(call), _) => {
+                let h = rvs_harvest_from_expr_method_call(call, &[]);
+                assert!(h.calls.iter().any(|c| c.name == "method"));
+            }
+            _ => panic!("expected method call"),
+        }
+    }
+
+    #[test]
+    fn test_20260425_harvest_from_expr() {
+        let expr: syn::Expr = syn::parse_quote!(foo(1));
+        let h = rvs_harvest_from_expr(&expr, &[]);
+        assert!(h.calls.iter().any(|c| c.name == "foo"));
+    }
+
+    #[test]
+    fn test_20260425_harvest_from_block() {
+        let block = parse_block("foo(1); bar(2);");
+        let h = rvs_harvest_from_block(&block, &[]);
+        assert!(h.calls.iter().any(|c| c.name == "foo"));
+        assert!(h.calls.iter().any(|c| c.name == "bar"));
+    }
+
+    #[test]
+    fn test_20260425_collect_calls_and_statics() {
+        let block = parse_block("baz();");
+        let (calls, statics) = rvs_collect_calls_and_statics(&block, &[]);
+        assert!(calls.iter().any(|c| c.name == "baz"));
+        assert!(statics.is_empty());
+    }
+
+    #[test]
+    fn test_20260425_calc_line_count() {
+        let span = proc_macro2::Span::call_site();
+        let count = rvs_calc_line_count(span, span);
+        assert!(count >= 1);
+    }
+
+    #[test]
+    fn test_20260425_parse_thread_local_names() {
+        let tokens: proc_macro2::TokenStream = "static FOO: T = 0;".parse().unwrap();
+        let names = rvs_parse_thread_local_names(&tokens);
+        assert!(names.contains(&"FOO".to_string()));
+    }
+
+    #[test]
+    fn test_20260425_collect_static_decls_from_items() {
+        let items = parse_items("static X: i32 = 0;");
+        let decls = rvs_collect_static_decls_from_items(&items);
+        assert_eq!(decls.len(), 1);
+        assert_eq!(decls[0].name, "X");
+    }
+
+    #[test]
+    fn test_20260425_classify_param_type() {
+        let ty = parse_type("i32");
+        assert_eq!(rvs_classify_param_type(&ty), ParamType::PrimitiveNumeric);
+        let ty2 = parse_type("String");
+        assert_eq!(rvs_classify_param_type(&ty2), ParamType::Other);
+    }
+
+    #[test]
+    fn test_20260425_has_mut_receiver() {
+        let sig = parse_fn_sig("fn foo(&mut self)");
+        assert!(rvs_has_mut_receiver(&sig.inputs));
+        let sig2 = parse_fn_sig("fn foo(&self)");
+        assert!(!rvs_has_mut_receiver(&sig2.inputs));
+    }
+
+    #[test]
+    fn test_20260425_has_mut_typed_param() {
+        let sig = parse_fn_sig("fn foo(x: &mut i32)");
+        assert!(rvs_has_mut_typed_param(&sig.inputs));
+        let sig2 = parse_fn_sig("fn foo(x: i32)");
+        assert!(!rvs_has_mut_typed_param(&sig2.inputs));
+    }
+
+    #[test]
+    fn test_20260425_extract_param_names() {
+        let sig = parse_fn_sig("fn foo(&self, a: i32, b: String)");
+        let params = rvs_extract_param_names(&sig.inputs);
+        assert_eq!(params.len(), 2);
+        assert_eq!(params[0].name, "a");
+        assert_eq!(params[0].ty, ParamType::PrimitiveNumeric);
+        assert_eq!(params[1].ty, ParamType::Other);
+    }
+
+    #[test]
+    fn test_20260425_is_debug_assert() {
+        let mac = parse_macro("debug_assert!(x > 0);");
+        assert!(rvs_is_debug_assert(&mac));
+        let mac2 = parse_macro("println!(\"hi\");");
+        assert!(!rvs_is_debug_assert(&mac2));
+    }
+
+    #[test]
+    fn test_20260425_collect_ident_tokens() {
+        let tokens: proc_macro2::TokenStream = "x + y".parse().unwrap();
+        let ids = rvs_collect_ident_tokens(&tokens);
+        assert!(ids.contains("x"));
+        assert!(ids.contains("y"));
+    }
+
+    #[test]
+    fn test_20260425_collect_debug_asserted_params() {
+        let block = parse_block("debug_assert!(x > 0);");
+        let params = rvs_collect_debug_asserted_params(&block);
+        assert!(params.contains("x"));
+    }
+
+    #[test]
+    fn test_20260425_collect_assert_ids_from_block() {
+        let block = parse_block("debug_assert!(a > b);");
+        let ids = rvs_collect_assert_ids_from_block(&block);
+        assert!(ids.contains(&"a".to_string()));
+        assert!(ids.contains(&"b".to_string()));
+    }
+
+    #[test]
+    fn test_20260425_collect_assert_ids_from_expr() {
+        let expr: syn::Expr = syn::parse_quote!(debug_assert!(z > 0));
+        let ids = rvs_collect_assert_ids_from_expr(&expr);
+        assert!(ids.contains(&"z".to_string()));
+    }
+
+    #[test]
+    fn test_20260425_extract_from_item_fn() {
+        let items = parse_items("#[allow(non_snake_case)] fn rvs_add_M(x: i32) { x + 1; }");
+        match &items[0] {
+            syn::Item::Fn(f) => {
+                let def = rvs_extract_from_item_fn(f, &[]);
+                assert!(def.is_some());
+                let d = def.unwrap();
+                assert_eq!(d.name, "rvs_add_M");
+                assert_eq!(d.line_count, 1);
+            }
+            _ => panic!("expected fn"),
+        }
+    }
+
+    #[test]
+    fn test_20260425_extract_from_impl_fn() {
+        let items = parse_items("impl Foo { #[allow(non_snake_case)] fn rvs_do_M(&self) {} }");
+        match &items[0] {
+            syn::Item::Impl(imp) => match &imp.items[0] {
+                syn::ImplItem::Fn(f) => {
+                    let def = rvs_extract_from_impl_fn(f, &[]);
+                    assert!(def.is_some());
+                }
+                _ => panic!("expected impl fn"),
+            },
+            _ => panic!("expected impl"),
+        }
+    }
+
+    #[test]
+    fn test_20260425_extract_from_trait_fn() {
+        let items =
+            parse_items("trait Tr { #[allow(non_snake_case)] fn rvs_compute(&self) -> i32; }");
+        match &items[0] {
+            syn::Item::Trait(t) => match &t.items[0] {
+                syn::TraitItem::Fn(f) => {
+                    let def = rvs_extract_from_trait_fn(f, &[]);
+                    assert!(def.is_some());
+                    assert!(!def.unwrap().has_body);
+                }
+                _ => panic!("expected trait fn"),
+            },
+            _ => panic!("expected trait"),
+        }
+    }
+
+    #[test]
+    fn test_20260425_extract_from_items() {
+        let items = parse_items("#[allow(non_snake_case)] fn rvs_foo() { 1; }");
+        let fns = rvs_extract_from_items(&items, &[], false);
+        assert_eq!(fns.len(), 1);
+        assert_eq!(fns[0].name, "rvs_foo");
+    }
+
+    #[test]
+    fn test_20260425_is_panic_macro() {
+        let mac = parse_macro("panic!(\"no\");");
+        assert!(rvs_is_panic_macro(&mac));
+        let mac2 = parse_macro("println!(\"hi\");");
+        assert!(!rvs_is_panic_macro(&mac2));
+    }
+
+    #[test]
+    fn test_20260425_scan_block_has_unsafe() {
+        let block = parse_block("unsafe { *ptr; }");
+        assert!(rvs_scan_block_has_unsafe(&block));
+        let block2 = parse_block("let x = 1;");
+        assert!(!rvs_scan_block_has_unsafe(&block2));
+    }
+
+    #[test]
+    fn test_20260425_scan_expr_has_unsafe() {
+        let expr: syn::Expr = syn::parse_quote!(unsafe { 1 });
+        assert!(rvs_scan_expr_has_unsafe(&expr));
+        let expr2: syn::Expr = syn::parse_quote!(1 + 2);
+        assert!(!rvs_scan_expr_has_unsafe(&expr2));
+    }
+
+    #[test]
+    fn test_20260425_scan_block_has_panic() {
+        let block = parse_block("panic!(\"err\");");
+        assert!(rvs_scan_block_has_panic(&block));
+        let block2 = parse_block("let x = 1;");
+        assert!(!rvs_scan_block_has_panic(&block2));
+    }
+
+    #[test]
+    fn test_20260425_scan_expr_has_panic() {
+        let expr: syn::Expr = syn::parse_quote!(panic!("err"));
+        assert!(rvs_scan_expr_has_panic(&expr));
+        let expr2: syn::Expr = syn::parse_quote!(42);
+        assert!(!rvs_scan_expr_has_panic(&expr2));
+    }
+
+    #[test]
+    fn test_20260425_is_test_fn() {
+        let items = parse_items("#[test] fn my_test() {}");
+        match &items[0] {
+            syn::Item::Fn(f) => {
+                assert!(rvs_is_test_fn(&f.attrs));
+            }
+            _ => panic!("expected fn"),
+        }
+    }
+
+    #[test]
+    fn test_20260425_is_cfg_test() {
+        let items = parse_items("#[cfg(test)] mod m {}");
+        match &items[0] {
+            syn::Item::Mod(m) => {
+                assert!(rvs_is_cfg_test(&m.attrs));
+            }
+            _ => panic!("expected mod"),
+        }
+    }
+
+    #[test]
+    fn test_20260425_allows_dead_code() {
+        let items = parse_items("#[allow(dead_code)] fn f() {}");
+        match &items[0] {
+            syn::Item::Fn(f) => {
+                assert!(rvs_allows_dead_code(&f.attrs));
+            }
+            _ => panic!("expected fn"),
+        }
+    }
+
+    #[test]
+    fn test_20260425_allows_non_snake_case() {
+        let items = parse_items("#[allow(non_snake_case)] fn rvs_foo_M() {}");
+        match &items[0] {
+            syn::Item::Fn(f) => {
+                assert!(rvs_allows_non_snake_case(&f.attrs));
+            }
+            _ => panic!("expected fn"),
+        }
+    }
+
+    #[test]
+    fn test_20260425_collect_tests_from_items() {
+        let items = parse_items("#[test] fn test_20260425_foo() {}");
+        let tests = rvs_collect_tests_from_items(&items);
+        assert_eq!(tests.len(), 1);
+        assert_eq!(tests[0].name, "test_20260425_foo");
+    }
+
+    #[test]
+    fn test_20260425_collect_imports_from_items() {
+        let items = parse_items("use std::collections::HashMap;");
+        let imports = rvs_collect_imports_from_items(&items);
+        assert_eq!(imports.len(), 1);
+        assert!(imports[0].use_path.contains("HashMap"));
+    }
+
+    #[test]
+    fn test_20260425_extract_use_paths() {
+        let tree: syn::UseTree = syn::parse_quote!(std::collections::HashMap);
+        let paths = rvs_extract_use_paths(&tree);
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0], "std::collections::HashMap");
+    }
+
+    #[test]
+    fn test_20260425_collect_non_rvs_fns_from_items() {
+        let items = parse_items("fn foo() {} fn rvs_bar() {}");
+        let fns = rvs_collect_non_rvs_fns_from_items(&items);
+        assert_eq!(fns.len(), 2);
+        assert!(!fns[0].has_rvs_prefix);
+        assert!(fns[1].has_rvs_prefix);
+    }
+
+    #[test]
+    fn test_20260425_has_doc_attr() {
+        let items = parse_items("/// docs\n#[doc = \"docs\"] fn f() {}");
+        match &items[0] {
+            syn::Item::Fn(f) => {
+                assert!(rvs_has_doc_attr(&f.attrs));
+            }
+            _ => panic!("expected fn"),
+        }
+    }
+
+    #[test]
+    fn test_20260425_collect_pub_items_from_items() {
+        let items = parse_items("pub fn f() {} fn g() {}");
+        let pubs = rvs_collect_pub_items_from_items(&items);
+        assert_eq!(pubs.len(), 1);
+        assert_eq!(pubs[0].name, "f");
+    }
+
+    #[test]
+    fn test_20260425_check_borrowed_type() {
+        let ty = parse_type("&String");
+        assert_eq!(
+            rvs_check_borrowed_type(&ty),
+            Some(("&String".into(), "&str".into()))
+        );
+        let ty2 = parse_type("&str");
+        assert!(rvs_check_borrowed_type(&ty2).is_none());
+    }
+
+    #[test]
+    fn test_20260425_has_safety_doc() {
+        let items = parse_items("/// # Safety\nunsafe fn f() {}");
+        match &items[0] {
+            syn::Item::Fn(f) => assert!(rvs_has_safety_doc(&f.attrs)),
+            _ => panic!("expected fn"),
+        }
+    }
+
+    #[test]
+    fn test_20260425_collect_borrowed_params_from_items() {
+        let items = parse_items("fn f(x: &String) {}");
+        let bp = rvs_collect_borrowed_params_from_items(&items);
+        assert_eq!(bp.len(), 1);
+        assert_eq!(bp[0].param, "x");
+    }
+
+    #[test]
+    fn test_20260425_collect_unsafe_fns_from_items() {
+        let items = parse_items("unsafe fn f() {}");
+        let uf = rvs_collect_unsafe_fns_from_items(&items);
+        assert_eq!(uf.len(), 1);
+        assert_eq!(uf[0].name, "f");
+    }
+
+    #[test]
+    fn test_20260425_find_deny_warnings() {
+        let file = syn::parse_file("#![deny(warnings)] fn f() {}").unwrap();
+        let line = rvs_find_deny_warnings(&file.attrs);
+        assert!(line.is_some());
+    }
+
+    #[test]
+    fn test_20260425_has_debug_derive() {
+        let items = parse_items("#[derive(Debug)] pub struct S;");
+        match &items[0] {
+            syn::Item::Struct(s) => assert!(rvs_has_debug_derive(&s.attrs)),
+            _ => panic!("expected struct"),
+        }
+    }
+
+    #[test]
+    fn test_20260425_has_panics_doc() {
+        let items = parse_items("/// # Panics\nfn f() {}");
+        match &items[0] {
+            syn::Item::Fn(f) => assert!(rvs_has_panics_doc(&f.attrs)),
+            _ => panic!("expected fn"),
+        }
+    }
+
+    #[test]
+    fn test_20260425_collect_missing_debug_from_items() {
+        let items = parse_items("pub struct S {} pub struct T {}");
+        let md = rvs_collect_missing_debug_from_items(&items);
+        assert_eq!(md.len(), 2);
+    }
+
+    #[test]
+    fn test_20260425_collect_missing_panics_doc_from_items() {
+        let items = parse_items("#[allow(non_snake_case)] fn rvs_foo_P() { panic!(\"\"); }");
+        let mp = rvs_collect_missing_panics_doc_from_items(&items);
+        assert_eq!(mp.len(), 1);
+    }
+
+    #[test]
+    fn test_20260425_collect_into_impls_from_items() {
+        let items = parse_items("impl Into<String> for Foo {}");
+        let ii = rvs_collect_into_impls_from_items(&items);
+        assert_eq!(ii.len(), 1);
+        assert_eq!(ii[0].target_type, "String");
+    }
+
+    #[test]
+    fn test_20260425_type_name() {
+        let ty = parse_type("Foo");
+        assert_eq!(rvs_type_name(&ty), "Foo");
+    }
+
+    #[test]
+    fn test_20260425_type_name_from_path() {
+        let items = parse_items("impl Into<String> for Foo {}");
+        match &items[0] {
+            syn::Item::Impl(imp) => {
+                if let Some((_, trait_path, _)) = &imp.trait_ {
+                    let seg = trait_path.segments.last().unwrap();
+                    assert_eq!(rvs_type_name_from_path(&seg.arguments), "String");
+                }
+            }
+            _ => panic!("expected impl"),
+        }
+    }
+
+    #[test]
+    fn test_20260425_type_ident() {
+        let ty = parse_type("Foo");
+        assert_eq!(rvs_type_ident(&ty), Some("Foo".to_string()));
+    }
+
+    #[test]
+    fn test_20260425_collect_consumed_arg_on_error_from_items() {
+        let items = parse_items("fn f(name: String) -> Result<(), MyError> { Ok(()) }");
+        let c = rvs_collect_consumed_arg_on_error_from_items(&items);
+        assert_eq!(c.len(), 1);
+        assert_eq!(c[0].param, "name");
+    }
+
+    #[test]
+    fn test_20260425_find_consumed_args() {
+        let sig = parse_fn_sig("fn f(name: String) -> Result<(), MyError>");
+        let r = rvs_find_consumed_args(&sig, "f", 1);
+        assert!(r.is_some());
+        assert_eq!(r.unwrap().param, "name");
+    }
+
+    #[test]
+    fn test_20260425_collect_type_idents() {
+        let ty = parse_type("Result<String, MyError>");
+        let ids = rvs_collect_type_idents(&ty);
+        assert!(ids.contains(&"Result".to_string()));
+        assert!(ids.contains(&"String".to_string()));
+    }
+
+    #[test]
+    fn test_20260425_collect_deref_polymorphism_from_items() {
+        let items = parse_items(
+            "impl std::ops::Deref for Foo { type Target = String; fn deref(&self) -> &Self::Target { panic!() } }",
+        );
+        let d = rvs_collect_deref_polymorphism_from_items(&items);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].target_type, "String");
+    }
+
+    #[test]
+    fn test_20260425_type_name_from_type_expr() {
+        let ty = parse_type("Bar");
+        assert_eq!(rvs_type_name_from_type_expr(&ty), "Bar");
+    }
+
+    #[test]
+    fn test_20260425_collect_reflection_usage_from_fns() {
+        let fns = vec![FnDef {
+            name: "f".into(),
+            capabilities: CapabilitySet::rvs_from_validated(""),
+            calls: vec![CalleeInfo {
+                name: "std::any::Any".into(),
+                line: 1,
+            }],
+            static_refs: vec![],
+            line: 1,
+            line_count: 1,
+            params: vec![],
+            debug_asserted_params: BTreeSet::new(),
+            has_body: true,
+            has_unsafe_block: false,
+            is_async_fn: false,
+            is_unsafe_fn: false,
+            has_mut_param: false,
+            has_mut_self: false,
+            has_panic_macro: false,
+            raw_suffix: String::new(),
+            is_test: false,
+            allows_dead_code: false,
+            has_allow_non_snake_case: false,
+        }];
+        let r = rvs_collect_reflection_usage_from_fns(&fns);
+        assert_eq!(r.len(), 1);
+    }
+
+    #[test]
+    fn test_20260425_is_stub_macro() {
+        let mac = parse_macro("todo!();");
+        assert!(rvs_is_stub_macro(&mac));
+        let mac2 = parse_macro("println!(\"hi\");");
+        assert!(!rvs_is_stub_macro(&mac2));
+    }
+
+    #[test]
+    fn test_20260425_collect_stub_macros_from_items() {
+        let items = parse_items("fn f() { todo!(); }");
+        let s = rvs_collect_stub_macros_from_items(&items);
+        assert_eq!(s.len(), 1);
+        assert_eq!(s[0].macro_name, "todo");
+    }
+
+    #[test]
+    fn test_20260425_scan_block_for_stubs() {
+        let block = parse_block("todo!();");
+        let s = rvs_scan_block_for_stubs(&block, "f");
+        assert_eq!(s.len(), 1);
+    }
+
+    #[test]
+    fn test_20260425_scan_expr_for_stubs() {
+        let expr: syn::Expr = syn::parse_quote!(todo!());
+        let s = rvs_scan_expr_for_stubs(&expr, "f");
+        assert_eq!(s.len(), 1);
+    }
+
+    #[test]
+    fn test_20260425_collect_empty_fns_from_items() {
+        let items = parse_items("fn f() {} fn g() { 1; }");
+        let e = rvs_collect_empty_fns_from_items(&items);
+        assert_eq!(e.len(), 1);
+        assert_eq!(e[0].function, "f");
+    }
+
+    #[test]
+    fn test_20260425_is_empty_block() {
+        let block = parse_block("");
+        assert!(rvs_is_empty_block(&block));
+        let block2 = parse_block("debug_assert!(x > 0);");
+        assert!(rvs_is_empty_block(&block2));
+        let block3 = parse_block("let x = 1;");
+        assert!(!rvs_is_empty_block(&block3));
+    }
+
+    #[test]
+    fn test_20260425_is_only_debug_asserts_expr() {
+        let expr: syn::Expr = syn::parse_quote!(debug_assert!(x > 0));
+        assert!(rvs_is_only_debug_asserts_expr(&expr));
+        let expr2: syn::Expr = syn::parse_quote!(42);
+        assert!(!rvs_is_only_debug_asserts_expr(&expr2));
+    }
+
+    #[test]
+    fn test_20260425_collect_test_calls_from_items() {
+        let items = parse_items("#[test] fn t() { rvs_foo(); }");
+        let calls = rvs_collect_test_calls_from_items(&items, &[]);
+        assert!(calls.iter().any(|c| c.name == "rvs_foo"));
+    }
+
+    #[test]
+    fn test_20260425_collect_error_swallows_from_items() {
+        let items = parse_items("fn f() { x.ok(); }");
+        let es = rvs_collect_error_swallows_from_items(&items);
+        assert_eq!(es.len(), 1);
+        assert_eq!(es[0].method, "ok");
+    }
+
+    #[test]
+    fn test_20260425_scan_block_for_error_swallows() {
+        let block = parse_block("x.ok();");
+        let es = rvs_scan_block_for_error_swallows(&block, "f");
+        assert_eq!(es.len(), 1);
+    }
+
+    #[test]
+    fn test_20260425_scan_expr_for_error_swallows() {
+        let expr: syn::Expr = syn::parse_quote!(x.ok());
+        let es = rvs_scan_expr_for_error_swallows(&expr, "f");
+        assert_eq!(es.len(), 1);
+    }
+
+    #[test]
+    fn test_20260425_collect_catch_unwind_from_items() {
+        let items = parse_items("fn f() { catch_unwind(|| {}); }");
+        let cu = rvs_collect_catch_unwind_from_items(&items);
+        assert_eq!(cu.len(), 1);
+    }
+
+    #[test]
+    fn test_20260425_scan_block_for_catch_unwind() {
+        let block = parse_block("catch_unwind(|| {});");
+        let cu = rvs_scan_block_for_catch_unwind(&block, "f");
+        assert_eq!(cu.len(), 1);
+    }
+
+    #[test]
+    fn test_20260425_scan_expr_for_catch_unwind() {
+        let expr: syn::Expr = syn::parse_quote!(catch_unwind(|| {}));
+        let cu = rvs_scan_expr_for_catch_unwind(&expr, "f");
+        assert_eq!(cu.len(), 1);
+    }
+
+    #[test]
+    fn test_20260425_collect_catch_all_variants_from_items() {
+        let items = parse_items("#[derive(Error)] enum MyError { Unknown, }");
+        let ca = rvs_collect_catch_all_variants_from_items(&items);
+        assert_eq!(ca.len(), 1);
+        assert_eq!(ca[0].variant, "Unknown");
+    }
+
+    // ---- Public API function tests ----
+
+    #[test]
+    fn test_20260425_extract_functions() {
+        let source = "#[allow(non_snake_case)] fn rvs_add(x: i32) -> i32 { x + 1 }";
+        let fns = rvs_extract_functions(source).unwrap();
+        assert_eq!(fns.len(), 1);
+        assert_eq!(fns[0].name, "rvs_add");
+    }
+
+    #[test]
+    fn test_20260425_extract_tests() {
+        let source = "#[test] fn test_foo() {}";
+        let tests = rvs_extract_tests(source).unwrap();
+        assert_eq!(tests.len(), 1);
+        assert_eq!(tests[0].name, "test_foo");
+    }
+
+    #[test]
+    fn test_20260425_extract_imports_pub() {
+        let source = "use std::collections::HashMap;";
+        let imports = rvs_extract_imports(source).unwrap();
+        assert_eq!(imports.len(), 1);
+        assert!(imports[0].use_path.contains("HashMap"));
+    }
+
+    #[test]
+    fn test_20260425_extract_non_rvs_fns_pub() {
+        let source = "fn foo() {} fn rvs_bar() {}";
+        let fns = rvs_extract_non_rvs_fns(source).unwrap();
+        assert_eq!(fns.len(), 2);
+    }
+
+    #[test]
+    fn test_20260425_extract_pub_items_pub() {
+        let source = "pub fn f() {} fn g() {}";
+        let pubs = rvs_extract_pub_items(source).unwrap();
+        assert_eq!(pubs.len(), 1);
+    }
+
+    #[test]
+    fn test_20260425_extract_borrowed_params_pub() {
+        let source = "fn f(x: &String) {}";
+        let bp = rvs_extract_borrowed_params(source).unwrap();
+        assert_eq!(bp.len(), 1);
+    }
+
+    #[test]
+    fn test_20260425_extract_unsafe_fns_pub() {
+        let source = "unsafe fn f() {}";
+        let uf = rvs_extract_unsafe_fns(source).unwrap();
+        assert_eq!(uf.len(), 1);
+    }
+
+    #[test]
+    fn test_20260425_extract_deny_warnings_pub() {
+        let source = "#![deny(warnings)] fn f() {}";
+        let dw = rvs_extract_deny_warnings(source).unwrap();
+        assert!(dw.is_some());
+    }
+
+    #[test]
+    fn test_20260425_extract_missing_debug_pub() {
+        let source = "pub struct S {}";
+        let md = rvs_extract_missing_debug(source).unwrap();
+        assert_eq!(md.len(), 1);
+    }
+
+    #[test]
+    fn test_20260425_extract_missing_panics_doc_pub() {
+        let source = "#[allow(non_snake_case)] fn rvs_foo_P() { panic!(\"\"); }";
+        let mp = rvs_extract_missing_panics_doc(source).unwrap();
+        assert_eq!(mp.len(), 1);
+    }
+
+    #[test]
+    fn test_20260425_extract_into_impls_pub() {
+        let source = "impl Into<String> for Foo {}";
+        let ii = rvs_extract_into_impls(source).unwrap();
+        assert_eq!(ii.len(), 1);
+    }
+
+    #[test]
+    fn test_20260425_extract_consumed_arg_on_error_pub() {
+        let source = "fn f(name: String) -> Result<(), MyError> { Ok(()) }";
+        let c = rvs_extract_consumed_arg_on_error(source).unwrap();
+        assert_eq!(c.len(), 1);
+    }
+
+    #[test]
+    fn test_20260425_extract_deref_polymorphism_pub() {
+        let source = "impl std::ops::Deref for Foo { type Target = String; fn deref(&self) -> &Self::Target { panic!() } }";
+        let d = rvs_extract_deref_polymorphism(source).unwrap();
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn test_20260425_extract_reflection_usage_pub() {
+        let fns = vec![FnDef {
+            name: "f".into(),
+            capabilities: CapabilitySet::rvs_from_validated(""),
+            calls: vec![CalleeInfo {
+                name: "std::any::Any".into(),
+                line: 1,
+            }],
+            static_refs: vec![],
+            line: 1,
+            line_count: 1,
+            params: vec![],
+            debug_asserted_params: BTreeSet::new(),
+            has_body: true,
+            has_unsafe_block: false,
+            is_async_fn: false,
+            is_unsafe_fn: false,
+            has_mut_param: false,
+            has_mut_self: false,
+            has_panic_macro: false,
+            raw_suffix: String::new(),
+            is_test: false,
+            allows_dead_code: false,
+            has_allow_non_snake_case: false,
+        }];
+        let r = rvs_extract_reflection_usage(&fns);
+        assert_eq!(r.len(), 1);
+    }
+
+    #[test]
+    fn test_20260425_extract_stub_macros_pub() {
+        let source = "fn f() { todo!(); }";
+        let s = rvs_extract_stub_macros(source).unwrap();
+        assert_eq!(s.len(), 1);
+    }
+
+    #[test]
+    fn test_20260425_extract_empty_fns_pub() {
+        let source = "fn f() {}";
+        let e = rvs_extract_empty_fns(source).unwrap();
+        assert_eq!(e.len(), 1);
+    }
+
+    #[test]
+    fn test_20260425_extract_todo_comments_pub() {
+        let source = "// TODO: fix this\n// FIXME: broken\nfn f() {}\n";
+        let tc = rvs_extract_todo_comments(source);
+        assert_eq!(tc.len(), 2);
+    }
+
+    #[test]
+    fn test_20260425_extract_test_call_names_pub() {
+        let source = "#[test] fn t() { rvs_foo(); rvs_bar(); }";
+        let names = rvs_extract_test_call_names(source).unwrap();
+        assert!(names.contains(&"rvs_foo".to_string()));
+        assert!(names.contains(&"rvs_bar".to_string()));
+    }
+
+    #[test]
+    fn test_20260425_extract_error_swallows_pub() {
+        let source = "fn f() { x.ok(); }";
+        let es = rvs_extract_error_swallows(source).unwrap();
+        assert_eq!(es.len(), 1);
+    }
+
+    #[test]
+    fn test_20260425_extract_catch_unwind_pub() {
+        let source = "fn f() { catch_unwind(|| {}); }";
+        let cu = rvs_extract_catch_unwind(source).unwrap();
+        assert_eq!(cu.len(), 1);
+    }
+
+    #[test]
+    fn test_20260425_extract_catch_all_error_variants_pub() {
+        let source = "#[derive(Error)] enum MyError { Unknown }";
+        let ca = rvs_extract_catch_all_error_variants(source).unwrap();
+        assert_eq!(ca.len(), 1);
+    }
 }

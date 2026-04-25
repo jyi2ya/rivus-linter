@@ -176,3 +176,110 @@ pub enum ReportError {
         source: crate::extract::ExtractError,
     },
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::capability::Capability;
+
+    fn make_fn_def(name: &str, caps: &str, line_count: usize) -> FnDef {
+        FnDef {
+            name: name.to_string(),
+            capabilities: if caps.is_empty() {
+                CapabilitySet::rvs_new()
+            } else {
+                CapabilitySet::rvs_from_validated(caps)
+            },
+            calls: vec![],
+            static_refs: vec![],
+            line: 1,
+            line_count,
+            params: vec![],
+            debug_asserted_params: Default::default(),
+            has_body: true,
+            has_unsafe_block: false,
+            is_async_fn: false,
+            is_unsafe_fn: false,
+            has_mut_param: false,
+            has_mut_self: false,
+            has_panic_macro: false,
+            raw_suffix: caps.to_string(),
+            is_test: false,
+            allows_dead_code: false,
+            has_allow_non_snake_case: true,
+        }
+    }
+
+    #[test]
+    fn test_20260425_build_report_empty() {
+        let report = rvs_build_report(&[]);
+        assert_eq!(report.total_fn_count, 0);
+        assert_eq!(report.total_line_count, 0);
+    }
+
+    #[test]
+    fn test_20260425_build_report_pure() {
+        let fns = vec![make_fn_def("rvs_add", "", 5)];
+        let report = rvs_build_report(&fns);
+        assert_eq!(report.total_fn_count, 1);
+        assert_eq!(report.pure_fn_count, 1);
+        assert_eq!(report.good_fn_count, 1);
+    }
+
+    #[test]
+    fn test_20260425_build_report_mixed() {
+        let fns = vec![
+            make_fn_def("rvs_add", "", 3),
+            make_fn_def("rvs_sort_M", "M", 10),
+            make_fn_def("rvs_read_BI", "BI", 20),
+        ];
+        let report = rvs_build_report(&fns);
+        assert_eq!(report.total_fn_count, 3);
+        assert_eq!(report.pure_fn_count, 1);
+        assert_eq!(report.good_fn_count, 2);
+        assert_eq!(report.by_capability[&Capability::M].fn_count, 1);
+    }
+
+    #[test]
+    fn test_20260425_build_report_skips_test_and_dead_code() {
+        let mut test_fn = make_fn_def("rvs_helper", "", 5);
+        test_fn.is_test = true;
+        let mut dead_fn = make_fn_def("rvs_unused", "S", 8);
+        dead_fn.allows_dead_code = true;
+        let normal_fn = make_fn_def("rvs_real", "M", 10);
+        let report = rvs_build_report(&[test_fn, dead_fn, normal_fn]);
+        assert_eq!(report.total_fn_count, 1);
+    }
+
+    #[test]
+    fn test_20260425_report_sources_single() {
+        let source = "#![allow(non_snake_case)]\nfn rvs_add(a: i32, b: i32) -> i32 { a + b }\n";
+        let sources = vec![SourceFile {
+            path: "test.rs".into(),
+            source: source.into(),
+        }];
+        let report = rvs_report_sources(&sources).unwrap();
+        assert_eq!(report.total_fn_count, 1);
+    }
+
+    #[test]
+    fn test_20260425_report_sources_empty() {
+        let report = rvs_report_sources(&[]).unwrap();
+        assert_eq!(report.total_fn_count, 0);
+    }
+
+    #[test]
+    fn test_20260425_report_display() {
+        let report = Report {
+            by_capability: BTreeMap::new(),
+            pure_fn_count: 0,
+            pure_line_count: 0,
+            good_fn_count: 0,
+            good_line_count: 0,
+            total_fn_count: 0,
+            total_line_count: 0,
+        };
+        let s = report.to_string();
+        assert!(s.contains("no rvs_ functions found"));
+    }
+}

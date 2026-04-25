@@ -6,15 +6,17 @@ use std::path::Path;
 use crate::capability::{Capability, CapabilitySet, rvs_parse_function};
 use crate::capsmap::CapsMap;
 use crate::extract::{
-    BorrowedParamInfo, ConsumedArgOnErrorInfo, DerefPolymorphismInfo, EmptyFnInfo, FnDef,
-    ImportInfo, IntoImplInfo, MissingDebugInfo, MissingPanicsDocInfo, NonRvsFnInfo, PubItemInfo,
-    ReflectionUsageInfo, StubMacroInfo, TestName, TodoCommentInfo, UnsafeFnInfo,
-    rvs_extract_borrowed_params, rvs_extract_consumed_arg_on_error, rvs_extract_deny_warnings,
-    rvs_extract_deref_polymorphism, rvs_extract_empty_fns, rvs_extract_functions,
-    rvs_extract_imports, rvs_extract_into_impls, rvs_extract_missing_debug,
-    rvs_extract_missing_panics_doc, rvs_extract_non_rvs_fns, rvs_extract_pub_items,
-    rvs_extract_reflection_usage, rvs_extract_stub_macros, rvs_extract_test_call_names,
-    rvs_extract_tests, rvs_extract_todo_comments, rvs_extract_unsafe_fns,
+    BorrowedParamInfo, CatchAllErrorVariantInfo, CatchUnwindInfo, ConsumedArgOnErrorInfo,
+    DerefPolymorphismInfo, EmptyFnInfo, ErrorSwallowInfo, FnDef, ImportInfo, IntoImplInfo,
+    MissingDebugInfo, MissingPanicsDocInfo, NonRvsFnInfo, PubItemInfo, ReflectionUsageInfo,
+    StubMacroInfo, TestName, TodoCommentInfo, UnsafeFnInfo, rvs_extract_borrowed_params,
+    rvs_extract_catch_all_error_variants, rvs_extract_catch_unwind,
+    rvs_extract_consumed_arg_on_error, rvs_extract_deny_warnings, rvs_extract_deref_polymorphism,
+    rvs_extract_empty_fns, rvs_extract_error_swallows, rvs_extract_functions, rvs_extract_imports,
+    rvs_extract_into_impls, rvs_extract_missing_debug, rvs_extract_missing_panics_doc,
+    rvs_extract_non_rvs_fns, rvs_extract_pub_items, rvs_extract_reflection_usage,
+    rvs_extract_stub_macros, rvs_extract_test_call_names, rvs_extract_tests,
+    rvs_extract_todo_comments, rvs_extract_unsafe_fns,
 };
 use crate::source::rvs_read_rust_sources_BI;
 
@@ -104,13 +106,13 @@ fn rvs_check_unsafe_safety_doc(fns: &[UnsafeFnInfo], file: &str) -> Vec<MissingS
 
 /// 纯函数：检查文件级 `#![deny(warnings)]` 反模式。
 fn rvs_check_deny_warnings(line: Option<usize>, file: &str) -> Vec<DenyWarningsWarning> {
-    line.map(|l| {
-        vec![DenyWarningsWarning {
+    match line {
+        Some(l) => vec![DenyWarningsWarning {
             file: file.to_string(),
             line: l,
-        }]
-    })
-    .unwrap_or_default()
+        }],
+        None => Vec::new(),
+    }
 }
 
 fn rvs_check_missing_debug(items: &[MissingDebugInfo], file: &str) -> Vec<MissingDebugWarning> {
@@ -471,6 +473,10 @@ pub struct CheckOutput {
     pub reflection_usage_warnings: Vec<ReflectionUsageWarning>,
     pub todo_comment_warnings: Vec<TodoCommentWarning>,
     pub untested_good_fn_warnings: Vec<UntestedGoodFnWarning>,
+    pub error_swallow_warnings: Vec<ErrorSwallowWarning>,
+    pub catch_unwind_warnings: Vec<CatchUnwindWarning>,
+    pub catch_all_error_variant_warnings: Vec<CatchAllErrorVariantWarning>,
+    pub missing_test_output_warnings: Vec<MissingTestOutputWarning>,
 }
 
 /// 一条 `#![deny(warnings)]` 反模式警告：这种粗粒度 deny 会随编译器升级意外破坏构建。
@@ -874,6 +880,119 @@ impl fmt::Display for DuplicateTestWarning {
     }
 }
 
+/// 一条错误吞没警告：函数中调用了 `.ok()` 或 `.unwrap_or_default()` 来静默忽略错误，
+/// 而非在上游处理根因。
+#[derive(Debug, Clone)]
+pub struct ErrorSwallowWarning {
+    pub function: String,
+    pub method: String,
+    pub file: String,
+    pub line: usize,
+}
+
+impl fmt::Display for ErrorSwallowWarning {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "warning: function '{}' calls .{}() which swallows errors—handle the error upstream instead\n  at {}:{}",
+            self.function, self.method, self.file, self.line,
+        )
+    }
+}
+
+fn rvs_check_error_swallows(items: &[ErrorSwallowInfo], file: &str) -> Vec<ErrorSwallowWarning> {
+    items
+        .iter()
+        .map(|i| ErrorSwallowWarning {
+            function: i.function.clone(),
+            method: i.method.clone(),
+            file: file.to_string(),
+            line: i.line,
+        })
+        .collect()
+}
+
+/// 一条 catch_unwind 反模式警告：用 `catch_unwind` 绕过 panic 而非修复 panic 源头。
+#[derive(Debug, Clone)]
+pub struct CatchUnwindWarning {
+    pub function: String,
+    pub file: String,
+    pub line: usize,
+}
+
+impl fmt::Display for CatchUnwindWarning {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "warning: function '{}' uses catch_unwind—fix the panic source instead of catching it\n  at {}:{}",
+            self.function, self.file, self.line,
+        )
+    }
+}
+
+fn rvs_check_catch_unwind(items: &[CatchUnwindInfo], file: &str) -> Vec<CatchUnwindWarning> {
+    items
+        .iter()
+        .map(|i| CatchUnwindWarning {
+            function: i.function.clone(),
+            file: file.to_string(),
+            line: i.line,
+        })
+        .collect()
+}
+
+/// 一条兜底错误变体警告：错误枚举中包含 `Unknown`/`Other` 等非穷举变体。
+#[derive(Debug, Clone)]
+pub struct CatchAllErrorVariantWarning {
+    pub enum_name: String,
+    pub variant: String,
+    pub file: String,
+    pub line: usize,
+}
+
+impl fmt::Display for CatchAllErrorVariantWarning {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "warning: error enum '{}' has catch-all variant '{}'—enumerate all failure modes explicitly\n  at {}:{}",
+            self.enum_name, self.variant, self.file, self.line,
+        )
+    }
+}
+
+fn rvs_check_catch_all_error_variants(
+    items: &[CatchAllErrorVariantInfo],
+    file: &str,
+) -> Vec<CatchAllErrorVariantWarning> {
+    items
+        .iter()
+        .map(|i| CatchAllErrorVariantWarning {
+            enum_name: i.enum_name.clone(),
+            variant: i.variant.clone(),
+            file: file.to_string(),
+            line: i.line,
+        })
+        .collect()
+}
+
+/// 一条测试输出文件缺失警告：`#[test]` 函数没有对应的 `test_out/{name}.out` 快照文件。
+#[derive(Debug, Clone)]
+pub struct MissingTestOutputWarning {
+    pub test_name: String,
+    pub file: String,
+    pub line: usize,
+}
+
+impl fmt::Display for MissingTestOutputWarning {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "warning: test '{}' is missing snapshot file test_out/{}.out\n  at {}:{}",
+            self.test_name, self.test_name, self.file, self.line,
+        )
+    }
+}
+
 /// 内部实现：检查函数调用合规性与静态引用合规性。
 fn rvs_check_functions_impl(functions: &[FnDef], file: &str, capsmap: &CapsMap) -> CheckOutput {
     let mut violations = Vec::new();
@@ -1083,6 +1202,10 @@ fn rvs_check_functions_impl(functions: &[FnDef], file: &str, capsmap: &CapsMap) 
         reflection_usage_warnings: Vec::new(),
         todo_comment_warnings: Vec::new(),
         untested_good_fn_warnings: Vec::new(),
+        error_swallow_warnings: Vec::new(),
+        catch_unwind_warnings: Vec::new(),
+        catch_all_error_variant_warnings: Vec::new(),
+        missing_test_output_warnings: Vec::new(),
     }
 }
 
@@ -1324,6 +1447,37 @@ pub fn rvs_check_source(
             file,
         ));
 
+    // 检查 .ok() / .unwrap_or_default() 错误吞没
+    let error_swallows = rvs_extract_error_swallows(source).map_err(|e| CheckError::Extract {
+        source: e,
+        file: file.to_string(),
+    })?;
+    output
+        .error_swallow_warnings
+        .extend(rvs_check_error_swallows(&error_swallows, file));
+
+    // 检查 catch_unwind 使用
+    let catch_unwind = rvs_extract_catch_unwind(source).map_err(|e| CheckError::Extract {
+        source: e,
+        file: file.to_string(),
+    })?;
+    output
+        .catch_unwind_warnings
+        .extend(rvs_check_catch_unwind(&catch_unwind, file));
+
+    // 检查兜底错误变体（Unknown/Other）
+    let catch_all_variants =
+        rvs_extract_catch_all_error_variants(source).map_err(|e| CheckError::Extract {
+            source: e,
+            file: file.to_string(),
+        })?;
+    output
+        .catch_all_error_variant_warnings
+        .extend(rvs_check_catch_all_error_variants(
+            &catch_all_variants,
+            file,
+        ));
+
     Ok(output)
 }
 
@@ -1497,6 +1651,39 @@ pub fn rvs_check_path_BI(path: &Path, capsmap: &CapsMap) -> Result<CheckOutput, 
             .todo_comment_warnings
             .extend(rvs_check_todo_comments(&todo_comments, &sf.path));
 
+        // 检查 .ok() / .unwrap_or_default() 错误吞没
+        let error_swallows =
+            rvs_extract_error_swallows(&sf.source).map_err(|e| CheckError::Extract {
+                source: e,
+                file: sf.path.clone(),
+            })?;
+        output
+            .error_swallow_warnings
+            .extend(rvs_check_error_swallows(&error_swallows, &sf.path));
+
+        // 检查 catch_unwind 使用
+        let catch_unwind =
+            rvs_extract_catch_unwind(&sf.source).map_err(|e| CheckError::Extract {
+                source: e,
+                file: sf.path.clone(),
+            })?;
+        output
+            .catch_unwind_warnings
+            .extend(rvs_check_catch_unwind(&catch_unwind, &sf.path));
+
+        // 检查兜底错误变体（Unknown/Other）
+        let catch_all_variants =
+            rvs_extract_catch_all_error_variants(&sf.source).map_err(|e| CheckError::Extract {
+                source: e,
+                file: sf.path.clone(),
+            })?;
+        output
+            .catch_all_error_variant_warnings
+            .extend(rvs_check_catch_all_error_variants(
+                &catch_all_variants,
+                &sf.path,
+            ));
+
         for t in tests {
             all_tests.push((sf.path.clone(), t));
         }
@@ -1528,6 +1715,23 @@ pub fn rvs_check_path_BI(path: &Path, capsmap: &CapsMap) -> Result<CheckOutput, 
     let (fmt_warnings, dup_warnings) = rvs_test_warnings(&all_tests);
     output.test_name_warnings.extend(fmt_warnings);
     output.duplicate_test_warnings.extend(dup_warnings);
+
+    // 检查测试快照文件是否存在
+    if Path::new("test_out").is_dir() {
+        for (file, test) in &all_tests {
+            let snapshot_path = format!("test_out/{}.out", test.name);
+            if !Path::new(&snapshot_path).exists() {
+                output
+                    .missing_test_output_warnings
+                    .push(MissingTestOutputWarning {
+                        test_name: test.name.clone(),
+                        file: file.clone(),
+                        line: test.line,
+                    });
+            }
+        }
+    }
+
     Ok(output)
 }
 
@@ -1605,4 +1809,1170 @@ pub fn rvs_check_mir_path_BIMPS(
     let deps_dir = crate::mir::rvs_compile_to_mir_BIMPS(project_dir)
         .map_err(|e| MirCheckError::Compile { source: e })?;
     rvs_check_mir_dir_BIM(&deps_dir, capsmap)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::capability::*;
+    use crate::capsmap::CapsMap;
+    use crate::extract::*;
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn test_20260425_check_imports_banned() {
+        let imports = vec![
+            ImportInfo {
+                use_path: "anyhow::Result".to_string(),
+                line: 1,
+            },
+            ImportInfo {
+                use_path: "std::fs".to_string(),
+                line: 2,
+            },
+            ImportInfo {
+                use_path: "eyre::Report".to_string(),
+                line: 3,
+            },
+            ImportInfo {
+                use_path: "color_eyre".to_string(),
+                line: 4,
+            },
+        ];
+        let warnings = rvs_check_imports(&imports, "test.rs");
+        assert_eq!(warnings.len(), 3);
+        assert_eq!(warnings[0].crate_name, "anyhow");
+        assert_eq!(warnings[1].crate_name, "eyre");
+        assert_eq!(warnings[2].crate_name, "color_eyre");
+    }
+
+    #[test]
+    fn test_20260425_check_imports_empty() {
+        let warnings = rvs_check_imports(&[], "test.rs");
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn test_20260425_check_imports_clean() {
+        let imports = vec![
+            ImportInfo {
+                use_path: "std::fs".to_string(),
+                line: 1,
+            },
+            ImportInfo {
+                use_path: "serde::Deserialize".to_string(),
+                line: 2,
+            },
+        ];
+        let warnings = rvs_check_imports(&imports, "test.rs");
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn test_20260425_check_wildcard_imports_banned() {
+        let imports = vec![
+            ImportInfo {
+                use_path: "std::collections::*".to_string(),
+                line: 1,
+            },
+            ImportInfo {
+                use_path: "super::*".to_string(),
+                line: 2,
+            },
+            ImportInfo {
+                use_path: "std::prelude::*".to_string(),
+                line: 3,
+            },
+        ];
+        let warnings = rvs_check_wildcard_imports(&imports, "test.rs");
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].use_path, "std::collections::*");
+    }
+
+    #[test]
+    fn test_20260425_is_banned_wildcard() {
+        assert!(!rvs_is_banned_wildcard("std::collections::HashMap"));
+        assert!(rvs_is_banned_wildcard("std::collections::*"));
+        assert!(!rvs_is_banned_wildcard("super::*"));
+        assert!(!rvs_is_banned_wildcard("std::prelude::*"));
+        assert!(!rvs_is_banned_wildcard("crate::prelude::*"));
+        assert!(!rvs_is_banned_wildcard("super :: *"));
+    }
+
+    #[test]
+    fn test_20260425_check_borrowed_params() {
+        let params = vec![BorrowedParamInfo {
+            function: "rvs_foo".to_string(),
+            param: "x".to_string(),
+            original: "&String".to_string(),
+            suggestion: "&str".to_string(),
+            line: 5,
+        }];
+        let warnings = rvs_check_borrowed_params(&params, "test.rs");
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].function, "rvs_foo");
+        assert_eq!(warnings[0].original, "&String");
+        assert_eq!(warnings[0].suggestion, "&str");
+    }
+
+    #[test]
+    fn test_20260425_check_unsafe_safety_doc_missing() {
+        let fns = vec![
+            UnsafeFnInfo {
+                name: "unsafe_fn1".to_string(),
+                line: 10,
+                has_safety_doc: false,
+            },
+            UnsafeFnInfo {
+                name: "unsafe_fn2".to_string(),
+                line: 20,
+                has_safety_doc: true,
+            },
+        ];
+        let warnings = rvs_check_unsafe_safety_doc(&fns, "test.rs");
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].function, "unsafe_fn1");
+    }
+
+    #[test]
+    fn test_20260425_check_deny_warnings_found() {
+        let warnings = rvs_check_deny_warnings(Some(1), "test.rs");
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].line, 1);
+    }
+
+    #[test]
+    fn test_20260425_check_deny_warnings_none() {
+        let warnings = rvs_check_deny_warnings(None, "test.rs");
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn test_20260425_check_missing_debug() {
+        let items = vec![
+            MissingDebugInfo {
+                name: "Foo".to_string(),
+                line: 5,
+            },
+            MissingDebugInfo {
+                name: "Bar".to_string(),
+                line: 10,
+            },
+        ];
+        let warnings = rvs_check_missing_debug(&items, "test.rs");
+        assert_eq!(warnings.len(), 2);
+        assert_eq!(warnings[0].name, "Foo");
+    }
+
+    #[test]
+    fn test_20260425_check_missing_panics_doc() {
+        let items = vec![MissingPanicsDocInfo {
+            function: "rvs_div_P".to_string(),
+            line: 3,
+        }];
+        let warnings = rvs_check_missing_panics_doc(&items, "test.rs");
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].function, "rvs_div_P");
+    }
+
+    #[test]
+    fn test_20260425_check_into_impls() {
+        let items = vec![IntoImplInfo {
+            impl_type: "Foo".to_string(),
+            target_type: "String".to_string(),
+            line: 7,
+        }];
+        let warnings = rvs_check_into_impls(&items, "test.rs");
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].impl_type, "Foo");
+        assert_eq!(warnings[0].target_type, "String");
+    }
+
+    #[test]
+    fn test_20260425_check_consumed_arg_on_error() {
+        let items = vec![ConsumedArgOnErrorInfo {
+            function: "rvs_process".to_string(),
+            param: "name".to_string(),
+            param_type: "String".to_string(),
+            line: 12,
+        }];
+        let warnings = rvs_check_consumed_arg_on_error(&items, "test.rs");
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].param, "name");
+    }
+
+    #[test]
+    fn test_20260425_check_deref_polymorphism() {
+        let items = vec![DerefPolymorphismInfo {
+            impl_type: "MyWrapper".to_string(),
+            target_type: "Inner".to_string(),
+            line: 15,
+        }];
+        let warnings = rvs_check_deref_polymorphism(&items, "test.rs");
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].impl_type, "MyWrapper");
+    }
+
+    #[test]
+    fn test_20260425_check_reflection_usage() {
+        let items = vec![ReflectionUsageInfo {
+            function: "rvs_check".to_string(),
+            path: "std::any::Any".to_string(),
+            line: 20,
+        }];
+        let warnings = rvs_check_reflection_usage(&items, "test.rs");
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].path, "std::any::Any");
+    }
+
+    #[test]
+    fn test_20260425_check_stub_macros() {
+        let items = vec![StubMacroInfo {
+            function: "rvs_foo".to_string(),
+            macro_name: "todo".to_string(),
+            line: 5,
+        }];
+        let violations = rvs_check_stub_macros(&items, "test.rs");
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].caller, "rvs_foo");
+        assert!(matches!(
+            violations[0].kind,
+            ViolationKind::StubMacro { .. }
+        ));
+    }
+
+    #[test]
+    fn test_20260425_check_empty_fns() {
+        let items = vec![EmptyFnInfo {
+            function: "rvs_noop".to_string(),
+            line: 8,
+        }];
+        let violations = rvs_check_empty_fns(&items, "test.rs");
+        assert_eq!(violations.len(), 1);
+        assert!(matches!(violations[0].kind, ViolationKind::EmptyFn));
+    }
+
+    #[test]
+    fn test_20260425_check_todo_comments() {
+        let items = vec![
+            TodoCommentInfo {
+                kind: "TODO".to_string(),
+                text: "fix this".to_string(),
+                line: 3,
+            },
+            TodoCommentInfo {
+                kind: "FIXME".to_string(),
+                text: String::new(),
+                line: 7,
+            },
+        ];
+        let warnings = rvs_check_todo_comments(&items, "test.rs");
+        assert_eq!(warnings.len(), 2);
+        assert_eq!(warnings[0].kind, "TODO");
+        assert_eq!(warnings[1].kind, "FIXME");
+    }
+
+    #[test]
+    fn test_20260425_check_untested_good_fns_untested() {
+        let functions = vec![FnDef {
+            name: "rvs_add".to_string(),
+            capabilities: CapabilitySet::rvs_new(),
+            calls: vec![],
+            static_refs: vec![],
+            line: 1,
+            line_count: 5,
+            params: vec![],
+            debug_asserted_params: BTreeSet::new(),
+            has_body: true,
+            has_unsafe_block: false,
+            is_async_fn: false,
+            is_unsafe_fn: false,
+            has_mut_param: false,
+            has_mut_self: false,
+            has_panic_macro: false,
+            raw_suffix: String::new(),
+            is_test: false,
+            allows_dead_code: false,
+            has_allow_non_snake_case: false,
+        }];
+        let warnings = rvs_check_untested_good_fns(&functions, &[], "test.rs");
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].function, "rvs_add");
+    }
+
+    #[test]
+    fn test_20260425_check_untested_good_fns_tested() {
+        let functions = vec![FnDef {
+            name: "rvs_add".to_string(),
+            capabilities: CapabilitySet::rvs_new(),
+            calls: vec![],
+            static_refs: vec![],
+            line: 1,
+            line_count: 5,
+            params: vec![],
+            debug_asserted_params: BTreeSet::new(),
+            has_body: true,
+            has_unsafe_block: false,
+            is_async_fn: false,
+            is_unsafe_fn: false,
+            has_mut_param: false,
+            has_mut_self: false,
+            has_panic_macro: false,
+            raw_suffix: String::new(),
+            is_test: false,
+            allows_dead_code: false,
+            has_allow_non_snake_case: false,
+        }];
+        let warnings = rvs_check_untested_good_fns(&functions, &["rvs_add".to_string()], "test.rs");
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn test_20260425_check_untested_good_fns_bad_fn_excluded() {
+        let functions = vec![FnDef {
+            name: "rvs_read_BI".to_string(),
+            capabilities: CapabilitySet::rvs_from_validated("BI"),
+            calls: vec![],
+            static_refs: vec![],
+            line: 1,
+            line_count: 5,
+            params: vec![],
+            debug_asserted_params: BTreeSet::new(),
+            has_body: true,
+            has_unsafe_block: false,
+            is_async_fn: false,
+            is_unsafe_fn: false,
+            has_mut_param: false,
+            has_mut_self: false,
+            has_panic_macro: false,
+            raw_suffix: "BI".to_string(),
+            is_test: false,
+            allows_dead_code: false,
+            has_allow_non_snake_case: true,
+        }];
+        let warnings = rvs_check_untested_good_fns(&functions, &[], "test.rs");
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn test_20260425_check_non_rvs_fn_names() {
+        let fns = vec![
+            NonRvsFnInfo {
+                name: "foo".to_string(),
+                line: 1,
+                has_rvs_prefix: false,
+            },
+            NonRvsFnInfo {
+                name: "rvs_bar".to_string(),
+                line: 2,
+                has_rvs_prefix: true,
+            },
+        ];
+        let warnings = rvs_check_non_rvs_fn_names(&fns, "test.rs");
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].function, "foo");
+    }
+
+    #[test]
+    fn test_20260425_check_missing_doc() {
+        let pubs = vec![
+            PubItemInfo {
+                name: "rvs_foo".to_string(),
+                line: 1,
+                has_doc: false,
+            },
+            PubItemInfo {
+                name: "rvs_bar".to_string(),
+                line: 5,
+                has_doc: true,
+            },
+        ];
+        let warnings = rvs_check_missing_doc(&pubs, "test.rs");
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].item, "rvs_foo");
+    }
+
+    #[test]
+    fn test_20260425_check_error_swallows() {
+        let items = vec![ErrorSwallowInfo {
+            function: "rvs_process".to_string(),
+            method: "ok".to_string(),
+            line: 10,
+        }];
+        let warnings = rvs_check_error_swallows(&items, "test.rs");
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].method, "ok");
+    }
+
+    #[test]
+    fn test_20260425_check_catch_unwind() {
+        let items = vec![CatchUnwindInfo {
+            function: "rvs_handle".to_string(),
+            line: 7,
+        }];
+        let warnings = rvs_check_catch_unwind(&items, "test.rs");
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].function, "rvs_handle");
+    }
+
+    #[test]
+    fn test_20260425_check_catch_all_error_variants() {
+        let items = vec![
+            CatchAllErrorVariantInfo {
+                enum_name: "MyError".to_string(),
+                variant: "Unknown".to_string(),
+                line: 3,
+            },
+            CatchAllErrorVariantInfo {
+                enum_name: "OtherError".to_string(),
+                variant: "Other".to_string(),
+                line: 10,
+            },
+        ];
+        let warnings = rvs_check_catch_all_error_variants(&items, "test.rs");
+        assert_eq!(warnings.len(), 2);
+        assert_eq!(warnings[0].enum_name, "MyError");
+    }
+
+    #[test]
+    fn test_20260425_check_functions_impl_call_violation() {
+        let caller = FnDef {
+            name: "rvs_add".to_string(),
+            capabilities: CapabilitySet::rvs_new(),
+            calls: vec![CalleeInfo {
+                name: "rvs_read_BI".to_string(),
+                line: 3,
+            }],
+            static_refs: vec![],
+            line: 1,
+            line_count: 5,
+            params: vec![],
+            debug_asserted_params: BTreeSet::new(),
+            has_body: true,
+            has_unsafe_block: false,
+            is_async_fn: false,
+            is_unsafe_fn: false,
+            has_mut_param: false,
+            has_mut_self: false,
+            has_panic_macro: false,
+            raw_suffix: String::new(),
+            is_test: false,
+            allows_dead_code: false,
+            has_allow_non_snake_case: false,
+        };
+        let output = rvs_check_functions_impl(&[caller], "test.rs", &CapsMap::rvs_new());
+        assert!(!output.violations.is_empty());
+        assert!(matches!(output.violations[0].kind, ViolationKind::Call));
+    }
+
+    #[test]
+    fn test_20260425_check_functions_impl_static_ref_violation() {
+        let caller = FnDef {
+            name: "rvs_add".to_string(),
+            capabilities: CapabilitySet::rvs_new(),
+            calls: vec![],
+            static_refs: vec![StaticRef {
+                name: "COUNTER".to_string(),
+                required_caps: CapabilitySet::rvs_from_validated("S"),
+                line: 2,
+            }],
+            line: 1,
+            line_count: 5,
+            params: vec![],
+            debug_asserted_params: BTreeSet::new(),
+            has_body: true,
+            has_unsafe_block: false,
+            is_async_fn: false,
+            is_unsafe_fn: false,
+            has_mut_param: false,
+            has_mut_self: false,
+            has_panic_macro: false,
+            raw_suffix: String::new(),
+            is_test: false,
+            allows_dead_code: false,
+            has_allow_non_snake_case: false,
+        };
+        let output = rvs_check_functions_impl(&[caller], "test.rs", &CapsMap::rvs_new());
+        assert!(!output.violations.is_empty());
+        assert!(matches!(
+            output.violations[0].kind,
+            ViolationKind::StaticRef
+        ));
+    }
+
+    #[test]
+    fn test_20260425_check_functions_impl_missing_assert() {
+        let caller = FnDef {
+            name: "rvs_add".to_string(),
+            capabilities: CapabilitySet::rvs_new(),
+            calls: vec![],
+            static_refs: vec![],
+            line: 1,
+            line_count: 5,
+            params: vec![ParamInfo {
+                name: "x".to_string(),
+                ty: ParamType::PrimitiveNumeric,
+            }],
+            debug_asserted_params: BTreeSet::new(),
+            has_body: true,
+            has_unsafe_block: false,
+            is_async_fn: false,
+            is_unsafe_fn: false,
+            has_mut_param: false,
+            has_mut_self: false,
+            has_panic_macro: false,
+            raw_suffix: String::new(),
+            is_test: false,
+            allows_dead_code: false,
+            has_allow_non_snake_case: false,
+        };
+        let output = rvs_check_functions_impl(&[caller], "test.rs", &CapsMap::rvs_new());
+        assert_eq!(output.assert_warnings.len(), 1);
+        assert!(
+            output.assert_warnings[0]
+                .missing_params
+                .contains(&"x".to_string())
+        );
+    }
+
+    #[test]
+    fn test_20260425_check_functions_impl_inference_async() {
+        let caller = FnDef {
+            name: "rvs_foo".to_string(),
+            capabilities: CapabilitySet::rvs_new(),
+            calls: vec![],
+            static_refs: vec![],
+            line: 1,
+            line_count: 5,
+            params: vec![],
+            debug_asserted_params: BTreeSet::new(),
+            has_body: true,
+            has_unsafe_block: false,
+            is_async_fn: true,
+            is_unsafe_fn: false,
+            has_mut_param: false,
+            has_mut_self: false,
+            has_panic_macro: false,
+            raw_suffix: String::new(),
+            is_test: false,
+            allows_dead_code: false,
+            has_allow_non_snake_case: false,
+        };
+        let output = rvs_check_functions_impl(&[caller], "test.rs", &CapsMap::rvs_new());
+        assert!(
+            output
+                .inference_warnings
+                .iter()
+                .any(|w| w.kind == InferenceKind::MissingAsync)
+        );
+    }
+
+    #[test]
+    fn test_20260425_check_functions_impl_inference_unsafe() {
+        let caller = FnDef {
+            name: "rvs_foo".to_string(),
+            capabilities: CapabilitySet::rvs_new(),
+            calls: vec![],
+            static_refs: vec![],
+            line: 1,
+            line_count: 5,
+            params: vec![],
+            debug_asserted_params: BTreeSet::new(),
+            has_body: true,
+            has_unsafe_block: true,
+            is_async_fn: false,
+            is_unsafe_fn: false,
+            has_mut_param: false,
+            has_mut_self: false,
+            has_panic_macro: false,
+            raw_suffix: String::new(),
+            is_test: false,
+            allows_dead_code: false,
+            has_allow_non_snake_case: false,
+        };
+        let output = rvs_check_functions_impl(&[caller], "test.rs", &CapsMap::rvs_new());
+        assert!(
+            output
+                .inference_warnings
+                .iter()
+                .any(|w| w.kind == InferenceKind::MissingUnsafe)
+        );
+    }
+
+    #[test]
+    fn test_20260425_check_functions_impl_inference_mutable() {
+        let caller = FnDef {
+            name: "rvs_foo".to_string(),
+            capabilities: CapabilitySet::rvs_new(),
+            calls: vec![],
+            static_refs: vec![],
+            line: 1,
+            line_count: 5,
+            params: vec![],
+            debug_asserted_params: BTreeSet::new(),
+            has_body: true,
+            has_unsafe_block: false,
+            is_async_fn: false,
+            is_unsafe_fn: false,
+            has_mut_param: true,
+            has_mut_self: false,
+            has_panic_macro: false,
+            raw_suffix: String::new(),
+            is_test: false,
+            allows_dead_code: false,
+            has_allow_non_snake_case: false,
+        };
+        let output = rvs_check_functions_impl(&[caller], "test.rs", &CapsMap::rvs_new());
+        assert!(
+            output
+                .inference_warnings
+                .iter()
+                .any(|w| w.kind == InferenceKind::MissingMutable)
+        );
+    }
+
+    #[test]
+    fn test_20260425_check_functions_impl_inference_panic() {
+        let caller = FnDef {
+            name: "rvs_foo".to_string(),
+            capabilities: CapabilitySet::rvs_new(),
+            calls: vec![],
+            static_refs: vec![],
+            line: 1,
+            line_count: 5,
+            params: vec![],
+            debug_asserted_params: BTreeSet::new(),
+            has_body: true,
+            has_unsafe_block: false,
+            is_async_fn: false,
+            is_unsafe_fn: false,
+            has_mut_param: false,
+            has_mut_self: false,
+            has_panic_macro: true,
+            raw_suffix: String::new(),
+            is_test: false,
+            allows_dead_code: false,
+            has_allow_non_snake_case: false,
+        };
+        let output = rvs_check_functions_impl(&[caller], "test.rs", &CapsMap::rvs_new());
+        assert!(
+            output
+                .inference_warnings
+                .iter()
+                .any(|w| w.kind == InferenceKind::MissingPanic)
+        );
+    }
+
+    #[test]
+    fn test_20260425_check_functions_impl_non_alpha_suffix() {
+        let caller = FnDef {
+            name: "rvs_foo_MA".to_string(),
+            capabilities: CapabilitySet::rvs_from_validated("MA"),
+            calls: vec![],
+            static_refs: vec![],
+            line: 1,
+            line_count: 5,
+            params: vec![],
+            debug_asserted_params: BTreeSet::new(),
+            has_body: true,
+            has_unsafe_block: false,
+            is_async_fn: false,
+            is_unsafe_fn: false,
+            has_mut_param: false,
+            has_mut_self: false,
+            has_panic_macro: false,
+            raw_suffix: "MA".to_string(),
+            is_test: false,
+            allows_dead_code: false,
+            has_allow_non_snake_case: true,
+        };
+        let output = rvs_check_functions_impl(&[caller], "test.rs", &CapsMap::rvs_new());
+        assert!(
+            output
+                .inference_warnings
+                .iter()
+                .any(|w| w.kind == InferenceKind::NonAlphabeticalSuffix)
+        );
+    }
+
+    #[test]
+    fn test_20260425_check_functions_impl_duplicate_suffix() {
+        let caller = FnDef {
+            name: "rvs_foo_MM".to_string(),
+            capabilities: CapabilitySet::rvs_from_validated("M"),
+            calls: vec![],
+            static_refs: vec![],
+            line: 1,
+            line_count: 5,
+            params: vec![],
+            debug_asserted_params: BTreeSet::new(),
+            has_body: true,
+            has_unsafe_block: false,
+            is_async_fn: false,
+            is_unsafe_fn: false,
+            has_mut_param: false,
+            has_mut_self: false,
+            has_panic_macro: false,
+            raw_suffix: "MM".to_string(),
+            is_test: false,
+            allows_dead_code: false,
+            has_allow_non_snake_case: true,
+        };
+        let output = rvs_check_functions_impl(&[caller], "test.rs", &CapsMap::rvs_new());
+        assert!(
+            output
+                .inference_warnings
+                .iter()
+                .any(|w| w.kind == InferenceKind::DuplicateSuffixLetter)
+        );
+    }
+
+    #[test]
+    fn test_20260425_check_functions_impl_missing_allow() {
+        let caller = FnDef {
+            name: "rvs_foo_M".to_string(),
+            capabilities: CapabilitySet::rvs_from_validated("M"),
+            calls: vec![],
+            static_refs: vec![],
+            line: 1,
+            line_count: 5,
+            params: vec![],
+            debug_asserted_params: BTreeSet::new(),
+            has_body: true,
+            has_unsafe_block: false,
+            is_async_fn: false,
+            is_unsafe_fn: false,
+            has_mut_param: false,
+            has_mut_self: false,
+            has_panic_macro: false,
+            raw_suffix: "M".to_string(),
+            is_test: false,
+            allows_dead_code: false,
+            has_allow_non_snake_case: false,
+        };
+        let output = rvs_check_functions_impl(&[caller], "test.rs", &CapsMap::rvs_new());
+        assert_eq!(output.missing_allow_warnings.len(), 1);
+    }
+
+    #[test]
+    fn test_20260425_check_functions_impl_dead_code() {
+        let caller = FnDef {
+            name: "rvs_foo".to_string(),
+            capabilities: CapabilitySet::rvs_new(),
+            calls: vec![],
+            static_refs: vec![],
+            line: 1,
+            line_count: 5,
+            params: vec![],
+            debug_asserted_params: BTreeSet::new(),
+            has_body: true,
+            has_unsafe_block: false,
+            is_async_fn: false,
+            is_unsafe_fn: false,
+            has_mut_param: false,
+            has_mut_self: false,
+            has_panic_macro: false,
+            raw_suffix: String::new(),
+            is_test: false,
+            allows_dead_code: true,
+            has_allow_non_snake_case: false,
+        };
+        let output = rvs_check_functions_impl(&[caller], "test.rs", &CapsMap::rvs_new());
+        assert_eq!(output.dead_code_warnings.len(), 1);
+    }
+
+    #[test]
+    fn test_20260425_check_functions_impl_capsmap() {
+        let caller = FnDef {
+            name: "rvs_foo".to_string(),
+            capabilities: CapabilitySet::rvs_new(),
+            calls: vec![CalleeInfo {
+                name: "std::fs::read".to_string(),
+                line: 2,
+            }],
+            static_refs: vec![],
+            line: 1,
+            line_count: 5,
+            params: vec![],
+            debug_asserted_params: BTreeSet::new(),
+            has_body: true,
+            has_unsafe_block: false,
+            is_async_fn: false,
+            is_unsafe_fn: false,
+            has_mut_param: false,
+            has_mut_self: false,
+            has_panic_macro: false,
+            raw_suffix: String::new(),
+            is_test: false,
+            allows_dead_code: false,
+            has_allow_non_snake_case: false,
+        };
+        let capsmap = CapsMap::rvs_parse("std::fs::read=BI").unwrap();
+        let output = rvs_check_functions_impl(&[caller], "test.rs", &capsmap);
+        assert!(!output.violations.is_empty());
+    }
+
+    #[test]
+    fn test_20260425_check_functions_impl_unknown_callee() {
+        let caller = FnDef {
+            name: "rvs_foo".to_string(),
+            capabilities: CapabilitySet::rvs_new(),
+            calls: vec![CalleeInfo {
+                name: "unknown_fn".to_string(),
+                line: 2,
+            }],
+            static_refs: vec![],
+            line: 1,
+            line_count: 5,
+            params: vec![],
+            debug_asserted_params: BTreeSet::new(),
+            has_body: true,
+            has_unsafe_block: false,
+            is_async_fn: false,
+            is_unsafe_fn: false,
+            has_mut_param: false,
+            has_mut_self: false,
+            has_panic_macro: false,
+            raw_suffix: String::new(),
+            is_test: false,
+            allows_dead_code: false,
+            has_allow_non_snake_case: false,
+        };
+        let output = rvs_check_functions_impl(&[caller], "test.rs", &CapsMap::rvs_new());
+        assert_eq!(output.warnings.len(), 1);
+    }
+
+    #[test]
+    fn test_20260425_check_functions_simple() {
+        let caller = FnDef {
+            name: "rvs_add".to_string(),
+            capabilities: CapabilitySet::rvs_new(),
+            calls: vec![CalleeInfo {
+                name: "rvs_read_BI".to_string(),
+                line: 2,
+            }],
+            static_refs: vec![],
+            line: 1,
+            line_count: 5,
+            params: vec![],
+            debug_asserted_params: BTreeSet::new(),
+            has_body: true,
+            has_unsafe_block: false,
+            is_async_fn: false,
+            is_unsafe_fn: false,
+            has_mut_param: false,
+            has_mut_self: false,
+            has_panic_macro: false,
+            raw_suffix: String::new(),
+            is_test: false,
+            allows_dead_code: false,
+            has_allow_non_snake_case: false,
+        };
+        let violations = rvs_check_functions(&[caller], "test.rs");
+        assert_eq!(violations.len(), 1);
+    }
+
+    #[test]
+    fn test_20260425_is_valid_test_name() {
+        assert!(rvs_is_valid_test_name("test_20260425_foo"));
+        assert!(rvs_is_valid_test_name("test_20260101_parse_ipv4_valid"));
+        assert!(!rvs_is_valid_test_name("test_foo"));
+        assert!(!rvs_is_valid_test_name("test_2026042"));
+        assert!(!rvs_is_valid_test_name("test_20260425_"));
+        assert!(!rvs_is_valid_test_name("foo_bar"));
+        assert!(!rvs_is_valid_test_name("test_XXXXYYYY_foo"));
+        assert!(rvs_is_valid_test_name("test_20260425_a_b_c"));
+    }
+
+    #[test]
+    fn test_20260425_find_duplicate_tests_none() {
+        let entries: Vec<(String, TestName)> = vec![
+            (
+                "a.rs".to_string(),
+                TestName {
+                    name: "test_1".to_string(),
+                    line: 1,
+                },
+            ),
+            (
+                "b.rs".to_string(),
+                TestName {
+                    name: "test_2".to_string(),
+                    line: 2,
+                },
+            ),
+        ];
+        let warnings = rvs_find_duplicate_tests(&entries);
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn test_20260425_find_duplicate_tests_found() {
+        let entries: Vec<(String, TestName)> = vec![
+            (
+                "a.rs".to_string(),
+                TestName {
+                    name: "test_dup".to_string(),
+                    line: 1,
+                },
+            ),
+            (
+                "b.rs".to_string(),
+                TestName {
+                    name: "test_dup".to_string(),
+                    line: 5,
+                },
+            ),
+        ];
+        let warnings = rvs_find_duplicate_tests(&entries);
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].name, "test_dup");
+        assert_eq!(warnings[0].occurrences.len(), 2);
+    }
+
+    #[test]
+    fn test_20260425_test_warnings_valid() {
+        let tests: Vec<(String, TestName)> = vec![(
+            "a.rs".to_string(),
+            TestName {
+                name: "test_20260425_foo".to_string(),
+                line: 1,
+            },
+        )];
+        let (fmt, dup) = rvs_test_warnings(&tests);
+        assert!(fmt.is_empty());
+        assert!(dup.is_empty());
+    }
+
+    #[test]
+    fn test_20260425_test_warnings_invalid_name() {
+        let tests: Vec<(String, TestName)> = vec![(
+            "a.rs".to_string(),
+            TestName {
+                name: "bad_name".to_string(),
+                line: 1,
+            },
+        )];
+        let (fmt, _dup) = rvs_test_warnings(&tests);
+        assert_eq!(fmt.len(), 1);
+        assert_eq!(fmt[0].function, "bad_name");
+    }
+
+    #[test]
+    fn test_20260425_test_warnings_duplicate() {
+        let tests: Vec<(String, TestName)> = vec![
+            (
+                "a.rs".to_string(),
+                TestName {
+                    name: "test_20260425_dup".to_string(),
+                    line: 1,
+                },
+            ),
+            (
+                "b.rs".to_string(),
+                TestName {
+                    name: "test_20260425_dup".to_string(),
+                    line: 5,
+                },
+            ),
+        ];
+        let (fmt, dup) = rvs_test_warnings(&tests);
+        assert!(fmt.is_empty());
+        assert_eq!(dup.len(), 1);
+    }
+
+    #[test]
+    fn test_20260425_check_source_empty() {
+        let output = rvs_check_source("", "test.rs", &CapsMap::rvs_new()).unwrap();
+        assert!(output.violations.is_empty());
+        assert!(output.warnings.is_empty());
+    }
+
+    #[test]
+    fn test_20260425_check_source_call_violation() {
+        let source = r#"
+            #[allow(non_snake_case)]
+            fn rvs_add() {
+                rvs_read_BI();
+            }
+        "#;
+        let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+        assert!(!output.violations.is_empty());
+        assert!(
+            output
+                .violations
+                .iter()
+                .any(|v| matches!(v.kind, ViolationKind::Call))
+        );
+    }
+
+    #[test]
+    fn test_20260425_check_source_banned_import() {
+        let source = "use anyhow::Result;";
+        let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+        assert!(!output.banned_import_warnings.is_empty());
+    }
+
+    #[test]
+    fn test_20260425_check_source_non_rvs_fn() {
+        let source = "fn helper() {}";
+        let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+        assert!(!output.non_rvs_fn_warnings.is_empty());
+    }
+
+    #[test]
+    fn test_20260425_check_source_missing_doc() {
+        let source = "pub fn rvs_foo() {}";
+        let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+        assert!(!output.missing_doc_warnings.is_empty());
+    }
+
+    #[test]
+    fn test_20260425_check_source_wildcard_import() {
+        let source = "use std::collections::*;";
+        let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+        assert!(!output.wildcard_import_warnings.is_empty());
+    }
+
+    #[test]
+    fn test_20260425_check_source_super_wildcard_ok() {
+        let source = "use super::*;";
+        let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+        assert!(output.wildcard_import_warnings.is_empty());
+    }
+
+    #[test]
+    fn test_20260425_check_source_deny_warnings() {
+        let source = "#![deny(warnings)]\nfn f() {}";
+        let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+        assert!(!output.deny_warnings_warnings.is_empty());
+    }
+
+    #[test]
+    fn test_20260425_check_source_missing_debug() {
+        let source = "pub struct Foo {}";
+        let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+        assert!(!output.missing_debug_warnings.is_empty());
+    }
+
+    #[test]
+    fn test_20260425_check_source_stub_macro() {
+        let source = "#[allow(non_snake_case)] fn rvs_foo() { todo!(); }";
+        let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+        assert!(
+            output
+                .violations
+                .iter()
+                .any(|v| matches!(v.kind, ViolationKind::StubMacro { .. }))
+        );
+    }
+
+    #[test]
+    fn test_20260425_check_source_empty_fn() {
+        let source = "#[allow(non_snake_case)] fn rvs_foo() {}";
+        let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+        assert!(
+            output
+                .violations
+                .iter()
+                .any(|v| matches!(v.kind, ViolationKind::EmptyFn))
+        );
+    }
+
+    #[test]
+    fn test_20260425_check_source_todo_comment() {
+        let source = "// TODO: fix this\nfn f() {}\n";
+        let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+        assert!(!output.todo_comment_warnings.is_empty());
+    }
+
+    #[test]
+    fn test_20260425_check_source_error_swallow() {
+        let source = "fn f() { x.ok(); }";
+        let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+        assert!(!output.error_swallow_warnings.is_empty());
+    }
+
+    #[test]
+    fn test_20260425_check_source_catch_unwind() {
+        let source = "fn f() { catch_unwind(|| {}); }";
+        let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+        assert!(!output.catch_unwind_warnings.is_empty());
+    }
+
+    #[test]
+    fn test_20260425_check_source_catch_all_error_variant() {
+        let source = r#"#[derive(Debug)] enum MyError { Unknown }"#;
+        let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+        assert!(!output.catch_all_error_variant_warnings.is_empty());
+    }
+
+    #[test]
+    fn test_20260425_check_source_into_impl() {
+        let source = "impl Into<String> for Foo {}";
+        let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+        assert!(!output.into_impl_warnings.is_empty());
+    }
+
+    #[test]
+    fn test_20260425_check_source_test_name_format() {
+        let source = "#[test] fn bad_test() {}";
+        let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+        assert!(!output.test_name_warnings.is_empty());
+    }
+
+    #[test]
+    fn test_20260425_check_source_with_capsmap() {
+        let source = r#"
+            #[allow(non_snake_case)]
+            fn rvs_foo() {
+                std::fs::read_to_string("x");
+            }
+        "#;
+        let capsmap = CapsMap::rvs_parse("std::fs::read_to_string=BI").unwrap();
+        let output = rvs_check_source(source, "test.rs", &capsmap).unwrap();
+        assert!(!output.violations.is_empty());
+    }
+
+    #[test]
+    fn test_20260425_violation_kind_display() {
+        assert_eq!(ViolationKind::Call.to_string(), "calls");
+        assert_eq!(ViolationKind::StaticRef.to_string(), "references");
+        assert!(
+            ViolationKind::StubMacro {
+                macro_name: "todo".to_string()
+            }
+            .to_string()
+            .contains("todo")
+        );
+        assert!(ViolationKind::EmptyFn.to_string().contains("empty body"));
+    }
+
+    #[test]
+    fn test_20260425_inference_kind_display() {
+        assert!(InferenceKind::MissingAsync.to_string().contains("async"));
+        assert!(InferenceKind::MissingUnsafe.to_string().contains("unsafe"));
+        assert!(InferenceKind::MissingMutable.to_string().contains("&mut"));
+        assert!(InferenceKind::MissingPanic.to_string().contains("panic"));
+        assert!(
+            InferenceKind::MissingSideEffect
+                .to_string()
+                .contains("static")
+        );
+        assert!(
+            InferenceKind::MissingThreadLocal
+                .to_string()
+                .contains("thread_local")
+        );
+        assert!(
+            InferenceKind::NonAlphabeticalSuffix
+                .to_string()
+                .contains("alphabetical")
+        );
+        assert!(
+            InferenceKind::DuplicateSuffixLetter
+                .to_string()
+                .contains("duplicate")
+        );
+    }
 }

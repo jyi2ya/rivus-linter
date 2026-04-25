@@ -237,3 +237,300 @@ pub fn rvs_extract_raw_suffix(name: &str) -> String {
     }
     String::new()
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(non_snake_case)]
+    use super::*;
+
+    #[test]
+    fn test_20260425_from_char_valid() {
+        assert_eq!(Capability::rvs_from_char('A'), Some(Capability::A));
+        assert_eq!(Capability::rvs_from_char('B'), Some(Capability::B));
+        assert_eq!(Capability::rvs_from_char('I'), Some(Capability::I));
+        assert_eq!(Capability::rvs_from_char('M'), Some(Capability::M));
+        assert_eq!(Capability::rvs_from_char('P'), Some(Capability::P));
+        assert_eq!(Capability::rvs_from_char('S'), Some(Capability::S));
+        assert_eq!(Capability::rvs_from_char('T'), Some(Capability::T));
+        assert_eq!(Capability::rvs_from_char('U'), Some(Capability::U));
+    }
+
+    #[test]
+    fn test_20260425_from_char_invalid() {
+        assert_eq!(Capability::rvs_from_char('X'), None);
+        assert_eq!(Capability::rvs_from_char('a'), None);
+        assert_eq!(Capability::rvs_from_char('1'), None);
+        assert_eq!(Capability::rvs_from_char('_'), None);
+    }
+
+    #[test]
+    fn test_20260425_as_char_roundtrip() {
+        for c in VALID_SUFFIX_CHARS.iter().copied() {
+            let cap = Capability::rvs_from_char(c).unwrap();
+            assert_eq!(cap.rvs_as_char(), c);
+        }
+    }
+
+    #[test]
+    fn test_20260425_description_all() {
+        assert_eq!(Capability::A.rvs_description(), "Async");
+        assert_eq!(Capability::B.rvs_description(), "Blocking");
+        assert_eq!(Capability::I.rvs_description(), "IO");
+        assert_eq!(Capability::M.rvs_description(), "Mutable");
+        assert_eq!(Capability::P.rvs_description(), "Panic");
+        assert_eq!(Capability::S.rvs_description(), "SideEffect");
+        assert_eq!(Capability::T.rvs_description(), "ThreadLocal");
+        assert_eq!(Capability::U.rvs_description(), "Unsafe");
+    }
+
+    #[test]
+    fn test_20260425_new_empty() {
+        let set = CapabilitySet::rvs_new();
+        assert!(set.rvs_is_empty());
+        assert_eq!(set.rvs_len(), 0);
+    }
+
+    #[test]
+    fn test_20260425_from_str_valid() {
+        let set = CapabilitySet::rvs_from_str("ABIM").unwrap();
+        assert!(set.rvs_contains(Capability::A));
+        assert!(set.rvs_contains(Capability::B));
+        assert!(set.rvs_contains(Capability::I));
+        assert!(set.rvs_contains(Capability::M));
+        assert!(!set.rvs_contains(Capability::P));
+        assert_eq!(set.rvs_len(), 4);
+    }
+
+    #[test]
+    fn test_20260425_from_str_invalid() {
+        let err = CapabilitySet::rvs_from_str("AX").unwrap_err();
+        match err {
+            CapabilityParseError::InvalidLetter(c) => assert_eq!(c, 'X'),
+        }
+    }
+
+    #[test]
+    fn test_20260425_from_str_empty() {
+        let set = CapabilitySet::rvs_from_str("").unwrap();
+        assert!(set.rvs_is_empty());
+    }
+
+    #[test]
+    fn test_20260425_from_str_dedup() {
+        let set = CapabilitySet::rvs_from_str("AAAB").unwrap();
+        assert_eq!(set.rvs_len(), 2);
+    }
+
+    #[test]
+    fn test_20260425_from_validated() {
+        let set = CapabilitySet::rvs_from_validated("ABPSU");
+        assert_eq!(set.rvs_len(), 5);
+        assert!(set.rvs_contains(Capability::A));
+        assert!(set.rvs_contains(Capability::B));
+        assert!(set.rvs_contains(Capability::P));
+        assert!(set.rvs_contains(Capability::S));
+        assert!(set.rvs_contains(Capability::U));
+    }
+
+    #[test]
+    fn test_20260425_can_call_superset() {
+        let caller = CapabilitySet::rvs_from_validated("ABIMP");
+        let callee = CapabilitySet::rvs_from_validated("ABI");
+        assert!(caller.rvs_can_call(&callee));
+    }
+
+    #[test]
+    fn test_20260425_can_call_equal() {
+        let a = CapabilitySet::rvs_from_validated("ABM");
+        let b = CapabilitySet::rvs_from_validated("ABM");
+        assert!(a.rvs_can_call(&b));
+    }
+
+    #[test]
+    fn test_20260425_can_call_missing_cap() {
+        let caller = CapabilitySet::rvs_from_validated("AB");
+        let callee = CapabilitySet::rvs_from_validated("ABP");
+        assert!(!caller.rvs_can_call(&callee));
+    }
+
+    #[test]
+    fn test_20260425_can_call_empty_callee() {
+        let caller = CapabilitySet::rvs_from_validated("A");
+        let callee = CapabilitySet::rvs_new();
+        assert!(caller.rvs_can_call(&callee));
+    }
+
+    #[test]
+    fn test_20260425_missing_for_no_missing() {
+        let a = CapabilitySet::rvs_from_validated("ABIM");
+        let b = CapabilitySet::rvs_from_validated("AB");
+        assert!(a.rvs_missing_for(&b).is_empty());
+    }
+
+    #[test]
+    fn test_20260425_missing_for_has_missing() {
+        let a = CapabilitySet::rvs_from_validated("AB");
+        let b = CapabilitySet::rvs_from_validated("ABP");
+        let missing = a.rvs_missing_for(&b);
+        assert_eq!(missing.len(), 1);
+        assert!(missing.contains(&Capability::P));
+    }
+
+    #[test]
+    fn test_20260425_is_subset_of_true() {
+        let set = CapabilitySet::rvs_from_validated("AB");
+        let allowed = CapabilitySet::rvs_from_validated("ABIM");
+        assert!(set.rvs_is_subset_of(&allowed));
+    }
+
+    #[test]
+    fn test_20260425_is_subset_of_false() {
+        let set = CapabilitySet::rvs_from_validated("ABP");
+        let allowed = CapabilitySet::rvs_from_validated("ABM");
+        assert!(!set.rvs_is_subset_of(&allowed));
+    }
+
+    #[test]
+    fn test_20260425_is_subset_of_empty() {
+        let empty = CapabilitySet::rvs_new();
+        let allowed = CapabilitySet::rvs_from_validated("ABM");
+        assert!(empty.rvs_is_subset_of(&allowed));
+    }
+
+    #[test]
+    fn test_20260425_from_good_caps() {
+        let good = CapabilitySet::rvs_from_good_caps();
+        assert!(good.rvs_contains(Capability::A));
+        assert!(good.rvs_contains(Capability::B));
+        assert!(good.rvs_contains(Capability::M));
+        assert!(!good.rvs_contains(Capability::P));
+        assert!(!good.rvs_contains(Capability::I));
+        assert!(!good.rvs_contains(Capability::S));
+        assert!(!good.rvs_contains(Capability::T));
+        assert!(!good.rvs_contains(Capability::U));
+        assert_eq!(good.rvs_len(), 3);
+    }
+
+    #[test]
+    fn test_20260425_is_empty_and_len() {
+        let mut set = CapabilitySet::rvs_new();
+        assert!(set.rvs_is_empty());
+        assert_eq!(set.rvs_len(), 0);
+        set.rvs_insert_M(Capability::A);
+        assert!(!set.rvs_is_empty());
+        assert_eq!(set.rvs_len(), 1);
+    }
+
+    #[test]
+    fn test_20260425_contains() {
+        let set = CapabilitySet::rvs_from_validated("MP");
+        assert!(set.rvs_contains(Capability::M));
+        assert!(set.rvs_contains(Capability::P));
+        assert!(!set.rvs_contains(Capability::A));
+    }
+
+    #[test]
+    fn test_20260425_iter() {
+        let set = CapabilitySet::rvs_from_validated("BAM");
+        let caps: Vec<Capability> = set.rvs_iter().collect();
+        assert_eq!(caps, vec![Capability::A, Capability::B, Capability::M]);
+    }
+
+    #[test]
+    fn test_20260425_insert_M() {
+        let mut set = CapabilitySet::rvs_new();
+        set.rvs_insert_M(Capability::S);
+        assert!(set.rvs_contains(Capability::S));
+        assert_eq!(set.rvs_len(), 1);
+        set.rvs_insert_M(Capability::S);
+        assert_eq!(set.rvs_len(), 1);
+    }
+
+    #[test]
+    fn test_20260425_parse_function_with_suffix() {
+        let (base, caps) = rvs_parse_function("rvs_write_db_ABI").unwrap();
+        assert_eq!(base, "write_db");
+        assert!(caps.rvs_contains(Capability::A));
+        assert!(caps.rvs_contains(Capability::B));
+        assert!(caps.rvs_contains(Capability::I));
+        assert_eq!(caps.rvs_len(), 3);
+    }
+
+    #[test]
+    fn test_20260425_parse_function_no_suffix() {
+        let (base, caps) = rvs_parse_function("rvs_add").unwrap();
+        assert_eq!(base, "add");
+        assert!(caps.rvs_is_empty());
+    }
+
+    #[test]
+    fn test_20260425_parse_function_bare_rvs() {
+        let (base, caps) = rvs_parse_function("rvs_").unwrap();
+        assert_eq!(base, "");
+        assert!(caps.rvs_is_empty());
+    }
+
+    #[test]
+    fn test_20260425_parse_function_non_rvs() {
+        assert!(rvs_parse_function("foo_bar").is_none());
+    }
+
+    #[test]
+    fn test_20260425_parse_function_qualified() {
+        let (base, caps) = rvs_parse_function("CapsMap::rvs_parse").unwrap();
+        assert_eq!(base, "parse");
+        assert!(caps.rvs_is_empty());
+    }
+
+    #[test]
+    fn test_20260425_parse_function_qualified_with_caps() {
+        let (base, caps) = rvs_parse_function("MyMod::rvs_do_thing_ABIM").unwrap();
+        assert_eq!(base, "do_thing");
+        assert_eq!(caps.rvs_len(), 4);
+    }
+
+    #[test]
+    fn test_20260425_parse_segment_suffix_not_all_caps() {
+        let (base, caps) = rvs_parse_segment("rvs_write_db_ABI1").unwrap();
+        assert_eq!(base, "write_db_ABI1");
+        assert!(caps.rvs_is_empty());
+    }
+
+    #[test]
+    fn test_20260425_extract_raw_suffix_present() {
+        assert_eq!(rvs_extract_raw_suffix("rvs_write_db_ABI"), "ABI");
+    }
+
+    #[test]
+    fn test_20260425_extract_raw_suffix_empty() {
+        assert_eq!(rvs_extract_raw_suffix("rvs_add"), "");
+    }
+
+    #[test]
+    fn test_20260425_extract_raw_suffix_non_rvs() {
+        assert_eq!(rvs_extract_raw_suffix("foo_bar"), "");
+    }
+
+    #[test]
+    fn test_20260425_extract_raw_suffix_preserves_order() {
+        assert_eq!(rvs_extract_raw_suffix("rvs_foo_MBA"), "MBA");
+    }
+
+    #[test]
+    fn test_20260425_display_capability() {
+        assert_eq!(format!("{}", Capability::A), "A(Async)");
+        assert_eq!(format!("{}", Capability::M), "M(Mutable)");
+    }
+
+    #[test]
+    fn test_20260425_display_capability_set() {
+        let set = CapabilitySet::rvs_from_validated("BAM");
+        assert_eq!(format!("{set}"), "{A, B, M}");
+    }
+
+    #[test]
+    fn test_20260425_display_empty_capability_set() {
+        let set = CapabilitySet::rvs_new();
+        assert_eq!(format!("{set}"), "{}");
+    }
+}
