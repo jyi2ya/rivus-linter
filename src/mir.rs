@@ -322,7 +322,7 @@ fn rvs_scan_mir_has_panic(mir_fn: &MirFnDef) -> bool {
         let has_panic_pattern = trimmed.contains("panicking::panic")
             || trimmed.contains("panicking::assert")
             || trimmed.contains("panicking::panic_fmt");
-        if has_panic_pattern && !trimmed.contains("const \"") {
+        if has_panic_pattern && !trimmed.contains("const \"") && !trimmed.contains("\"never:") {
             return true;
         }
     }
@@ -646,6 +646,26 @@ mod tests {
             "rvs_foo_P",
             "fn rvs_foo_P() -> () {",
             &["    _0 = core::panicking::panic_fmt(move _1, move _2) -> [return]"],
+        );
+        assert!(rvs_scan_mir_has_panic(&f));
+    }
+
+    #[test]
+    fn test_20260425_scan_mir_has_panic_never_expect_ok() {
+        let f = mir_fn(
+            "rvs_foo",
+            "fn rvs_foo() -> () {",
+            &["    _0 = core::panicking::panic(\"never: valid utf-8\") -> [return]"],
+        );
+        assert!(!rvs_scan_mir_has_panic(&f));
+    }
+
+    #[test]
+    fn test_20260425_scan_mir_has_panic_expect_still_panic() {
+        let f = mir_fn(
+            "rvs_foo_P",
+            "fn rvs_foo_P() -> () {",
+            &["    _0 = core::panicking::panic(\"something went wrong\") -> [return]"],
         );
         assert!(rvs_scan_mir_has_panic(&f));
     }

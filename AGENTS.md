@@ -483,7 +483,7 @@ core::panicking::panic=P       # 可能 panic
 | `MissingAsync` | 函数声明为 `async fn` 但后缀缺少 `A` |
 | `MissingUnsafe` | 函数含 `unsafe` 块或声明为 `unsafe fn` 但后缀缺少 `U` |
 | `MissingMutable` | 函数有 `&mut` 参数（含 `&mut self`）但后缀缺少 `M` |
-| `MissingPanic` | 函数调用了 `panic!`/`assert!`/`assert_eq!`/`assert_ne!`/`unreachable!`/`todo!`/`unimplemented!`/`.unwrap()`/`.expect()`（不含 `debug_assert!`）但后缀缺少 `P` |
+| `MissingPanic` | 函数调用了 `panic!`/`assert!`/`assert_eq!`/`assert_ne!`/`unreachable!`/`todo!`/`unimplemented!`/`.unwrap()`/`.expect()`（不含 `debug_assert!`）但后缀缺少 `P`。**例外**：`.expect("never: ...")` 不视为 panic——消息以 `never:` 开头表示调用方保证此处不会 panic |
 | `MissingSideEffect` | 函数读取了 `static` 或 `thread_local!` 变量但后缀缺少 `S` |
 | `MissingThreadLocal` | 函数读取了 `thread_local!` 变量但后缀缺少 `T` |
 | `NonAlphabeticalSuffix` | 能力后缀字母未按字母序排列 |
@@ -725,6 +725,7 @@ fn test_20260422_create_order_ok() {
 
 * 函数能力最好按照字母顺序排列
 * 多用泛型少用 dyn
+* 用 `.expect("never: 补充说明")` 标注不会 panic 的 `.expect()` 调用——linter 不会将此类调用视为 panic
 
 交付检查：
 

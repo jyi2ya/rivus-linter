@@ -987,6 +987,18 @@ fn rvs_scan_expr_has_unsafe(expr: &syn::Expr) -> bool {
 }
 
 /// 扫描块中是否存在 panic 类宏调用。
+fn rvs_is_never_expect(call: &syn::ExprMethodCall) -> bool {
+    if let Some(syn::Expr::Lit(syn::ExprLit {
+        lit: syn::Lit::Str(s),
+        ..
+    })) = call.args.first()
+    {
+        s.value().starts_with("never:")
+    } else {
+        false
+    }
+}
+
 fn rvs_scan_block_has_panic(block: &syn::Block) -> bool {
     for stmt in &block.stmts {
         match stmt {
@@ -1046,7 +1058,11 @@ fn rvs_scan_expr_has_panic(expr: &syn::Expr) -> bool {
             rvs_scan_expr_has_panic(&c.func) || c.args.iter().any(rvs_scan_expr_has_panic)
         }
         syn::Expr::MethodCall(c) => {
-            let is_panic_method = matches!(c.method.to_string().as_str(), "unwrap" | "expect");
+            let is_panic_method = if c.method == "expect" {
+                !rvs_is_never_expect(c)
+            } else {
+                c.method == "unwrap"
+            };
             is_panic_method
                 || rvs_scan_expr_has_panic(&c.receiver)
                 || c.args.iter().any(rvs_scan_expr_has_panic)
@@ -3459,6 +3475,46 @@ mod tests {
         assert!(rvs_scan_expr_has_panic(&expr));
         let expr2: syn::Expr = syn::parse_quote!(42);
         assert!(!rvs_scan_expr_has_panic(&expr2));
+    }
+
+    #[test]
+    fn test_20260425_expect_never_not_panic() {
+        let expr: syn::Expr = syn::parse_quote!(result.expect("never: valid utf-8"));
+        assert!(!rvs_scan_expr_has_panic(&expr));
+    }
+
+    #[test]
+    fn test_20260425_expect_normal_is_panic() {
+        let expr: syn::Expr = syn::parse_quote!(result.expect("something went wrong"));
+        assert!(rvs_scan_expr_has_panic(&expr));
+    }
+
+    #[test]
+    fn test_20260425_unwrap_is_panic() {
+        let expr: syn::Expr = syn::parse_quote!(result.unwrap());
+        assert!(rvs_scan_expr_has_panic(&expr));
+    }
+
+    #[test]
+    fn test_20260425_is_never_expect() {
+        let expr: syn::Expr = syn::parse_quote!(result.expect("never: invariant held"));
+        if let syn::Expr::MethodCall(call) = expr {
+            assert!(rvs_is_never_expect(&call));
+        } else {
+            panic!("expected method call");
+        }
+        let expr2: syn::Expr = syn::parse_quote!(result.expect("something else"));
+        if let syn::Expr::MethodCall(call) = expr2 {
+            assert!(!rvs_is_never_expect(&call));
+        } else {
+            panic!("expected method call");
+        }
+        let expr3: syn::Expr = syn::parse_quote!(result.expect(format!("err: {}", x)));
+        if let syn::Expr::MethodCall(call) = expr3 {
+            assert!(!rvs_is_never_expect(&call));
+        } else {
+            panic!("expected method call");
+        }
     }
 
     #[test]

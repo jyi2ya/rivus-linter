@@ -2935,6 +2935,44 @@ mod tests {
     }
 
     #[test]
+    fn test_20260425_check_source_expect_never_no_panic() {
+        let source = r#"
+            #[allow(non_snake_case)]
+            fn rvs_foo(x: i32) -> i32 {
+                debug_assert!(x > 0);
+                Some(x).expect("never: positive has Some")
+            }
+        "#;
+        let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+        assert!(
+            output
+                .inference_warnings
+                .iter()
+                .all(|w| w.kind != InferenceKind::MissingPanic),
+            "expect(\"never: ...\") should not trigger MissingPanic"
+        );
+    }
+
+    #[test]
+    fn test_20260425_check_source_expect_normal_has_panic() {
+        let source = r#"
+            #[allow(non_snake_case)]
+            fn rvs_foo(x: i32) -> i32 {
+                debug_assert!(x > 0);
+                Some(x).expect("something went wrong")
+            }
+        "#;
+        let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+        assert!(
+            output
+                .inference_warnings
+                .iter()
+                .any(|w| w.kind == InferenceKind::MissingPanic),
+            "normal .expect() should still trigger MissingPanic"
+        );
+    }
+
+    #[test]
     fn test_20260425_violation_kind_display() {
         assert_eq!(ViolationKind::Call.to_string(), "calls");
         assert_eq!(ViolationKind::StaticRef.to_string(), "references");
