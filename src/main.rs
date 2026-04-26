@@ -201,6 +201,9 @@ fn rvs_print_check_output_BIPS(output: &rivus_linter::CheckOutput) {
     for w in &output.missing_test_output_warnings {
         eprintln!("{w}");
     }
+    for w in &output.validate_returns_unit_warnings {
+        eprintln!("{w}");
+    }
     for v in &output.violations {
         eprintln!("{v}");
     }

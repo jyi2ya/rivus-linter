@@ -16,7 +16,7 @@ use crate::extract::{
     rvs_extract_into_impls, rvs_extract_missing_debug, rvs_extract_missing_panics_doc,
     rvs_extract_non_rvs_fns, rvs_extract_pub_items, rvs_extract_reflection_usage,
     rvs_extract_stub_macros, rvs_extract_test_call_names, rvs_extract_tests,
-    rvs_extract_todo_comments, rvs_extract_unsafe_fns,
+    rvs_extract_todo_comments, rvs_extract_unsafe_fns, rvs_extract_validate_returns_unit,
 };
 use crate::source::rvs_read_rust_sources_BI;
 
@@ -477,6 +477,7 @@ pub struct CheckOutput {
     pub catch_unwind_warnings: Vec<CatchUnwindWarning>,
     pub catch_all_error_variant_warnings: Vec<CatchAllErrorVariantWarning>,
     pub missing_test_output_warnings: Vec<MissingTestOutputWarning>,
+    pub validate_returns_unit_warnings: Vec<ValidateReturnsUnitWarning>,
 }
 
 /// 一条 `#![deny(warnings)]` 反模式警告：这种粗粒度 deny 会随编译器升级意外破坏构建。
@@ -993,6 +994,39 @@ impl fmt::Display for MissingTestOutputWarning {
     }
 }
 
+/// 一条 validate 函数返回 `Result<(), E>` 的警告：建议改为返回 `Result<Validated<T>, E>`，
+/// 用类型系统保证验证通过的数据不会被当作未验证的。
+#[derive(Debug, Clone)]
+pub struct ValidateReturnsUnitWarning {
+    pub function: String,
+    pub file: String,
+    pub line: usize,
+}
+
+impl fmt::Display for ValidateReturnsUnitWarning {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "warning: function '{}' returns Result<(), E> — consider replacing with a TryFrom impl that returns Result<Target, Error> (parse instead of validate)\n  at {}:{}",
+            self.function, self.file, self.line,
+        )
+    }
+}
+
+fn rvs_check_validate_returns_unit(
+    items: &[crate::extract::ValidateReturnsUnitInfo],
+    file: &str,
+) -> Vec<ValidateReturnsUnitWarning> {
+    items
+        .iter()
+        .map(|i| ValidateReturnsUnitWarning {
+            function: i.function.clone(),
+            file: file.to_string(),
+            line: i.line,
+        })
+        .collect()
+}
+
 /// 内部实现：检查函数调用合规性与静态引用合规性。
 fn rvs_check_functions_impl(functions: &[FnDef], file: &str, capsmap: &CapsMap) -> CheckOutput {
     let mut violations = Vec::new();
@@ -1206,6 +1240,7 @@ fn rvs_check_functions_impl(functions: &[FnDef], file: &str, capsmap: &CapsMap) 
         catch_unwind_warnings: Vec::new(),
         catch_all_error_variant_warnings: Vec::new(),
         missing_test_output_warnings: Vec::new(),
+        validate_returns_unit_warnings: Vec::new(),
     }
 }
 
@@ -1478,6 +1513,19 @@ pub fn rvs_check_source(
             file,
         ));
 
+    // 检查 validate 函数返回 Result<(), E>（应改为 parse 模式）
+    let validate_returns_unit =
+        rvs_extract_validate_returns_unit(source).map_err(|e| CheckError::Extract {
+            source: e,
+            file: file.to_string(),
+        })?;
+    output
+        .validate_returns_unit_warnings
+        .extend(rvs_check_validate_returns_unit(
+            &validate_returns_unit,
+            file,
+        ));
+
     Ok(output)
 }
 
@@ -1681,6 +1729,19 @@ pub fn rvs_check_path_BI(path: &Path, capsmap: &CapsMap) -> Result<CheckOutput, 
             .catch_all_error_variant_warnings
             .extend(rvs_check_catch_all_error_variants(
                 &catch_all_variants,
+                &sf.path,
+            ));
+
+        // 检查 validate 函数返回 Result<(), E>（应改为 parse 模式）
+        let validate_returns_unit =
+            rvs_extract_validate_returns_unit(&sf.source).map_err(|e| CheckError::Extract {
+                source: e,
+                file: sf.path.clone(),
+            })?;
+        output
+            .validate_returns_unit_warnings
+            .extend(rvs_check_validate_returns_unit(
+                &validate_returns_unit,
                 &sf.path,
             ));
 

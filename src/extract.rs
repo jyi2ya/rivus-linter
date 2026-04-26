@@ -3151,6 +3151,122 @@ pub fn rvs_extract_catch_all_error_variants(
     Ok(rvs_collect_catch_all_variants_from_items(&file.items))
 }
 
+/// Information about a function named `validate*` that returns `Result<(), E>`.
+/// Such functions should instead return `Result<Validated<T>, E>` to leverage the type system.
+#[derive(Debug, Clone)]
+pub struct ValidateReturnsUnitInfo {
+    pub function: String,
+    pub line: usize,
+}
+
+const VALIDATE_PREFIXES: &[&str] = &["validate", "check", "verify"];
+
+fn rvs_is_validate_name(name: &str) -> bool {
+    // Strip the rvs_ prefix and capability suffix to get the base name.
+    // e.g. "rvs_validate_email" -> "validate_email", "rvs_check_config_M" -> "check_config"
+    let base = name
+        .strip_prefix("rvs_")
+        .unwrap_or(name)
+        .split('_')
+        .next()
+        .unwrap_or("");
+    let lower = base.to_ascii_lowercase();
+    VALIDATE_PREFIXES.iter().any(|prefix| lower == *prefix)
+}
+
+/// Check if a return type is `Result<(), E>` (unit ok type).
+fn rvs_returns_result_unit(ret: &syn::ReturnType) -> bool {
+    let syn::ReturnType::Type(_, ret_ty) = ret else {
+        return false;
+    };
+    let syn::Type::Path(type_path) = ret_ty.as_ref() else {
+        return false;
+    };
+    let Some(last_seg) = type_path.path.segments.last() else {
+        return false;
+    };
+    if last_seg.ident != "Result" {
+        return false;
+    }
+    let syn::PathArguments::AngleBracketed(args) = &last_seg.arguments else {
+        return false;
+    };
+    // Result<T, E> — check if first generic arg is unit `()`
+    if let Some(syn::GenericArgument::Type(ty)) = args.args.first() {
+        matches!(ty, syn::Type::Tuple(t) if t.elems.is_empty())
+    } else {
+        false
+    }
+}
+
+fn rvs_collect_validate_returns_unit_from_items(
+    items: &[syn::Item],
+) -> Vec<ValidateReturnsUnitInfo> {
+    let mut result = Vec::new();
+    for item in items {
+        match item {
+            syn::Item::Fn(item_fn) => {
+                let name = item_fn.sig.ident.to_string();
+                if rvs_is_validate_name(&name) && rvs_returns_result_unit(&item_fn.sig.output) {
+                    result.push(ValidateReturnsUnitInfo {
+                        function: name,
+                        line: item_fn.sig.ident.span().start().line,
+                    });
+                }
+            }
+            syn::Item::Impl(item_impl) => {
+                for impl_item in &item_impl.items {
+                    if let syn::ImplItem::Fn(impl_fn) = impl_item {
+                        let name = impl_fn.sig.ident.to_string();
+                        if rvs_is_validate_name(&name)
+                            && rvs_returns_result_unit(&impl_fn.sig.output)
+                        {
+                            result.push(ValidateReturnsUnitInfo {
+                                function: name,
+                                line: impl_fn.sig.ident.span().start().line,
+                            });
+                        }
+                    }
+                }
+            }
+            syn::Item::Trait(item_trait) => {
+                for trait_item in &item_trait.items {
+                    if let syn::TraitItem::Fn(tfn) = trait_item {
+                        let name = tfn.sig.ident.to_string();
+                        if rvs_is_validate_name(&name) && rvs_returns_result_unit(&tfn.sig.output) {
+                            result.push(ValidateReturnsUnitInfo {
+                                function: name,
+                                line: tfn.sig.ident.span().start().line,
+                            });
+                        }
+                    }
+                }
+            }
+            syn::Item::Mod(m) => {
+                if rvs_is_cfg_test(&m.attrs) {
+                    continue;
+                }
+                if let Some((_, inner_items)) = &m.content {
+                    result.extend(rvs_collect_validate_returns_unit_from_items(inner_items));
+                }
+            }
+            _ => {}
+        }
+    }
+    result
+}
+
+/// Extract functions named `validate*` / `check*` / `verify*` that return `Result<(), E>`.
+/// These should be refactored to return `Result<Validated<T>, E>` (parse instead of validate).
+pub fn rvs_extract_validate_returns_unit(
+    source: &str,
+) -> Result<Vec<ValidateReturnsUnitInfo>, ExtractError> {
+    let file = syn::parse_file(source).map_err(|e| ExtractError::Parse {
+        message: e.to_string(),
+    })?;
+    Ok(rvs_collect_validate_returns_unit_from_items(&file.items))
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ExtractError {
     #[error("parse error: {message}")]
@@ -4080,5 +4196,116 @@ mod tests {
         let source = "#[derive(Error)] enum MyError { Unknown }";
         let ca = rvs_extract_catch_all_error_variants(source).unwrap();
         assert_eq!(ca.len(), 1);
+    }
+
+    #[test]
+    fn test_20260426_validate_returns_unit_detects() {
+        let source = r#"
+fn rvs_validate_email(raw: &str) -> Result<(), ParseError> {
+    Ok(())
+}
+"#;
+        let items = rvs_extract_validate_returns_unit(source).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].function, "rvs_validate_email");
+    }
+
+    #[test]
+    fn test_20260426_validate_non_unit_ok_not_detected() {
+        let source = r#"
+fn rvs_parse_email(raw: &str) -> Result<Email, ParseError> {
+    Ok(Email {})
+}
+"#;
+        let items = rvs_extract_validate_returns_unit(source).unwrap();
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn test_20260426_check_prefix_also_detected() {
+        let source = r#"
+fn rvs_check_config(cfg: &Config) -> Result<(), ConfigError> {
+    Ok(())
+}
+"#;
+        let items = rvs_extract_validate_returns_unit(source).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].function, "rvs_check_config");
+    }
+
+    #[test]
+    fn test_20260426_verify_prefix_also_detected() {
+        let source = r#"
+fn rvs_verify_signature(data: &[u8]) -> Result<(), SigError> {
+    Ok(())
+}
+"#;
+        let items = rvs_extract_validate_returns_unit(source).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].function, "rvs_verify_signature");
+    }
+
+    #[test]
+    fn test_20260426_validate_non_result_not_detected() {
+        let source = r#"
+fn rvs_validate_input(x: i32) -> bool {
+    x > 0
+}
+"#;
+        let items = rvs_extract_validate_returns_unit(source).unwrap();
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn test_20260426_validate_case_insensitive() {
+        let source = r#"
+fn rvs_Validate_email(raw: &str) -> Result<(), Error> {
+    Ok(())
+}
+"#;
+        let items = rvs_extract_validate_returns_unit(source).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].function, "rvs_Validate_email");
+    }
+
+    #[test]
+    fn test_20260426_impl_method_detected() {
+        let source = r#"
+struct S;
+impl S {
+    fn rvs_validate_field(&self, v: &str) -> Result<(), Error> {
+        Ok(())
+    }
+}
+"#;
+        let items = rvs_extract_validate_returns_unit(source).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].function, "rvs_validate_field");
+    }
+
+    #[test]
+    fn test_20260426_trait_method_detected() {
+        let source = r#"
+trait Validator {
+    fn rvs_validate(&self, input: &str) -> Result<(), Error>;
+}
+"#;
+        let items = rvs_extract_validate_returns_unit(source).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].function, "rvs_validate");
+    }
+
+    #[test]
+    fn test_20260426_cfg_test_module_skipped() {
+        let source = r#"
+#[cfg(test)]
+mod tests {
+    fn rvs_validate_helper(x: i32) -> Result<(), Error> {
+        Ok(())
+    }
+}
+"#;
+        let items = rvs_extract_validate_returns_unit(source).unwrap();
+        assert!(items.is_empty());
     }
 }

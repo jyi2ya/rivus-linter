@@ -372,3 +372,4 @@ syn::StaticMutability::Mut=
 # ─── 本项目：结构体构造器 ────────────────────────────
 DenyWarningsWarning=
 StubMacroInfo=
+alloc::string::String::to_ascii_lowercase=

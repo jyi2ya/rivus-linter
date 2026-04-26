@@ -5054,3 +5054,44 @@ fn test_20260425_missing_test_output_self_check() {
         ),
     );
 }
+
+#[test]
+fn test_20260426_validate_returns_unit_detected() {
+    let source = r#"
+#![allow(non_snake_case)]
+fn rvs_validate_email(raw: &str) -> Result<(), ParseError> {
+    Ok(())
+}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(!output.validate_returns_unit_warnings.is_empty());
+    assert_eq!(
+        output.validate_returns_unit_warnings[0].function,
+        "rvs_validate_email"
+    );
+
+    rvs_snapshot_BI(
+        "20260426_validate_returns_unit_detected",
+        format!(
+            "warnings: {}\n",
+            output.validate_returns_unit_warnings.len()
+        ),
+    );
+}
+
+#[test]
+fn test_20260426_validate_returns_unit_none_ok() {
+    let source = r#"
+#![allow(non_snake_case)]
+fn rvs_parse_email(raw: &str) -> Result<Email, ParseError> {
+    Ok(Email {})
+}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.validate_returns_unit_warnings.is_empty());
+
+    rvs_snapshot_BI(
+        "20260426_validate_returns_unit_none_ok",
+        "validate_returns_unit_warnings: 0\n".to_string(),
+    );
+}
