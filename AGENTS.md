@@ -723,6 +723,7 @@ fn test_20260422_create_order_ok() {
 
 编码风格：
 
+* 尽量使用编辑工具（edit/write）读写和修改代码，而不是通过 shell 命令行（如 `sed`、`cat`、`echo >` 等）
 * 函数能力最好按照字母顺序排列
 * 多用泛型少用 dyn
 * 用 `.expect("never: 补充说明")` 标注不会 panic 的 `.expect()` 调用——linter 不会将此类调用视为 panic
