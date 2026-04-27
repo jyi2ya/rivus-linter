@@ -86,7 +86,7 @@ test_out/
 
 > *"To err is human; to forgive, divine."*
 
-每个可能失败的函数定义完整的错误类型枚举，调用者必须处理每种错误。采用 Rust 的 `Result<T, E>` 模式。用 thiserror 而不是 anyhow。
+每个可能失败的函数定义完整的错误类型枚举，调用者必须处理每种错误。采用 Rust 的 `Result<T, E>` 模式。用 thiserror，禁止使用 `anyhow`、`eyre`、`color_eyre`。
 
 **Result/Option 由类型系统强制处理**——编译器保证调用方必须 `match` 或 `?`，因此不需要额外的能力标记。真正需要标记的是 `panic`——它绕过类型系统，调用方无法静态知道函数可能崩溃。参见第五节能力标记中的 `P`。
 
@@ -249,6 +249,125 @@ core::panicking::panic=P       # 可能 panic
 - linter 对 capsmap 中的键做双向后缀匹配：`name.ends_with("::key")` 或 `key.ends_with("::name")` 均可命中。先查全名精确匹配，找不到再做双向后缀匹配。如果匹配到了错误的条目，在代码里把调用路径写长一点以消除歧义
 - 如果 linter 报告某函数"既非 rvs_-prefixed nor in capsmap"，你需要补全 capsmap。方法优先级：检查源码 > 编写测试验证行为 > 合理猜测
 
+### rivus-linter 工具手册
+
+#### `rivus-linter check <path> [-m <capsmap>]`
+
+基于 syn 的源码分析。递归扫描 `path` 下所有 `.rs` 文件，提取 `rvs_` 函数的定义与调用关系，检查调用链的能力合规性。
+
+```bash
+rivus-linter check src/ -m capsmap.txt
+```
+
+退出码：`0` = 无违规，`1` = 有违规，`2` = 运行错误。hint 和 warning 不影响退出码。
+
+#### `rivus-linter mir-check <path> [-m <capsmap>] [--mir-dir <dir>]`
+
+基于 MIR 的分析。编译项目到 MIR 中间表示，从编译器的视角提取函数调用。比 syn 更精确——能看到编译器展开的 trait 方法调用、闭包、运算符重载等 syn 看不到的东西。
+
+```bash
+# 完整流程：自动编译到 MIR 再检查
+rivus-linter mir-check . -m capsmap.txt
+
+# 跳过编译：直接检查已有的 .mir 文件（用于 CI 或调试）
+rivus-linter mir-check . -m capsmap.txt --mir-dir target/debug/deps
+```
+
+`path` 必须是包含 `Cargo.toml` 的项目根目录（完整流程），或任意目录（`--mir-dir` 模式）。
+
+**MIR 检查的局限**：
+1. 不执行 lint 检查（25 种警告检查），仅做能力合规性检查（违规 + 推断提示）
+2. 推断提示不完整：能产生 `MissingPanic` 和 `MissingMutable`，但不能检测静态变量引用、`MissingAsync`、`MissingUnsafe`、缺断言警告等
+
+#### `rivus-linter report <path>`
+
+统计 `path` 下所有 `.rs` 文件中 `rvs_` 函数的能力分布，输出各能力标记的函数数量和行数占比。好函数（能力 ≤ ABM）应该越多越好。
+
+**报告中的百分比和柱状图均基于行数占比，而非函数数量占比。** 优化方向是减少非好函数的代码行数——将逻辑从高能力函数抽出到低能力/纯函数中。
+
+**严禁注水**：为了提高好函数率而注入无实际业务价值的纯函数是被禁止的。好函数率的提升必须来自有意义的重构。
+
+**以下函数被排除在统计之外**：`#[test]` 函数、`#[cfg(test)]` 模块内的函数、`#[allow(dead_code)]` 或 `#[allow(unused)]` 标记的函数。
+
+```bash
+rivus-linter report src/
+```
+
+示例输出：
+
+```
+Capability Report
+------------------------------------------------------------
+Total: 42 functions, 890 lines
+------------------------------------------------------------
+  (good)          30 fns    650 lines  73.0% |██████████████████████░░░░░░░░|
+  (pure)          12 fns    200 lines  22.5% |██████████░░░░░░░░░░░░░░░░░░░░|
+  M(Mutable)      10 fns    300 lines  33.7% |█████████████░░░░░░░░░░░░░░░░░|
+  P(Panic)         5 fns    100 lines  11.2% |████░░░░░░░░░░░░░░░░░░░░░░░░░░|
+```
+
+#### 输出分类
+
+`check` 和 `mir-check` 输出三类结果：
+
+| 类别 | 关键字 | 含义 | 影响退出码 |
+|------|--------|------|-----------|
+| 违规 | `error` | 调用链能力冲突、stub 宏、空函数体 | 是 |
+| 警告 | `warning` | 各种代码质量问题 | 否 |
+| 推断提示 | `hint` | 函数的实际行为暗示应有某能力但名字里没写 | 否 |
+
+#### 违规类型
+
+| 类型 | 含义 |
+|------|------|
+| `Call` | 函数调用了自身能力不允许的函数 |
+| `StaticRef` | 函数引用了 `static` 或 `thread_local!` 变量但缺少相应能力（`static` 不可变引用需要 `S`，`static mut` 引用需要 `S` + `U`，`thread_local!` 引用需要 `S` + `T`） |
+| `StubMacro` | 函数体包含 `todo!()` 或 `unimplemented!()`——未实现的存根 |
+| `EmptyFn` | 函数体无任何逻辑（仅含 `debug_assert!`） |
+
+#### 警告类型
+
+| 警告 | 含义 |
+|------|------|
+| `Warning` | 调用了既非 `rvs_` 前缀也不在 capsmap 中的函数 |
+| `MissingAssertWarning` | `rvs_` 函数有原始数值类型参数却未写 `debug_assert!` |
+| `DeadCodeWarning` | `rvs_` 函数被 `#[allow(dead_code)]` 或 `#[allow(unused)]` 标记 |
+| `MissingAllowWarning` | `rvs_` 函数有大写后缀但未被 `#[allow(non_snake_case)]` 覆盖 |
+| `TestNameFormatWarning` | `#[test]` 函数名不匹配 `^test_\d{8}_\w+$` 格式 |
+| `DuplicateTestWarning` | 同名测试函数出现多次（跨文件检测） |
+| `BannedImportWarning` | 导入了被禁 crate（`anyhow`、`eyre`、`color_eyre`） |
+| `NonRvsFnWarning` | 函数缺少 `rvs_` 前缀（`#[test]` 函数、`main`、trait impl 方法除外） |
+| `MissingDocWarning` | pub 函数/方法缺少 `///` 文档注释 |
+| `DenyWarningsWarning` | 文件级 `#![deny(warnings)]` 反模式——应改用具名 lint |
+| `WildcardImportWarning` | `use xxx::*;` 通配导入（`super::*` 和 `*::prelude::*` 除外） |
+| `MissingSafetyDocWarning` | unsafe 函数缺少 `/// # Safety` 文档段 |
+| `BorrowedParamWarning` | 参数使用 `&String`/`&Vec<T>`/`&Box<T>`——应改用 `&str`/`&[T]`/`&T` |
+| `MissingDebugWarning` | pub struct/enum 缺少 `#[derive(Debug)]` |
+| `MissingPanicsDocWarning` | 带 `P` 标记的函数缺少 `/// # Panics` 文档段 |
+| `IntoImplWarning` | 直接实现 `Into`——应实现 `From`，`Into` 会自动提供 |
+| `ConsumedArgOnErrorWarning` | 函数消费了 owned 参数但错误类型中未保留该参数 |
+| `DerefPolymorphismWarning` | 实现了 `Deref`——可能用 Deref 模拟继承，应改用组合 |
+| `ReflectionUsageWarning` | 使用了 `std::any::Any`/`type_name`/`type_id`——应改用 trait 分发 |
+| `TodoCommentWarning` | 代码中包含 `// TODO` 或 `// FIXME` 注释 |
+| `UntestedGoodFnWarning` | 好函数（能力 ≤ ABM）未被任何测试调用 |
+| `ErrorSwallowWarning` | 调用 `.ok()` 或 `.unwrap_or_default()` 静默吞掉错误 |
+| `CatchUnwindWarning` | 使用 `catch_unwind`——应修 panic 源头而非捕获 |
+| `CatchAllErrorVariantWarning` | 错误枚举含 `Unknown`/`Other` 兜底变体 |
+| `MissingTestOutputWarning` | `#[test]` 函数缺少对应的 `test_out/{name}.out` 快照文件 |
+
+#### 推断提示
+
+| InferenceKind | 含义 |
+|---------------|------|
+| `MissingAsync` | 函数声明为 `async fn` 但后缀缺少 `A` |
+| `MissingUnsafe` | 函数含 `unsafe` 块或声明为 `unsafe fn` 但后缀缺少 `U` |
+| `MissingMutable` | 函数有 `&mut` 参数（含 `&mut self`）但后缀缺少 `M` |
+| `MissingPanic` | 函数调用了 `panic!`/`assert!`/`assert_eq!`/`assert_ne!`/`unreachable!`/`todo!`/`unimplemented!`/`.unwrap()`/`.expect()`（不含 `debug_assert!`）但后缀缺少 `P`。**例外**：`.expect("never: ...")` 不视为 panic |
+| `MissingSideEffect` | 函数读取了 `static` 变量但后缀缺少 `S` |
+| `MissingThreadLocal` | 函数读取了 `thread_local!` 变量但后缀缺少 `T` |
+| `NonAlphabeticalSuffix` | 能力后缀字母未按字母序排列 |
+| `DuplicateSuffixLetter` | 能力后缀中有重复字母 |
+
 ### 日常开发流程
 
 1. **写代码时**：确保每个 `rvs_` 函数名的后缀与其实际行为一致
@@ -261,7 +380,9 @@ core::panicking::panic=P       # 可能 panic
    rivus-linter check src/ -m capsmap.txt   # syn 检查无违规
    rivus-linter mir-check . -m capsmap.txt  # MIR 检查无违规（可选，更严格）
    ```
-3. **遇到 violation 时**：调用链能力冲突。要么修改调用方的标记（可能级联影响），要么重构代码避免不合规的调用
+3. **遇到 warning 时**：linter 输出的 warning 表示某个函数调用既非 `rvs_` 前缀也不在 capsmap 中。补全 capsmap 即可消除
+4. **遇到 violation 时**：调用链能力冲突。要么修改调用方的标记（可能级联影响），要么重构代码避免不合规的调用
+5. **遇到 hint 时**：推断性提示——函数的实际行为暗示应有某能力但名字里没写。审查后决定：补上能力标记（注意级联影响），或确认是误判则忽略
 
 ---
 
@@ -501,6 +622,7 @@ fn test_20260422_create_order_ok() {
 * 多用泛型少用 dyn
 * 用 `.expect("never: 补充说明")` 标注不会 panic 的 `.expect()` 调用——linter 不会将此类调用视为 panic
 * 用结构体显式定义数据类型，不要直接使用 `serde_json::Value` 和 `serde_json::json!`
+* 禁止使用 `#![deny(warnings)]`——应改用具名 lint（如 `#![deny(unused_imports)]`）
 
 ### 交付检查
 
