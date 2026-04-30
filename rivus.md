@@ -622,6 +622,7 @@ fn test_20260422_create_order_ok() {
 * 多用泛型少用 dyn
 * 用 `.expect("never: 补充说明")` 标注不会 panic 的 `.expect()` 调用——linter 不会将此类调用视为 panic
 * 用结构体显式定义数据类型，不要直接使用 `serde_json::Value` 和 `serde_json::json!`
+* 编程过程中需要创建临时目录时，优先使用 `$TMPDIR`（如果已设置）或 `~/tmp`，而不是 `/tmp`
 * 禁止使用 `#![deny(warnings)]`——应改用具名 lint（如 `#![deny(unused_imports)]`）
 
 ### 交付检查
