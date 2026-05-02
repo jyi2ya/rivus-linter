@@ -1430,7 +1430,8 @@ fn rvs_collect_non_rvs_fns_from_items(items: &[syn::Item]) -> Vec<NonRvsFnInfo> 
                 let is_test = rvs_is_test_fn(&item_fn.attrs);
                 let name = item_fn.sig.ident.to_string();
                 let is_main = name == "main";
-                if !is_test && !is_main {
+                let is_dunder = name.starts_with("__");
+                if !is_test && !is_main && !is_dunder {
                     let line = item_fn.sig.ident.span().start().line;
                     fns.push(NonRvsFnInfo {
                         has_rvs_prefix: name.starts_with("rvs_"),
@@ -1448,12 +1449,14 @@ fn rvs_collect_non_rvs_fns_from_items(items: &[syn::Item]) -> Vec<NonRvsFnInfo> 
                         let is_test = rvs_is_test_fn(&impl_fn.attrs);
                         if !is_test {
                             let name = impl_fn.sig.ident.to_string();
-                            let line = impl_fn.sig.ident.span().start().line;
-                            fns.push(NonRvsFnInfo {
-                                has_rvs_prefix: name.starts_with("rvs_"),
-                                name,
-                                line,
-                            });
+                            if !name.starts_with("__") {
+                                let line = impl_fn.sig.ident.span().start().line;
+                                fns.push(NonRvsFnInfo {
+                                    has_rvs_prefix: name.starts_with("rvs_"),
+                                    name,
+                                    line,
+                                });
+                            }
                         }
                     }
                 }

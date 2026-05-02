@@ -241,7 +241,7 @@ fn rvs_extract_call_target(line: &str) -> Option<String> {
     } else if rvs_find_call_open_paren(rest).is_some() && rest.contains("->") {
         let paren_pos =
             rvs_find_call_open_paren(rest).unwrap_or_else(|| rest.find(' ').unwrap_or(rest.len()));
-        if paren_pos > 0 {
+        if paren_pos > 0 && !rest.starts_with("__") {
             Some(rest.get(..paren_pos).unwrap_or(rest).to_string())
         } else {
             None
