@@ -45,6 +45,7 @@ pub const CLIPPY_LINTS: &[(&str, &str)] = &[
     ("iter_not_returning_iterator", "warn"),
     ("expl_impl_clone_on_copy", "warn"),
     ("infallible_try_from", "warn"),
+    ("use_debug", "warn"),
     ("dbg_macro", "warn"),
     ("allow_attributes", "warn"),
     ("allow_attributes_without_reason", "warn"),
