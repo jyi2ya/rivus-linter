@@ -711,7 +711,6 @@ fn rvs_collect_assert_ids_from_expr(expr: &syn::Expr) -> Vec<String> {
 }
 
 /// 从顶层函数定义中萃取信息。
-#[allow(non_snake_case)]
 fn rvs_extract_from_item_fn(item_fn: &syn::ItemFn, statics: &[StaticDecl]) -> Option<FnDef> {
     let name = item_fn.sig.ident.to_string();
     let (_, caps) = rvs_parse_function(&name)?;
@@ -755,7 +754,6 @@ fn rvs_extract_from_item_fn(item_fn: &syn::ItemFn, statics: &[StaticDecl]) -> Op
 }
 
 /// 从 impl 块中的方法萃取信息。
-#[allow(non_snake_case)]
 fn rvs_extract_from_impl_fn(impl_fn: &syn::ImplItemFn, statics: &[StaticDecl]) -> Option<FnDef> {
     let name = impl_fn.sig.ident.to_string();
     let (_, caps) = rvs_parse_function(&name)?;
@@ -799,7 +797,6 @@ fn rvs_extract_from_impl_fn(impl_fn: &syn::ImplItemFn, statics: &[StaticDecl]) -
 }
 
 /// 从 trait 定义中的方法签名萃取信息。
-#[allow(non_snake_case)]
 fn rvs_extract_from_trait_fn(trait_fn: &syn::TraitItemFn, statics: &[StaticDecl]) -> Option<FnDef> {
     let name = trait_fn.sig.ident.to_string();
     let (_, caps) = rvs_parse_function(&name)?;
@@ -1150,16 +1147,12 @@ fn rvs_allows_dead_code(attrs: &[syn::Attribute]) -> bool {
     })
 }
 
-/// 判断属性列表中是否有 `#[allow(non_snake_case)]`（含 `#![allow(non_snake_case)]`）。
+/// 判断属性列表中是否有 `#[allow(non_snake_case)]` 或 `#[expect(non_snake_case)]`。
 /// `allow(a, non_snake_case, b)` 这类组合亦可识别。
 fn rvs_allows_non_snake_case(attrs: &[syn::Attribute]) -> bool {
     attrs.iter().any(|attr| {
-        if !attr
-            .path()
-            .segments
-            .last()
-            .is_some_and(|s| s.ident == "allow")
-        {
+        let last_ident = attr.path().segments.last().map(|s| s.ident.to_string());
+        if !last_ident.is_some_and(|ident| ident == "allow" || ident == "expect") {
             return false;
         }
         let Ok(list) = attr.meta.require_list() else {
@@ -2076,10 +2069,10 @@ fn rvs_find_consumed_args(
     if ab.args.len() != 2 {
         return None;
     };
-    let syn::GenericArgument::Type(ok_ty) = &ab.args[0] else {
+    let Some(syn::GenericArgument::Type(ok_ty)) = ab.args.get(0) else {
         return None;
     };
-    let syn::GenericArgument::Type(err_ty) = &ab.args[1] else {
+    let Some(syn::GenericArgument::Type(err_ty)) = ab.args.get(1) else {
         return None;
     };
     let is_unit = matches!(ok_ty, syn::Type::Tuple(t) if t.elems.is_empty());

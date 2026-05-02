@@ -1,0 +1,3 @@
+test_20260503_inject_preserves_existing: PASSED
+- Preserves existing lint entries (e.g. string_slice = "deny" kept as-is)
+- Only injects entries not already present

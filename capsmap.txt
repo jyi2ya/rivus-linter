@@ -373,3 +373,35 @@ syn::StaticMutability::Mut=
 DenyWarningsWarning=
 StubMacroInfo=
 alloc::string::String::to_ascii_lowercase=
+
+# ─── 标准库：str 方法（补充4）─────────────────────────
+std::str::to_ascii_lowercase=
+
+# ─── 标准库：str 方法（补充4）─────────────────────────
+core::str::to_ascii_lowercase=
+
+# ─── 标准库：字符串方法（补充3）─────────────────────────
+alloc::string::String::push_str=M
+
+# ─── 标准库：HashSet/Vec 方法（补充）─────────────────────────
+std::collections::HashSet::is_empty=
+std::collections::HashSet::contains=
+alloc::vec::Vec::insert=M
+
+# ─── 标准库：字符串方法（补充3）─────────────────────────
+alloc::string::String::push_str=M
+
+# ─── 标准库：文件系统（补充2）─────────────────────────
+std::fs::write=BIMS
+# ─── 标准库：Path 方法（补充5）─────────────────────────
+std::path::Path::file_name=
+alloc::string::Cow::to_string=
+core::ffi::c_str::CString::to_string_lossy=
+core::option::Option::as_deref=
+
+core::iter::traits::iterator::Iterator::take=
+std::ffi::os_str::OsStr::to_string_lossy=
+str::split_at_checked=
+core::str::get=
+core::slice::get=
+syn::punctuated::Punctuated::get=

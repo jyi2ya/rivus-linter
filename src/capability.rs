@@ -73,7 +73,6 @@ const VALID_SUFFIX_CHARS: &[char] = &['A', 'B', 'I', 'M', 'P', 'S', 'T', 'U'];
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct CapabilitySet(BTreeSet<Capability>);
 
-#[allow(non_snake_case)]
 impl CapabilitySet {
     /// 构造一个空的能力集。
     pub fn rvs_new() -> Self {
@@ -199,13 +198,12 @@ pub fn rvs_parse_function(name: &str) -> Option<(&str, CapabilitySet)> {
 }
 
 /// 拆解单个片段：去掉 rvs_ 前缀后，萃取能力后缀。
-#[allow(non_snake_case)]
 fn rvs_parse_segment(name: &str) -> Option<(&str, CapabilitySet)> {
     let rest = name.strip_prefix("rvs_")?;
 
     if let Some(pos) = rest.rfind('_') {
-        let potential_suffix = &rest[pos + 1..];
-        let base = &rest[..pos];
+        let potential_suffix = rest.get(pos + 1..).unwrap_or("");
+        let base = rest.get(..pos).unwrap_or("");
 
         if !potential_suffix.is_empty()
             && potential_suffix
@@ -226,7 +224,7 @@ pub fn rvs_extract_raw_suffix(name: &str) -> String {
     if let Some(rest) = name.strip_prefix("rvs_")
         && let Some(pos) = rest.rfind('_')
     {
-        let potential_suffix = &rest[pos + 1..];
+        let potential_suffix = rest.get(pos + 1..).unwrap_or("");
         if !potential_suffix.is_empty()
             && potential_suffix
                 .chars()
@@ -240,7 +238,6 @@ pub fn rvs_extract_raw_suffix(name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    #![allow(non_snake_case)]
     use super::*;
 
     #[test]

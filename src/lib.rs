@@ -1,5 +1,15 @@
-#![allow(clippy::unwrap_or_default)]
-#![allow(clippy::manual_ok_err)]
+#![expect(
+    clippy::unwrap_or_default,
+    reason = "used intentionally in linter internals"
+)]
+#![expect(
+    clippy::manual_ok_err,
+    reason = "used intentionally in linter internals"
+)]
+#![expect(
+    non_snake_case,
+    reason = "rvs_ functions use uppercase capability suffixes (A/B/I/M/P/S/T/U)"
+)]
 
 pub mod capability;
 pub mod capsmap;
@@ -7,6 +17,7 @@ pub mod check;
 pub mod extract;
 pub mod mir;
 pub mod report;
+pub mod setup;
 pub mod source;
 
 pub use capability::{Capability, CapabilitySet, rvs_parse_function};

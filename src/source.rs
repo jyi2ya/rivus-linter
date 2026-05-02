@@ -14,7 +14,6 @@ pub struct SourceFile {
 ///
 /// 千里之行，始于足下；
 /// 万卷之源，皆从磁盘来。
-#[allow(non_snake_case)]
 pub fn rvs_read_rust_sources_BI(path: &Path) -> Result<Vec<SourceFile>, ReadError> {
     debug_assert!(path.exists(), "路径必须存在");
 
@@ -58,7 +57,6 @@ pub enum ReadError {
 }
 
 /// 从路径读取所有 `.mir` 文件。路径可为单个 mir 文件或目录（递归扫描）。
-#[allow(non_snake_case)]
 pub fn rvs_read_mir_sources_BI(path: &Path) -> Result<Vec<SourceFile>, ReadError> {
     debug_assert!(path.exists(), "路径必须存在");
 

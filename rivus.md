@@ -156,7 +156,13 @@ async fn rvs_send_email_AIS(email: &Validated<Email>, body: &str) -> Result<(), 
 
 你的所有函数名必须以 `rvs_` 开头！实现外部 traits 除外。
 
-记得在每个 `rvs_` 函数上标注 `#[allow(non_snake_case)]`，防止编译器对大写字母后缀发出警告。此标注可从外层作用域继承——如果在文件级（`#![allow(non_snake_case)]`）、`mod` 级、`impl` 块或 `trait` 定义上标注了 `#[allow(non_snake_case)]`，则内部的所有 `rvs_` 函数均视为已覆盖，无需逐个重复标注。
+推荐在 crate 根（`lib.rs` 或 `main.rs`）加一行全局标注即可：
+
+```rust
+#![expect(non_snake_case, reason = "rvs_ functions use uppercase capability suffixes (A/B/I/M/P/S/T/U)")]
+```
+
+此标注可从外层作用域继承——如果在 crate 级（`#![expect(non_snake_case)]`）、文件级、`mod` 级、`impl` 块或 `trait` 定义上标注了 `#[allow(non_snake_case)]` 或 `#[expect(non_snake_case)]`，则内部的所有 `rvs_` 函数均视为已覆盖，无需逐个重复标注。
 
 ### 能力字母表
 
@@ -306,6 +312,27 @@ Total: 42 functions, 890 lines
   P(Panic)         5 fns    100 lines  11.2% |████░░░░░░░░░░░░░░░░░░░░░░░░░░|
 ```
 
+#### `rivus-linter setup <path>`
+
+将 `rivus.md` 复制为目标项目的 `AGENTS.md`，并在 `Cargo.toml` 中注入 clippy lint 规则。
+
+- 如果目标项目已有部分 clippy lint，只注入不存在的条目
+- 已存在的 lint 值不会被覆盖
+- `AGENTS.md` 每次覆盖写入（确保与最新 `rivus.md` 同步）
+
+注入的 clippy lint 分为以下几类：
+- **防 panic**：`string_slice`、`indexing_slicing`、`unwrap_used`、`panic`、`todo` 等
+- **防静默故障**：`let_underscore_future`、`let_underscore_must_use`、`unused_result_ok`、`map_err_ignore` 等
+- **async 安全**：`await_holding_lock`、`await_holding_refcell_ref`、`large_futures`
+- **内存安全**：`mem_forget`、`undocumented_unsafe_blocks`、`multiple_unsafe_ops_per_block` 等
+- **数值正确性**：`float_cmp`、`float_cmp_const`、`cast_sign_loss`、`invalid_upcast_comparisons` 等
+- **杂项**：`rc_mutex`、`debug_assert_with_mut_call`、`dbg_macro`、`allow_attributes` 等
+
+```bash
+rivus-linter setup .           # 当前目录
+rivus-linter setup /path/to/project  # 指定目录
+```
+
 #### 输出分类
 
 `check` 和 `mir-check` 输出三类结果：
@@ -332,7 +359,7 @@ Total: 42 functions, 890 lines
 | `Warning` | 调用了既非 `rvs_` 前缀也不在 capsmap 中的函数 |
 | `MissingAssertWarning` | `rvs_` 函数有原始数值类型参数却未写 `debug_assert!` |
 | `DeadCodeWarning` | `rvs_` 函数被 `#[allow(dead_code)]` 或 `#[allow(unused)]` 标记 |
-| `MissingAllowWarning` | `rvs_` 函数有大写后缀但未被 `#[allow(non_snake_case)]` 覆盖 |
+| `MissingAllowWarning` | `rvs_` 函数有大写后缀但未被 `#[allow(non_snake_case)]` 或 `#[expect(non_snake_case)]` 覆盖 |
 | `TestNameFormatWarning` | `#[test]` 函数名不匹配 `^test_\d{8}_\w+$` 格式 |
 | `DuplicateTestWarning` | 同名测试函数出现多次（跨文件检测） |
 | `BannedImportWarning` | 导入了被禁 crate（`anyhow`、`eyre`、`color_eyre`） |
@@ -354,8 +381,11 @@ Total: 42 functions, 890 lines
 | `CatchUnwindWarning` | 使用 `catch_unwind`——应修 panic 源头而非捕获 |
 | `CatchAllErrorVariantWarning` | 错误枚举含 `Unknown`/`Other` 兜底变体 |
 | `MissingTestOutputWarning` | `#[test]` 函数缺少对应的 `test_out/{name}.out` 快照文件 |
+| `ValidateReturnsUnitWarning` | 名为 `validate`/`check`/`verify` 的函数返回 `Result<(), E>`——应改用 `TryFrom` 返回 `Result<Target, Error>`（parse instead of validate） |
 
 #### 推断提示
+
+> **严重级别**：`MissingPanic` 输出为 `warning`（更值得关注），其余推断提示输出为 `hint`。两者均不影响退出码。
 
 | InferenceKind | 含义 |
 |---------------|------|

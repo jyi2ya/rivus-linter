@@ -1,12 +1,19 @@
+#![expect(
+    non_snake_case,
+    reason = "rvs_ functions use uppercase capability suffixes (A/B/I/M/P/S/T/U)"
+)]
 use std::path::PathBuf;
 use std::process;
 
 use clap::{Parser, Subcommand};
 use rivus_linter::capsmap::CapsMap;
+use rivus_linter::report::rvs_report_path_BI;
 use rivus_linter::rvs_check_mir_dir_BIM;
 use rivus_linter::rvs_check_mir_path_BIMPS;
 use rivus_linter::rvs_check_path_BI;
-use rivus_linter::rvs_report_path_BI;
+use rivus_linter::setup::rvs_inject_clippy_lints_M;
+
+const RIVUS_MD: &str = include_str!("../rivus.md");
 
 #[derive(Parser)]
 #[command(name = "rivus-linter")]
@@ -42,12 +49,17 @@ enum Command {
         /// Path to file or directory to analyze
         path: PathBuf,
     },
+    /// Set up project: copy rivus.md to AGENTS.md and inject clippy lints into Cargo.toml
+    Setup {
+        /// Path to target project directory (default: current directory)
+        #[arg(default_value = ".")]
+        path: PathBuf,
+    },
 }
 
 /// # Panics
 ///
 /// Panics on invalid CLI arguments or failed subcommand execution.
-#[allow(non_snake_case)]
 fn rvs_main_BIMPS() {
     let cli = Cli::parse();
 
@@ -95,13 +107,13 @@ fn rvs_main_BIMPS() {
                 process::exit(2);
             }
         },
+        Command::Setup { path } => rvs_setup_BIMPS(&path),
     }
 }
 
 /// # Panics
 ///
 /// Panics if the capsmap file is unreadable or contains invalid entries.
-#[allow(non_snake_case)]
 fn rvs_load_capsmap_BIPS(capsmap: Option<PathBuf>) -> CapsMap {
     match capsmap {
         Some(cm_path) => {
@@ -120,8 +132,46 @@ fn rvs_load_capsmap_BIPS(capsmap: Option<PathBuf>) -> CapsMap {
 
 /// # Panics
 ///
+/// Panics on I/O errors during setup.
+fn rvs_setup_BIMPS(path: &std::path::Path) {
+    debug_assert!(path.is_dir(), "setup path must be a directory");
+
+    // 1. Copy rivus.md to AGENTS.md
+    let agents_md = path.join("AGENTS.md");
+    std::fs::write(&agents_md, RIVUS_MD).unwrap_or_else(|e| {
+        eprintln!("Error: cannot write '{}': {e}", agents_md.display());
+        process::exit(2);
+    });
+    println!("Written {}", agents_md.display());
+
+    // 2. Inject clippy lints into Cargo.toml
+    let cargo_toml_path = path.join("Cargo.toml");
+    let content = std::fs::read_to_string(&cargo_toml_path).unwrap_or_else(|e| {
+        eprintln!("Error: cannot read '{}': {e}", cargo_toml_path.display());
+        process::exit(2);
+    });
+
+    let (new_content, count) = rvs_inject_clippy_lints_M(&content);
+    if count > 0 {
+        std::fs::write(&cargo_toml_path, &new_content).unwrap_or_else(|e| {
+            eprintln!("Error: cannot write '{}': {e}", cargo_toml_path.display());
+            process::exit(2);
+        });
+        println!(
+            "Injected {count} clippy lint(s) into {}",
+            cargo_toml_path.display()
+        );
+    } else {
+        println!(
+            "All clippy lints already present in {}",
+            cargo_toml_path.display()
+        );
+    }
+}
+
+/// # Panics
+///
 /// Panics on I/O errors when writing to stderr.
-#[allow(non_snake_case)]
 fn rvs_print_check_output_BIPS(output: &rivus_linter::CheckOutput) {
     for w in &output.warnings {
         eprintln!("{w}");
@@ -212,7 +262,6 @@ fn rvs_print_check_output_BIPS(output: &rivus_linter::CheckOutput) {
     }
 }
 
-#[allow(non_snake_case)]
 fn main() {
     rvs_main_BIMPS();
 }

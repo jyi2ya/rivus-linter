@@ -1,4 +1,4 @@
 violations: 0
 warnings: 1
 warning: rvs_do_thing calls mystery_function which is neither rvs_-prefixed nor in capsmap
-  at /tmp/rivus_test_mir_warning:2
+  at /home/jyi/tmp/rivus_test_mir_warning:2

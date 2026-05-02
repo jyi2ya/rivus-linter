@@ -141,7 +141,13 @@ impl fmt::Display for Report {
 
         for (label, fn_count, line_count) in &rows {
             let pct = *line_count as f64 / self.total_line_count as f64 * 100.0;
-            let bar_len = (pct / 100.0 * bar_width as f64).round() as usize;
+            #[expect(
+                clippy::cast_sign_loss,
+                reason = "pct is 0..=100, round() is non-negative"
+            )]
+            let bar_len = (pct / 100.0 * bar_width as f64)
+                .round()
+                .clamp(0.0, bar_width as f64) as usize;
             let bar: String = "█".repeat(bar_len) + &"░".repeat(bar_width - bar_len);
             writeln!(
                 f,
@@ -160,7 +166,6 @@ impl fmt::Display for Report {
 
 /// 从文件路径（或目录）出发，生成汇报。
 /// 薄薄一层壳：只管读文件，真正的事交给纯函数。
-#[allow(non_snake_case)]
 pub fn rvs_report_path_BI(path: &Path) -> Result<Report, ReportError> {
     let sources = rvs_read_rust_sources_BI(path).map_err(|e| ReportError::Read { source: e })?;
     rvs_report_sources(&sources)

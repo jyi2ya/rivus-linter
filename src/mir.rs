@@ -27,7 +27,6 @@ pub enum MirCompileError {
 /// # Panics
 ///
 /// Panics if `project_dir` does not exist.
-#[allow(non_snake_case)]
 pub fn rvs_compile_to_mir_BIMPS(project_dir: &Path) -> Result<PathBuf, MirCompileError> {
     debug_assert!(project_dir.exists(), "项目目录必须存在");
 
@@ -102,8 +101,7 @@ fn rvs_extract_calls_from_body(body_lines: &[String]) -> Vec<CalleeInfo> {
 }
 
 fn rvs_extract_parent_fn_name(closure_name: &str) -> Option<&str> {
-    let brace_pos = closure_name.find("::{")?;
-    let parent = &closure_name[..brace_pos];
+    let (parent, _) = closure_name.split_once("::{")?;
     rvs_parse_function(parent)?;
     Some(parent)
 }
@@ -111,36 +109,39 @@ fn rvs_extract_parent_fn_name(closure_name: &str) -> Option<&str> {
 fn rvs_strip_generics(path: &str) -> String {
     let mut result = String::with_capacity(path.len());
     let mut depth: i32 = 0;
-    let chars: Vec<char> = path.chars().collect();
-    let mut i = 0;
-    while i < chars.len() {
-        match chars[i] {
-            ':' if depth == 0 && i + 1 < chars.len() && chars[i + 1] == ':' => {
-                if i + 2 < chars.len() && chars[i + 2] == '<' {
-                    i += 2;
+    let mut chars = path.chars().peekable();
+    let mut prev: Option<char> = None;
+    while let Some(ch) = chars.next() {
+        match ch {
+            ':' if depth == 0 && chars.peek() == Some(&':') => {
+                let _next_colon = chars.next();
+                if chars.peek() == Some(&'<') {
+                    // skip `::<` — the `<` will be consumed next iteration? No, we need to skip it
+                    let _angle = chars.next(); // consume '<'
+                    depth += 1;
                 } else {
                     result.push(':');
                     result.push(':');
-                    i += 2;
                 }
+                prev = Some(':');
             }
             '<' => {
                 depth += 1;
-                i += 1;
+                prev = Some('<');
             }
-            '>' if i > 0 && chars[i - 1] == '-' => {
-                i += 1;
+            '>' if prev == Some('-') => {
+                prev = Some('>');
             }
             '>' => {
                 depth = depth.saturating_sub(1);
-                i += 1;
+                prev = Some('>');
             }
             _ if depth == 0 => {
-                result.push(chars[i]);
-                i += 1;
+                result.push(ch);
+                prev = Some(ch);
             }
             _ => {
-                i += 1;
+                prev = Some(ch);
             }
         }
     }
@@ -149,19 +150,21 @@ fn rvs_strip_generics(path: &str) -> String {
 
 fn rvs_find_call_open_paren(s: &str) -> Option<usize> {
     let mut angle_depth: i32 = 0;
-    let chars: Vec<char> = s.chars().collect();
-    let mut i = 0;
-    while i < chars.len() {
-        match chars[i] {
+    let mut prev_char: Option<char> = None;
+    let mut byte_offset = 0;
+    for (i, ch) in s.char_indices() {
+        byte_offset = i;
+        match ch {
             '<' => angle_depth += 1,
-            '>' if i > 0 && chars[i - 1] == '-' => {}
+            '>' if prev_char == Some('-') => {}
             '>' => angle_depth -= 1,
             '(' if angle_depth == 0 => return Some(i),
             ' ' if angle_depth == 0 => return None,
             _ => {}
         }
-        i += 1;
+        prev_char = Some(ch);
     }
+    let _ = byte_offset;
     None
 }
 
@@ -192,29 +195,29 @@ fn rvs_extract_call_target(line: &str) -> Option<String> {
         .char_indices()
         .take_while(|(_, c)| c.is_ascii_digit())
         .last()?;
-    let rest = &rest[digits_end.0 + digits_end.1.len_utf8()..];
+    let (_, rest) = rest.split_at_checked(digits_end.0 + digits_end.1.len_utf8())?;
     let rest = rest.strip_prefix(" = ")?;
     let rest = rest.strip_prefix("const ").unwrap_or(rest);
 
-    if let Some(stripped) = rest.strip_prefix('<') {
+    if rest.starts_with('<') {
+        let stripped = rest.strip_prefix('<')?;
         let end = rvs_find_matching_angle(stripped)?;
-        let end_in_rest = end + 1;
-        let inner = &rest[1..end_in_rest];
-        let after_angle = &rest[end_in_rest..];
+        let (inner, after_angle) = stripped.split_at_checked(end)?;
 
         if let Some(method_path) = after_angle.strip_prefix(">::") {
             let method_end = rvs_find_call_open_paren(method_path)
                 .unwrap_or_else(|| method_path.find(' ').unwrap_or(method_path.len()));
-            let method = &method_path[..method_end];
+            let (method, _) = method_path.split_at_checked(method_end)?;
             let clean_method = rvs_strip_generics(method);
 
             if let Some(as_pos) = inner.find(" as ") {
-                let trait_part = &inner[as_pos + 4..];
+                let (_, trait_part) = inner.split_at_checked(as_pos + 4)?;
                 let clean_trait = rvs_strip_generics(trait_part);
                 Some(format!("{clean_trait}::{clean_method}"))
             } else {
                 let sep = inner.rfind(">::")?;
-                let type_part = rvs_strip_generics(&inner[..sep + 1]);
+                let (type_inner, _) = inner.split_at_checked(sep + 1)?;
+                let type_part = rvs_strip_generics(type_inner);
                 Some(format!("{type_part}::{clean_method}"))
             }
         } else {
@@ -222,7 +225,7 @@ fn rvs_extract_call_target(line: &str) -> Option<String> {
         }
     } else if rest.contains("::") {
         let paren_pos = rvs_find_call_open_paren(rest)?;
-        let path = &rest[..paren_pos];
+        let (path, _) = rest.split_at_checked(paren_pos)?;
         let clean = rvs_strip_generics(path);
         if clean.contains("::")
             || (!clean.is_empty() && clean.chars().all(|c| c.is_alphanumeric() || c == '_'))
@@ -234,12 +237,12 @@ fn rvs_extract_call_target(line: &str) -> Option<String> {
     } else if rest.starts_with("rvs_") {
         let paren_pos =
             rvs_find_call_open_paren(rest).unwrap_or_else(|| rest.find(' ').unwrap_or(rest.len()));
-        Some(rest[..paren_pos].to_string())
+        Some(rest.get(..paren_pos).unwrap_or(rest).to_string())
     } else if rvs_find_call_open_paren(rest).is_some() && rest.contains("->") {
         let paren_pos =
             rvs_find_call_open_paren(rest).unwrap_or_else(|| rest.find(' ').unwrap_or(rest.len()));
         if paren_pos > 0 {
-            Some(rest[..paren_pos].to_string())
+            Some(rest.get(..paren_pos).unwrap_or(rest).to_string())
         } else {
             None
         }
@@ -259,7 +262,8 @@ fn rvs_parse_mir_functions(mir_text: &str) -> Vec<MirFnDef> {
         if let Some(rest) = trimmed.strip_prefix("fn ")
             && let Some(paren_pos) = rest.find('(')
         {
-            let name = rest[..paren_pos].trim().to_string();
+            let (name, _) = rest.split_at(paren_pos);
+            let name = name.trim().to_string();
             brace_depth = 0;
             for ch in rest.chars() {
                 match ch {

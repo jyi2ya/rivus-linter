@@ -1,0 +1,3 @@
+test_20260501_inject_into_empty_cargo_toml: PASSED
+- Injects all 37 clippy lints into a Cargo.toml with no existing [lints.clippy] section
+- Result contains [lints.clippy] section with all entries

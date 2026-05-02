@@ -817,8 +817,8 @@ impl fmt::Display for InferenceWarning {
     }
 }
 
-/// 一条缺 `#[allow(non_snake_case)]` 警告：函数名有大写后缀，却未豁免 snake_case 检查。
-/// 外层 impl/trait/mod/crate 级的 `#![allow(non_snake_case)]` 可以覆盖本函数。
+/// 一条缺 `#[allow(non_snake_case)]` 或 `#[expect(non_snake_case)]` 警告：函数名有大写后缀，却未豁免 snake_case 检查。
+/// 外层 impl/trait/mod/crate 级的 `#![allow(non_snake_case)]` 或 `#![expect(non_snake_case)]` 可以覆盖本函数。
 #[derive(Debug, Clone)]
 pub struct MissingAllowWarning {
     pub function: String,
@@ -830,7 +830,7 @@ impl fmt::Display for MissingAllowWarning {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "warning: {} has uppercase capability suffix but is not covered by #[allow(non_snake_case)]\n  at {}:{}",
+            "warning: {} has uppercase capability suffix but is not covered by #[allow(non_snake_case)] or #[expect(non_snake_case)]\n  at {}:{}",
             self.function, self.file, self.line,
         )
     }
@@ -1529,12 +1529,27 @@ pub fn rvs_check_source(
     Ok(output)
 }
 
+/// Check if source contains a crate-level `#![expect(non_snake_case)]` or `#![allow(non_snake_case)]`.
+fn rvs_crate_allows_non_snake_case(source: &str) -> bool {
+    let head = source.chars().take(500).collect::<String>();
+    head.contains("#![") && head.contains("non_snake_case")
+}
+
 /// 从文件路径（或目录）出发，检查违规。
 /// CapsMap 用于查找非 rvs_ 函数的能力。
 /// 测试命名唯一性检查在整个路径内进行——跨文件同名亦会被抓。
-#[allow(non_snake_case)]
 pub fn rvs_check_path_BI(path: &Path, capsmap: &CapsMap) -> Result<CheckOutput, CheckError> {
     let sources = rvs_read_rust_sources_BI(path).map_err(|e| CheckError::Read { source: e })?;
+
+    // Detect crate-level #![expect(non_snake_case)] or #![allow(non_snake_case)] in lib.rs
+    let crate_allows_snake = sources.iter().any(|sf| {
+        let name = std::path::Path::new(&sf.path)
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string());
+        (name.as_deref() == Some("lib.rs") || name.as_deref() == Some("main.rs"))
+            && rvs_crate_allows_non_snake_case(&sf.source)
+    });
+
     let mut output = CheckOutput::default();
     let mut all_tests: Vec<(String, TestName)> = Vec::new();
     let mut all_test_call_names: Vec<String> = Vec::new();
@@ -1568,9 +1583,12 @@ pub fn rvs_check_path_BI(path: &Path, capsmap: &CapsMap) -> Result<CheckOutput, 
         output.assert_warnings.extend(result.assert_warnings);
         output.dead_code_warnings.extend(result.dead_code_warnings);
         output.inference_warnings.extend(result.inference_warnings);
-        output
-            .missing_allow_warnings
-            .extend(result.missing_allow_warnings);
+        output.missing_allow_warnings.extend(
+            result
+                .missing_allow_warnings
+                .into_iter()
+                .filter(|_| !crate_allows_snake),
+        );
 
         // 检查被禁导入
         output
@@ -1821,7 +1839,6 @@ pub enum MirCheckError {
 }
 
 /// 从目录中所有 `.mir` 文件中萃取函数定义，做跨文件合并后检查调用合规性。
-#[allow(non_snake_case)]
 pub fn rvs_check_mir_dir_BIM(
     mir_dir: &Path,
     capsmap: &CapsMap,
@@ -1862,7 +1879,6 @@ pub fn rvs_check_mir_dir_BIM(
 /// # Panics
 ///
 /// Panics if MIR compilation or file operations fail unexpectedly.
-#[allow(non_snake_case)]
 pub fn rvs_check_mir_path_BIMPS(
     project_dir: &Path,
     capsmap: &CapsMap,

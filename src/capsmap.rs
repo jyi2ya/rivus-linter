@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::capability::CapabilitySet;
+use crate::capability::{CapabilityParseError, CapabilitySet};
 
 /// 能力之鉴：非 rvs 函数的品行录。
 /// 外人虽无 rvs 前缀，登记在册，亦知其能。
@@ -16,6 +16,8 @@ pub enum CapsMapError {
         key: String,
         caps: String,
         line: usize,
+        #[source]
+        source: CapabilityParseError,
     },
     #[error("line {line}: missing '=' separator")]
     MissingSeparator { line: usize },
@@ -43,10 +45,11 @@ impl CapsMap {
             let key = key.trim().to_string();
             let value = value.split('#').next().unwrap_or("").trim();
             let caps =
-                CapabilitySet::rvs_from_str(value).map_err(|_| CapsMapError::InvalidCaps {
+                CapabilitySet::rvs_from_str(value).map_err(|e| CapsMapError::InvalidCaps {
                     key: key.clone(),
                     caps: value.to_string(),
                     line: line_num,
+                    source: e,
                 })?;
             entries.insert(key, caps);
         }
