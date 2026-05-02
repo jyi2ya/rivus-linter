@@ -1,0 +1,2 @@
+test_20260508_type_ident_unwraps_box: PASSED
+  rvs_type_ident(Box<Cli>) returns Some("Cli") — unwraps Box wrapper.

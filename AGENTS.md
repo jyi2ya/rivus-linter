@@ -372,7 +372,7 @@ rivus-linter setup /path/to/project  # 指定目录
 | `MissingDebugWarning` | pub struct/enum 缺少 `#[derive(Debug)]` |
 | `MissingPanicsDocWarning` | 带 `P` 标记的函数缺少 `/// # Panics` 文档段 |
 | `IntoImplWarning` | 直接实现 `Into`——应实现 `From`，`Into` 会自动提供 |
-| `ConsumedArgOnErrorWarning` | 函数消费了 owned 参数但错误类型中未保留该参数 |
+| `ConsumedArgOnErrorWarning` | 函数消费了 owned 参数但错误类型中未保留该参数。注意：仅检查错误类型名称中是否包含参数类型标识符（如 `RunError<Cli>` 包含 `Cli`），无法深入检查错误枚举的变体字段——如果参数确实被保留在变体中（如 `AppError::Failed { cli: Box<Cli> }`），属于误报 |
 | `DerefPolymorphismWarning` | 实现了 `Deref`——可能用 Deref 模拟继承，应改用组合 |
 | `ReflectionUsageWarning` | 使用了 `std::any::Any`/`type_name`/`type_id`——应改用 trait 分发 |
 | `TodoCommentWarning` | 代码中包含 `// TODO` 或 `// FIXME` 注释 |

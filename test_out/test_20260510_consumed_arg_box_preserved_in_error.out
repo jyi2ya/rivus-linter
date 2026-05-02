@@ -1,0 +1,3 @@
+test_20260510_consumed_arg_box_preserved_in_error: PASSED
+  Box<Cli> consumed arg not flagged when error type RunError<Cli> preserves Cli.
+  rvs_type_ident now unwraps Box/Arc/Rc/etc. wrappers to check inner type.

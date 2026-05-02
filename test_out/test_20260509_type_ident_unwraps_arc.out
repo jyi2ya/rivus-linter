@@ -1,0 +1,2 @@
+test_20260509_type_ident_unwraps_arc: PASSED
+  rvs_type_ident(Arc<Connection>) returns Some("Connection") — unwraps Arc wrapper.

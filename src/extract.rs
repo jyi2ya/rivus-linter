@@ -2027,7 +2027,21 @@ fn rvs_type_name_from_path(args: &syn::PathArguments) -> String {
 
 fn rvs_type_ident(ty: &syn::Type) -> Option<String> {
     if let syn::Type::Path(p) = ty {
-        p.path.segments.last().map(|s| s.ident.to_string())
+        let last = p.path.segments.last()?;
+        let ident = last.ident.to_string();
+        // For wrapper types, extract the inner type ident
+        match ident.as_str() {
+            "Box" | "Arc" | "Rc" | "Cell" | "RefCell" | "Mutex" | "RwLock" | "Cow" | "Option"
+            | "Pin" | "Vec" => {
+                if let syn::PathArguments::AngleBracketed(ab) = &last.arguments
+                    && let Some(syn::GenericArgument::Type(inner)) = ab.args.first()
+                {
+                    return rvs_type_ident(inner);
+                }
+            }
+            _ => {}
+        }
+        Some(ident)
     } else {
         None
     }
@@ -3888,6 +3902,27 @@ mod tests {
     fn test_20260425_type_ident() {
         let ty = parse_type("Foo");
         assert_eq!(rvs_type_ident(&ty), Some("Foo".to_string()));
+    }
+
+    #[test]
+    fn test_20260508_type_ident_unwraps_box() {
+        let ty = parse_type("Box<Cli>");
+        assert_eq!(rvs_type_ident(&ty), Some("Cli".to_string()));
+    }
+
+    #[test]
+    fn test_20260509_type_ident_unwraps_arc() {
+        let ty = parse_type("Arc<Connection>");
+        assert_eq!(rvs_type_ident(&ty), Some("Connection".to_string()));
+    }
+
+    #[test]
+    fn test_20260510_consumed_arg_box_preserved_in_error() {
+        // Box<Cli> consumed, but error type contains Cli → no warning
+        let items =
+            parse_items("fn rvs_run_BIPS(cli: Box<Cli>) -> Result<(), RunError<Cli>> { Ok(()) }");
+        let c = rvs_collect_consumed_arg_on_error_from_items(&items);
+        assert_eq!(c.len(), 0); // RunError<Cli> preserves Cli
     }
 
     #[test]
