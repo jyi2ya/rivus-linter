@@ -395,12 +395,27 @@ fn rvs_collect_calls_and_statics(
     (harvest.calls, harvest.static_refs)
 }
 
-/// 取首尾行号之差加一，即为函数所占行数。
-fn rvs_calc_line_count(start_span: proc_macro2::Span, end_span: proc_macro2::Span) -> usize {
-    let start_line = start_span.start().line;
-    let end_line = end_span.end().line;
-    debug_assert!(end_line >= start_line, "函数尾行不应在首行之前");
-    end_line - start_line + 1
+/// 从源码文本中统计函数体内部的非空、非注释行数。
+/// `open_brace_line` 是 `{` 所在行号（1-based），`close_brace_line` 是 `}` 所在行号（1-based）。
+fn rvs_count_body_lines(source: &str, open_brace_line: usize, close_brace_line: usize) -> usize {
+    debug_assert!(open_brace_line > 0, "行号从 1 开始");
+    debug_assert!(
+        close_brace_line >= open_brace_line,
+        "闭括号行不应在开括号行之前"
+    );
+    if open_brace_line == close_brace_line {
+        return 0;
+    }
+    source
+        .lines()
+        .enumerate()
+        .skip(open_brace_line)
+        .take(close_brace_line - open_brace_line - 1)
+        .filter(|(_, line)| {
+            let trimmed = line.trim();
+            !trimmed.is_empty() && !trimmed.starts_with("//")
+        })
+        .count()
 }
 
 /// 从 thread_local! 宏的 token 流中萃取变量名。
@@ -711,14 +726,19 @@ fn rvs_collect_assert_ids_from_expr(expr: &syn::Expr) -> Vec<String> {
 }
 
 /// 从顶层函数定义中萃取信息。
-fn rvs_extract_from_item_fn(item_fn: &syn::ItemFn, statics: &[StaticDecl]) -> Option<FnDef> {
+fn rvs_extract_from_item_fn(
+    item_fn: &syn::ItemFn,
+    statics: &[StaticDecl],
+    source: &str,
+) -> Option<FnDef> {
     let name = item_fn.sig.ident.to_string();
     let (_, caps) = rvs_parse_function(&name)?;
     let raw_suffix = rvs_extract_raw_suffix(&name);
     let line = item_fn.sig.ident.span().start().line;
-    let line_count = rvs_calc_line_count(
-        item_fn.sig.fn_token.span,
-        item_fn.block.brace_token.span.join(),
+    let line_count = rvs_count_body_lines(
+        source,
+        item_fn.block.brace_token.span.open().start().line,
+        item_fn.block.brace_token.span.close().start().line,
     );
     let (calls, static_refs) = rvs_collect_calls_and_statics(&item_fn.block, statics);
     let params = rvs_extract_param_names(&item_fn.sig.inputs);
@@ -754,14 +774,19 @@ fn rvs_extract_from_item_fn(item_fn: &syn::ItemFn, statics: &[StaticDecl]) -> Op
 }
 
 /// 从 impl 块中的方法萃取信息。
-fn rvs_extract_from_impl_fn(impl_fn: &syn::ImplItemFn, statics: &[StaticDecl]) -> Option<FnDef> {
+fn rvs_extract_from_impl_fn(
+    impl_fn: &syn::ImplItemFn,
+    statics: &[StaticDecl],
+    source: &str,
+) -> Option<FnDef> {
     let name = impl_fn.sig.ident.to_string();
     let (_, caps) = rvs_parse_function(&name)?;
     let raw_suffix = rvs_extract_raw_suffix(&name);
     let line = impl_fn.sig.ident.span().start().line;
-    let line_count = rvs_calc_line_count(
-        impl_fn.sig.fn_token.span,
-        impl_fn.block.brace_token.span.join(),
+    let line_count = rvs_count_body_lines(
+        source,
+        impl_fn.block.brace_token.span.open().start().line,
+        impl_fn.block.brace_token.span.close().start().line,
     );
     let (calls, static_refs) = rvs_collect_calls_and_statics(&impl_fn.block, statics);
     let params = rvs_extract_param_names(&impl_fn.sig.inputs);
@@ -797,7 +822,11 @@ fn rvs_extract_from_impl_fn(impl_fn: &syn::ImplItemFn, statics: &[StaticDecl]) -
 }
 
 /// 从 trait 定义中的方法签名萃取信息。
-fn rvs_extract_from_trait_fn(trait_fn: &syn::TraitItemFn, statics: &[StaticDecl]) -> Option<FnDef> {
+fn rvs_extract_from_trait_fn(
+    trait_fn: &syn::TraitItemFn,
+    statics: &[StaticDecl],
+    source: &str,
+) -> Option<FnDef> {
     let name = trait_fn.sig.ident.to_string();
     let (_, caps) = rvs_parse_function(&name)?;
     let raw_suffix = rvs_extract_raw_suffix(&name);
@@ -810,8 +839,14 @@ fn rvs_extract_from_trait_fn(trait_fn: &syn::TraitItemFn, statics: &[StaticDecl]
     let line_count = trait_fn
         .default
         .as_ref()
-        .map(|block| rvs_calc_line_count(trait_fn.sig.fn_token.span, block.brace_token.span.join()))
-        .unwrap_or(1);
+        .map(|block| {
+            rvs_count_body_lines(
+                source,
+                block.brace_token.span.open().start().line,
+                block.brace_token.span.close().start().line,
+            )
+        })
+        .unwrap_or(0);
     let has_body = trait_fn.default.is_some();
     let (params, debug_asserted_params) = trait_fn
         .default
@@ -1171,6 +1206,7 @@ fn rvs_extract_from_items(
     items: &[syn::Item],
     statics: &[StaticDecl],
     inherited_allow_snake: bool,
+    source: &str,
 ) -> Vec<FnDef> {
     let mut functions = Vec::new();
 
@@ -1180,7 +1216,7 @@ fn rvs_extract_from_items(
                 if rvs_is_test_fn(&item_fn.attrs) {
                     continue;
                 }
-                if let Some(mut fn_def) = rvs_extract_from_item_fn(item_fn, statics) {
+                if let Some(mut fn_def) = rvs_extract_from_item_fn(item_fn, statics, source) {
                     fn_def.allows_dead_code = rvs_allows_dead_code(&item_fn.attrs);
                     fn_def.has_allow_non_snake_case =
                         inherited_allow_snake || rvs_allows_non_snake_case(&item_fn.attrs);
@@ -1197,7 +1233,7 @@ fn rvs_extract_from_items(
                 for impl_item in &item_impl.items {
                     if let syn::ImplItem::Fn(impl_fn) = impl_item
                         && !rvs_is_test_fn(&impl_fn.attrs)
-                        && let Some(mut fn_def) = rvs_extract_from_impl_fn(impl_fn, statics)
+                        && let Some(mut fn_def) = rvs_extract_from_impl_fn(impl_fn, statics, source)
                     {
                         fn_def.allows_dead_code =
                             impl_allows_dead_code || rvs_allows_dead_code(&impl_fn.attrs);
@@ -1213,7 +1249,8 @@ fn rvs_extract_from_items(
                 for trait_item in &item_trait.items {
                     if let syn::TraitItem::Fn(trait_fn) = trait_item
                         && !rvs_is_test_fn(&trait_fn.attrs)
-                        && let Some(mut fn_def) = rvs_extract_from_trait_fn(trait_fn, statics)
+                        && let Some(mut fn_def) =
+                            rvs_extract_from_trait_fn(trait_fn, statics, source)
                     {
                         fn_def.allows_dead_code = rvs_allows_dead_code(&trait_fn.attrs);
                         fn_def.has_allow_non_snake_case =
@@ -1232,6 +1269,7 @@ fn rvs_extract_from_items(
                         inner_items,
                         statics,
                         mod_allows_snake,
+                        source,
                     ));
                 }
             }
@@ -1359,6 +1397,7 @@ pub fn rvs_extract_functions(source: &str) -> Result<Vec<FnDef>, ExtractError> {
         &file.items,
         &statics,
         file_allows_snake,
+        source,
     ))
 }
 
@@ -3398,10 +3437,27 @@ mod tests {
     }
 
     #[test]
-    fn test_20260425_calc_line_count() {
-        let span = proc_macro2::Span::call_site();
-        let count = rvs_calc_line_count(span, span);
-        assert!(count >= 1);
+    fn test_20260505_count_body_lines() {
+        let source = "fn foo() {\n    x + 1\n}\n";
+        // open_brace at line 1, close_brace at line 3
+        let count = rvs_count_body_lines(source, 1, 3);
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_20260506_count_body_lines_skips_empty_and_comments() {
+        let source = "fn foo() {\n\n    // comment\n    x + 1\n    // another\n\n}\n";
+        // open_brace at line 1, close_brace at line 7
+        let count = rvs_count_body_lines(source, 1, 7);
+        assert_eq!(count, 1); // only "x + 1"
+    }
+
+    #[test]
+    fn test_20260507_count_body_lines_single_line() {
+        let source = "fn foo() {}\n";
+        // open_brace at line 1, close_brace at line 1
+        let count = rvs_count_body_lines(source, 1, 1);
+        assert_eq!(count, 0);
     }
 
     #[test]
@@ -3493,14 +3549,15 @@ mod tests {
 
     #[test]
     fn test_20260425_extract_from_item_fn() {
-        let items = parse_items("#[allow(non_snake_case)] fn rvs_add_M(x: i32) { x + 1; }");
+        let src = "#[allow(non_snake_case)] fn rvs_add_M(x: i32) { x + 1; }";
+        let items = parse_items(src);
         match &items[0] {
             syn::Item::Fn(f) => {
-                let def = rvs_extract_from_item_fn(f, &[]);
+                let def = rvs_extract_from_item_fn(f, &[], src);
                 assert!(def.is_some());
                 let d = def.unwrap();
                 assert_eq!(d.name, "rvs_add_M");
-                assert_eq!(d.line_count, 1);
+                assert_eq!(d.line_count, 0);
             }
             _ => panic!("expected fn"),
         }
@@ -3508,11 +3565,12 @@ mod tests {
 
     #[test]
     fn test_20260425_extract_from_impl_fn() {
-        let items = parse_items("impl Foo { #[allow(non_snake_case)] fn rvs_do_M(&self) {} }");
+        let src = "impl Foo { #[allow(non_snake_case)] fn rvs_do_M(&self) {} }";
+        let items = parse_items(src);
         match &items[0] {
             syn::Item::Impl(imp) => match &imp.items[0] {
                 syn::ImplItem::Fn(f) => {
-                    let def = rvs_extract_from_impl_fn(f, &[]);
+                    let def = rvs_extract_from_impl_fn(f, &[], src);
                     assert!(def.is_some());
                 }
                 _ => panic!("expected impl fn"),
@@ -3523,12 +3581,12 @@ mod tests {
 
     #[test]
     fn test_20260425_extract_from_trait_fn() {
-        let items =
-            parse_items("trait Tr { #[allow(non_snake_case)] fn rvs_compute(&self) -> i32; }");
+        let src = "trait Tr { #[allow(non_snake_case)] fn rvs_compute(&self) -> i32; }";
+        let items = parse_items(src);
         match &items[0] {
             syn::Item::Trait(t) => match &t.items[0] {
                 syn::TraitItem::Fn(f) => {
-                    let def = rvs_extract_from_trait_fn(f, &[]);
+                    let def = rvs_extract_from_trait_fn(f, &[], src);
                     assert!(def.is_some());
                     assert!(!def.unwrap().has_body);
                 }
@@ -3540,8 +3598,9 @@ mod tests {
 
     #[test]
     fn test_20260425_extract_from_items() {
-        let items = parse_items("#[allow(non_snake_case)] fn rvs_foo() { 1; }");
-        let fns = rvs_extract_from_items(&items, &[], false);
+        let src = "#[allow(non_snake_case)] fn rvs_foo() { 1; }";
+        let items = parse_items(src);
+        let fns = rvs_extract_from_items(&items, &[], false, src);
         assert_eq!(fns.len(), 1);
         assert_eq!(fns[0].name, "rvs_foo");
     }

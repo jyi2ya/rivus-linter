@@ -405,3 +405,6 @@ str::split_at_checked=
 core::str::get=
 core::slice::get=
 syn::punctuated::Punctuated::get=
+proc_macro2::DelimSpan::open=
+proc_macro2::DelimSpan::close=
+core::iter::traits::iterator::Iterator::skip=
