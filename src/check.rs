@@ -1028,7 +1028,12 @@ fn rvs_check_validate_returns_unit(
 }
 
 /// 内部实现：检查函数调用合规性与静态引用合规性。
-fn rvs_check_functions_impl(functions: &[FnDef], file: &str, capsmap: &CapsMap) -> CheckOutput {
+fn rvs_check_functions_impl(
+    functions: &[FnDef],
+    file: &str,
+    capsmap: &CapsMap,
+    report_unknown_calls: bool,
+) -> CheckOutput {
     let mut violations = Vec::new();
     let mut warnings = Vec::new();
     let mut assert_warnings = Vec::new();
@@ -1076,12 +1081,14 @@ fn rvs_check_functions_impl(functions: &[FnDef], file: &str, capsmap: &CapsMap) 
                     if let Some(caps) = capsmap.rvs_lookup(&call.name) {
                         caps.clone()
                     } else {
-                        warnings.push(Warning {
-                            caller: func.name.clone(),
-                            callee: call.name.clone(),
-                            file: file.to_string(),
-                            line: call.line,
-                        });
+                        if report_unknown_calls {
+                            warnings.push(Warning {
+                                caller: func.name.clone(),
+                                callee: call.name.clone(),
+                                file: file.to_string(),
+                                line: call.line,
+                            });
+                        }
                         continue;
                     }
                 }
@@ -1246,7 +1253,7 @@ fn rvs_check_functions_impl(functions: &[FnDef], file: &str, capsmap: &CapsMap) 
 
 /// 纯函数：检查一组函数定义中的调用合规性与静态引用合规性。
 pub fn rvs_check_functions(functions: &[FnDef], file: &str) -> Vec<Violation> {
-    rvs_check_functions_impl(functions, file, &CapsMap::rvs_new()).violations
+    rvs_check_functions_impl(functions, file, &CapsMap::rvs_new(), true).violations
 }
 
 /// 纯函数：判断一个测试函数名是否符合 `^test_\d{8}_\w+$`。
@@ -1338,7 +1345,7 @@ pub fn rvs_check_source(
         file: file.to_string(),
     })?;
 
-    let mut output = rvs_check_functions_impl(&functions, file, capsmap);
+    let mut output = rvs_check_functions_impl(&functions, file, capsmap, true);
     let entries: Vec<(String, TestName)> =
         tests.into_iter().map(|t| (file.to_string(), t)).collect();
     let (fmt_warnings, dup_warnings) = rvs_test_warnings(&entries);
@@ -1577,7 +1584,7 @@ pub fn rvs_check_path_BI(path: &Path, capsmap: &CapsMap) -> Result<CheckOutput, 
             file: sf.path.clone(),
         })?;
 
-        let result = rvs_check_functions_impl(&functions, &sf.path, capsmap);
+        let result = rvs_check_functions_impl(&functions, &sf.path, capsmap, true);
         output.violations.extend(result.violations);
         output.warnings.extend(result.warnings);
         output.assert_warnings.extend(result.assert_warnings);
@@ -1871,6 +1878,7 @@ pub fn rvs_check_mir_dir_BIM(
         &functions,
         &mir_dir.display().to_string(),
         capsmap,
+        false,
     ))
 }
 
@@ -2337,7 +2345,7 @@ mod tests {
             allows_dead_code: false,
             has_allow_non_snake_case: false,
         };
-        let output = rvs_check_functions_impl(&[caller], "test.rs", &CapsMap::rvs_new());
+        let output = rvs_check_functions_impl(&[caller], "test.rs", &CapsMap::rvs_new(), true);
         assert!(!output.violations.is_empty());
         assert!(matches!(output.violations[0].kind, ViolationKind::Call));
     }
@@ -2369,7 +2377,7 @@ mod tests {
             allows_dead_code: false,
             has_allow_non_snake_case: false,
         };
-        let output = rvs_check_functions_impl(&[caller], "test.rs", &CapsMap::rvs_new());
+        let output = rvs_check_functions_impl(&[caller], "test.rs", &CapsMap::rvs_new(), true);
         assert!(!output.violations.is_empty());
         assert!(matches!(
             output.violations[0].kind,
@@ -2403,7 +2411,7 @@ mod tests {
             allows_dead_code: false,
             has_allow_non_snake_case: false,
         };
-        let output = rvs_check_functions_impl(&[caller], "test.rs", &CapsMap::rvs_new());
+        let output = rvs_check_functions_impl(&[caller], "test.rs", &CapsMap::rvs_new(), true);
         assert_eq!(output.assert_warnings.len(), 1);
         assert!(
             output.assert_warnings[0]
@@ -2435,7 +2443,7 @@ mod tests {
             allows_dead_code: false,
             has_allow_non_snake_case: false,
         };
-        let output = rvs_check_functions_impl(&[caller], "test.rs", &CapsMap::rvs_new());
+        let output = rvs_check_functions_impl(&[caller], "test.rs", &CapsMap::rvs_new(), true);
         assert!(
             output
                 .inference_warnings
@@ -2467,7 +2475,7 @@ mod tests {
             allows_dead_code: false,
             has_allow_non_snake_case: false,
         };
-        let output = rvs_check_functions_impl(&[caller], "test.rs", &CapsMap::rvs_new());
+        let output = rvs_check_functions_impl(&[caller], "test.rs", &CapsMap::rvs_new(), true);
         assert!(
             output
                 .inference_warnings
@@ -2499,7 +2507,7 @@ mod tests {
             allows_dead_code: false,
             has_allow_non_snake_case: false,
         };
-        let output = rvs_check_functions_impl(&[caller], "test.rs", &CapsMap::rvs_new());
+        let output = rvs_check_functions_impl(&[caller], "test.rs", &CapsMap::rvs_new(), true);
         assert!(
             output
                 .inference_warnings
@@ -2531,7 +2539,7 @@ mod tests {
             allows_dead_code: false,
             has_allow_non_snake_case: false,
         };
-        let output = rvs_check_functions_impl(&[caller], "test.rs", &CapsMap::rvs_new());
+        let output = rvs_check_functions_impl(&[caller], "test.rs", &CapsMap::rvs_new(), true);
         assert!(
             output
                 .inference_warnings
@@ -2563,7 +2571,7 @@ mod tests {
             allows_dead_code: false,
             has_allow_non_snake_case: true,
         };
-        let output = rvs_check_functions_impl(&[caller], "test.rs", &CapsMap::rvs_new());
+        let output = rvs_check_functions_impl(&[caller], "test.rs", &CapsMap::rvs_new(), true);
         assert!(
             output
                 .inference_warnings
@@ -2595,7 +2603,7 @@ mod tests {
             allows_dead_code: false,
             has_allow_non_snake_case: true,
         };
-        let output = rvs_check_functions_impl(&[caller], "test.rs", &CapsMap::rvs_new());
+        let output = rvs_check_functions_impl(&[caller], "test.rs", &CapsMap::rvs_new(), true);
         assert!(
             output
                 .inference_warnings
@@ -2627,7 +2635,7 @@ mod tests {
             allows_dead_code: false,
             has_allow_non_snake_case: false,
         };
-        let output = rvs_check_functions_impl(&[caller], "test.rs", &CapsMap::rvs_new());
+        let output = rvs_check_functions_impl(&[caller], "test.rs", &CapsMap::rvs_new(), true);
         assert_eq!(output.missing_allow_warnings.len(), 1);
     }
 
@@ -2654,7 +2662,7 @@ mod tests {
             allows_dead_code: true,
             has_allow_non_snake_case: false,
         };
-        let output = rvs_check_functions_impl(&[caller], "test.rs", &CapsMap::rvs_new());
+        let output = rvs_check_functions_impl(&[caller], "test.rs", &CapsMap::rvs_new(), true);
         assert_eq!(output.dead_code_warnings.len(), 1);
     }
 
@@ -2685,7 +2693,7 @@ mod tests {
             has_allow_non_snake_case: false,
         };
         let capsmap = CapsMap::rvs_parse("std::fs::read=BI").unwrap();
-        let output = rvs_check_functions_impl(&[caller], "test.rs", &capsmap);
+        let output = rvs_check_functions_impl(&[caller], "test.rs", &capsmap, true);
         assert!(!output.violations.is_empty());
     }
 
@@ -2715,7 +2723,7 @@ mod tests {
             allows_dead_code: false,
             has_allow_non_snake_case: false,
         };
-        let output = rvs_check_functions_impl(&[caller], "test.rs", &CapsMap::rvs_new());
+        let output = rvs_check_functions_impl(&[caller], "test.rs", &CapsMap::rvs_new(), true);
         assert_eq!(output.warnings.len(), 1);
     }
 

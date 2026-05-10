@@ -1610,18 +1610,13 @@ fn rvs_do_thing() -> () {
     let cm = CapsMap::rvs_new();
     let output = rivus_linter::rvs_check_mir_dir_BIM(&dir, &cm).unwrap();
     assert!(output.violations.is_empty());
-    assert_eq!(output.warnings.len(), 1);
-    assert_eq!(output.warnings[0].callee, "mystery_function");
+    assert!(output.warnings.is_empty());
 
     std::fs::remove_dir_all(&dir).unwrap();
 
     rvs_snapshot_BI(
         "20260419_mir_check_dir_unknown_non_rvs_warning",
-        format!(
-            "violations: 0\nwarnings: {}\n{}\n",
-            output.warnings.len(),
-            output.warnings[0]
-        ),
+        "violations: 0\nwarnings: 0\n".to_string(),
     );
 }
 

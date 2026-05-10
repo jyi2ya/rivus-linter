@@ -284,6 +284,7 @@ rivus-linter mir-check . -m capsmap.txt --mir-dir target/debug/deps
 **MIR 检查的局限**：
 1. 不执行 lint 检查（25 种警告检查），仅做能力合规性检查（违规 + 推断提示）
 2. 推断提示不完整：能产生 `MissingPanic` 和 `MissingMutable`，但不能检测静态变量引用、`MissingAsync`、`MissingUnsafe`、缺断言警告等
+3. 不报告未知非 `rvs_` 函数调用警告（MIR 展开大量编译器内部调用，误报率太高）
 
 #### `rivus-linter report <path>`
 
