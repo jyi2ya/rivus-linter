@@ -1,4 +1,4 @@
 violations: 0
 merged calls for rvs_outer: 2
-  - rvs_other
   - rvs_helper
+  - rvs_other

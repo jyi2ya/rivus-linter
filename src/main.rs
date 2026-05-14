@@ -11,7 +11,7 @@ use rivus_linter::report::rvs_report_path_BI;
 use rivus_linter::rvs_check_mir_dir_BIM;
 use rivus_linter::rvs_check_mir_path_BIMPS;
 use rivus_linter::rvs_check_path_BI;
-use rivus_linter::setup::rvs_inject_clippy_lints_M;
+use rivus_linter::setup::{rvs_inject_clippy_lints_M, rvs_inject_spawn_capsmap_M};
 
 const RIVUS_MD: &str = include_str!("../rivus.md");
 
@@ -167,6 +167,31 @@ fn rvs_setup_BIMPS(path: &std::path::Path) {
             cargo_toml_path.display()
         );
     }
+
+    // 3. Inject spawn entries into capsmap.txt (if it exists)
+    let capsmap_path = path.join("capsmap.txt");
+    if capsmap_path.exists() {
+        let capsmap_content = std::fs::read_to_string(&capsmap_path).unwrap_or_else(|e| {
+            eprintln!("Error: cannot read '{}': {e}", capsmap_path.display());
+            process::exit(2);
+        });
+        let (new_capsmap, spawn_count) = rvs_inject_spawn_capsmap_M(&capsmap_content);
+        if spawn_count > 0 {
+            std::fs::write(&capsmap_path, &new_capsmap).unwrap_or_else(|e| {
+                eprintln!("Error: cannot write '{}': {e}", capsmap_path.display());
+                process::exit(2);
+            });
+            println!(
+                "Injected {spawn_count} spawn capsmap entries into {}",
+                capsmap_path.display()
+            );
+        } else {
+            println!(
+                "All spawn capsmap entries already present in {}",
+                capsmap_path.display()
+            );
+        }
+    }
 }
 
 /// # Panics
@@ -252,6 +277,9 @@ fn rvs_print_check_output_BIPS(output: &rivus_linter::CheckOutput) {
         eprintln!("{w}");
     }
     for w in &output.validate_returns_unit_warnings {
+        eprintln!("{w}");
+    }
+    for w in &output.spawn_warnings {
         eprintln!("{w}");
     }
     for v in &output.violations {

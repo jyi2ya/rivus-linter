@@ -28,11 +28,11 @@ pub use check::{
     DerefPolymorphismWarning, DuplicateTestWarning, ErrorSwallowWarning, InferenceKind,
     InferenceWarning, IntoImplWarning, MirCheckError, MissingAllowWarning, MissingAssertWarning,
     MissingDebugWarning, MissingDocWarning, MissingPanicsDocWarning, MissingSafetyDocWarning,
-    MissingTestOutputWarning, NonRvsFnWarning, ReflectionUsageWarning, TestNameFormatWarning,
-    TodoCommentWarning, UntestedGoodFnWarning, ValidateReturnsUnitWarning, Violation,
-    ViolationKind, Warning, rvs_check_functions, rvs_check_imports, rvs_check_mir_dir_BIM,
-    rvs_check_mir_path_BIMPS, rvs_check_missing_doc, rvs_check_path_BI, rvs_check_source,
-    rvs_find_duplicate_tests, rvs_is_valid_test_name,
+    MissingTestOutputWarning, NonRvsFnWarning, ReflectionUsageWarning, SpawnWarning,
+    TestNameFormatWarning, TodoCommentWarning, UntestedGoodFnWarning, ValidateReturnsUnitWarning,
+    Violation, ViolationKind, Warning, rvs_check_functions, rvs_check_imports,
+    rvs_check_mir_dir_BIM, rvs_check_mir_path_BIMPS, rvs_check_missing_doc, rvs_check_path_BI,
+    rvs_check_source, rvs_find_duplicate_tests, rvs_is_valid_test_name,
 };
 pub use extract::{
     BorrowedParamInfo, CalleeInfo, CatchAllErrorVariantInfo, CatchUnwindInfo,
@@ -50,4 +50,5 @@ pub use extract::{
 };
 pub use mir::{MirCompileError, MirError};
 pub use report::{Report, rvs_build_report, rvs_report_path_BI};
+pub use setup::{SPAWN_CAPSMAP_ENTRIES, rvs_inject_spawn_capsmap_M};
 pub use source::{ReadError, SourceFile, rvs_read_rust_sources_BI};

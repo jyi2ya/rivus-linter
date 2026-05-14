@@ -282,9 +282,10 @@ rivus-linter mir-check . -m capsmap.txt --mir-dir target/debug/deps
 `path` 必须是包含 `Cargo.toml` 的项目根目录（完整流程），或任意目录（`--mir-dir` 模式）。
 
 **MIR 检查的局限**：
-1. 不执行 lint 检查（25 种警告检查），仅做能力合规性检查（违规 + 推断提示）
+1. 不执行 lint 检查（25 种警告检查），仅做能力合规性检查（违规 + 推断提示 + SpawnWarning）
 2. 推断提示不完整：能产生 `MissingPanic` 和 `MissingMutable`，但不能检测静态变量引用、`MissingAsync`、`MissingUnsafe`、缺断言警告等
 3. 不报告未知非 `rvs_` 函数调用警告（MIR 展开大量编译器内部调用，误报率太高）
+4. SpawnWarning 在 MIR 路径中有效，且因 MIR 使用全限定路径（如 `tokio::spawn` 而非 `use` 后的短名 `spawn`），能捕获 syn 路径因名字解析局限而漏检的 spawn 调用
 
 #### `rivus-linter report <path>`
 
@@ -383,6 +384,7 @@ rivus-linter setup /path/to/project  # 指定目录
 | `CatchAllErrorVariantWarning` | 错误枚举含 `Unknown`/`Other` 兜底变体 |
 | `MissingTestOutputWarning` | `#[test]` 函数缺少对应的 `test_out/{name}.out` 快照文件 |
 | `ValidateReturnsUnitWarning` | 名为 `validate`/`check`/`verify` 的函数返回 `Result<(), E>`——应改用 `TryFrom` 返回 `Result<Target, Error>`（parse instead of validate） |
+| `SpawnWarning` | 函数调用了非结构化 spawn（`tokio::spawn`、`std::thread::spawn` 等）——应改用结构化并发原语 |
 
 #### 推断提示
 
@@ -414,6 +416,33 @@ rivus-linter setup /path/to/project  # 指定目录
 3. **遇到 warning 时**：linter 输出的 warning 表示某个函数调用既非 `rvs_` 前缀也不在 capsmap 中。补全 capsmap 即可消除
 4. **遇到 violation 时**：调用链能力冲突。要么修改调用方的标记（可能级联影响），要么重构代码避免不合规的调用
 5. **遇到 hint 时**：推断性提示——函数的实际行为暗示应有某能力但名字里没写。审查后决定：补上能力标记（注意级联影响），或确认是误判则忽略
+
+### 结构化并发
+
+> *"有始必有终。"*
+
+Spawn 是**并发的 goto**——它创建的后台任务生命周期不受调用方作用域约束，容易导致资源泄漏、错误丢失、任务失控。与 goto 一样，偶尔有用，但应尽量用结构化替代方案。
+
+#### Spawn 与结构化替代方案
+
+| Spawn（非结构化） | 结构化替代 | 适用场景 |
+|-------------------|-----------|---------|
+| `tokio::spawn(fut)` | `tokio::join!(fut1, fut2)` | 并发执行少量已知任务 |
+| `tokio::spawn(fut)` | `tokio::task::JoinSet` | 并发执行动态数量任务，需收集结果 |
+| `tokio::spawn(fut)` | `futures::stream::FuturesUnordered` | 流式处理并发任务 |
+| `std::thread::spawn(closure)` | `std::thread::scope(|s| { s.spawn(|| ...); })` | 作用域线程，无需 `'static` |
+| `std::thread::spawn(closure)` | `rayon::spawn` / `rayon::join` | 数据并行 |
+
+#### 原则
+
+1. **优先 `join!` / `JoinSet` / `thread::scope`**：任务的生命周期与词法作用域绑定，父任务自动等待子任务完成
+2. **spawn 是最后的手段**：只在确实需要"fire-and-forget"时使用，并确保有独立的超时和错误处理机制
+3. **每个 spawn 必须有对应的 JoinHandle 或超时**：确保后台任务不会无声消失
+4. **测试中可使用 spawn**：linter 对 `#[test]` 函数中的 spawn 调用不产生警告
+
+#### setup 命令的 spawn 处理
+
+`rivus-linter setup` 会自动在目标项目的 `capsmap.txt` 中注入 spawn 函数条目，确保 linter 能识别这些调用。已在 capsmap 中的条目不会被重复添加。
 
 ---
 

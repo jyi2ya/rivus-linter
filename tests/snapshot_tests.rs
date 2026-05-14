@@ -5090,3 +5090,412 @@ fn rvs_parse_email(raw: &str) -> Result<Email, ParseError> {
         "validate_returns_unit_warnings: 0\n".to_string(),
     );
 }
+
+// ─── SpawnWarning: 非结构化 spawn 检查 ────────────────────────
+
+#[test]
+fn test_20260515_spawn_warning_tokio_spawn() {
+    let source = r#"
+fn rvs_handle_request_ABI() {
+    tokio::spawn(async move { rvs_do_work(); });
+}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.spawn_warnings.len(), 1);
+    assert_eq!(output.spawn_warnings[0].caller, "rvs_handle_request_ABI");
+    assert_eq!(output.spawn_warnings[0].callee, "tokio::spawn");
+
+    rvs_snapshot_BI(
+        "20260515_spawn_warning_tokio_spawn",
+        format!(
+            "spawn_warnings: {}\n{}\n",
+            output.spawn_warnings.len(),
+            output.spawn_warnings[0],
+        ),
+    );
+}
+
+#[test]
+fn test_20260515_spawn_warning_thread_spawn() {
+    let source = r#"
+fn rvs_process_BS() {
+    std::thread::spawn(|| { rvs_background_work(); });
+}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.spawn_warnings.len(), 1);
+    assert_eq!(output.spawn_warnings[0].callee, "std::thread::spawn");
+
+    rvs_snapshot_BI(
+        "20260515_spawn_warning_thread_spawn",
+        format!(
+            "spawn_warnings: {}\n{}\n",
+            output.spawn_warnings.len(),
+            output.spawn_warnings[0],
+        ),
+    );
+}
+
+#[test]
+fn test_20260515_spawn_warning_multiple_spawns() {
+    let source = r#"
+fn rvs_orchestrate_ABIS() {
+    tokio::spawn(async {});
+    tokio::task::spawn_blocking(|| {});
+}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert_eq!(output.spawn_warnings.len(), 2);
+
+    rvs_snapshot_BI(
+        "20260515_spawn_warning_multiple_spawns",
+        format!(
+            "spawn_warnings: {}\n{}\n{}\n",
+            output.spawn_warnings.len(),
+            output.spawn_warnings[0],
+            output.spawn_warnings[1],
+        ),
+    );
+}
+
+#[test]
+fn test_20260515_spawn_warning_no_spawn_ok() {
+    let source = r#"
+fn rvs_good_ABIS() {
+    rvs_helper();
+}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.spawn_warnings.is_empty());
+
+    rvs_snapshot_BI("20260515_spawn_warning_no_spawn_ok", "spawn_warnings: 0\n");
+}
+
+#[test]
+fn test_20260515_spawn_warning_test_fn_exempt() {
+    let source = r#"
+#[test]
+fn test_20260515_spawn_in_test() {
+    tokio::spawn(async {});
+}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(output.spawn_warnings.is_empty());
+
+    rvs_snapshot_BI(
+        "20260515_spawn_warning_test_fn_exempt",
+        "spawn_warnings: 0\n",
+    );
+}
+
+#[test]
+fn test_20260515_spawn_warning_capsmap_user_spawn() {
+    let cm = CapsMap::rvs_parse("my_framework::spawn_task=AS\n").unwrap();
+    let source = r#"
+fn rvs_schedule_ABM() {
+    my_framework::spawn_task(|| {});
+}
+"#;
+    let output = rvs_check_source(source, "test.rs", &cm).unwrap();
+    assert_eq!(output.spawn_warnings.len(), 1);
+    assert_eq!(output.spawn_warnings[0].callee, "my_framework::spawn_task");
+
+    rvs_snapshot_BI(
+        "20260515_spawn_warning_capsmap_user_spawn",
+        format!(
+            "spawn_warnings: {}\n{}\n",
+            output.spawn_warnings.len(),
+            output.spawn_warnings[0],
+        ),
+    );
+}
+
+#[test]
+fn test_20260515_spawn_warning_capsmap_no_spawn_name_no_warning() {
+    let cm = CapsMap::rvs_parse("some_io=BI\n").unwrap();
+    let source = r#"
+fn rvs_caller_BI() {
+    some_io();
+}
+"#;
+    let output = rvs_check_source(source, "test.rs", &cm).unwrap();
+    assert!(output.spawn_warnings.is_empty());
+
+    rvs_snapshot_BI(
+        "20260515_spawn_warning_capsmap_no_spawn_name_no_warning",
+        "spawn_warnings: 0\n",
+    );
+}
+
+// ─── MIR SpawnWarning: MIR 中的非结构化 spawn 检查 ───────────
+
+#[test]
+fn test_20260515_mir_spawn_warning_tokio_spawn() {
+    let mir = r#"
+fn rvs_handle_request_ABI() -> () {
+    let mut _0: ();
+
+    bb0: {
+        _0 = tokio::spawn::<impl Future>(move _1) -> [return: bb1, unwind continue];
+    }
+
+    bb1: {
+        return;
+    }
+}
+"#;
+    let dir = std::env::temp_dir().join("rivus_test_mir_spawn_tokio");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("test.mir"), mir).unwrap();
+
+    let cm = CapsMap::rvs_new();
+    let output = rivus_linter::rvs_check_mir_dir_BIM(&dir, &cm).unwrap();
+    assert_eq!(output.spawn_warnings.len(), 1);
+    assert_eq!(output.spawn_warnings[0].callee, "tokio::spawn");
+
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    rvs_snapshot_BI(
+        "20260515_mir_spawn_warning_tokio_spawn",
+        format!(
+            "spawn_warnings: {}\n{}\n",
+            output.spawn_warnings.len(),
+            output.spawn_warnings[0],
+        ),
+    );
+}
+
+#[test]
+fn test_20260515_mir_spawn_warning_thread_spawn() {
+    let mir = r#"
+fn rvs_process_BS() -> () {
+    let mut _0: ();
+
+    bb0: {
+        _0 = std::thread::spawn::<impl FnOnce, ()>(move _1) -> [return: bb1, unwind continue];
+    }
+
+    bb1: {
+        return;
+    }
+}
+"#;
+    let dir = std::env::temp_dir().join("rivus_test_mir_spawn_thread");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("test.mir"), mir).unwrap();
+
+    let cm = CapsMap::rvs_new();
+    let output = rivus_linter::rvs_check_mir_dir_BIM(&dir, &cm).unwrap();
+    assert_eq!(output.spawn_warnings.len(), 1);
+    assert_eq!(output.spawn_warnings[0].callee, "std::thread::spawn");
+
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    rvs_snapshot_BI(
+        "20260515_mir_spawn_warning_thread_spawn",
+        format!(
+            "spawn_warnings: {}\n{}\n",
+            output.spawn_warnings.len(),
+            output.spawn_warnings[0],
+        ),
+    );
+}
+
+#[test]
+fn test_20260515_mir_spawn_warning_spawn_blocking() {
+    let mir = r#"
+fn rvs_heavy_task_BI() -> () {
+    let mut _0: ();
+
+    bb0: {
+        _0 = tokio::task::spawn_blocking::<impl FnOnce, ()>(move _1) -> [return: bb1, unwind continue];
+    }
+
+    bb1: {
+        return;
+    }
+}
+"#;
+    let dir = std::env::temp_dir().join("rivus_test_mir_spawn_blocking");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("test.mir"), mir).unwrap();
+
+    let cm = CapsMap::rvs_new();
+    let output = rivus_linter::rvs_check_mir_dir_BIM(&dir, &cm).unwrap();
+    assert_eq!(output.spawn_warnings.len(), 1);
+    assert_eq!(
+        output.spawn_warnings[0].callee,
+        "tokio::task::spawn_blocking"
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    rvs_snapshot_BI(
+        "20260515_mir_spawn_warning_spawn_blocking",
+        format!(
+            "spawn_warnings: {}\n{}\n",
+            output.spawn_warnings.len(),
+            output.spawn_warnings[0],
+        ),
+    );
+}
+
+#[test]
+fn test_20260515_mir_spawn_warning_no_spawn_ok() {
+    let mir = r#"
+fn rvs_good_ABI() -> () {
+    let mut _0: ();
+
+    bb0: {
+        _0 = alloc::vec::Vec::<i32>::new() -> [return: bb1, unwind continue];
+    }
+
+    bb1: {
+        return;
+    }
+}
+"#;
+    let dir = std::env::temp_dir().join("rivus_test_mir_spawn_ok");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("test.mir"), mir).unwrap();
+
+    let cm = CapsMap::rvs_new();
+    let output = rivus_linter::rvs_check_mir_dir_BIM(&dir, &cm).unwrap();
+    assert!(output.spawn_warnings.is_empty());
+
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    rvs_snapshot_BI(
+        "20260515_mir_spawn_warning_no_spawn_ok",
+        "spawn_warnings: 0\n",
+    );
+}
+
+#[test]
+fn test_20260515_mir_spawn_warning_capsmap_user_spawn() {
+    let mir = r#"
+fn rvs_schedule_ABM() -> () {
+    let mut _0: ();
+
+    bb0: {
+        _0 = my_framework::spawn_task::<impl FnOnce, ()>(move _1) -> [return: bb1, unwind continue];
+    }
+
+    bb1: {
+        return;
+    }
+}
+"#;
+    let dir = std::env::temp_dir().join("rivus_test_mir_spawn_capsmap");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("test.mir"), mir).unwrap();
+
+    let cm = CapsMap::rvs_parse("my_framework::spawn_task=AS\n").unwrap();
+    let output = rivus_linter::rvs_check_mir_dir_BIM(&dir, &cm).unwrap();
+    assert_eq!(output.spawn_warnings.len(), 1);
+    assert_eq!(output.spawn_warnings[0].callee, "my_framework::spawn_task");
+
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    rvs_snapshot_BI(
+        "20260515_mir_spawn_warning_capsmap_user_spawn",
+        format!(
+            "spawn_warnings: {}\n{}\n",
+            output.spawn_warnings.len(),
+            output.spawn_warnings[0],
+        ),
+    );
+}
+
+#[test]
+fn test_20260515_mir_spawn_warning_fully_qualified_path() {
+    let mir = r#"
+fn rvs_orchestrate_ABIS() -> () {
+    let mut _0: ();
+
+    bb0: {
+        _0 = crate::runtime::tokio::spawn::<impl Future>(move _1) -> [return: bb1, unwind continue];
+    }
+
+    bb1: {
+        _1 = crate::workers::std::thread::spawn::<impl FnOnce, ()>(move _2) -> [return: bb2, unwind continue];
+    }
+
+    bb2: {
+        return;
+    }
+}
+"#;
+    let dir = std::env::temp_dir().join("rivus_test_mir_spawn_qualified");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("test.mir"), mir).unwrap();
+
+    let cm = CapsMap::rvs_new();
+    let output = rivus_linter::rvs_check_mir_dir_BIM(&dir, &cm).unwrap();
+    assert_eq!(output.spawn_warnings.len(), 2);
+
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    rvs_snapshot_BI(
+        "20260515_mir_spawn_warning_fully_qualified_path",
+        format!(
+            "spawn_warnings: {}\n{}\n{}\n",
+            output.spawn_warnings.len(),
+            output.spawn_warnings[0],
+            output.spawn_warnings[1],
+        ),
+    );
+}
+
+#[test]
+fn test_20260515_mir_spawn_warning_multiple_in_merged() {
+    let mir1 = r#"
+fn rvs_handler_ABI() -> () {
+    bb0: {
+        _0 = tokio::spawn::<impl Future>(move _1) -> [return: bb1, unwind continue];
+    }
+
+    bb1: {
+        return;
+    }
+}
+"#;
+    let mir2 = r#"
+fn rvs_handler_ABI(_1: i32) -> () {
+    bb0: {
+        _0 = std::thread::spawn::<impl FnOnce, ()>(move _2) -> [return: bb1, unwind continue];
+    }
+
+    bb1: {
+        return;
+    }
+}
+"#;
+    let dir = std::env::temp_dir().join("rivus_test_mir_spawn_merged");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("part1.mir"), mir1).unwrap();
+    std::fs::write(dir.join("part2.mir"), mir2).unwrap();
+
+    let cm = CapsMap::rvs_new();
+    let output = rivus_linter::rvs_check_mir_dir_BIM(&dir, &cm).unwrap();
+    assert_eq!(output.spawn_warnings.len(), 2);
+
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    rvs_snapshot_BI(
+        "20260515_mir_spawn_warning_multiple_in_merged",
+        format!(
+            "spawn_warnings: {}\n{}\n{}\n",
+            output.spawn_warnings.len(),
+            output.spawn_warnings[0],
+            output.spawn_warnings[1],
+        ),
+    );
+}

@@ -23,6 +23,21 @@ use crate::source::rvs_read_rust_sources_BI;
 /// 被禁用的 crate 列表。
 const BANNED_CRATES: &[&str] = &["anyhow", "eyre", "color_eyre"];
 
+/// 非结构化 spawn 函数列表。
+/// 这些函数创建后台任务，生命周期不受调用方作用域约束，是"并发的 goto"。
+/// 应改用 `join!`、`JoinSet`、`FuturesUnordered`、`thread::scope` 等结构化并发原语。
+const SPAWN_FUNCTIONS: &[&str] = &[
+    "tokio::spawn",
+    "tokio::task::spawn",
+    "tokio::task::spawn_blocking",
+    "tokio::task::spawn_local",
+    "std::thread::spawn",
+    "std::thread::Builder::spawn",
+    "async_std::task::spawn",
+    "async_std::task::spawn_blocking",
+    "smol::spawn",
+];
+
 /// 纯函数：检查导入列表中是否包含被禁 crate。
 /// 返回所有被禁导入的警告。
 pub fn rvs_check_imports(imports: &[ImportInfo], file: &str) -> Vec<BannedImportWarning> {
@@ -478,6 +493,7 @@ pub struct CheckOutput {
     pub catch_all_error_variant_warnings: Vec<CatchAllErrorVariantWarning>,
     pub missing_test_output_warnings: Vec<MissingTestOutputWarning>,
     pub validate_returns_unit_warnings: Vec<ValidateReturnsUnitWarning>,
+    pub spawn_warnings: Vec<SpawnWarning>,
 }
 
 /// 一条 `#![deny(warnings)]` 反模式警告：这种粗粒度 deny 会随编译器升级意外破坏构建。
@@ -1027,6 +1043,27 @@ fn rvs_check_validate_returns_unit(
         .collect()
 }
 
+/// 一条非结构化 spawn 警告：在函数中调用了 spawn 创建后台任务。
+/// spawn 是"并发的 goto"——后台任务的生命周期不受调用方作用域约束，
+/// 容易导致资源泄漏、错误丢失、任务失控。
+#[derive(Debug, Clone)]
+pub struct SpawnWarning {
+    pub caller: String,
+    pub callee: String,
+    pub file: String,
+    pub line: usize,
+}
+
+impl fmt::Display for SpawnWarning {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "warning: function '{}' calls '{}' which is an unstructured spawn — use join!, JoinSet, FuturesUnordered, thread::scope, or other structured concurrency primitives instead\n  at {}:{}",
+            self.caller, self.callee, self.file, self.line,
+        )
+    }
+}
+
 /// 内部实现：检查函数调用合规性与静态引用合规性。
 fn rvs_check_functions_impl(
     functions: &[FnDef],
@@ -1040,6 +1077,7 @@ fn rvs_check_functions_impl(
     let mut dead_code_warnings = Vec::new();
     let mut inference_warnings = Vec::new();
     let mut missing_allow_warnings = Vec::new();
+    let mut spawn_warnings = Vec::new();
 
     for func in functions {
         if !func.raw_suffix.is_empty() && !func.has_allow_non_snake_case {
@@ -1217,6 +1255,19 @@ fn rvs_check_functions_impl(
                 }
             }
         }
+
+        if !func.is_test {
+            for call in &func.calls {
+                if rvs_is_spawn_call(&call.name, capsmap) {
+                    spawn_warnings.push(SpawnWarning {
+                        caller: func.name.clone(),
+                        callee: call.name.clone(),
+                        file: file.to_string(),
+                        line: call.line,
+                    });
+                }
+            }
+        }
     }
 
     CheckOutput {
@@ -1248,7 +1299,26 @@ fn rvs_check_functions_impl(
         catch_all_error_variant_warnings: Vec::new(),
         missing_test_output_warnings: Vec::new(),
         validate_returns_unit_warnings: Vec::new(),
+        spawn_warnings,
     }
+}
+
+/// 判断函数调用是否为非结构化 spawn。
+fn rvs_is_spawn_call(callee: &str, capsmap: &CapsMap) -> bool {
+    for &spawn_fn in SPAWN_FUNCTIONS {
+        if callee == spawn_fn || callee.ends_with(&format!("::{spawn_fn}")) {
+            return true;
+        }
+    }
+    if let Some(caps) = capsmap.rvs_lookup(callee)
+        && caps.rvs_contains(Capability::S)
+    {
+        let base = callee.rsplit("::").next().unwrap_or(callee);
+        if base.contains("spawn") {
+            return true;
+        }
+    }
+    false
 }
 
 /// 纯函数：检查一组函数定义中的调用合规性与静态引用合规性。

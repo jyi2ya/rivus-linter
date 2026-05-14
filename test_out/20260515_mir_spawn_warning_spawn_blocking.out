@@ -1,0 +1,3 @@
+spawn_warnings: 1
+warning: function 'rvs_heavy_task_BI' calls 'tokio::task::spawn_blocking' which is an unstructured spawn — use join!, JoinSet, FuturesUnordered, thread::scope, or other structured concurrency primitives instead
+  at /home/jyi/tmp/rivus_test_mir_spawn_blocking:4

@@ -51,6 +51,59 @@ pub const CLIPPY_LINTS: &[(&str, &str)] = &[
     ("allow_attributes_without_reason", "warn"),
 ];
 
+/// Spawn 函数的 capsmap 条目：函数路径及其能力。
+/// Setup 时注入到目标项目的 capsmap.txt 中。
+pub const SPAWN_CAPSMAP_ENTRIES: &[(&str, &str)] = &[
+    ("tokio::spawn", "AS"),
+    ("tokio::task::spawn", "AS"),
+    ("tokio::task::spawn_blocking", "BIS"),
+    ("tokio::task::spawn_local", "AST"),
+    ("std::thread::spawn", "BS"),
+    ("std::thread::Builder::spawn", "BUS"),
+    ("async_std::task::spawn", "AS"),
+    ("async_std::task::spawn_blocking", "BIS"),
+    ("smol::spawn", "AS"),
+];
+
+/// 检查 capsmap.txt 内容中是否包含 spawn 函数条目，将缺失的追加到末尾。
+/// 返回 `(new_content, count_of_injected)`。
+pub fn rvs_inject_spawn_capsmap_M(capsmap: &str) -> (String, usize) {
+    let mut existing_keys: HashSet<&str> = HashSet::new();
+    for line in capsmap.lines() {
+        let line = line.split('#').next().unwrap_or("").trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Some((key, _)) = line.split_once('=') {
+            existing_keys.insert(key.trim());
+        }
+    }
+
+    let missing: Vec<(&str, &str)> = SPAWN_CAPSMAP_ENTRIES
+        .iter()
+        .filter(|(key, _)| !existing_keys.contains(*key))
+        .copied()
+        .collect();
+
+    if missing.is_empty() {
+        return (capsmap.to_string(), 0);
+    }
+
+    let mut result = capsmap.to_string();
+    if !result.ends_with('\n') {
+        result.push('\n');
+    }
+    result.push_str("\n# ─── 非结构化 spawn 函数（并发 goto）─────────────────────────\n");
+    result.push_str("# spawn 创建的后台任务不受调用方作用域约束，容易导致资源泄漏、错误丢失。\n");
+    result
+        .push_str("# 应改用 join!、JoinSet、FuturesUnordered、thread::scope 等结构化并发原语。\n");
+    for (key, caps) in &missing {
+        result.push_str(&format!("{key}={caps}\n"));
+    }
+
+    (result, missing.len())
+}
+
 /// Injects missing clippy lint entries under `[lints.clippy]` in a Cargo.toml string.
 /// Returns `(new_content, count_of_injected)`.
 pub fn rvs_inject_clippy_lints_M(cargo_toml: &str) -> (String, usize) {
@@ -181,9 +234,36 @@ mod tests {
         let (result, count) = rvs_inject_clippy_lints_M(input);
         debug_assert!(count > 0);
         debug_assert!(result.contains("[lints.clippy]"));
-        // Should be appended after [features], not in the middle
         let features_pos = result.find("[features]").unwrap();
         let lints_pos = result.find("[lints.clippy]").unwrap();
         debug_assert!(lints_pos > features_pos);
+    }
+
+    #[test]
+    fn test_20260515_inject_spawn_capsmap_empty() {
+        let input = "HashMap::new=\nVec::push=\n";
+        let (result, count) = rvs_inject_spawn_capsmap_M(input);
+        debug_assert_eq!(count, SPAWN_CAPSMAP_ENTRIES.len());
+        debug_assert!(result.contains("tokio::spawn=AS"));
+        debug_assert!(result.contains("std::thread::spawn=BS"));
+    }
+
+    #[test]
+    fn test_20260515_inject_spawn_capsmap_idempotent() {
+        let input = "HashMap::new=\n";
+        let (first, count1) = rvs_inject_spawn_capsmap_M(input);
+        let (second, count2) = rvs_inject_spawn_capsmap_M(&first);
+        debug_assert!(count1 > 0);
+        debug_assert_eq!(count2, 0);
+        debug_assert_eq!(first, second);
+    }
+
+    #[test]
+    fn test_20260515_inject_spawn_capsmap_partial() {
+        let input = "HashMap::new=\ntokio::spawn=AS\nstd::thread::spawn=BS\n";
+        let (result, count) = rvs_inject_spawn_capsmap_M(input);
+        debug_assert!(count > 0);
+        debug_assert!(count < SPAWN_CAPSMAP_ENTRIES.len());
+        debug_assert!(result.contains("tokio::task::spawn=AS"));
     }
 }
