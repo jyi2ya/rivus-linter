@@ -112,6 +112,18 @@ impl CapabilitySet {
         Self(set)
     }
 
+    /// 从后缀字符串中萃取已知能力字母，忽略未知字母。
+    /// 用于处理后缀含非标准字母（如 E）的情况。
+    pub fn rvs_from_str_allow_unknown(suffix: &str) -> Self {
+        let mut set = BTreeSet::new();
+        for c in suffix.chars() {
+            if let Some(cap) = Capability::rvs_from_char(c) {
+                set.insert(cap);
+            }
+        }
+        Self(set)
+    }
+
     /// 调用之规：我有，方可调你。
     /// 你有的每一个能力，我都必须有，方为合规。
     pub fn rvs_can_call(&self, other: &Self) -> bool {
@@ -198,6 +210,10 @@ pub fn rvs_parse_function(name: &str) -> Option<(&str, CapabilitySet)> {
 }
 
 /// 拆解单个片段：去掉 rvs_ 前缀后，萃取能力后缀。
+///
+/// 后缀必须全是大写字母。若所有字母都是合法能力字母（ABIMPSTU），
+/// 直接萃取。若含未知大写字母（如 E），仍萃取已知部分，
+/// 由调用方负责报告未知字母警告。
 fn rvs_parse_segment(name: &str) -> Option<(&str, CapabilitySet)> {
     let rest = name.strip_prefix("rvs_")?;
 
@@ -205,12 +221,9 @@ fn rvs_parse_segment(name: &str) -> Option<(&str, CapabilitySet)> {
         let potential_suffix = rest.get(pos + 1..).unwrap_or("");
         let base = rest.get(..pos).unwrap_or("");
 
-        if !potential_suffix.is_empty()
-            && potential_suffix
-                .chars()
-                .all(|c| VALID_SUFFIX_CHARS.contains(&c))
+        if !potential_suffix.is_empty() && potential_suffix.chars().all(|c| c.is_ascii_uppercase())
         {
-            let caps = CapabilitySet::rvs_from_validated(potential_suffix);
+            let caps = CapabilitySet::rvs_from_str_allow_unknown(potential_suffix);
             return Some((base, caps));
         }
     }
@@ -219,21 +232,31 @@ fn rvs_parse_segment(name: &str) -> Option<(&str, CapabilitySet)> {
 }
 
 /// 从 rvs_ 函数名中萃取原始后缀字符串（未排序、未去重）。
-/// 用于检查命名规范（C4 字母序、C5 重复字母）。
+/// 用于检查命名规范（C4 字母序、C5 重复字母、未知字母）。
+/// 后缀必须全是大写字母才视为有效。
 pub fn rvs_extract_raw_suffix(name: &str) -> String {
     if let Some(rest) = name.strip_prefix("rvs_")
         && let Some(pos) = rest.rfind('_')
     {
         let potential_suffix = rest.get(pos + 1..).unwrap_or("");
-        if !potential_suffix.is_empty()
-            && potential_suffix
-                .chars()
-                .all(|c| VALID_SUFFIX_CHARS.contains(&c))
+        if !potential_suffix.is_empty() && potential_suffix.chars().all(|c| c.is_ascii_uppercase())
         {
             return potential_suffix.to_string();
         }
     }
     String::new()
+}
+
+/// 从原始后缀中萃取未知（非 ABIMPSTU）的大写字母，按出现顺序去重。
+pub fn rvs_extract_unknown_suffix_letters(raw_suffix: &str) -> Vec<char> {
+    let mut seen = BTreeSet::new();
+    let mut result = Vec::new();
+    for c in raw_suffix.chars() {
+        if c.is_ascii_uppercase() && !VALID_SUFFIX_CHARS.contains(&c) && seen.insert(c) {
+            result.push(c);
+        }
+    }
+    result
 }
 
 #[cfg(test)]
@@ -529,5 +552,50 @@ mod tests {
     fn test_20260425_display_empty_capability_set() {
         let set = CapabilitySet::rvs_new();
         assert_eq!(format!("{set}"), "{}");
+    }
+
+    #[test]
+    fn test_20260515_parse_suffix_with_unknown_letter_e() {
+        let (base, caps) = rvs_parse_function("rvs_execute_effects_ABEIMP").unwrap();
+        assert_eq!(base, "execute_effects");
+        assert!(caps.rvs_contains(Capability::A));
+        assert!(caps.rvs_contains(Capability::B));
+        assert!(caps.rvs_contains(Capability::I));
+        assert!(caps.rvs_contains(Capability::M));
+        assert!(caps.rvs_contains(Capability::P));
+        assert_eq!(caps.rvs_len(), 5);
+    }
+
+    #[test]
+    fn test_20260515_parse_suffix_only_unknown_letter() {
+        let (base, caps) = rvs_parse_function("rvs_render_art_E").unwrap();
+        assert_eq!(base, "render_art");
+        assert!(caps.rvs_is_empty());
+    }
+
+    #[test]
+    fn test_20260515_parse_suffix_mixed_aeip() {
+        let (base, caps) = rvs_parse_function("rvs_render_msg_AEIP").unwrap();
+        assert_eq!(base, "render_msg");
+        assert!(caps.rvs_contains(Capability::A));
+        assert!(caps.rvs_contains(Capability::I));
+        assert!(caps.rvs_contains(Capability::P));
+        assert_eq!(caps.rvs_len(), 3);
+    }
+
+    #[test]
+    fn test_20260515_extract_raw_suffix_with_unknown() {
+        assert_eq!(rvs_extract_raw_suffix("rvs_foo_ABEIMP"), "ABEIMP");
+        assert_eq!(rvs_extract_raw_suffix("rvs_bar_E"), "E");
+        assert_eq!(rvs_extract_raw_suffix("rvs_baz_AEIP"), "AEIP");
+    }
+
+    #[test]
+    fn test_20260515_extract_unknown_suffix_letters() {
+        assert_eq!(rvs_extract_unknown_suffix_letters("ABEIMP"), vec!['E']);
+        assert_eq!(rvs_extract_unknown_suffix_letters("AEIP"), vec!['E']);
+        assert_eq!(rvs_extract_unknown_suffix_letters("E"), vec!['E']);
+        assert!(rvs_extract_unknown_suffix_letters("ABIMP").is_empty());
+        assert!(rvs_extract_unknown_suffix_letters("").is_empty());
     }
 }

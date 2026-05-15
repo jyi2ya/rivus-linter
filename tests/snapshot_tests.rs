@@ -5499,3 +5499,74 @@ fn rvs_handler_ABI(_1: i32) -> () {
         ),
     );
 }
+
+// ─── Unknown Suffix Letter: 后缀含未知字母时的推断提示 ───────
+
+#[test]
+fn test_20260515_unknown_suffix_letter_e() {
+    let source = r#"
+fn rvs_execute_effects_ABEIMP() {
+    rvs_helper_P();
+}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(
+        output
+            .inference_warnings
+            .iter()
+            .any(|w| w.kind == InferenceKind::UnknownSuffixLetter),
+        "should produce UnknownSuffixLetter hint for E in ABEIMP"
+    );
+    assert!(
+        output.violations.is_empty(),
+        "ABEIMP should extract A,B,I,M,P which covers calling rvs_helper_P"
+    );
+
+    rvs_snapshot_BI(
+        "20260515_unknown_suffix_letter_e",
+        format!(
+            "violations: {}\ninference_warnings: {}\n",
+            output.violations.len(),
+            output.inference_warnings.len()
+        ),
+    );
+}
+
+#[test]
+fn test_20260515_unknown_suffix_letter_only_e() {
+    let source = r#"
+fn rvs_render_art_E() -> String { String::new() }
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(
+        output
+            .inference_warnings
+            .iter()
+            .any(|w| w.kind == InferenceKind::UnknownSuffixLetter)
+    );
+    assert!(output.violations.is_empty());
+
+    rvs_snapshot_BI(
+        "20260515_unknown_suffix_letter_only_e",
+        format!("inference_warnings: {}\n", output.inference_warnings.len()),
+    );
+}
+
+#[test]
+fn test_20260515_unknown_suffix_no_unknown_ok() {
+    let source = r#"
+fn rvs_good_ABIM() {}
+"#;
+    let output = rvs_check_source(source, "test.rs", &CapsMap::rvs_new()).unwrap();
+    assert!(
+        output
+            .inference_warnings
+            .iter()
+            .all(|w| w.kind != InferenceKind::UnknownSuffixLetter)
+    );
+
+    rvs_snapshot_BI(
+        "20260515_unknown_suffix_no_unknown_ok",
+        "inference_warnings: 0\n",
+    );
+}

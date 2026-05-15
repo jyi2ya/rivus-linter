@@ -421,3 +421,5 @@ std::thread::Builder::spawn=BUS
 async_std::task::spawn=AS
 async_std::task::spawn_blocking=BIS
 smol::spawn=AS
+str::is_ascii_uppercase=
+char::is_ascii_uppercase=

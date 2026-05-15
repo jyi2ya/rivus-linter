@@ -400,6 +400,7 @@ rivus-linter setup /path/to/project  # 指定目录
 | `MissingThreadLocal` | 函数读取了 `thread_local!` 变量但后缀缺少 `T` |
 | `NonAlphabeticalSuffix` | 能力后缀字母未按字母序排列 |
 | `DuplicateSuffixLetter` | 能力后缀中有重复字母 |
+| `UnknownSuffixLetter` | 能力后缀包含不在 `ABIMPSTU` 中的字母——已知字母仍正常提取，未知字母仅报告提示 |
 
 ### 日常开发流程
 

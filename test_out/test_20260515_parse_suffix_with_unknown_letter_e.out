@@ -1,0 +1,3 @@
+input: rvs_execute_effects_ABEIMP
+base: execute_effects
+caps: A,B,I,M,P (E ignored as unknown)

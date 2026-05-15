@@ -3,7 +3,9 @@ use std::collections::HashMap;
 use std::fmt;
 use std::path::Path;
 
-use crate::capability::{Capability, CapabilitySet, rvs_parse_function};
+use crate::capability::{
+    Capability, CapabilitySet, rvs_extract_unknown_suffix_letters, rvs_parse_function,
+};
 use crate::capsmap::CapsMap;
 use crate::extract::{
     BorrowedParamInfo, CatchAllErrorVariantInfo, CatchUnwindInfo, ConsumedArgOnErrorInfo,
@@ -786,6 +788,7 @@ pub enum InferenceKind {
     MissingThreadLocal,
     NonAlphabeticalSuffix,
     DuplicateSuffixLetter,
+    UnknownSuffixLetter,
 }
 
 impl fmt::Display for InferenceKind {
@@ -804,6 +807,9 @@ impl fmt::Display for InferenceKind {
             }
             InferenceKind::DuplicateSuffixLetter => {
                 write!(f, "duplicate capability letter in suffix")
+            }
+            InferenceKind::UnknownSuffixLetter => {
+                write!(f, "suffix contains unrecognized capability letters")
             }
         }
     }
@@ -1253,6 +1259,15 @@ fn rvs_check_functions_impl(
                     });
                     break;
                 }
+            }
+            let unknown = rvs_extract_unknown_suffix_letters(&func.raw_suffix);
+            if !unknown.is_empty() {
+                inference_warnings.push(InferenceWarning {
+                    function: func.name.clone(),
+                    kind: InferenceKind::UnknownSuffixLetter,
+                    file: file.to_string(),
+                    line: func.line,
+                });
             }
         }
 

@@ -20,7 +20,10 @@ pub mod report;
 pub mod setup;
 pub mod source;
 
-pub use capability::{Capability, CapabilitySet, rvs_parse_function};
+pub use capability::{
+    Capability, CapabilitySet, rvs_extract_raw_suffix, rvs_extract_unknown_suffix_letters,
+    rvs_parse_function,
+};
 pub use capsmap::CapsMap;
 pub use check::{
     BannedImportWarning, BorrowedParamWarning, CatchAllErrorVariantWarning, CatchUnwindWarning,
