@@ -1,14 +1,16 @@
 =encoding utf8
 
-具体详见项目目录下 rivus.md
+LLM 很懒而且很笨。需要很多约束才能让它们写出看得过去的代码。
 
-使用方法：
+但是 LLM 又很聪明且很勤快，不管多长多无聊的代码它都能写得下去。
+
+所以需要这个项目来指导 LLM 的行为，并检查生成的代码。结合 clippy 之类的工具，确保 LLM 一直走在最佳实践的路上。
 
 =over
 
-=item 1. 将 rivus.md 复制到项目根目录，命名为 AGENTS.md
+=item 1. 将编译产物重命名为 rivus-linter，放到 C<$PATH> 中。
 
-=item 2. 将编译产物重命名为 rivus-linter，放到 C<$PATH> 中。
+=item 2. 在项目中运行 C<rivus-linter setup>
 
 =item 3. 在 llm 交付的时候，运行 rivus-linter，并且根据结果训斥它们。
 
