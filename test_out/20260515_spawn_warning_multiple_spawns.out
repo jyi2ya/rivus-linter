@@ -1,5 +1,0 @@
-spawn_warnings: 2
-warning: function 'rvs_orchestrate_ABIS' calls 'tokio::spawn' which is an unstructured spawn — use join!, JoinSet, FuturesUnordered, thread::scope, or other structured concurrency primitives instead
-  at test.rs:3
-warning: function 'rvs_orchestrate_ABIS' calls 'tokio::task::spawn_blocking' which is an unstructured spawn — use join!, JoinSet, FuturesUnordered, thread::scope, or other structured concurrency primitives instead
-  at test.rs:4

@@ -1,0 +1,43 @@
+error: &mut param but suffix lacks M
+  --> $DIR/tests/ui/20_infer_mutable.rs:3:1
+   |
+LL | / pub fn rvs_add(x: &mut i32) {
+LL | |     *x += 1;
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-missing-mutable` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_mutable)]`
+
+error: pub fn 'rvs_add' missing /// doc comment
+  --> $DIR/tests/ui/20_infer_mutable.rs:3:1
+   |
+LL | / pub fn rvs_add(x: &mut i32) {
+LL | |     *x += 1;
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-missing-doc` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_doc)]`
+
+error: good fn 'rvs_add' not called by any test
+  --> $DIR/tests/ui/20_infer_mutable.rs:3:1
+   |
+LL | / pub fn rvs_add(x: &mut i32) {
+LL | |     *x += 1;
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
+
+error: this lint expectation is unfulfilled
+  --> $DIR/tests/ui/20_infer_mutable.rs:1:11
+   |
+LL | #![expect(non_snake_case)]
+   |           ^^^^^^^^^^^^^^
+   |
+   = note: `-D unfulfilled-lint-expectations` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unfulfilled_lint_expectations)]`
+
+error: aborting due to 4 previous errors

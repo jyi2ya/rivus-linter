@@ -1,0 +1,36 @@
+error: empty function body
+  --> $DIR/tests/ui/26_unknown_suffix_letter.rs:3:1
+   |
+LL | pub fn rvs_add_Z() {}
+   | ^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(rivus::rvs_empty_fn)]` on by default
+
+error: unknown letters: Z
+  --> $DIR/tests/ui/26_unknown_suffix_letter.rs:3:1
+   |
+LL | pub fn rvs_add_Z() {}
+   | ^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-unknown-suffix-letter` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_unknown_suffix_letter)]`
+
+error: pub fn 'rvs_add_Z' missing /// doc comment
+  --> $DIR/tests/ui/26_unknown_suffix_letter.rs:3:1
+   |
+LL | pub fn rvs_add_Z() {}
+   | ^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-missing-doc` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_doc)]`
+
+error: good fn 'rvs_add_Z' not called by any test
+  --> $DIR/tests/ui/26_unknown_suffix_letter.rs:3:1
+   |
+LL | pub fn rvs_add_Z() {}
+   | ^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
+
+error: aborting due to 4 previous errors

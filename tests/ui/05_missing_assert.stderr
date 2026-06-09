@@ -1,0 +1,24 @@
+error: param 'n' missing debug_assert!
+  --> $DIR/tests/ui/05_missing_assert.rs:3:35
+   |
+LL |   fn rvs_add_M(x: &mut i32, n: i32) {
+   |  ___________________________________^
+LL | |     *x += n;
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-missing-debug-assert` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_debug_assert)]`
+
+error: good fn 'rvs_add_M' not called by any test
+  --> $DIR/tests/ui/05_missing_assert.rs:3:1
+   |
+LL | / fn rvs_add_M(x: &mut i32, n: i32) {
+LL | |     *x += n;
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
+
+error: aborting due to 2 previous errors

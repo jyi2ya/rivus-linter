@@ -1,0 +1,64 @@
+error: reflection — use trait dispatch instead
+  --> $DIR/tests/ui/21_reflection_usage.rs:6:13
+   |
+LL |     let _ = val.type_id();
+   |             ^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-reflection-usage` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_reflection_usage)]`
+
+error: 'core::any::Any::type_id' not in capsmap
+  --> $DIR/tests/ui/21_reflection_usage.rs:6:13
+   |
+LL |     let _ = val.type_id();
+   |             ^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-unknown-callee` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_unknown_callee)]`
+
+error: reflection — use trait dispatch instead
+  --> $DIR/tests/ui/21_reflection_usage.rs:7:13
+   |
+LL |     let _ = std::any::type_name::<i32>();
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: 'std::any::type_name' (core::any::type_name) not in capsmap
+  --> $DIR/tests/ui/21_reflection_usage.rs:7:13
+   |
+LL |     let _ = std::any::type_name::<i32>();
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: pub fn 'rvs_reflect' missing /// doc comment
+  --> $DIR/tests/ui/21_reflection_usage.rs:5:1
+   |
+LL | / pub fn rvs_reflect(val: &dyn Any) {
+LL | |     let _ = val.type_id();
+LL | |     let _ = std::any::type_name::<i32>();
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-missing-doc` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_doc)]`
+
+error: good fn 'rvs_reflect' not called by any test
+  --> $DIR/tests/ui/21_reflection_usage.rs:5:1
+   |
+LL | / pub fn rvs_reflect(val: &dyn Any) {
+LL | |     let _ = val.type_id();
+LL | |     let _ = std::any::type_name::<i32>();
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
+
+error: this lint expectation is unfulfilled
+  --> $DIR/tests/ui/21_reflection_usage.rs:1:11
+   |
+LL | #![expect(non_snake_case)]
+   |           ^^^^^^^^^^^^^^
+   |
+   = note: `-D unfulfilled-lint-expectations` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unfulfilled_lint_expectations)]`
+
+error: aborting due to 7 previous errors

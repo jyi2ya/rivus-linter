@@ -1,3 +1,0 @@
-input: rvs_write_db_ABI
-base: "write_db"
-capabilities: {A, B, I}

@@ -1,0 +1,70 @@
+error: empty function body
+  --> $DIR/tests/ui/24_non_alphabetical_suffix.rs:3:1
+   |
+LL | pub fn rvs_add() {}
+   | ^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(rivus::rvs_empty_fn)]` on by default
+
+error: pub fn 'rvs_add' missing /// doc comment
+  --> $DIR/tests/ui/24_non_alphabetical_suffix.rs:3:1
+   |
+LL | pub fn rvs_add() {}
+   | ^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-missing-doc` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_doc)]`
+
+error: suffix not alphabetical
+  --> $DIR/tests/ui/24_non_alphabetical_suffix.rs:5:1
+   |
+LL | / pub fn rvs_foo_MI() {
+LL | |     rvs_add();
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-non-alphabetical-suffix` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_non_alphabetical_suffix)]`
+
+error: pub fn 'rvs_foo_MI' missing /// doc comment
+  --> $DIR/tests/ui/24_non_alphabetical_suffix.rs:5:1
+   |
+LL | / pub fn rvs_foo_MI() {
+LL | |     rvs_add();
+LL | | }
+   | |_^
+
+error: suffix not alphabetical
+  --> $DIR/tests/ui/24_non_alphabetical_suffix.rs:9:1
+   |
+LL | / pub fn rvs_foo_MA() {
+LL | |     rvs_add();
+LL | | }
+   | |_^
+
+error: pub fn 'rvs_foo_MA' missing /// doc comment
+  --> $DIR/tests/ui/24_non_alphabetical_suffix.rs:9:1
+   |
+LL | / pub fn rvs_foo_MA() {
+LL | |     rvs_add();
+LL | | }
+   | |_^
+
+error: good fn 'rvs_add' not called by any test
+  --> $DIR/tests/ui/24_non_alphabetical_suffix.rs:3:1
+   |
+LL | pub fn rvs_add() {}
+   | ^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
+
+error: good fn 'rvs_foo_MA' not called by any test
+  --> $DIR/tests/ui/24_non_alphabetical_suffix.rs:9:1
+   |
+LL | / pub fn rvs_foo_MA() {
+LL | |     rvs_add();
+LL | | }
+   | |_^
+
+error: aborting due to 8 previous errors

@@ -1,3 +1,0 @@
-missing_debug_warnings: 1
-warning: public type 'Color' is missing #[derive(Debug)]
-  at test.rs:2

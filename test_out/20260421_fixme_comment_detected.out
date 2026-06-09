@@ -1,3 +1,0 @@
-todo_comment_warnings: 1
-warning: FIXME comment found: this is broken 
-  at test.rs:2

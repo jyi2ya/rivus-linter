@@ -1,3 +1,0 @@
-banned_import_warnings: 1
-warning: banned crate 'anyhow' imported via 'anyhow::Result'
-  at test.rs:2

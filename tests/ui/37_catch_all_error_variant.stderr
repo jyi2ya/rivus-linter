@@ -1,0 +1,31 @@
+error: type 'MyError' missing #[derive(Debug)]
+  --> $DIR/tests/ui/37_catch_all_error_variant.rs:3:1
+   |
+LL | / enum MyError {
+LL | |     NotFound,
+LL | |     Unknown(String),
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-missing-debug-derive` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_debug_derive)]`
+
+error: catch-all variant 'Unknown' in MyError
+  --> $DIR/tests/ui/37_catch_all_error_variant.rs:5:5
+   |
+LL |     Unknown(String),
+   |     ^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-catch-all-error-variant` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_catch_all_error_variant)]`
+
+error: this lint expectation is unfulfilled
+  --> $DIR/tests/ui/37_catch_all_error_variant.rs:1:11
+   |
+LL | #![expect(non_snake_case)]
+   |           ^^^^^^^^^^^^^^
+   |
+   = note: `-D unfulfilled-lint-expectations` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unfulfilled_lint_expectations)]`
+
+error: aborting due to 3 previous errors

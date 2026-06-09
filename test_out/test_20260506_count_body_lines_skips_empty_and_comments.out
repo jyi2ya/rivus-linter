@@ -1,3 +1,0 @@
-test_20260506_count_body_lines_skips_empty_and_comments: PASSED
-  Body lines filter skips empty lines and // comments, counting only real code.
-  Source with 2 empty lines + 2 comment lines + 1 code line (open=1, close=7) → 1 line.

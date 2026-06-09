@@ -1,3 +1,0 @@
-empty_fn_violations: 1
-error: rvs_empty_method has empty body (no logic beyond debug_assert) 
-  at test.rs:4

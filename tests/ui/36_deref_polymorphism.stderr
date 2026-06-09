@@ -1,0 +1,33 @@
+error: type 'Wrapper' missing #[derive(Debug)]
+  --> $DIR/tests/ui/36_deref_polymorphism.rs:3:1
+   |
+LL | struct Wrapper(String);
+   | ^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-missing-debug-derive` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_debug_derive)]`
+
+error: impl Deref — use composition instead of Deref polymorphism
+  --> $DIR/tests/ui/36_deref_polymorphism.rs:5:1
+   |
+LL | / impl std::ops::Deref for Wrapper {
+LL | |     type Target = str;
+LL | |     fn deref(&self) -> &str {
+LL | |         &self.0
+LL | |     }
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-deref-polymorphism` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_deref_polymorphism)]`
+
+error: this lint expectation is unfulfilled
+  --> $DIR/tests/ui/36_deref_polymorphism.rs:1:11
+   |
+LL | #![expect(non_snake_case)]
+   |           ^^^^^^^^^^^^^^
+   |
+   = note: `-D unfulfilled-lint-expectations` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unfulfilled_lint_expectations)]`
+
+error: aborting due to 3 previous errors

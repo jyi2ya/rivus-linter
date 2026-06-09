@@ -1,2 +1,0 @@
-test_20260507_count_body_lines_single_line: PASSED
-  Single-line function body (open brace == close brace line) → 0 body lines.

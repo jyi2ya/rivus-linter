@@ -1,0 +1,41 @@
+error: rvs_validate: validate returning Result<(),E> — use TryFrom returning Result<T,E>
+  --> $DIR/tests/ui/29_validate_returns_unit.rs:3:1
+   |
+LL | pub fn rvs_validate(input: &str) -> Result<(), String> {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-validate-returns-unit` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_validate_returns_unit)]`
+
+error: pub fn 'rvs_validate' missing /// doc comment
+  --> $DIR/tests/ui/29_validate_returns_unit.rs:3:1
+   |
+LL | / pub fn rvs_validate(input: &str) -> Result<(), String> {
+LL | |     Ok(())
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-missing-doc` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_doc)]`
+
+error: good fn 'rvs_validate' not called by any test
+  --> $DIR/tests/ui/29_validate_returns_unit.rs:3:1
+   |
+LL | / pub fn rvs_validate(input: &str) -> Result<(), String> {
+LL | |     Ok(())
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
+
+error: this lint expectation is unfulfilled
+  --> $DIR/tests/ui/29_validate_returns_unit.rs:1:11
+   |
+LL | #![expect(non_snake_case)]
+   |           ^^^^^^^^^^^^^^
+   |
+   = note: `-D unfulfilled-lint-expectations` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unfulfilled_lint_expectations)]`
+
+error: aborting due to 4 previous errors

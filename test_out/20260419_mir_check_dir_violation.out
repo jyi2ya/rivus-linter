@@ -1,5 +1,0 @@
-violations: 1
-error: rvs_pure calls rvs_io_BI but is missing capabilities [B(Blocking), I(IO)]
-  at /home/jyi/tmp/rivus_test_mir_violation:2
-  caller has: {}
-  target needs: {B, I}

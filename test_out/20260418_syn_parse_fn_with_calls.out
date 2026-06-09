@@ -1,5 +1,0 @@
-name: rvs_write_db_ABI
-caps: {A, B, I}
-calls: 2
-  - rvs_validate_M
-  - rvs_sort_M

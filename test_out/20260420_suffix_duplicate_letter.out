@@ -1,3 +1,0 @@
-inference_warnings: 1
-hint: rvs_foo_PP duplicate capability letter in suffix in its name
-  at test.rs:2

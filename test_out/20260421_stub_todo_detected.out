@@ -1,3 +1,0 @@
-stub_violations: 1
-error: rvs_fetch_AI contains todo!() stub macro 
-  at test.rs:3

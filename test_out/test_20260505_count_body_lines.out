@@ -1,3 +1,0 @@
-test_20260505_count_body_lines: PASSED
-  Counts body lines between braces, skipping signature and closing brace.
-  Source: "fn foo() {\n    x + 1\n}\n" (open=1, close=3) → 1 line of body code.

@@ -1,0 +1,28 @@
+error: empty function body
+  --> $DIR/tests/ui/02_call_violation.rs:3:1
+   |
+LL | fn rvs_read_file_BI() {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(rivus::rvs_empty_fn)]` on by default
+
+error: {} → {B, I} missing B(Blocking), I(IO)
+  --> $DIR/tests/ui/02_call_violation.rs:5:5
+   |
+LL |     rvs_read_file_BI(); // pure function (no caps) calling BI function
+   |     ^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(rivus::rvs_call_violation)]` on by default
+
+error: good fn 'rvs_pure' not called by any test
+  --> $DIR/tests/ui/02_call_violation.rs:4:1
+   |
+LL | / fn rvs_pure() {
+LL | |     rvs_read_file_BI(); // pure function (no caps) calling BI function
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
+
+error: aborting due to 3 previous errors

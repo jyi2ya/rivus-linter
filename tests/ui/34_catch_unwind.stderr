@@ -1,0 +1,39 @@
+error: 'std::panic::catch_unwind' not in capsmap
+  --> $DIR/tests/ui/34_catch_unwind.rs:4:13
+   |
+LL |     let _ = std::panic::catch_unwind(|| {});
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-unknown-callee` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_unknown_callee)]`
+
+error: catch_unwind — fix panic source instead
+  --> $DIR/tests/ui/34_catch_unwind.rs:4:13
+   |
+LL |     let _ = std::panic::catch_unwind(|| {});
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-catch-unwind` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_catch_unwind)]`
+
+error: good fn 'rvs_catch_it' not called by any test
+  --> $DIR/tests/ui/34_catch_unwind.rs:3:1
+   |
+LL | / fn rvs_catch_it() {
+LL | |     let _ = std::panic::catch_unwind(|| {});
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
+
+error: this lint expectation is unfulfilled
+  --> $DIR/tests/ui/34_catch_unwind.rs:1:11
+   |
+LL | #![expect(non_snake_case)]
+   |           ^^^^^^^^^^^^^^
+   |
+   = note: `-D unfulfilled-lint-expectations` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unfulfilled_lint_expectations)]`
+
+error: aborting due to 4 previous errors

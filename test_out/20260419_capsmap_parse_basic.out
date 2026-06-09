@@ -1,3 +1,0 @@
-entries: 2
-std::fs::read_to_string: {B, I}
-Vec::new: {}

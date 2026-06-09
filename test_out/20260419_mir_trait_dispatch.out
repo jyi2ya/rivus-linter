@@ -1,5 +1,0 @@
-name: rvs_process_BI
-calls: 3
-  - core::str::lines
-  - Iterator::map
-  - Iterator::collect

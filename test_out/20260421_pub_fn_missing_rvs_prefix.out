@@ -1,3 +1,0 @@
-non_rvs_fn_warnings: 1
-warning: function 'bad_pub_fn' should have rvs_ prefix
-  at test.rs:2

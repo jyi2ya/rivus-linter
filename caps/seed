@@ -1,0 +1,187 @@
+# ─── Core panicking ──────────────────────────────
+core::panicking::panic=P
+core::panicking::assert_failed=P
+core::panicking::panic_nounwind=P
+core::panicking::panic_bounds_check=P
+core::panicking::panic_display=P
+core::panicking::panic_str=P
+core::panicking::unwrap_failed=P
+core::result::unwrap_failed=P
+core::option::expect_failed=P
+
+# ─── Raw allocation ──────────────────────────────
+alloc::raw_vec::finish=U
+alloc::raw_vec::reserve_for_push=U
+alloc::raw_vec::handle_reserve=U
+alloc::alloc::alloc=U
+alloc::alloc::dealloc=U
+alloc::alloc::realloc=U
+
+# ─── Runtime bootstrap ───────────────────────────
+std::rt::lang_start=B
+std::rt::lang_start_internal=BIS
+
+# ─── IO internals ────────────────────────────────
+std::io::stdio::_print=IS
+std::io::stdio::_eprint=IS
+std::io::stdio::_print_to=IS
+
+# ─── Process/environment ─────────────────────────
+std::process::abort=S
+std::env::var_os=S
+std::env::set_var=MS
+std::env::remove_var=MS
+std::env::temp_dir=S
+std::time::Instant::now=S
+std::time::SystemTime::now=S
+std::path::Path::exists=IS
+
+# ─── Compiler internals (language expansion) ─────
+# ? operator expands to Try::branch + from_residual
+std::ops::Try::branch=
+FromResidual::from_residual=
+# . and * operators expand to Deref
+Deref::deref=
+DerefMut::deref_mut=
+# [] operator expands to Index
+std::ops::Index::index=
+# == / != expansion
+PartialEq::eq=
+PartialEq::ne=
+# for loop expansion
+IntoIterator::into_iter=
+# collection extension
+Extend::extend=
+# format/panic internals
+core::fmt::rt::Argument::new_display=
+Arguments::new=
+Arguments::from_str=
+format=
+must_use=
+Option::expect=P
+
+# ─── Async/.await expansion internals ─────────────
+# .await desugars into Future::poll, IntoFuture::into_future, etc.
+# These are compiler-generated calls, not user code.
+core::future::into_future::IntoFuture::into_future=
+core::future::future::Future::poll=
+core::task::Poll::Ready=
+core::task::Context::from_waker=
+core::pin::impl::new_unchecked=
+core::future::get_context=
+# Generator/coroutine internals
+Generator::resume=
+
+# ─── Common stdlib methods (pure) ─────────────────
+alloc::string::ToString::to_string=
+alloc::borrow::ToOwned::to_owned=
+core::clone::Clone::clone=
+core::convert::Into::into=
+core::convert::From::from=
+core::option::impl::expect=P
+core::option::impl::unwrap=P
+core::option::impl::unwrap_or=
+core::option::impl::unwrap_or_default=
+core::option::impl::unwrap_or_else=
+core::result::impl::expect=P
+core::result::impl::unwrap=P
+core::result::impl::map_err=
+core::result::impl::unwrap_or_else=
+core::str::impl::is_empty=
+core::str::impl::len=
+core::str::impl::to_string=
+core::slice::impl::get=
+core::slice::impl::len=
+core::slice::impl::iter=
+core::slice::impl::is_empty=
+core::net::socket_addr::impl::ip=
+core::net::socket_addr::impl::port=
+
+# ─── Memory internals ────────────────────────────
+std::boxed::Box::new_uninit=
+std::boxed::box_assume_init_into_vec_unsafe=
+
+# ─── Unstructured spawn functions (concurrency goto) ──────
+# spawn creates background tasks whose lifetime is not bound by caller scope,
+# easily causing resource leaks and lost errors.
+# Prefer structured concurrency: join!, JoinSet, FuturesUnordered, thread::scope.
+tokio::spawn=AS
+tokio::task::spawn=AS
+tokio::task::spawn_blocking=BIS
+tokio::task::spawn_local=AST
+std::thread::spawn=BS
+std::thread::Builder::spawn=BS
+async_std::task::spawn=AS
+async_std::task::spawn_blocking=BIS
+smol::spawn=AS
+
+# ─── Rustc driver ──────────────────────────────────
+# run_compiler drives the entire compilation pipeline: blocking, I/O, side effects
+rustc_driver::run_compiler=BIS
+rustc_driver_impl::run_compiler=BIS
+# catch_with_exit_code catches panics and returns exit code
+rustc_driver::catch_with_exit_code=BS
+rustc_driver_impl::catch_with_exit_code=BS
+# init_rustc_env_logger initializes the logger (side effect)
+rustc_driver::init_rustc_env_logger=S
+rustc_driver_impl::init_rustc_env_logger=S
+
+# ─── Rustc lint context ────────────────────────────
+# emit_span_lint emits a diagnostic (side effect: writes to stderr/diagnostic buffer)
+rustc_lint::context::LintContext::emit_span_lint=S
+
+# ─── Rustc session ─────────────────────────────────
+rustc_session::session::impl::new=
+rustc_session::session::impl::source_map=
+
+# ─── Rustc HIR queries ─────────────────────────────
+# These are all pure query methods on the compiler's type context
+rustc_hir::hir::impl::has_name=
+rustc_hir::hir::impl::is_async=
+rustc_hir::hir::impl::as_unambig_ty=
+rustc_middle::hir::map::impl::hir_attrs=
+rustc_middle::hir::map::impl::hir_body=
+rustc_middle::hir::map::impl::hir_get_parent_item=
+rustc_middle::queries::impl::crate_name=
+rustc_middle::queries::impl::visibility=
+rustc_middle::query::plumbing::impl::typeck=
+rustc_middle::ty::context::impl::def_path=
+rustc_middle::ty::impl::is_public=
+rustc_middle::ty::typeck_results::impl::type_dependent_def_id=
+rustc_lint::context::impl::qpath_res=
+
+# ─── Rustc type system queries ─────────────────────
+rustc_middle::queries::impl::type_of=
+rustc_middle::queries::impl::trait_impls_of=
+rustc_middle::ty::context::impl::get_diagnostic_item=
+rustc_middle::ty::trait_def::impl::non_blanket_impls=
+rustc_middle::ty::trait_def::impl::blanket_impls=
+rustc_type_ir::binder::impl::skip_binder=
+
+# ─── Rustc span/def_id ─────────────────────────────
+rustc_span::def_id::impl::as_local=
+rustc_span::def_id::impl::to_def_id=
+rustc_span::source_map::impl::span_to_snippet=
+rustc_span::span_encoding::impl::from_expansion=
+rustc_span::symbol::impl::as_str=
+
+# ─── Rustc span/hygiene internals ─────────────────
+rustc_span::span_encoding::impl::ctxt=
+rustc_span::hygiene::impl::outer_expn_data=
+rustc_span::hygiene::impl::expn_data=
+rustc_span::hygiene::impl::root=
+Symbol::intern=
+
+# ─── Rustc session types ───────────────────────────
+EarlyDiagCtxt::new=
+ErrorOutputType::default=
+core::default::Default::default=
+
+# ─── Core traits ────────────────────────────────────
+alloc::string::ToString::to_string=
+core::clone::Clone::clone=
+
+# ─── More std impl methods ────────────────────────
+std::ffi::os_str::impl::to_string_lossy=
+core::option::impl::unwrap_or_else=
+alloc::borrow::impl::into_owned=

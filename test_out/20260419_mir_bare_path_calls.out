@@ -1,4 +1,0 @@
-name: rvs_process
-calls: 2
-  - parse_file
-  - format

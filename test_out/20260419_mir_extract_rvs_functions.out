@@ -1,4 +1,0 @@
-functions: 2
-1: rvs_add caps={} calls=0
-2: rvs_read_BI caps={B, I} calls=1
-  - std::fs::read_to_string

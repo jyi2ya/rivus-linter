@@ -1,3 +1,0 @@
-test_name_warnings: 1
-warning: test test_something_obvious does not match required format ^test_\d{8}_\w+$
-  at test.rs:3

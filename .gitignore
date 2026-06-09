@@ -1,1 +1,5 @@
 /target
+/src_old
+*.rlib
+*.rmeta
+mir_dump/

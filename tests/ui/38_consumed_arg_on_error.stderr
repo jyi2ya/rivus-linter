@@ -1,0 +1,30 @@
+error: owned param 'String' consumed but not preserved in error type of rvs_process
+  --> $DIR/tests/ui/38_consumed_arg_on_error.rs:3:22
+   |
+LL | fn rvs_process(name: String) -> Result<(), std::io::Error> {
+   |                      ^^^^^^
+   |
+   = note: `-D rivus::rvs-consumed-arg-on-error` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_consumed_arg_on_error)]`
+
+error: good fn 'rvs_process' not called by any test
+  --> $DIR/tests/ui/38_consumed_arg_on_error.rs:3:1
+   |
+LL | / fn rvs_process(name: String) -> Result<(), std::io::Error> {
+LL | |     Ok(())
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
+
+error: this lint expectation is unfulfilled
+  --> $DIR/tests/ui/38_consumed_arg_on_error.rs:1:11
+   |
+LL | #![expect(non_snake_case)]
+   |           ^^^^^^^^^^^^^^
+   |
+   = note: `-D unfulfilled-lint-expectations` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unfulfilled_lint_expectations)]`
+
+error: aborting due to 3 previous errors

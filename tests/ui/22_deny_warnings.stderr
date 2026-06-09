@@ -1,0 +1,46 @@
+error: #![deny(warnings)] — use named lints instead
+  --> $DIR/tests/ui/22_deny_warnings.rs:3:1
+   |
+LL | #![deny(warnings)]
+   | ^^^^^^^^^^^^^^^^^^
+   |
+note: the lint level is defined here
+  --> $DIR/tests/ui/22_deny_warnings.rs:3:9
+   |
+LL | #![deny(warnings)]
+   |         ^^^^^^^^
+   = note: `#[deny(rivus::rvs_deny_warnings)]` implied by `#[deny(warnings)]`
+
+error: empty function body
+  --> $DIR/tests/ui/22_deny_warnings.rs:5:1
+   |
+LL | pub fn rvs_add() {}
+   | ^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(rivus::rvs_empty_fn)]` on by default
+
+error: pub fn 'rvs_add' missing /// doc comment
+  --> $DIR/tests/ui/22_deny_warnings.rs:5:1
+   |
+LL | pub fn rvs_add() {}
+   | ^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(rivus::rvs_missing_doc)]` implied by `#[deny(warnings)]`
+
+error: good fn 'rvs_add' not called by any test
+  --> $DIR/tests/ui/22_deny_warnings.rs:5:1
+   |
+LL | pub fn rvs_add() {}
+   | ^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(rivus::rvs_untested_good_fn)]` implied by `#[deny(warnings)]`
+
+error: this lint expectation is unfulfilled
+  --> $DIR/tests/ui/22_deny_warnings.rs:1:11
+   |
+LL | #![expect(non_snake_case)]
+   |           ^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(unfulfilled_lint_expectations)]` implied by `#[deny(warnings)]`
+
+error: aborting due to 5 previous errors

@@ -1,3 +1,0 @@
-borrowed_param_warnings: 1
-warning: param 's' of 'rvs_foo' uses '&String'—prefer '&str'
-  at test.rs:2

@@ -1,3 +1,0 @@
-test_20260504_inject_no_section_in_middle: PASSED
-- Appends [lints.clippy] after all existing sections when no section exists
-- Does not insert in the middle of other sections

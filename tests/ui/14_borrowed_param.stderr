@@ -1,0 +1,82 @@
+error: type 'Foo' missing #[derive(Debug)]
+  --> $DIR/tests/ui/14_borrowed_param.rs:3:1
+   |
+LL | / pub struct Foo<'a> {
+LL | |     name: &'a String,
+LL | |     data: &'a Vec<u8>,
+LL | |     ptr: &'a Box<i32>,
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-missing-debug-derive` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_debug_derive)]`
+
+error: &String field — use &str instead
+  --> $DIR/tests/ui/14_borrowed_param.rs:4:11
+   |
+LL |     name: &'a String,
+   |           ^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-borrowed-param` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_borrowed_param)]`
+
+error: &Vec field — use &[T] instead
+  --> $DIR/tests/ui/14_borrowed_param.rs:5:11
+   |
+LL |     data: &'a Vec<u8>,
+   |           ^^^^^^^^^^^
+
+error: &Box field — use &T instead
+  --> $DIR/tests/ui/14_borrowed_param.rs:6:10
+   |
+LL |     ptr: &'a Box<i32>,
+   |          ^^^^^^^^^^^^
+
+error: empty function body
+  --> $DIR/tests/ui/14_borrowed_param.rs:9:1
+   |
+LL | pub fn rvs_example(x: &String, y: &Vec<u8>) {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(rivus::rvs_empty_fn)]` on by default
+
+error: &String — use &str instead
+  --> $DIR/tests/ui/14_borrowed_param.rs:9:23
+   |
+LL | pub fn rvs_example(x: &String, y: &Vec<u8>) {}
+   |                       ^^^^^^^
+
+error: &Vec — use &[T] instead
+  --> $DIR/tests/ui/14_borrowed_param.rs:9:35
+   |
+LL | pub fn rvs_example(x: &String, y: &Vec<u8>) {}
+   |                                   ^^^^^^^^
+
+error: pub fn 'rvs_example' missing /// doc comment
+  --> $DIR/tests/ui/14_borrowed_param.rs:9:1
+   |
+LL | pub fn rvs_example(x: &String, y: &Vec<u8>) {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-missing-doc` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_doc)]`
+
+error: good fn 'rvs_example' not called by any test
+  --> $DIR/tests/ui/14_borrowed_param.rs:9:1
+   |
+LL | pub fn rvs_example(x: &String, y: &Vec<u8>) {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
+
+error: this lint expectation is unfulfilled
+  --> $DIR/tests/ui/14_borrowed_param.rs:1:11
+   |
+LL | #![expect(non_snake_case)]
+   |           ^^^^^^^^^^^^^^
+   |
+   = note: `-D unfulfilled-lint-expectations` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unfulfilled_lint_expectations)]`
+
+error: aborting due to 10 previous errors

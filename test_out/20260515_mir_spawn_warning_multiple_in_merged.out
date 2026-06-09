@@ -1,5 +1,0 @@
-spawn_warnings: 2
-warning: function 'rvs_handler_ABI' calls 'tokio::spawn' which is an unstructured spawn — use join!, JoinSet, FuturesUnordered, thread::scope, or other structured concurrency primitives instead
-  at /home/jyi/tmp/rivus_test_mir_spawn_merged:2
-warning: function 'rvs_handler_ABI' calls 'std::thread::spawn' which is an unstructured spawn — use join!, JoinSet, FuturesUnordered, thread::scope, or other structured concurrency primitives instead
-  at /home/jyi/tmp/rivus_test_mir_spawn_merged:2

@@ -1,0 +1,57 @@
+error: empty function body
+  --> $DIR/tests/ui/07_infer_async.rs:3:1
+   |
+LL | fn rvs_add() {}
+   | ^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(rivus::rvs_empty_fn)]` on by default
+
+error: async but suffix lacks A
+  --> $DIR/tests/ui/07_infer_async.rs:5:1
+   |
+LL | / pub async fn rvs_fetch() {
+LL | |     rvs_add();
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-missing-async` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_async)]`
+
+error: pub fn 'rvs_fetch' missing /// doc comment
+  --> $DIR/tests/ui/07_infer_async.rs:5:1
+   |
+LL | / pub async fn rvs_fetch() {
+LL | |     rvs_add();
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-missing-doc` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_doc)]`
+
+error: good fn 'rvs_add' not called by any test
+  --> $DIR/tests/ui/07_infer_async.rs:3:1
+   |
+LL | fn rvs_add() {}
+   | ^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
+
+error: good fn 'rvs_fetch' not called by any test
+  --> $DIR/tests/ui/07_infer_async.rs:5:1
+   |
+LL | / pub async fn rvs_fetch() {
+LL | |     rvs_add();
+LL | | }
+   | |_^
+
+error: this lint expectation is unfulfilled
+  --> $DIR/tests/ui/07_infer_async.rs:1:11
+   |
+LL | #![expect(non_snake_case)]
+   |           ^^^^^^^^^^^^^^
+   |
+   = note: `-D unfulfilled-lint-expectations` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unfulfilled_lint_expectations)]`
+
+error: aborting due to 6 previous errors

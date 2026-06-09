@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use crate::capability::{CapabilityParseError, CapabilitySet};
 
@@ -21,6 +22,10 @@ pub enum CapsMapError {
     },
     #[error("line {line}: missing '=' separator")]
     MissingSeparator { line: usize },
+    #[error("cannot read caps directory: {0}")]
+    DirRead(String),
+    #[error("cannot read {path}: {error}")]
+    FileRead { path: String, error: String },
 }
 
 impl CapsMap {
@@ -69,6 +74,71 @@ impl CapsMap {
             }
         }
         None
+    }
+
+    /// 合并两个能力映射表：self 的条目优先，other 的同名键被覆盖。
+    pub fn rvs_merge(self, other: Self) -> Self {
+        let mut entries = other.entries;
+        for (key, caps) in self.entries {
+            entries.insert(key, caps);
+        }
+        Self { entries }
+    }
+
+    /// Extend this capsmap with entries from another.
+    /// Entries in `other` override existing entries for the same key.
+    pub(crate) fn rvs_extend_from_M(&mut self, other: Self) {
+        for (key, caps) in other.entries {
+            self.entries.insert(key, caps);
+        }
+    }
+
+    /// Load all capability files from a directory, merging them in filename order.
+    /// Files named `seed` are loaded first (lowest priority), then alphabetically.
+    /// Later files override earlier entries for the same key.
+    pub fn rvs_load_from_dir_BIMS(dir: &Path) -> Result<Self, CapsMapError> {
+        let mut result = Self::rvs_new();
+        if !dir.is_dir() {
+            return Ok(result);
+        }
+        let mut files: Vec<std::path::PathBuf> = Vec::new();
+        let entries = std::fs::read_dir(dir)
+            .map_err(|e| CapsMapError::DirRead(format!("{}: {e}", dir.display())))?;
+        for entry in entries {
+            let entry =
+                entry.map_err(|e| CapsMapError::DirRead(format!("{}: {e}", dir.display())))?;
+            let path = entry.path();
+            if path.is_file() {
+                files.push(path);
+            }
+        }
+        // Sort: seed first, then alphabetical
+        files.sort_by(|a, b| {
+            let a_name = match a.file_name() {
+                Some(n) => n.to_string_lossy().into_owned(),
+                None => String::new(),
+            };
+            let b_name = match b.file_name() {
+                Some(n) => n.to_string_lossy().into_owned(),
+                None => String::new(),
+            };
+            let a_is_seed = a_name == "seed";
+            let b_is_seed = b_name == "seed";
+            match (a_is_seed, b_is_seed) {
+                (true, false) => std::cmp::Ordering::Less,
+                (false, true) => std::cmp::Ordering::Greater,
+                _ => a_name.as_str().cmp(b_name.as_str()),
+            }
+        });
+        for path in &files {
+            let content = std::fs::read_to_string(path).map_err(|e| CapsMapError::FileRead {
+                path: path.display().to_string(),
+                error: e.to_string(),
+            })?;
+            let partial = Self::rvs_parse(&content)?;
+            result.rvs_extend_from_M(partial);
+        }
+        Ok(result)
     }
 }
 

@@ -1,3 +1,0 @@
-name: rvs_outer
-calls: 1
-  - rvs_check

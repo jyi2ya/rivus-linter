@@ -1,3 +1,0 @@
-inference_warnings: 1
-hint: rvs_foo_BA capability suffix not in alphabetical order in its name
-  at test.rs:2

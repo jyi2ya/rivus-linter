@@ -1,0 +1,25 @@
+# ─── External library: clap ──────────────────────
+# Cli::parse reads global process args, has side effects (S)
+clap::Parser::parse=S
+Cli::parse=S
+
+# ─── External library: serde_json ────────────────
+# serde_json::from_str is a pure parser (no I/O, no side effects)
+serde_json::from_str=
+serde_json::de::from_str=
+
+# ─── External library: indexmap ──────────────────
+indexmap::map::impl::values=
+
+# ─── Local types (path-based calls) ──────────────
+CapabilityParseError::InvalidLetter=
+DenyWarningsWarning=
+StubMacroInfo=
+
+# ─── Local helpers (path-based calls) ────────────
+# Msg::new is a pure constructor
+Msg::new=
+cargo_rivus::lints::impl::new=
+# go and wblk are pure traversal helpers inside rvs_walk_closures
+cargo_rivus::lints::rvs_walk_closures::go=
+cargo_rivus::lints::rvs_walk_closures::wblk=

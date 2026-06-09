@@ -1,0 +1,45 @@
+error: .ok() swallows errors
+  --> $DIR/tests/ui/43_error_swallow.rs:4:13
+   |
+LL |     let _ = "abc".parse::<i32>().ok();
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-error-swallow` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_error_swallow)]`
+
+error: 'core::result::impl::ok' not in capsmap
+  --> $DIR/tests/ui/43_error_swallow.rs:4:13
+   |
+LL |     let _ = "abc".parse::<i32>().ok();
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-unknown-callee` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_unknown_callee)]`
+
+error: 'core::str::impl::parse' not in capsmap
+  --> $DIR/tests/ui/43_error_swallow.rs:4:13
+   |
+LL |     let _ = "abc".parse::<i32>().ok();
+   |             ^^^^^^^^^^^^^^^^^^^^
+
+error: good fn 'rvs_swallow' not called by any test
+  --> $DIR/tests/ui/43_error_swallow.rs:3:1
+   |
+LL | / fn rvs_swallow() {
+LL | |     let _ = "abc".parse::<i32>().ok();
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
+
+error: this lint expectation is unfulfilled
+  --> $DIR/tests/ui/43_error_swallow.rs:1:11
+   |
+LL | #![expect(non_snake_case)]
+   |           ^^^^^^^^^^^^^^
+   |
+   = note: `-D unfulfilled-lint-expectations` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unfulfilled_lint_expectations)]`
+
+error: aborting due to 5 previous errors

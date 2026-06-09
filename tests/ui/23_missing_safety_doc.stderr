@@ -1,0 +1,65 @@
+error: empty function body
+  --> $DIR/tests/ui/23_missing_safety_doc.rs:3:1
+   |
+LL | pub fn rvs_add() {}
+   | ^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(rivus::rvs_empty_fn)]` on by default
+
+error: pub fn 'rvs_add' missing /// doc comment
+  --> $DIR/tests/ui/23_missing_safety_doc.rs:3:1
+   |
+LL | pub fn rvs_add() {}
+   | ^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-missing-doc` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_doc)]`
+
+error: unsafe code but suffix lacks U
+  --> $DIR/tests/ui/23_missing_safety_doc.rs:5:1
+   |
+LL | / pub unsafe fn rvs_raw_Unsafe() -> u8 {
+LL | |     0
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-missing-unsafe` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_unsafe)]`
+
+error: pub fn 'rvs_raw_Unsafe' missing /// doc comment
+  --> $DIR/tests/ui/23_missing_safety_doc.rs:5:1
+   |
+LL | / pub unsafe fn rvs_raw_Unsafe() -> u8 {
+LL | |     0
+LL | | }
+   | |_^
+
+error: unsafe fn missing /// # Safety
+  --> $DIR/tests/ui/23_missing_safety_doc.rs:5:1
+   |
+LL | / pub unsafe fn rvs_raw_Unsafe() -> u8 {
+LL | |     0
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-missing-safety-doc` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_safety_doc)]`
+
+error: good fn 'rvs_add' not called by any test
+  --> $DIR/tests/ui/23_missing_safety_doc.rs:3:1
+   |
+LL | pub fn rvs_add() {}
+   | ^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
+
+error: good fn 'rvs_raw_Unsafe' not called by any test
+  --> $DIR/tests/ui/23_missing_safety_doc.rs:5:1
+   |
+LL | / pub unsafe fn rvs_raw_Unsafe() -> u8 {
+LL | |     0
+LL | | }
+   | |_^
+
+error: aborting due to 7 previous errors

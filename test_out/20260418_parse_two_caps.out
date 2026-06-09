@@ -1,3 +1,0 @@
-input: rvs_random_uuid_ST
-base: "random_uuid"
-capabilities: {S, T}

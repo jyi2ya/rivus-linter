@@ -1,0 +1,171 @@
+# ─── Rust language keyword constructors ─────────────────
+# Self is used for type construction, semantically equivalent to new, pure function
+Self=
+Self::default=
+None=
+
+# ─── Short MIR-visible names ───────────────────────
+Vec::clear=
+Iterator::take_while=
+Result::is_ok_and=
+String::push=
+Peekable::peek=
+FileType::is_file=
+BTreeSet::is_empty=
+AsRef::as_ref=
+str::split_at=
+str::is_ascii_uppercase=
+str::split_at_checked=
+char::is_ascii_uppercase=
+HashMap::entry=
+
+# ─── Std: filesystem (standalone functions) ────────
+# read_to_string is blocking (B) and does I/O (I)
+std::fs::read_to_string=BI
+std::fs::read_dir=BI
+std::fs::write=BIS
+
+# ─── Std: process (standalone functions) ───────────
+# process::exit has side effects (S), terminates the process
+std::process::exit=S
+
+# ─── Std: numeric operations (standalone functions)
+core::num::saturating_sub=
+
+# ─── MIR-visible: std container methods (fully qualified) ──
+std::collections::btree_map::Entry::or_default=
+std::collections::hash_map::Entry::or_default=
+std::collections::hash_map::VacantEntry::insert=
+std::collections::hash_map::OccupiedEntry::get_mut=
+
+# ─── Std: MIR-visible impl paths (btree_map) ──────
+alloc::collections::btree::map::impl::new=
+alloc::collections::btree::map::impl::entry=
+alloc::collections::btree::map::impl::get=
+alloc::collections::btree::map::impl::iter=
+alloc::collections::btree::map::entry::impl::or_insert_with=
+
+# ─── Std: MIR-visible impl paths (btree_set) ──────
+alloc::collections::btree::set::impl::new=
+alloc::collections::btree::set::impl::contains=
+alloc::collections::btree::set::impl::difference=
+alloc::collections::btree::set::impl::insert=
+alloc::collections::btree::set::impl::is_empty=
+alloc::collections::btree::set::impl::iter=
+alloc::collections::btree::set::impl::len=
+
+# ─── Std: MIR-visible impl paths (vec) ─────────────
+alloc::vec::impl::new=
+alloc::vec::impl::push=
+alloc::vec::impl::is_empty=
+alloc::vec::impl::len=
+alloc::vec::impl::remove=
+
+# ─── Std: MIR-visible impl paths (slice) ───────────
+alloc::slice::impl::join=
+alloc::slice::impl::sort=
+alloc::slice::impl::sort_by=
+core::slice::impl::contains=
+core::slice::impl::first=
+core::slice::impl::get=
+core::slice::impl::is_empty=
+core::slice::impl::iter=
+core::slice::impl::last=
+core::slice::impl::len=
+
+# ─── Std: MIR-visible impl paths (string/str) ──────
+alloc::string::impl::new=
+alloc::string::impl::is_empty=
+alloc::string::impl::push=
+alloc::string::impl::push_str=
+alloc::string::impl::from_utf8_lossy=
+alloc::string::impl::as_str=
+alloc::str::impl::to_ascii_lowercase=
+core::str::impl::as_bytes=
+core::str::impl::chars=
+core::str::impl::ends_with=
+core::str::impl::get=
+core::str::impl::is_empty=
+core::str::impl::len=
+core::str::impl::lines=
+core::str::impl::rfind=
+core::str::impl::rsplit=
+core::str::impl::split=
+core::str::impl::starts_with=
+core::str::impl::strip_prefix=
+core::str::impl::trim=
+
+# ─── Std: MIR-visible impl paths (char) ────────────
+core::char::methods::impl::is_ascii_alphanumeric=
+core::char::methods::impl::is_ascii_digit=
+core::char::methods::impl::is_ascii_lowercase=
+core::char::methods::impl::is_ascii_uppercase=
+
+# ─── Std: MIR-visible impl paths (option) ──────────
+core::option::impl::and_then=
+core::option::impl::as_deref=
+core::option::impl::as_ref=
+core::option::impl::is_none=
+core::option::impl::is_some=
+core::option::impl::is_some_and=
+core::option::impl::map=
+core::option::impl::or_else=
+core::option::impl::unwrap_or=
+core::option::impl::unwrap_or_default=
+
+# ─── Std: MIR-visible impl paths (result) ──────────
+core::result::impl::expect=P
+core::result::impl::is_ok=
+core::result::impl::map_err=
+core::result::impl::unwrap_or_else=
+
+# ─── Std: MIR-visible impl paths (convert/cmp) ─────
+core::convert::Into::into=
+core::convert::From::from=
+core::cmp::Ord::cmp=
+
+# ─── Std: MIR-visible iterator traits ──────────────
+core::iter::traits::iterator::Iterator::all=
+core::iter::traits::iterator::Iterator::any=
+core::iter::traits::iterator::Iterator::collect=
+core::iter::traits::iterator::Iterator::copied=
+core::iter::traits::iterator::Iterator::filter=
+core::iter::traits::iterator::Iterator::filter_map=
+core::iter::traits::iterator::Iterator::for_each=
+core::iter::traits::iterator::Iterator::map=
+core::iter::traits::iterator::Iterator::next=
+
+# ─── Std: MIR-visible impl paths (hash_set) ────────
+std::collections::hash::set::impl::new=
+std::collections::hash::set::impl::contains=
+std::collections::hash::set::impl::insert=
+std::collections::hash::set::impl::is_empty=
+
+# ─── Std: MIR-visible impl paths (path) ────────────
+std::path::impl::new=
+std::path::impl::display=
+std::path::impl::exists=BIS
+std::path::impl::file_name=
+std::path::impl::file_stem=
+std::path::impl::is_absolute=
+std::path::impl::is_dir=BIS
+std::path::impl::is_file=BIS
+std::path::impl::join=
+std::path::impl::to_path_buf=
+
+# ─── Std: MIR-visible impl paths (process) ─────────
+std::process::impl::new=
+std::process::impl::arg=M
+std::process::impl::args=M
+std::process::impl::code=
+std::process::impl::env=M
+std::process::impl::output=BIS
+std::process::impl::spawn=BIS
+std::process::impl::success=
+std::process::impl::wait=BI
+
+# ─── Std: MIR-visible env functions ────────────────
+std::env::args=S
+std::env::current_dir=S
+std::env::current_exe=S
+std::env::var=S

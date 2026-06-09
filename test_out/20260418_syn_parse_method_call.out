@@ -1,4 +1,0 @@
-name: rvs_create_order_ABM
-calls: 2
-  - rvs_find_by_id_ABI
-  - rvs_publish_AIS

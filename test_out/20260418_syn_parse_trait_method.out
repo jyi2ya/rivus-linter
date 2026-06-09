@@ -1,3 +1,0 @@
-functions: 2
-1: rvs_find_by_id_ABI caps={A, B, I}
-2: rvs_save_ABI caps={A, B, I}

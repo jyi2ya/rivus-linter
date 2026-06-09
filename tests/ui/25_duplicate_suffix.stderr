@@ -1,0 +1,36 @@
+error: empty function body
+  --> $DIR/tests/ui/25_duplicate_suffix.rs:3:1
+   |
+LL | pub fn rvs_add_MM() {}
+   | ^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(rivus::rvs_empty_fn)]` on by default
+
+error: duplicate 'M'
+  --> $DIR/tests/ui/25_duplicate_suffix.rs:3:1
+   |
+LL | pub fn rvs_add_MM() {}
+   | ^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-duplicate-suffix` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_duplicate_suffix)]`
+
+error: pub fn 'rvs_add_MM' missing /// doc comment
+  --> $DIR/tests/ui/25_duplicate_suffix.rs:3:1
+   |
+LL | pub fn rvs_add_MM() {}
+   | ^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-missing-doc` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_doc)]`
+
+error: good fn 'rvs_add_MM' not called by any test
+  --> $DIR/tests/ui/25_duplicate_suffix.rs:3:1
+   |
+LL | pub fn rvs_add_MM() {}
+   | ^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
+
+error: aborting due to 4 previous errors

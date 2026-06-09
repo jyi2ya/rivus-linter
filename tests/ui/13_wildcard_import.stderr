@@ -1,0 +1,45 @@
+error: wildcard import: std::io::*
+  --> $DIR/tests/ui/13_wildcard_import.rs:3:1
+   |
+LL | use std::io::*;
+   | ^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-wildcard-import` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_wildcard_import)]`
+
+error: empty function body
+  --> $DIR/tests/ui/13_wildcard_import.rs:5:1
+   |
+LL | pub fn rvs_read() {}
+   | ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(rivus::rvs_empty_fn)]` on by default
+
+error: pub fn 'rvs_read' missing /// doc comment
+  --> $DIR/tests/ui/13_wildcard_import.rs:5:1
+   |
+LL | pub fn rvs_read() {}
+   | ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-missing-doc` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_doc)]`
+
+error: good fn 'rvs_read' not called by any test
+  --> $DIR/tests/ui/13_wildcard_import.rs:5:1
+   |
+LL | pub fn rvs_read() {}
+   | ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
+
+error: this lint expectation is unfulfilled
+  --> $DIR/tests/ui/13_wildcard_import.rs:1:11
+   |
+LL | #![expect(non_snake_case)]
+   |           ^^^^^^^^^^^^^^
+   |
+   = note: `-D unfulfilled-lint-expectations` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unfulfilled_lint_expectations)]`
+
+error: aborting due to 5 previous errors

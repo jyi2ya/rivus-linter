@@ -1,4 +1,0 @@
-name: rvs_outer
-calls: 2
-  - rvs_a
-  - rvs_b

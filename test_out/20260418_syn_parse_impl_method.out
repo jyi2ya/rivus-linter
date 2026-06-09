@@ -1,3 +1,0 @@
-functions: 2
-1: rvs_process_ABI caps={A, B, I} calls=1
-2: rvs_validate caps={} calls=0

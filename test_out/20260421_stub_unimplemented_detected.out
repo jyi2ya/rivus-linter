@@ -1,3 +1,0 @@
-stub_violations: 1
-error: rvs_parse_P contains unimplemented!() stub macro 
-  at test.rs:3

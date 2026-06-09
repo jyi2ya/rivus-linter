@@ -1,0 +1,11 @@
+error[E0432]: unresolved import `anyhow`
+  --> $DIR/tests/ui/11_banned_import.rs:6:5
+   |
+LL | use anyhow::Error;
+   |     ^^^^^^ use of unresolved module or unlinked crate `anyhow`
+   |
+   = help: you might be missing a crate named `anyhow`
+
+error: aborting due to 1 previous error
+
+For more information about this error, try `rustc --explain E0432`.
