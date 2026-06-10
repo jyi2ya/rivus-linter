@@ -479,6 +479,9 @@ fn rvs_run_report_BIMPS(path: &Path) {
     if report_dir.exists() {
         let _ = std::fs::remove_dir_all(&report_dir);
     }
+    if build_dir.exists() {
+        let _ = std::fs::remove_dir_all(&build_dir);
+    }
     let mut cmd = Command::new(env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
     cmd.current_dir(path)
         .env("RUSTC_WORKSPACE_WRAPPER", self_path)
@@ -498,10 +501,11 @@ fn rvs_run_report_BIMPS(path: &Path) {
     }
 
     let mut all_entries: Vec<FnEntry> = Vec::new();
-    let rd = std::fs::read_dir(&report_dir).unwrap_or_else(|e| {
-        eprintln!("Error: cannot read {}: {e}", report_dir.display());
-        process::exit(2);
-    });
+    let Ok(rd) = std::fs::read_dir(&report_dir) else {
+        let report = rvs_build_report(&all_entries);
+        print!("{report}");
+        return;
+    };
     for entry in rd.flatten() {
         let p = entry.path();
         if p.extension().is_some_and(|ext| ext == "json") {
@@ -714,6 +718,9 @@ fn rvs_run_annotate_BIMPS(path: &Path) -> Result<(), String> {
         if cg_dir.exists() {
             let _ = std::fs::remove_dir_all(&cg_dir);
         }
+        if cg_target_dir.exists() {
+            let _ = std::fs::remove_dir_all(&cg_target_dir);
+        }
         let mut cmd = Command::new(env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
         cmd.current_dir(path)
             .env("RUSTC_WRAPPER", self_path)
@@ -820,6 +827,9 @@ fn rvs_run_infer_capsmap_BIMPS(
         if cg_dir.exists() {
             let _ = std::fs::remove_dir_all(&cg_dir);
         }
+        if cg_target_dir.exists() {
+            let _ = std::fs::remove_dir_all(&cg_target_dir);
+        }
         let mut cmd = Command::new(env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
         cmd.current_dir(path)
             .env("RUSTC_WRAPPER", self_path)
@@ -846,9 +856,51 @@ fn rvs_run_infer_capsmap_BIMPS(
 
     let inferred = rvs_infer_caps_M(&callgraph, &seed);
 
-    let result = rvs_format_capsmap(&inferred);
-    let default_path = path.join("target").join("rivus-inferred-capsmap.txt");
-    rvs_write_capsmap_result_BIS(&result, &default_path, output, "inferred capsmap")
+    let all_result = rvs_format_capsmap(&inferred);
+    let cache_path = path.join("target").join("rivus-inferred-capsmap.txt");
+    std::fs::write(&cache_path, &all_result)
+        .map_err(|e| format!("cannot write {}: {e}", cache_path.display()))?;
+
+    let crate_name = rvs_detect_crate_name_BIS(path)?;
+    let crate_prefix = format!("{crate_name}::");
+
+    let mut direct_external_calls: BTreeMap<String, CapabilitySet> = BTreeMap::new();
+    for (func, behavior) in &callgraph {
+        if !func.starts_with(&crate_prefix) {
+            continue;
+        }
+        for callee in &behavior.calls {
+            if callee.starts_with(&crate_prefix) {
+                continue;
+            }
+            if seed.rvs_lookup(callee).is_some() {
+                continue;
+            }
+            if !direct_external_calls.contains_key(callee) {
+                let caps = inferred
+                    .get(callee)
+                    .cloned()
+                    .unwrap_or_else(CapabilitySet::rvs_new);
+                direct_external_calls.insert(callee.clone(), caps);
+            }
+        }
+    }
+
+    let deps_result = rvs_format_capsmap(&direct_external_calls);
+    let deps_default_path = path.join("target").join("rivus-deps-capsmap.txt");
+    match output {
+        Some(p) => {
+            std::fs::write(p, &deps_result)
+                .map_err(|e| format!("cannot write {}: {e}", p.display()))?;
+            println!("Written deps capsmap to {}", p.display());
+        }
+        None => {
+            std::fs::write(&deps_default_path, &deps_result)
+                .map_err(|e| format!("cannot write {}: {e}", deps_default_path.display()))?;
+            print!("{deps_result}");
+        }
+    }
+    Ok(())
 }
 
 fn rvs_merge_callgraph_dir_BI(cg_dir: &Path) -> Result<BTreeMap<String, ParsedFnBehavior>, String> {
@@ -905,6 +957,13 @@ fn rvs_run_infer_std_BIMPS(path: &Path, output: Option<&Path>) -> Result<(), Str
 
     let cg_dir = path.join("target").join("rivus-callgraph-std");
     let cg_target_dir = path.join("target").join("rivus-build-std");
+
+    if cg_dir.exists() {
+        let _ = std::fs::remove_dir_all(&cg_dir);
+    }
+    if cg_target_dir.exists() {
+        let _ = std::fs::remove_dir_all(&cg_target_dir);
+    }
 
     {
         let self_path = env::current_exe().expect("current executable path invalid");
