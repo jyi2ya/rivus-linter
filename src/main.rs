@@ -16,7 +16,7 @@ extern crate rustc_middle;
 extern crate rustc_session;
 extern crate rustc_span;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::env;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -91,26 +91,6 @@ fn rvs_run_driver_BIMPS() -> ExitCode {
             .unwrap_or(false);
         if wrapper_mode {
             args.remove(1);
-        }
-
-        if std::env::var("RIVUS_CALLGRAPH").is_ok() {
-            let mut new_args = Vec::new();
-            let mut skip_next = false;
-            for a in &args {
-                if skip_next {
-                    skip_next = false;
-                    continue;
-                }
-                if a == "--cap-lints" {
-                    skip_next = true;
-                    continue;
-                }
-                if a.starts_with("--cap-lints=") {
-                    continue;
-                }
-                new_args.push(a.clone());
-            }
-            args = new_args;
         }
 
         if env::var("RIVUS_ENABLED").is_ok() {
@@ -248,7 +228,7 @@ fn main() -> ExitCode {
             }
         }
         Some(Commands::Annotate { path }) => {
-            if let Err(e) = rename::rvs_annotate_BIS(&path) {
+            if let Err(e) = rvs_run_annotate_BIMPS(&path) {
                 eprintln!("Error: {e}");
                 return ExitCode::from(2u8);
             }
@@ -313,7 +293,7 @@ fn rvs_run_cargo_check_BIMPS(capsmap: Option<PathBuf>, extra_args: Vec<String>) 
         }
     }
 
-    cmd.arg("check").args(&extra_args);
+    cmd.arg("check").arg("--tests").args(&extra_args);
     let exit_status = cmd
         .spawn()
         .expect("could not run cargo")
@@ -438,6 +418,7 @@ struct JsonFnBehavior {
     has_static_ref: bool,
     has_static_mut_ref: bool,
     has_thread_local_ref: bool,
+    is_trait_impl: bool,
 }
 
 fn rvs_build_report(entries: &[FnEntry]) -> Report {
@@ -696,6 +677,120 @@ fn rvs_write_capsmap_result_BIS(
     Ok(())
 }
 
+fn rvs_detect_crate_name_BIS(path: &Path) -> Result<String, String> {
+    let cargo_toml = path.join("Cargo.toml");
+    let content = std::fs::read_to_string(&cargo_toml)
+        .map_err(|e| format!("cannot read {}: {e}", cargo_toml.display()))?;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("name") {
+            let rest = rest.trim();
+            if let Some(rest) = rest.strip_prefix('=') {
+                let name = rest.trim().trim_matches('"').trim_matches('\'');
+                if !name.is_empty() {
+                    return Ok(name.replace('-', "_"));
+                }
+            }
+        }
+    }
+    Err("Cargo.toml missing [package].name".into())
+}
+
+/// # Panics
+///
+/// Panics if the current executable path, current directory, or cargo cannot be resolved.
+fn rvs_run_annotate_BIMPS(path: &Path) -> Result<(), String> {
+    if !path.is_dir() {
+        return Err(format!("'{}' is not a directory", path.display()));
+    }
+
+    let cg_dir = path.join("target").join("rivus-callgraph");
+    let cg_target_dir = path.join("target").join("rivus-build");
+    {
+        let self_path = env::current_exe().expect("current executable path invalid");
+        let abs_cg_dir = std::env::current_dir()
+            .expect("current dir invalid")
+            .join(&cg_dir);
+        if cg_dir.exists() {
+            let _ = std::fs::remove_dir_all(&cg_dir);
+        }
+        let mut cmd = Command::new(env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
+        cmd.current_dir(path)
+            .env("RUSTC_WRAPPER", self_path)
+            .env("RIVUS_ENABLED", "1")
+            .env("RIVUS_CALLGRAPH", "1")
+            .env("RIVUS_CALLGRAPH_DIR", abs_cg_dir)
+            .arg("check")
+            .arg("--target-dir")
+            .arg(&cg_target_dir);
+        let exit_status = cmd
+            .spawn()
+            .expect("could not run cargo")
+            .wait()
+            .expect("failed to wait for cargo?");
+        if !exit_status.success() {
+            return Err("cargo check failed — fix compilation errors first".into());
+        }
+    }
+
+    let callgraph = rvs_merge_callgraph_dir_BI(&cg_dir)?;
+
+    let seed_path = path.join("capsmap.txt");
+    let seed = rvs_load_seed_capsmap_BIMS(path, &seed_path);
+
+    let inferred = rvs_infer_caps_M(&callgraph, &seed);
+
+    let workspace_name = rvs_detect_crate_name_BIS(path)?;
+
+    let mut renames: Vec<(String, String)> = Vec::new();
+    let mut skip_names: HashSet<String> = HashSet::new();
+    for (full_path, caps) in &inferred {
+        if !full_path.starts_with(&format!("{workspace_name}::")) {
+            continue;
+        }
+        let short_name = full_path.rsplit("::").next().unwrap_or(full_path);
+        if short_name.starts_with("rvs_") {
+            continue;
+        }
+        if short_name.starts_with(|c: char| c.is_ascii_uppercase()) {
+            continue;
+        }
+        if short_name == "main" || short_name == "new" || short_name == "drop" {
+            continue;
+        }
+        if callgraph.get(full_path).is_some_and(|b| b.is_trait_impl) {
+            skip_names.insert(short_name.to_string());
+            continue;
+        }
+        let caps_str: String = caps.rvs_iter().map(|c| c.rvs_as_char()).collect();
+        let new_name = if caps_str.is_empty() {
+            format!("rvs_{short_name}")
+        } else {
+            format!("rvs_{short_name}_{caps_str}")
+        };
+        renames.push((short_name.to_string(), new_name));
+    }
+
+    renames.retain(|(name, _)| !skip_names.contains(name));
+    renames.sort();
+    renames.dedup();
+
+    if renames.is_empty() {
+        println!("No functions to annotate.");
+        return Ok(());
+    }
+
+    let rename_map: HashMap<String, String> = renames.into_iter().collect();
+    let files_changed = rename::rvs_apply_ra_renames_BIS(path, &rename_map)?;
+
+    println!(
+        "Annotate complete: renamed {} function(s) in {} file(s).",
+        rename_map.len(),
+        files_changed
+    );
+    Ok(())
+}
+
 /// # Panics
 ///
 /// Panics if the current executable path, current directory, or cargo cannot be resolved.
@@ -749,7 +844,7 @@ fn rvs_run_infer_capsmap_BIMPS(
 
     let seed = rvs_load_seed_capsmap_BIMS(path, seed_capsmap);
 
-    let inferred = rvs_infer_caps_M(callgraph, &seed);
+    let inferred = rvs_infer_caps_M(&callgraph, &seed);
 
     let result = rvs_format_capsmap(&inferred);
     let default_path = path.join("target").join("rivus-inferred-capsmap.txt");
@@ -778,6 +873,7 @@ fn rvs_merge_callgraph_dir_BI(cg_dir: &Path) -> Result<BTreeMap<String, ParsedFn
                     has_static_ref: false,
                     has_static_mut_ref: false,
                     has_thread_local_ref: false,
+                    is_trait_impl: false,
                 });
                 existing.calls.extend(behavior.calls);
                 existing.has_async |= behavior.has_async;
@@ -788,6 +884,7 @@ fn rvs_merge_callgraph_dir_BI(cg_dir: &Path) -> Result<BTreeMap<String, ParsedFn
                 existing.has_static_ref |= behavior.has_static_ref;
                 existing.has_static_mut_ref |= behavior.has_static_mut_ref;
                 existing.has_thread_local_ref |= behavior.has_thread_local_ref;
+                existing.is_trait_impl |= behavior.is_trait_impl;
             }
         }
     }
@@ -842,7 +939,7 @@ fn rvs_run_infer_std_BIMPS(path: &Path, output: Option<&Path>) -> Result<(), Str
 
     let seed = rvs_load_seed_capsmap_BIMS(path, &path.join("caps"));
 
-    let inferred = rvs_infer_caps_M(callgraph, &seed);
+    let inferred = rvs_infer_caps_M(&callgraph, &seed);
 
     let result = rvs_format_capsmap(&inferred);
     let default_path = path.join("target").join("rivus-std-capsmap.txt");
@@ -890,6 +987,7 @@ struct ParsedFnBehavior {
     has_static_ref: bool,
     has_static_mut_ref: bool,
     has_thread_local_ref: bool,
+    is_trait_impl: bool,
 }
 
 impl From<JsonFnBehavior> for ParsedFnBehavior {
@@ -904,17 +1002,18 @@ impl From<JsonFnBehavior> for ParsedFnBehavior {
             has_static_ref: j.has_static_ref,
             has_static_mut_ref: j.has_static_mut_ref,
             has_thread_local_ref: j.has_thread_local_ref,
+            is_trait_impl: j.is_trait_impl,
         }
     }
 }
 
 fn rvs_infer_caps_M(
-    callgraph: BTreeMap<String, ParsedFnBehavior>,
+    callgraph: &BTreeMap<String, ParsedFnBehavior>,
     seed: &capsmap::CapsMap,
 ) -> BTreeMap<String, CapabilitySet> {
     let mut inferred: BTreeMap<String, CapabilitySet> = BTreeMap::new();
 
-    for (func, behavior) in &callgraph {
+    for (func, behavior) in callgraph {
         if let Some(caps) = seed.rvs_lookup(func) {
             inferred.insert(func.clone(), caps.clone());
         } else {
@@ -959,7 +1058,7 @@ fn rvs_infer_caps_M(
     let mut changed = true;
     while changed {
         changed = false;
-        for (caller, behavior) in &callgraph {
+        for (caller, behavior) in callgraph {
             let mut combined = inferred
                 .get(caller)
                 .cloned()
@@ -1213,6 +1312,7 @@ mod tests {
             has_static_ref: false,
             has_static_mut_ref: false,
             has_thread_local_ref: false,
+            is_trait_impl: false,
         }
     }
 
@@ -1220,7 +1320,7 @@ mod tests {
     fn test_20260609_infer_caps_empty_callgraph() {
         let callgraph: BTreeMap<String, ParsedFnBehavior> = BTreeMap::new();
         let seed = capsmap::CapsMap::rvs_new();
-        let result = rvs_infer_caps_M(callgraph, &seed);
+        let result = rvs_infer_caps_M(&callgraph, &seed);
         rvs_snapshot(
             "test_20260609_infer_caps_empty_callgraph",
             &format!("{result:?}"),
@@ -1233,7 +1333,7 @@ mod tests {
         let mut callgraph: BTreeMap<String, ParsedFnBehavior> = BTreeMap::new();
         callgraph.insert("my_crate::rvs_add".into(), rvs_make_behavior());
         let seed = capsmap::CapsMap::rvs_new();
-        let result = rvs_infer_caps_M(callgraph, &seed);
+        let result = rvs_infer_caps_M(&callgraph, &seed);
         let output = rvs_format_capsmap(&result);
         rvs_snapshot("test_20260609_infer_caps_single_pure", &output);
         // Pure function: no caps inferred, so it should be absent from the result
@@ -1251,7 +1351,7 @@ mod tests {
         behavior.has_panic = true;
         callgraph.insert("my_crate::rvs_divide_P".into(), behavior);
         let seed = capsmap::CapsMap::rvs_new();
-        let result = rvs_infer_caps_M(callgraph, &seed);
+        let result = rvs_infer_caps_M(&callgraph, &seed);
         let output = rvs_format_capsmap(&result);
         rvs_snapshot("test_20260609_infer_caps_single_panic", &output);
         let caps = result
@@ -1268,7 +1368,7 @@ mod tests {
         behavior.has_static_ref = true;
         callgraph.insert("my_crate::rvs_get_env_S".into(), behavior);
         let seed = capsmap::CapsMap::rvs_new();
-        let result = rvs_infer_caps_M(callgraph, &seed);
+        let result = rvs_infer_caps_M(&callgraph, &seed);
         let output = rvs_format_capsmap(&result);
         rvs_snapshot("test_20260609_infer_caps_single_static_ref", &output);
         let caps = result
@@ -1285,7 +1385,7 @@ mod tests {
         behavior.has_unsafe_block = true;
         callgraph.insert("my_crate::rvs_ffi_call_U".into(), behavior);
         let seed = capsmap::CapsMap::rvs_new();
-        let result = rvs_infer_caps_M(callgraph, &seed);
+        let result = rvs_infer_caps_M(&callgraph, &seed);
         let output = rvs_format_capsmap(&result);
         rvs_snapshot("test_20260609_infer_caps_single_unsafe_block", &output);
         let caps = result
@@ -1308,7 +1408,7 @@ mod tests {
         // Seed says read_to_string has BI
         let seed = capsmap::CapsMap::rvs_parse("std::fs::read_to_string=BI").unwrap();
 
-        let result = rvs_infer_caps_M(callgraph, &seed);
+        let result = rvs_infer_caps_M(&callgraph, &seed);
         let output = rvs_format_capsmap(&result);
         rvs_snapshot(
             "test_20260609_infer_caps_propagation_caller_gets_io",
@@ -1340,7 +1440,7 @@ mod tests {
 
         let seed = capsmap::CapsMap::rvs_parse("my_crate::C=S").unwrap();
 
-        let result = rvs_infer_caps_M(callgraph, &seed);
+        let result = rvs_infer_caps_M(&callgraph, &seed);
         let output = rvs_format_capsmap(&result);
         rvs_snapshot("test_20260609_infer_caps_propagation_chain", &output);
 
@@ -1358,7 +1458,7 @@ mod tests {
         callgraph.insert("my_crate::rvs_loop".into(), behavior);
 
         let seed = capsmap::CapsMap::rvs_new();
-        let result = rvs_infer_caps_M(callgraph, &seed);
+        let result = rvs_infer_caps_M(&callgraph, &seed);
         let output = rvs_format_capsmap(&result);
         rvs_snapshot("test_20260609_infer_caps_cycle_self_recursive", &output);
 
@@ -1382,7 +1482,7 @@ mod tests {
         callgraph.insert("my_crate::B".into(), b_behavior);
 
         let seed = capsmap::CapsMap::rvs_new();
-        let result = rvs_infer_caps_M(callgraph, &seed);
+        let result = rvs_infer_caps_M(&callgraph, &seed);
         let output = rvs_format_capsmap(&result);
         rvs_snapshot("test_20260609_infer_caps_cycle_mutual_recursion", &output);
 
@@ -1401,7 +1501,7 @@ mod tests {
         callgraph.insert("my_crate::rvs_read_BI".into(), behavior);
 
         let seed = capsmap::CapsMap::rvs_parse("my_crate::rvs_read_BI=BI").unwrap();
-        let result = rvs_infer_caps_M(callgraph, &seed);
+        let result = rvs_infer_caps_M(&callgraph, &seed);
         let output = rvs_format_capsmap(&result);
         rvs_snapshot("test_20260609_infer_caps_seed_override", &output);
 
@@ -1429,7 +1529,7 @@ mod tests {
         callgraph.insert("my_crate::rvs_write_db_ABM".into(), behavior);
 
         let seed = capsmap::CapsMap::rvs_new();
-        let result = rvs_infer_caps_M(callgraph, &seed);
+        let result = rvs_infer_caps_M(&callgraph, &seed);
         let output = rvs_format_capsmap(&result);
         rvs_snapshot("test_20260609_infer_caps_rvs_suffix_from_name", &output);
 
@@ -1500,7 +1600,8 @@ mod tests {
                 "has_panic": false,
                 "has_static_ref": false,
                 "has_static_mut_ref": false,
-                "has_thread_local_ref": false
+                "has_thread_local_ref": false,
+                "is_trait_impl": false
             },
             "my_crate::rvs_write_BI": {
                 "calls": ["std::fs::write"],
@@ -1511,7 +1612,8 @@ mod tests {
                 "has_panic": true,
                 "has_static_ref": false,
                 "has_static_mut_ref": false,
-                "has_thread_local_ref": false
+                "has_thread_local_ref": false,
+                "is_trait_impl": false
             }
         }"#;
         let result = rvs_parse_callgraph(json).unwrap();

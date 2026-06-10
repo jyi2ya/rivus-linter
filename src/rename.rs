@@ -1,13 +1,16 @@
 //! Workspace-level rename operations for strip and annotate commands.
 //!
 //! Uses rust-analyzer's `ra_ap_*` crates to load the full workspace,
-//! find all `rvs_` function definitions, and perform semantic renames
+//! find all function definitions, and perform semantic renames
 //! that correctly update all references (including trait impls, macros, etc.).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use ra_ap_ide::{AnalysisHost, FileStructureConfig, StructureNodeKind};
+use ra_ap_ide::{
+    AnalysisHost, FilePosition, FileStructureConfig, Indel, RenameConfig, SourceChange,
+    StructureNodeKind,
+};
 use ra_ap_ide_db::SymbolKind;
 use ra_ap_load_cargo::{LoadCargoConfig, ProcMacroServerChoice, load_workspace_at};
 use ra_ap_project_model::{CargoConfig, RustLibSource};
@@ -29,6 +32,7 @@ pub fn rvs_strip_BIS(path: &Path) -> Result<(), String> {
 
     let cargo_config = CargoConfig {
         sysroot: Some(RustLibSource::Discover),
+        set_test: true,
         ..CargoConfig::default()
     };
     let load_config = LoadCargoConfig {
@@ -145,11 +149,167 @@ pub fn rvs_strip_BIS(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Annotates all functions with `rvs_` prefix and capability suffix.
-///
-/// Currently a stub — will be implemented after strip works.
-pub fn rvs_annotate_BIS(_path: &Path) -> Result<(), String> {
-    Err("annotate not yet implemented".into())
+pub fn rvs_apply_ra_renames_BIS(
+    path: &Path,
+    rename_map: &HashMap<String, String>,
+) -> Result<usize, String> {
+    let canonical_path = path
+        .canonicalize()
+        .map_err(|e| format!("cannot canonicalize '{}': {e}", path.display()))?;
+
+    let cargo_config = CargoConfig {
+        sysroot: Some(RustLibSource::Discover),
+        set_test: true,
+        ..CargoConfig::default()
+    };
+    let load_config = LoadCargoConfig {
+        load_out_dirs_from_check: true,
+        with_proc_macro_server: ProcMacroServerChoice::Sysroot,
+        prefill_caches: true,
+        num_worker_threads: 0,
+        proc_macro_processes: 1,
+    };
+
+    let (db, vfs, _proc_macro) =
+        load_workspace_at(&canonical_path, &cargo_config, &load_config, &|_| {})
+            .map_err(|e| format!("failed to load workspace: {e}"))?;
+
+    let host = AnalysisHost::with_database(db);
+    let analysis = host.analysis();
+
+    let mut file_edits: HashMap<PathBuf, Vec<Indel>> = HashMap::new();
+
+    for (file_id, vfs_path) in vfs.iter() {
+        let raw_path = match vfs_path.as_path() {
+            Some(p) => p,
+            None => continue,
+        };
+        let abs_path: &Path = raw_path.as_ref();
+        if !abs_path.to_string_lossy().ends_with(".rs") {
+            continue;
+        }
+        if !rvs_is_local_file(abs_path, &canonical_path) {
+            continue;
+        }
+
+        let structure_config = FileStructureConfig {
+            exclude_locals: true,
+        };
+        let nodes = match analysis.file_structure(&structure_config, file_id) {
+            Ok(nodes) => nodes,
+            Err(_) => continue,
+        };
+
+        let source = match std::fs::read_to_string(abs_path) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+
+        let mut trait_impl_ranges: Vec<ra_ap_ide::TextRange> = Vec::new();
+        for node in &nodes {
+            if let StructureNodeKind::SymbolKind(SymbolKind::Impl) = node.kind {
+                if node.label.contains(" for ") {
+                    trait_impl_ranges.push(node.node_range);
+                }
+            }
+        }
+
+        for node in &nodes {
+            match node.kind {
+                StructureNodeKind::SymbolKind(sym) => {
+                    if !matches!(sym, SymbolKind::Function | SymbolKind::Method) {
+                        continue;
+                    }
+                }
+                _ => continue,
+            }
+
+            let nav_start = u32::from(node.navigation_range.start()) as usize;
+            let nav_end = u32::from(node.navigation_range.end()) as usize;
+
+            if nav_end > source.len() {
+                continue;
+            }
+            let name = source.get(nav_start..nav_end).unwrap_or("");
+
+            if name.starts_with("rvs_") {
+                continue;
+            }
+
+            if trait_impl_ranges
+                .iter()
+                .any(|r| r.contains_range(node.navigation_range))
+            {
+                continue;
+            }
+
+            let Some(new_name) = rename_map.get(name) else {
+                continue;
+            };
+
+            let position = FilePosition {
+                file_id,
+                offset: node.navigation_range.start(),
+            };
+            let rename_config = RenameConfig {
+                prefer_no_std: false,
+                prefer_prelude: true,
+                prefer_absolute: false,
+                show_conflicts: false,
+            };
+            match analysis.rename(position, new_name.as_str(), &rename_config) {
+                Ok(Ok(source_change)) => {
+                    rvs_collect_edits(&source_change, &vfs, &mut file_edits);
+                }
+                Ok(Err(e)) => {
+                    eprintln!("warning: RA cannot rename '{name}' -> '{new_name}': {e}");
+                }
+                Err(e) => {
+                    eprintln!("warning: RA rename failed for '{name}': {e}");
+                }
+            }
+        }
+    }
+
+    let mut files_changed = 0usize;
+    for (file_path, mut edits) in file_edits {
+        edits.sort_by_key(|e| std::cmp::Reverse(u32::from(e.delete.start())));
+        let mut text = std::fs::read_to_string(&file_path)
+            .map_err(|e| format!("cannot read {}: {e}", file_path.display()))?;
+        for edit in &edits {
+            let start: usize = u32::from(edit.delete.start()) as usize;
+            let end: usize = u32::from(edit.delete.end()) as usize;
+            if end <= text.len() {
+                text.replace_range(start..end, &edit.insert);
+            }
+        }
+        std::fs::write(&file_path, &text)
+            .map_err(|e| format!("cannot write {}: {e}", file_path.display()))?;
+        files_changed += 1;
+    }
+
+    Ok(files_changed)
+}
+
+fn rvs_collect_edits(
+    source_change: &SourceChange,
+    vfs: &ra_ap_vfs::Vfs,
+    file_edits: &mut std::collections::HashMap<PathBuf, Vec<Indel>>,
+) {
+    for (&file_id, (text_edit, _snippet)) in &source_change.source_file_edits {
+        let vfs_path = vfs.file_path(file_id);
+        let Some(raw_path) = vfs_path.as_path() else {
+            continue;
+        };
+        let abs_path: &Path = raw_path.as_ref();
+        let indels: Vec<Indel> = text_edit.iter().cloned().collect();
+        if !indels.is_empty() {
+            file_edits
+                .entry(abs_path.to_path_buf())
+                .or_default()
+                .extend(indels);
+        }
+    }
 }
 
 /// Computes the new name for a strip operation.
