@@ -476,12 +476,8 @@ fn rvs_run_report_BIMPS(path: &Path) {
     let abs_report_dir = std::env::current_dir()
         .expect("current dir invalid")
         .join(&report_dir);
-    if report_dir.exists() {
-        let _ = std::fs::remove_dir_all(&report_dir);
-    }
-    if build_dir.exists() {
-        let _ = std::fs::remove_dir_all(&build_dir);
-    }
+    rvs_clean_dir(&report_dir);
+    rvs_clean_dir(&build_dir);
     let mut cmd = Command::new(env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
     cmd.current_dir(path)
         .env("RUSTC_WORKSPACE_WRAPPER", self_path)
@@ -700,6 +696,53 @@ fn rvs_detect_crate_name_BIS(path: &Path) -> Result<String, String> {
     Err("Cargo.toml missing [package].name".into())
 }
 
+fn rvs_clean_dir(path: &Path) {
+    if path.exists() {
+        let _ = std::fs::remove_dir_all(path);
+    }
+}
+
+/// # Panics
+///
+/// Panics if the current executable path, current directory, or cargo cannot be resolved.
+fn rvs_run_cargo_check_for_callgraph_BIMPS(
+    path: &Path,
+    extra_env: Vec<(&str, PathBuf)>,
+) -> Result<BTreeMap<String, ParsedFnBehavior>, String> {
+    let cg_dir = path.join("target").join("rivus-callgraph");
+    let cg_target_dir = path.join("target").join("rivus-build");
+
+    rvs_clean_dir(&cg_dir);
+    rvs_clean_dir(&cg_target_dir);
+
+    let self_path = env::current_exe().expect("current executable path invalid");
+    let abs_cg_dir = std::env::current_dir()
+        .expect("current dir invalid")
+        .join(&cg_dir);
+
+    let mut cmd = Command::new(env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
+    cmd.current_dir(path)
+        .env("RUSTC_WRAPPER", self_path)
+        .env("RIVUS_ENABLED", "1")
+        .env("RIVUS_CALLGRAPH", "1")
+        .env("RIVUS_CALLGRAPH_DIR", &abs_cg_dir);
+    for (key, val) in &extra_env {
+        cmd.env(key, val);
+    }
+    cmd.arg("check").arg("--target-dir").arg(&cg_target_dir);
+
+    let exit_status = cmd
+        .spawn()
+        .expect("could not run cargo")
+        .wait()
+        .expect("failed to wait for cargo?");
+    if !exit_status.success() {
+        return Err("cargo check failed — fix compilation errors first".into());
+    }
+
+    rvs_merge_callgraph_dir_BI(&cg_dir)
+}
+
 /// # Panics
 ///
 /// Panics if the current executable path, current directory, or cargo cannot be resolved.
@@ -708,39 +751,7 @@ fn rvs_run_annotate_BIMPS(path: &Path) -> Result<(), String> {
         return Err(format!("'{}' is not a directory", path.display()));
     }
 
-    let cg_dir = path.join("target").join("rivus-callgraph");
-    let cg_target_dir = path.join("target").join("rivus-build");
-    {
-        let self_path = env::current_exe().expect("current executable path invalid");
-        let abs_cg_dir = std::env::current_dir()
-            .expect("current dir invalid")
-            .join(&cg_dir);
-        if cg_dir.exists() {
-            let _ = std::fs::remove_dir_all(&cg_dir);
-        }
-        if cg_target_dir.exists() {
-            let _ = std::fs::remove_dir_all(&cg_target_dir);
-        }
-        let mut cmd = Command::new(env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
-        cmd.current_dir(path)
-            .env("RUSTC_WRAPPER", self_path)
-            .env("RIVUS_ENABLED", "1")
-            .env("RIVUS_CALLGRAPH", "1")
-            .env("RIVUS_CALLGRAPH_DIR", abs_cg_dir)
-            .arg("check")
-            .arg("--target-dir")
-            .arg(&cg_target_dir);
-        let exit_status = cmd
-            .spawn()
-            .expect("could not run cargo")
-            .wait()
-            .expect("failed to wait for cargo?");
-        if !exit_status.success() {
-            return Err("cargo check failed — fix compilation errors first".into());
-        }
-    }
-
-    let callgraph = rvs_merge_callgraph_dir_BI(&cg_dir)?;
+    let callgraph = rvs_run_cargo_check_for_callgraph_BIMPS(path, vec![])?;
 
     let seed_path = path.join("capsmap.txt");
     let seed = rvs_load_seed_capsmap_BIMS(path, &seed_path);
@@ -810,47 +821,16 @@ fn rvs_run_infer_capsmap_BIMPS(
         return Err(format!("'{}' is not a directory", path.display()));
     }
 
-    let cg_dir = path.join("target").join("rivus-callgraph");
-    let cg_target_dir = path.join("target").join("rivus-build");
-    {
-        let self_path = env::current_exe().expect("current executable path invalid");
-        let abs_seed = if seed_capsmap.is_absolute() {
-            seed_capsmap.to_path_buf()
-        } else {
-            std::env::current_dir()
-                .expect("current dir invalid")
-                .join(seed_capsmap)
-        };
-        let abs_cg_dir = std::env::current_dir()
+    let abs_seed = if seed_capsmap.is_absolute() {
+        seed_capsmap.to_path_buf()
+    } else {
+        std::env::current_dir()
             .expect("current dir invalid")
-            .join(&cg_dir);
-        if cg_dir.exists() {
-            let _ = std::fs::remove_dir_all(&cg_dir);
-        }
-        if cg_target_dir.exists() {
-            let _ = std::fs::remove_dir_all(&cg_target_dir);
-        }
-        let mut cmd = Command::new(env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
-        cmd.current_dir(path)
-            .env("RUSTC_WRAPPER", self_path)
-            .env("RIVUS_ENABLED", "1")
-            .env("RIVUS_CALLGRAPH", "1")
-            .env("RIVUS_CALLGRAPH_DIR", abs_cg_dir)
-            .env("RIVUS_CAPSMAP", abs_seed)
-            .arg("check")
-            .arg("--target-dir")
-            .arg(&cg_target_dir);
-        let exit_status = cmd
-            .spawn()
-            .expect("could not run cargo")
-            .wait()
-            .expect("failed to wait for cargo?");
-        if !exit_status.success() {
-            return Err("cargo check failed — fix compilation errors first".into());
-        }
-    }
+            .join(seed_capsmap)
+    };
 
-    let callgraph = rvs_merge_callgraph_dir_BI(&cg_dir)?;
+    let callgraph =
+        rvs_run_cargo_check_for_callgraph_BIMPS(path, vec![("RIVUS_CAPSMAP", abs_seed)])?;
 
     let seed = rvs_load_seed_capsmap_BIMS(path, seed_capsmap);
 
@@ -915,28 +895,7 @@ fn rvs_merge_callgraph_dir_BI(cg_dir: &Path) -> Result<BTreeMap<String, ParsedFn
                 .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
             let partial = rvs_parse_callgraph(&json_str)?;
             for (func, behavior) in partial {
-                let existing = merged.entry(func).or_insert_with(|| ParsedFnBehavior {
-                    calls: BTreeSet::new(),
-                    has_async: false,
-                    has_unsafe_block: false,
-                    is_unsafe_fn: false,
-                    has_mut_param: false,
-                    has_panic: false,
-                    has_static_ref: false,
-                    has_static_mut_ref: false,
-                    has_thread_local_ref: false,
-                    is_trait_impl: false,
-                });
-                existing.calls.extend(behavior.calls);
-                existing.has_async |= behavior.has_async;
-                existing.has_unsafe_block |= behavior.has_unsafe_block;
-                existing.is_unsafe_fn |= behavior.is_unsafe_fn;
-                existing.has_mut_param |= behavior.has_mut_param;
-                existing.has_panic |= behavior.has_panic;
-                existing.has_static_ref |= behavior.has_static_ref;
-                existing.has_static_mut_ref |= behavior.has_static_mut_ref;
-                existing.has_thread_local_ref |= behavior.has_thread_local_ref;
-                existing.is_trait_impl |= behavior.is_trait_impl;
+                merged.entry(func).or_default().rvs_merge_M(&behavior);
             }
         }
     }
@@ -1035,7 +994,7 @@ fn rvs_parse_callgraph(json: &str) -> Result<BTreeMap<String, ParsedFnBehavior>,
     Ok(raw.into_iter().map(|(k, v)| (k, v.into())).collect())
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct ParsedFnBehavior {
     calls: BTreeSet<String>,
     has_async: bool,
@@ -1047,6 +1006,21 @@ struct ParsedFnBehavior {
     has_static_mut_ref: bool,
     has_thread_local_ref: bool,
     is_trait_impl: bool,
+}
+
+impl ParsedFnBehavior {
+    fn rvs_merge_M(&mut self, other: &Self) {
+        self.calls.extend(other.calls.iter().cloned());
+        self.has_async |= other.has_async;
+        self.has_unsafe_block |= other.has_unsafe_block;
+        self.is_unsafe_fn |= other.is_unsafe_fn;
+        self.has_mut_param |= other.has_mut_param;
+        self.has_panic |= other.has_panic;
+        self.has_static_ref |= other.has_static_ref;
+        self.has_static_mut_ref |= other.has_static_mut_ref;
+        self.has_thread_local_ref |= other.has_thread_local_ref;
+        self.is_trait_impl |= other.is_trait_impl;
+    }
 }
 
 impl From<JsonFnBehavior> for ParsedFnBehavior {
