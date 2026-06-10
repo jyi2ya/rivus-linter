@@ -45,6 +45,7 @@ pub const CLIPPY_LINTS: &[(&str, &str)] = &[
 
 pub const SPAWN_CAPSMAP_ENTRIES: &[(&str, &str)] = &[
     ("tokio::spawn", "AS"),
+    ("tokio::runtime::spawn", "AS"),
     ("tokio::task::spawn", "AS"),
     ("tokio::task::spawn_blocking", "BIS"),
     ("tokio::task::spawn_local", "AST"),

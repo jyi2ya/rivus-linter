@@ -133,7 +133,7 @@ struct Cli {
 enum Commands {
     /// Check capability compliance via rustc plugin (cargo check)
     Check {
-        /// Path to capsmap file (default: capsmap.txt in current directory)
+        /// Path to capsmap file or directory
         #[arg(short = 'm', long = "capsmap")]
         capsmap: Option<PathBuf>,
         /// Extra cargo check args
@@ -897,6 +897,7 @@ fn rvs_infer_caps_M(
                 caps.rvs_insert_M(Capability::S);
             }
             if behavior.has_thread_local_ref {
+                caps.rvs_insert_M(Capability::S);
                 caps.rvs_insert_M(Capability::T);
             }
             if !caps.rvs_is_empty() {

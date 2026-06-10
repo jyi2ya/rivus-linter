@@ -1,10 +1,11 @@
-count: 9
+count: 10
 HashMap::new=
 
 # ─── 非结构化 spawn 函数（并发 goto）─────────────────────────
 # spawn 创建的后台任务不受调用方作用域约束，容易导致资源泄漏、错误丢失。
 # 应改用 join!、JoinSet、FuturesUnordered、thread::scope 等结构化并发原语。
 tokio::spawn=AS
+tokio::runtime::spawn=AS
 tokio::task::spawn=AS
 tokio::task::spawn_blocking=BIS
 tokio::task::spawn_local=AST
