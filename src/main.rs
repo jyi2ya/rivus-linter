@@ -32,12 +32,14 @@ use serde::Deserialize;
 mod capability;
 mod capsmap;
 mod lints;
+mod rename;
 mod setup;
 
 use capability::{Capability, CapabilitySet};
 use setup::{rvs_inject_clippy_lints_M, rvs_inject_spawn_capsmap_M};
 
 const RIVUS_MD: &str = include_str!("../rivus.md");
+const RIVUS_MANUAL: &str = include_str!("rivus-manual.md");
 
 // ─── Driver mode ─────────────────────────────────────────────────────────
 
@@ -164,6 +166,18 @@ enum Commands {
         #[arg(short = 'o', long = "output")]
         output: Option<PathBuf>,
     },
+    /// Strip rvs_ prefix and capability suffix from all functions
+    Strip {
+        /// Path to project directory (must contain Cargo.toml)
+        #[arg(default_value = ".")]
+        path: PathBuf,
+    },
+    /// Infer capabilities and add rvs_ prefix and capability suffix to all functions
+    Annotate {
+        /// Path to project directory (must contain Cargo.toml)
+        #[arg(default_value = ".")]
+        path: PathBuf,
+    },
     /// Infer capsmap for std/core/alloc via -Zbuild-std (requires nightly)
     InferStd {
         /// Path to project directory (must contain Cargo.toml)
@@ -173,6 +187,8 @@ enum Commands {
         #[arg(short = 'o', long = "output")]
         output: Option<PathBuf>,
     },
+    /// Display the detailed tool manual
+    Usage,
 }
 
 fn main() -> ExitCode {
@@ -180,7 +196,17 @@ fn main() -> ExitCode {
         return rvs_run_driver_BIMPS();
     }
 
-    let cli = Cli::parse();
+    // Cargo subcommands: `cargo rivus check` invokes `cargo-rivus rivus check`.
+    // Strip the leading "rivus" arg so clap sees the real subcommand.
+    let raw_args: Vec<String> = env::args().collect();
+    let filtered_args: Vec<String> = if raw_args.get(1).map(|s| s.as_str()) == Some("rivus") {
+        let mut v = raw_args;
+        v.remove(1);
+        v
+    } else {
+        raw_args
+    };
+    let cli = Cli::parse_from(filtered_args);
 
     match cli.command {
         None => {
@@ -214,6 +240,21 @@ fn main() -> ExitCode {
                 eprintln!("Error: {e}");
                 return ExitCode::from(2u8);
             }
+        }
+        Some(Commands::Strip { path }) => {
+            if let Err(e) = rename::rvs_strip_BIS(&path) {
+                eprintln!("Error: {e}");
+                return ExitCode::from(2u8);
+            }
+        }
+        Some(Commands::Annotate { path }) => {
+            if let Err(e) = rename::rvs_annotate_BIS(&path) {
+                eprintln!("Error: {e}");
+                return ExitCode::from(2u8);
+            }
+        }
+        Some(Commands::Usage) => {
+            print!("{RIVUS_MANUAL}");
         }
     }
     ExitCode::SUCCESS
