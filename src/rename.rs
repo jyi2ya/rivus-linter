@@ -179,6 +179,7 @@ fn rvs_is_local_file(file_path: &Path, workspace_root: &Path) -> bool {
     file_path.starts_with(workspace_root)
 }
 
+
 #[cfg(test)]
 mod tests {
     use super::*;
