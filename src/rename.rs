@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use ra_ap_ide::{AnalysisHost, FileStructureConfig, StructureNodeKind};
 use ra_ap_ide_db::SymbolKind;
 use ra_ap_load_cargo::{LoadCargoConfig, ProcMacroServerChoice, load_workspace_at};
-use ra_ap_project_model::CargoConfig;
+use ra_ap_project_model::{CargoConfig, RustLibSource};
 
 /// Strips `rvs_` prefix and capability suffix from all `rvs_` functions in the
 /// workspace at `path`, renaming them to their plain base names.
@@ -27,10 +27,13 @@ pub fn rvs_strip_BIS(path: &Path) -> Result<(), String> {
         .canonicalize()
         .map_err(|e| format!("cannot canonicalize '{}': {e}", path.display()))?;
 
-    let cargo_config = CargoConfig::default();
+    let cargo_config = CargoConfig {
+        sysroot: Some(RustLibSource::Discover),
+        ..CargoConfig::default()
+    };
     let load_config = LoadCargoConfig {
-        load_out_dirs_from_check: false,
-        with_proc_macro_server: ProcMacroServerChoice::None,
+        load_out_dirs_from_check: true,
+        with_proc_macro_server: ProcMacroServerChoice::Sysroot,
         prefill_caches: true,
         num_worker_threads: 0,
         proc_macro_processes: 1,
@@ -178,7 +181,6 @@ fn rvs_is_local_file(file_path: &Path, workspace_root: &Path) -> bool {
     // Files under the workspace root are local
     file_path.starts_with(workspace_root)
 }
-
 
 #[cfg(test)]
 mod tests {
