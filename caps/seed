@@ -10,9 +10,7 @@ core::result::unwrap_failed=P
 core::option::expect_failed=P
 
 # ─── Raw allocation ──────────────────────────────
-alloc::raw_vec::finish=U
-alloc::raw_vec::reserve_for_push=U
-alloc::raw_vec::handle_reserve=U
+alloc::raw_vec::finish_grow=U
 alloc::alloc::alloc=U
 alloc::alloc::dealloc=U
 alloc::alloc::realloc=U
@@ -67,7 +65,7 @@ core::future::into_future::IntoFuture::into_future=
 core::future::future::Future::poll=
 core::task::Poll::Ready=
 core::task::Context::from_waker=
-core::pin::impl::new_unchecked=
+core::pin::impl::new_unchecked=U
 core::future::get_context=
 # Generator/coroutine internals
 Generator::resume=
@@ -192,33 +190,34 @@ alloc::borrow::impl::into_owned=
 tokio::runtime::spawn=AS
 
 # ─── FFI math functions (f128) ─────────────────────────
-# These call C library functions via FFI. Marked U (unsafe FFI).
-std::sys::cmath::acosf128=U
-std::sys::cmath::acoshf128=U
-std::sys::cmath::asinf128=U
-std::sys::cmath::asinhf128=U
-std::sys::cmath::atan2f128=U
-std::sys::cmath::atanf128=U
-std::sys::cmath::cbrtf128=U
-std::sys::cmath::coshf128=U
-std::sys::cmath::erfcf128=U
-std::sys::cmath::erff128=U
-std::sys::cmath::expm1f128=U
-std::sys::cmath::hypotf128=U
-std::sys::cmath::lgammaf128_r=U
-std::sys::cmath::log1pf128=U
-std::sys::cmath::sinhf128=U
-std::sys::cmath::tanf128=U
-std::sys::cmath::tanhf128=U
-std::sys::cmath::tgammaf128=U
+# These are pub safe fn in unsafe extern "C" blocks (Rust 2024 safe FFI).
+# Callable without unsafe. Pure math, no side effects.
+std::sys::cmath::acosf128=
+std::sys::cmath::acoshf128=
+std::sys::cmath::asinf128=
+std::sys::cmath::asinhf128=
+std::sys::cmath::atan2f128=
+std::sys::cmath::atanf128=
+std::sys::cmath::cbrtf128=
+std::sys::cmath::coshf128=
+std::sys::cmath::erfcf128=
+std::sys::cmath::erff128=
+std::sys::cmath::expm1f128=
+std::sys::cmath::hypotf128=
+std::sys::cmath::lgammaf128_r=
+std::sys::cmath::log1pf128=
+std::sys::cmath::sinhf128=
+std::sys::cmath::tanf128=
+std::sys::cmath::tanhf128=
+std::sys::cmath::tgammaf128=
 
 # ─── Allocator internals ───────────────────────────────
-# allocate performs unsafe memory allocation
-core::alloc::Allocator::allocate=U
+# allocate is a safe trait method returning Result — not unsafe
+core::alloc::Allocator::allocate=
 
 # ─── Raw fd conversion ────────────────────────────────
-# into_raw_fd transfers ownership of a file descriptor (unsafe)
-std::os::fd::raw::IntoRawFd::into_raw_fd=U
+# into_raw_fd is a safe trait method — not unsafe
+std::os::fd::raw::IntoRawFd::into_raw_fd=
 std::sys::IntoInner::into_inner=
 
 # ─── Compiler builtins traits ──────────────────────────
@@ -284,43 +283,44 @@ core::slice::sort::stable::quicksort::IsFreeze::is_freeze=
 core::str::pattern::Searcher::haystack=
 
 # ─── FFI math functions (f32/f64) ─────────────────────
-# These call C library functions via FFI. Marked U (unsafe FFI).
-std::sys::cmath::acos=U
-std::sys::cmath::acosf=U
-std::sys::cmath::acosh=U
-std::sys::cmath::acoshf=U
-std::sys::cmath::asin=U
-std::sys::cmath::asinf=U
-std::sys::cmath::asinh=U
-std::sys::cmath::asinhf=U
-std::sys::cmath::atan=U
-std::sys::cmath::atan2=U
-std::sys::cmath::atan2f=U
-std::sys::cmath::atanf=U
-std::sys::cmath::cbrt=U
-std::sys::cmath::cbrtf=U
-std::sys::cmath::cosh=U
-std::sys::cmath::coshf=U
-std::sys::cmath::erf=U
-std::sys::cmath::erfc=U
-std::sys::cmath::erfcf=U
-std::sys::cmath::erff=U
-std::sys::cmath::expm1=U
-std::sys::cmath::expm1f=U
-std::sys::cmath::hypot=U
-std::sys::cmath::hypotf=U
-std::sys::cmath::lgamma_r=U
-std::sys::cmath::lgammaf_r=U
-std::sys::cmath::log1p=U
-std::sys::cmath::log1pf=U
-std::sys::cmath::sinh=U
-std::sys::cmath::sinhf=U
-std::sys::cmath::tan=U
-std::sys::cmath::tanf=U
-std::sys::cmath::tanh=U
-std::sys::cmath::tanhf=U
-std::sys::cmath::tgamma=U
-std::sys::cmath::tgammaf=U
+# These are pub safe fn in unsafe extern "C" blocks (Rust 2024 safe FFI).
+# Callable without unsafe. Pure math, no side effects.
+std::sys::cmath::acos=
+std::sys::cmath::acosf=
+std::sys::cmath::acosh=
+std::sys::cmath::acoshf=
+std::sys::cmath::asin=
+std::sys::cmath::asinf=
+std::sys::cmath::asinh=
+std::sys::cmath::asinhf=
+std::sys::cmath::atan=
+std::sys::cmath::atan2=
+std::sys::cmath::atan2f=
+std::sys::cmath::atanf=
+std::sys::cmath::cbrt=
+std::sys::cmath::cbrtf=
+std::sys::cmath::cosh=
+std::sys::cmath::coshf=
+std::sys::cmath::erf=
+std::sys::cmath::erfc=
+std::sys::cmath::erfcf=
+std::sys::cmath::erff=
+std::sys::cmath::expm1=
+std::sys::cmath::expm1f=
+std::sys::cmath::hypot=
+std::sys::cmath::hypotf=
+std::sys::cmath::lgamma_r=
+std::sys::cmath::lgammaf_r=
+std::sys::cmath::log1p=
+std::sys::cmath::log1pf=
+std::sys::cmath::sinh=
+std::sys::cmath::sinhf=
+std::sys::cmath::tan=
+std::sys::cmath::tanf=
+std::sys::cmath::tanh=
+std::sys::cmath::tanhf=
+std::sys::cmath::tgamma=
+std::sys::cmath::tgammaf=
 
 # ─── Alloc internal traits (pure) ─────────────────────
 alloc::boxed::iter::BoxIter::last=
@@ -384,8 +384,10 @@ core::hash::sip::Sip::d_rounds=
 core::num::imp::dec2flt::common::ByteSlice::parse_digits=
 core::num::imp::dec2flt::common::ByteSlice::read_u64=
 core::num::imp::flt2dec::decoder::DecodableFloat::min_pos_norm_value=
-core::num::imp::libm::cbrt=U
-core::num::imp::libm::cbrtf=U
+# These are pub(crate) safe fn in unsafe extern "C" blocks (Rust 2024 safe FFI).
+# Callable without unsafe. Pure math, no side effects.
+core::num::imp::libm::cbrt=
+core::num::imp::libm::cbrtf=
 core::num::imp::traits::CastInto::cast=
 core::num::imp::traits::Float::classify=
 core::num::imp::traits::Float::to_bits=

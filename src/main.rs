@@ -974,7 +974,11 @@ fn rvs_run_infer_std_BIMPS(path: &Path, output: Option<&Path>) -> Result<(), Str
 
     let callgraph = rvs_merge_callgraph_dir_BI(&cg_dir)?;
 
-    let seed = rvs_load_seed_capsmap_BIMS(path, &path.join("caps"));
+    // Only load the seed file, NOT the entire caps/ directory.
+    // Loading the full caps/ dir would pick up the OLD caps/std from a previous
+    // infer-std run, which defeats the purpose of regenerating.
+    let seed_file = path.join("caps").join("seed");
+    let seed = rvs_load_seed_capsmap_BIMS(path, &seed_file);
 
     let inferred = rvs_infer_caps_M(&callgraph, &seed);
 
