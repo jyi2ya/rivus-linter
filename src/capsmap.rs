@@ -97,9 +97,15 @@ impl CapsMap {
         }
     }
 
-    /// Load all capability files from a directory, merging them in filename order.
-    /// Files named `seed` are loaded first (lowest priority), then alphabetically.
-    /// Later files override earlier entries for the same key.
+    /// Load all capability files from a directory, merging them in layer order.
+    ///
+    /// Layer priority (highest last, overrides earlier):
+    ///   1. seed   — manually maintained low-level overrides (lowest priority)
+    ///   2. std    — auto-generated std/core/alloc caps (overrides seed)
+    ///   3. deps   — auto-generated external dependency caps (overrides std)
+    ///   4. ext    — manually maintained project-specific caps (highest priority)
+    ///
+    /// Files not named seed/std/deps/ext are loaded alphabetically after ext.
     pub fn rvs_load_from_dir_BIMS(dir: &Path) -> Result<Self, CapsMapError> {
         let mut result = Self::rvs_new();
         if !dir.is_dir() {
@@ -116,22 +122,25 @@ impl CapsMap {
                 files.push(path);
             }
         }
-        // Sort: seed first, then alphabetical
+        // Sort: seed first, then std, deps, ext, then alphabetical for others.
+        // Files loaded later override earlier ones (rvs_extend_from_M).
+        const LAYER_ORDER: &[&str] = &["seed", "std", "deps", "ext"];
         files.sort_by(|a, b| {
-            let a_name = match a.file_name() {
-                Some(n) => n.to_string_lossy().into_owned(),
-                None => String::new(),
-            };
-            let b_name = match b.file_name() {
-                Some(n) => n.to_string_lossy().into_owned(),
-                None => String::new(),
-            };
-            let a_is_seed = a_name == "seed";
-            let b_is_seed = b_name == "seed";
-            match (a_is_seed, b_is_seed) {
-                (true, false) => std::cmp::Ordering::Less,
-                (false, true) => std::cmp::Ordering::Greater,
-                _ => a_name.as_str().cmp(b_name.as_str()),
+            let a_name = a
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let b_name = b
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let a_layer = LAYER_ORDER.iter().position(|&n| n == a_name);
+            let b_layer = LAYER_ORDER.iter().position(|&n| n == b_name);
+            match (a_layer, b_layer) {
+                (Some(al), Some(bl)) => al.cmp(&bl),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => a_name.cmp(&b_name),
             }
         });
         for path in &files {

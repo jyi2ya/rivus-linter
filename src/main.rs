@@ -279,16 +279,21 @@ fn rvs_run_cargo_check_BIMPS(capsmap: Option<PathBuf>, extra_args: Vec<String>) 
         };
         cmd.env("RIVUS_CAPSMAP", abs);
     } else {
-        // No user capsmap — pass the linter's built-in caps/ directory
-        if let Some(exe_dir) = self_path.parent() {
-            // caps/ is at the project root, binary is at target/debug/cargo-rivus
-            // Go up from target/debug/ to project root
-            if let Some(project_root) = exe_dir.parent().and_then(|p| p.parent()) {
-                let caps_dir = project_root.join("caps");
-                if caps_dir.is_dir() {
-                    cmd.env("RIVUS_CAPSMAP", caps_dir);
-                }
-            }
+        // No user capsmap — try the project's caps/ directory first,
+        // then fall back to the linter's built-in caps/ directory.
+        let project_caps = std::env::current_dir().ok().map(|cwd| cwd.join("caps"));
+        let project_caps_dir = project_caps.as_ref().filter(|p| p.is_dir());
+
+        let built_in_caps = self_path.parent().and_then(|exe_dir| {
+            exe_dir
+                .parent()
+                .and_then(|p| p.parent())
+                .map(|root| root.join("caps"))
+        });
+        let built_in_caps_dir = built_in_caps.as_ref().filter(|p| p.is_dir());
+
+        if let Some(dir) = project_caps_dir.or(built_in_caps_dir) {
+            cmd.env("RIVUS_CAPSMAP", dir);
         }
     }
 
@@ -907,8 +912,11 @@ fn rvs_run_infer_std_BIMPS(path: &Path, output: Option<&Path>) -> Result<(), Str
         let abs_cg_dir = std::env::current_dir()
             .expect("current dir invalid")
             .join(&cg_dir);
+        // Use RUSTUP_TOOLCHAIN=nightly instead of `+nightly` arg, because
+        // CARGO env var may point to cargo-rivus (our own binary) which
+        // doesn't understand +nightly.
         let mut cmd = Command::new(env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
-        cmd.arg("+nightly")
+        cmd.env("RUSTUP_TOOLCHAIN", "nightly")
             .env("RUSTC_WRAPPER", self_path)
             .env("RIVUS_ENABLED", "1")
             .env("RIVUS_CALLGRAPH", "1")
@@ -937,7 +945,21 @@ fn rvs_run_infer_std_BIMPS(path: &Path, output: Option<&Path>) -> Result<(), Str
 
     let inferred = rvs_infer_caps_M(&callgraph, &seed);
 
-    let result = rvs_format_capsmap(&inferred);
+    // Filter to only std/core/alloc functions with non-empty capability sets.
+    // Exclude project-internal functions, build dummy crates, and pure functions.
+    let crate_name = rvs_detect_crate_name_BIS(path)?;
+    let crate_prefix = format!("{crate_name}::");
+    let std_crates: &[&str] = &["std::", "core::", "alloc::", "compiler_builtins::"];
+    let std_only: BTreeMap<String, CapabilitySet> = inferred
+        .into_iter()
+        .filter(|(name, caps)| {
+            !name.starts_with(&crate_prefix)
+                && !caps.rvs_is_empty()
+                && std_crates.iter().any(|prefix| name.starts_with(prefix))
+        })
+        .collect();
+
+    let result = rvs_format_capsmap(&std_only);
     let default_path = path.join("target").join("rivus-std-capsmap.txt");
     rvs_write_capsmap_result_BIS(&result, &default_path, output, "std capsmap")
 }
