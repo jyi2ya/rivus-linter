@@ -1183,13 +1183,7 @@ fn rvs_infer_caps_M(
             for callee in &behavior.calls {
                 let callee_caps = inferred
                     .get(callee)
-                    .or_else(|| {
-                        let cn = callee.rsplit("::").next().unwrap_or(callee);
-                        inferred
-                            .iter()
-                            .find(|(k, _)| k.ends_with(&format!("::{cn}")))
-                            .map(|(_, v)| v)
-                    })
+                    .or_else(|| seed.rvs_lookup(callee))
                     .cloned();
                 if let Some(cc) = callee_caps {
                     for cap in cc.rvs_iter() {
