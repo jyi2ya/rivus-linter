@@ -846,8 +846,25 @@ fn rvs_run_infer_capsmap_BIMPS(
         .map_err(|e| format!("cannot write {}: {e}", cache_path.display()))?;
 
     let crate_name = rvs_detect_crate_name_BIS(path)?;
-    let direct_external_calls =
+    let (direct_external_calls, unknown_callees) =
         rvs_collect_direct_external_deps(&callgraph, &crate_name, &seed, &inferred);
+
+    if !unknown_callees.is_empty() {
+        let mut msg = String::from(
+            "error: the following external functions have no capability data.\n\
+             Add them to caps/seed or caps/ext with the correct capability markers:\n\n",
+        );
+        for (callee, callers) in &unknown_callees {
+            msg.push_str(&format!("  {callee}=\n"));
+            for caller in callers.iter().take(3) {
+                msg.push_str(&format!("    called by: {caller}\n"));
+            }
+            if callers.len() > 3 {
+                msg.push_str(&format!("    ... and {} more\n", callers.len() - 3));
+            }
+        }
+        return Err(msg);
+    }
 
     let deps_result = rvs_format_capsmap(&direct_external_calls);
     let deps_default_path = path.join("target").join("rivus-deps-capsmap.txt");
@@ -946,18 +963,65 @@ fn rvs_run_infer_std_BIMPS(path: &Path, output: Option<&Path>) -> Result<(), Str
     let inferred = rvs_infer_caps_M(&callgraph, &seed);
 
     // Filter to only std/core/alloc functions with non-empty capability sets.
-    // Exclude project-internal functions, build dummy crates, and pure functions.
     let crate_name = rvs_detect_crate_name_BIS(path)?;
     let crate_prefix = format!("{crate_name}::");
     let std_crates: &[&str] = &["std::", "core::", "alloc::", "compiler_builtins::"];
     let std_only: BTreeMap<String, CapabilitySet> = inferred
-        .into_iter()
+        .iter()
         .filter(|(name, caps)| {
             !name.starts_with(&crate_prefix)
                 && !caps.rvs_is_empty()
                 && std_crates.iter().any(|prefix| name.starts_with(prefix))
         })
+        .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
+
+    // Check for std functions that have callees outside the inferred map.
+    // These are functions whose capabilities could not be fully determined.
+    let mut unknown: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for (func, behavior) in &callgraph {
+        let is_std = std_crates.iter().any(|p| func.starts_with(p));
+        if !is_std {
+            continue;
+        }
+        // Only check std functions that were inferred as pure (empty caps).
+        // If they already have caps, they're fine.
+        if let Some(caps) = inferred.get(func) {
+            if !caps.rvs_is_empty() {
+                continue;
+            }
+        }
+        for callee in &behavior.calls {
+            if inferred.get(callee).is_some() {
+                continue; // callee has known caps (may be empty = truly pure)
+            }
+            if seed.rvs_lookup(callee).is_some() {
+                continue; // callee is in seed
+            }
+            // callee is unknown — can't determine if it contributes capabilities
+            unknown
+                .entry(callee.clone())
+                .or_default()
+                .insert(func.clone());
+        }
+    }
+
+    if !unknown.is_empty() {
+        let mut msg = String::from(
+            "error: the following functions are called by std but have no capability data.\n\
+             Add them to caps/seed with the correct capability markers:\n\n",
+        );
+        for (callee, callers) in &unknown {
+            msg.push_str(&format!("  {callee}=\n"));
+            for caller in callers.iter().take(3) {
+                msg.push_str(&format!("    called by: {caller}\n"));
+            }
+            if callers.len() > 3 {
+                msg.push_str(&format!("    ... and {} more\n", callers.len() - 3));
+            }
+        }
+        return Err(msg);
+    }
 
     let result = rvs_format_capsmap(&std_only);
     let default_path = path.join("target").join("rivus-std-capsmap.txt");
@@ -1139,17 +1203,25 @@ fn rvs_format_capsmap(caps: &BTreeMap<String, CapabilitySet>) -> String {
 ///
 /// For each function in `callgraph` that belongs to `crate_name`, looks at its
 /// callees. If a callee is external (doesn't start with the crate prefix) and
-/// not in the seed capsmap, includes it in the output with its inferred
-/// capabilities. **Unknown callees (not in `inferred`) are skipped** — they
-/// should not be output as "pure" since we have no data about them.
+/// not in the seed capsmap, collects it.
+///
+/// **Errors on unknown callees** (not in `inferred`) — the caller must add
+/// them to seed or ext before proceeding.
+///
+/// Returns (known_deps, unknown_callees) where unknown_callees maps each
+/// unknown callee to a set of callers that reference it.
 fn rvs_collect_direct_external_deps(
     callgraph: &BTreeMap<String, ParsedFnBehavior>,
     crate_name: &str,
     seed: &capsmap::CapsMap,
     inferred: &BTreeMap<String, CapabilitySet>,
-) -> BTreeMap<String, CapabilitySet> {
+) -> (
+    BTreeMap<String, CapabilitySet>,
+    BTreeMap<String, BTreeSet<String>>,
+) {
     let crate_prefix = format!("{crate_name}::");
-    let mut direct_external_calls: BTreeMap<String, CapabilitySet> = BTreeMap::new();
+    let mut known: BTreeMap<String, CapabilitySet> = BTreeMap::new();
+    let mut unknown: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for (func, behavior) in callgraph {
         if !func.starts_with(&crate_prefix) {
             continue;
@@ -1161,17 +1233,17 @@ fn rvs_collect_direct_external_deps(
             if seed.rvs_lookup(callee).is_some() {
                 continue;
             }
-            if !direct_external_calls.contains_key(callee) {
-                if let Some(caps) = inferred.get(callee) {
-                    direct_external_calls.insert(callee.clone(), caps.clone());
-                }
-                // If callee is not in inferred (unknown, no data), skip it.
-                // Do NOT default to empty capability set — that would mean "pure",
-                // but we have no data about this function at all.
+            if let Some(caps) = inferred.get(callee) {
+                known.entry(callee.clone()).or_insert_with(|| caps.clone());
+            } else {
+                unknown
+                    .entry(callee.clone())
+                    .or_default()
+                    .insert(func.clone());
             }
         }
     }
-    direct_external_calls
+    (known, unknown)
 }
 
 #[cfg(test)]
@@ -1720,57 +1792,58 @@ mod tests {
     // ─── rvs_collect_direct_external_deps ────────────────────────────────
 
     #[test]
-    fn test_20260611_unknown_callee_not_output_as_pure() {
-        // Regression: infer-capsmap must NOT output unknown external callees
-        // with empty capability set (= pure function). If we have no data
-        // about a callee, we must skip it entirely.
+    fn test_20260611_unknown_callee_reported_as_error() {
+        // infer-capsmap must report unknown external callees as errors,
+        // not silently skip them or mark them as pure.
         let mut callgraph: BTreeMap<String, ParsedFnBehavior> = BTreeMap::new();
         let mut behavior = rvs_make_behavior();
-        // my_crate::caller calls external "std::time::impl::now" which is
-        // NOT in the callgraph and NOT in the seed.
         behavior.calls.insert("std::time::impl::now".into());
         callgraph.insert("my_crate::caller".into(), behavior);
 
-        let seed = capsmap::CapsMap::rvs_new(); // empty seed
-        let inferred: BTreeMap<String, CapabilitySet> = BTreeMap::new(); // nothing inferred
+        let seed = capsmap::CapsMap::rvs_new();
+        let inferred: BTreeMap<String, CapabilitySet> = BTreeMap::new();
 
-        let result = rvs_collect_direct_external_deps(&callgraph, "my_crate", &seed, &inferred);
+        let (known, unknown) =
+            rvs_collect_direct_external_deps(&callgraph, "my_crate", &seed, &inferred);
 
-        // Must NOT contain std::time::impl::now — we have no data about it
+        assert!(known.is_empty());
         assert!(
-            !result.contains_key("std::time::impl::now"),
-            "unknown callee must not be output as pure function"
+            unknown.contains_key("std::time::impl::now"),
+            "unknown callee must be reported as error"
         );
-        assert!(result.is_empty());
+        assert_eq!(unknown.len(), 1);
+        assert!(unknown["std::time::impl::now"].contains("my_crate::caller"));
     }
 
     #[test]
-    fn test_20260611_inferred_callee_is_output() {
-        // If a callee IS in the inferred map (has actual data), it should be output.
+    fn test_20260611_inferred_callee_is_known() {
+        // If a callee IS in the inferred map, it goes to known, not unknown.
         let mut callgraph: BTreeMap<String, ParsedFnBehavior> = BTreeMap::new();
         let mut behavior = rvs_make_behavior();
         behavior.calls.insert("std::fs::read_to_string".into());
         callgraph.insert("my_crate::caller".into(), behavior);
 
-        let seed = capsmap::CapsMap::rvs_new(); // empty seed
+        let seed = capsmap::CapsMap::rvs_new();
         let mut inferred: BTreeMap<String, CapabilitySet> = BTreeMap::new();
         inferred.insert(
             "std::fs::read_to_string".into(),
             CapabilitySet::rvs_from_validated("BI"),
         );
 
-        let result = rvs_collect_direct_external_deps(&callgraph, "my_crate", &seed, &inferred);
+        let (known, unknown) =
+            rvs_collect_direct_external_deps(&callgraph, "my_crate", &seed, &inferred);
 
-        let caps = result
+        let caps = known
             .get("std::fs::read_to_string")
-            .expect("should have entry");
+            .expect("should have entry in known");
         assert!(caps.rvs_contains(Capability::B));
         assert!(caps.rvs_contains(Capability::I));
+        assert!(unknown.is_empty());
     }
 
     #[test]
     fn test_20260611_seed_callee_is_skipped() {
-        // If a callee is already in the seed, it must be skipped (not duplicated).
+        // If a callee is already in the seed, it's neither known nor unknown.
         let mut callgraph: BTreeMap<String, ParsedFnBehavior> = BTreeMap::new();
         let mut behavior = rvs_make_behavior();
         behavior.calls.insert("std::fs::write".into());
@@ -1779,11 +1852,10 @@ mod tests {
         let seed = capsmap::CapsMap::rvs_parse("std::fs::write=BI").unwrap();
         let inferred: BTreeMap<String, CapabilitySet> = BTreeMap::new();
 
-        let result = rvs_collect_direct_external_deps(&callgraph, "my_crate", &seed, &inferred);
+        let (known, unknown) =
+            rvs_collect_direct_external_deps(&callgraph, "my_crate", &seed, &inferred);
 
-        assert!(
-            !result.contains_key("std::fs::write"),
-            "seed callee must be skipped"
-        );
+        assert!(!known.contains_key("std::fs::write"));
+        assert!(!unknown.contains_key("std::fs::write"));
     }
 }
