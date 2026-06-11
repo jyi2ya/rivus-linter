@@ -92,6 +92,22 @@ fn rvs_run_driver_BIMPS() -> ExitCode {
             args.remove(1);
         }
 
+        // In wrapper mode, replace --cap-lints allow with --cap-lints warn
+        // so our lint pass runs on std/core/alloc (cargo passes --cap-lints
+        // allow for them, which causes rustc to skip the lint pass entirely).
+        // Using --cap-lints warn (not removing entirely) prevents compilation
+        // failures from std's #[deny(...)] attributes.
+        if wrapper_mode {
+            let has_cap_lints_allow = args
+                .windows(2)
+                .any(|w| w[0] == "--cap-lints" && w[1] == "allow");
+            if has_cap_lints_allow {
+                args.retain(|a| a != "--cap-lints" && a != "allow");
+                args.push("--cap-lints".to_string());
+                args.push("warn".to_string());
+            }
+        }
+
         if env::var("RIVUS_ENABLED").is_ok() {
             rustc_driver::run_compiler(&args, &mut RivusCallbacks)
         } else {
@@ -993,12 +1009,15 @@ fn rvs_run_infer_std_BIMPS(path: &Path, output: Option<&Path>) -> Result<(), Str
         }
         for callee in &behavior.calls {
             if inferred.get(callee).is_some() {
-                continue; // callee has known caps (may be empty = truly pure)
+                continue; // callee has known non-empty caps
             }
             if seed.rvs_lookup(callee).is_some() {
                 continue; // callee is in seed
             }
-            // callee is unknown — can't determine if it contributes capabilities
+            if callgraph.contains_key(callee) {
+                continue; // callee is in callgraph — analyzed, inferred as pure
+            }
+            // callee is truly unknown — not in callgraph, not in seed, not inferred
             unknown
                 .entry(callee.clone())
                 .or_default()
