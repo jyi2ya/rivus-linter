@@ -978,7 +978,7 @@ fn rvs_run_infer_std_BIMPS(path: &Path, output: Option<&Path>) -> Result<(), Str
 
     let inferred = rvs_infer_caps_M(&callgraph, &seed);
 
-    // Filter to only std/core/alloc functions with non-empty capability sets.
+    // Build std capsmap from callgraph inference.
     let crate_name = rvs_detect_crate_name_BIS(path)?;
     let crate_prefix = format!("{crate_name}::");
     let std_crates: &[&str] = &["std::", "core::", "alloc::", "compiler_builtins::"];
