@@ -3,7 +3,6 @@
     non_snake_case,
     reason = "rvs_ functions use uppercase capability suffixes"
 )]
-#![expect(dead_code, reason = "test-only API like rvs_len")]
 
 extern crate rustc_ast;
 extern crate rustc_driver;

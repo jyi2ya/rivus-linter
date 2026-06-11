@@ -29,6 +29,10 @@ pub enum CapsMapError {
 }
 
 impl CapsMap {
+    pub fn rvs_len(&self) -> usize {
+        self.entries.len()
+    }
+
     /// 构造一个空的能力映射表。
     pub fn rvs_new() -> Self {
         Self::default()

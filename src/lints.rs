@@ -387,7 +387,6 @@ impl RivusLintPass {
         if self.capsmap.is_some() {
             return;
         }
-        // Highest priority: explicit env var (set by check subcommand)
         if let Ok(path_str) = std::env::var("RIVUS_CAPSMAP") {
             let path = std::path::PathBuf::from(&path_str);
             self.capsmap = Some(if path.is_dir() {
@@ -1259,22 +1258,6 @@ fn rvs_scan_debug_asserts_M<'tcx>(
         }
     });
     out
-}
-
-fn rvs_collect_idents_M(e: &Expr<'_>, out: &mut BTreeSet<String>) {
-    match &e.kind {
-        ExprKind::Path(q) => {
-            if let Some(n) = rvs_plast(q) {
-                out.insert(n);
-            }
-        }
-        ExprKind::Binary(_, l, r) => {
-            rvs_collect_idents_M(l, out);
-            rvs_collect_idents_M(r, out);
-        }
-        ExprKind::Unary(_, x) => rvs_collect_idents_M(x, out),
-        _ => {}
-    }
 }
 
 /// Deeply collect all path idents from an expression tree, recursing into
