@@ -1,0 +1,33 @@
+error: param 'x' missing debug_assert!
+  --> $DIR/tests/ui/151_calls_in_match_guard.rs:4:34
+   |
+LL |   fn rvs_check_ABI(x: i32) -> bool {
+   |  __________________________________^
+LL | |     x > 0
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-missing-debug-assert` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_debug_assert)]`
+
+error: {} → {A, B, I} missing A(Async), B(Blocking), I(IO)
+  --> $DIR/tests/ui/151_calls_in_match_guard.rs:10:14
+   |
+LL |         n if rvs_check_ABI(n) => {}
+   |              ^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(rivus::rvs_call_violation)]` on by default
+
+error: param 'x' missing debug_assert!
+  --> $DIR/tests/ui/151_calls_in_match_guard.rs:8:22
+   |
+LL |   fn rvs_outer(x: i32) {
+   |  ______________________^
+LL | |     match x {
+LL | |         n if rvs_check_ABI(n) => {}
+LL | |         _ => {}
+LL | |     }
+LL | | }
+   | |_^
+
+error: aborting due to 3 previous errors

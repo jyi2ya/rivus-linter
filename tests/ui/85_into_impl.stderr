@@ -1,0 +1,23 @@
+error: type 'Celsius' missing #[derive(Debug)]
+  --> $DIR/tests/ui/85_into_impl.rs:3:1
+   |
+LL | struct Celsius(f64);
+   | ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-missing-debug-derive` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_debug_derive)]`
+
+error: impl Into — implement From instead (Into is auto-provided)
+  --> $DIR/tests/ui/85_into_impl.rs:4:1
+   |
+LL | / impl Into<f64> for Celsius {
+LL | |     fn into(self) -> f64 {
+LL | |         self.0
+LL | |     }
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-into-impl` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_into_impl)]`
+
+error: aborting due to 2 previous errors

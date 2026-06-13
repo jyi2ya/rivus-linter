@@ -1,3 +1,19 @@
+error[E0133]: dereference of raw pointer is unsafe and requires unsafe block
+  --> $DIR/tests/ui/08_infer_unsafe.rs:7:5
+   |
+LL |     *x
+   |     ^^ dereference of raw pointer
+   |
+   = note: raw pointers may be null, dangling or unaligned; they can violate aliasing rules and cause data races: all of these are undefined behavior
+note: an unsafe function restricts its caller, but its body is safe by default
+  --> $DIR/tests/ui/08_infer_unsafe.rs:5:1
+   |
+LL | pub unsafe fn rvs_raw_ptr(x: *const u8) -> u8 {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/unsafe-op-in-unsafe-fn.html>
+   = note: `-D unsafe-op-in-unsafe-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unsafe_op_in_unsafe_fn)]`
+
 error: empty function body
   --> $DIR/tests/ui/08_infer_unsafe.rs:3:1
    |
@@ -9,9 +25,9 @@ LL | fn rvs_add() {}
 error: unsafe code but suffix lacks U
   --> $DIR/tests/ui/08_infer_unsafe.rs:5:1
    |
-LL | / pub fn rvs_raw_ptr(x: *const u8) -> u8 {
+LL | / pub unsafe fn rvs_raw_ptr(x: *const u8) -> u8 {
 LL | |     rvs_add();
-LL | |     unsafe { *x }
+LL | |     *x
 LL | | }
    | |_^
    |
@@ -21,14 +37,26 @@ LL | | }
 error: pub fn 'rvs_raw_ptr' missing /// doc comment
   --> $DIR/tests/ui/08_infer_unsafe.rs:5:1
    |
-LL | / pub fn rvs_raw_ptr(x: *const u8) -> u8 {
+LL | / pub unsafe fn rvs_raw_ptr(x: *const u8) -> u8 {
 LL | |     rvs_add();
-LL | |     unsafe { *x }
+LL | |     *x
 LL | | }
    | |_^
    |
    = note: `-D rivus::rvs-missing-doc` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_doc)]`
+
+error: unsafe fn missing /// # Safety
+  --> $DIR/tests/ui/08_infer_unsafe.rs:5:1
+   |
+LL | / pub unsafe fn rvs_raw_ptr(x: *const u8) -> u8 {
+LL | |     rvs_add();
+LL | |     *x
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-missing-safety-doc` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_safety_doc)]`
 
 error: good fn 'rvs_add' not called by any test
   --> $DIR/tests/ui/08_infer_unsafe.rs:3:1
@@ -42,9 +70,9 @@ LL | fn rvs_add() {}
 error: good fn 'rvs_raw_ptr' not called by any test
   --> $DIR/tests/ui/08_infer_unsafe.rs:5:1
    |
-LL | / pub fn rvs_raw_ptr(x: *const u8) -> u8 {
+LL | / pub unsafe fn rvs_raw_ptr(x: *const u8) -> u8 {
 LL | |     rvs_add();
-LL | |     unsafe { *x }
+LL | |     *x
 LL | | }
    | |_^
 
@@ -57,4 +85,6 @@ LL | #![expect(non_snake_case)]
    = note: `-D unfulfilled-lint-expectations` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(unfulfilled_lint_expectations)]`
 
-error: aborting due to 6 previous errors
+error: aborting due to 8 previous errors
+
+For more information about this error, try `rustc --explain E0133`.

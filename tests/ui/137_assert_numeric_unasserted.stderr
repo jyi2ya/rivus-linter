@@ -1,0 +1,13 @@
+error: param 'x' missing debug_assert!
+  --> $DIR/tests/ui/137_assert_numeric_unasserted.rs:4:43
+   |
+LL |   fn rvs_compute(x: i32, name: &str) -> i32 {
+   |  ___________________________________________^
+LL | |     x + 1
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-missing-debug-assert` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_debug_assert)]`
+
+error: aborting due to 1 previous error

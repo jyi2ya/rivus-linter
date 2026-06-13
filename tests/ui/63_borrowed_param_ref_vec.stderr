@@ -1,0 +1,40 @@
+error: {} → iter (core::slice::iter) ({M}) missing M(Mutable)
+  --> $DIR/tests/ui/63_borrowed_param_ref_vec.rs:4:5
+   |
+LL |     xs.iter().sum()
+   |     ^^^^^^^^^
+   |
+   = note: `#[deny(rivus::rvs_call_violation)]` on by default
+
+error: &Vec — use &[T] instead
+  --> $DIR/tests/ui/63_borrowed_param_ref_vec.rs:3:20
+   |
+LL | pub fn rvs_sum(xs: &Vec<i32>) -> i32 {
+   |                    ^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-borrowed-param` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_borrowed_param)]`
+
+error: pub fn 'rvs_sum' missing /// doc comment
+  --> $DIR/tests/ui/63_borrowed_param_ref_vec.rs:3:1
+   |
+LL | / pub fn rvs_sum(xs: &Vec<i32>) -> i32 {
+LL | |     xs.iter().sum()
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-missing-doc` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_doc)]`
+
+error: good fn 'rvs_sum' not called by any test
+  --> $DIR/tests/ui/63_borrowed_param_ref_vec.rs:3:1
+   |
+LL | / pub fn rvs_sum(xs: &Vec<i32>) -> i32 {
+LL | |     xs.iter().sum()
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
+
+error: aborting due to 4 previous errors

@@ -1,0 +1,9 @@
+error: empty function body
+  --> $DIR/tests/ui/94_all_caps_compliant.rs:3:1
+   |
+LL | fn rvs_write_ABI() {}
+   | ^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(rivus::rvs_empty_fn)]` on by default
+
+error: aborting due to 1 previous error

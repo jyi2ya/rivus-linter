@@ -1,0 +1,10 @@
+error: test 'stale_name' not test_YYYYMMDD_name
+  --> $DIR/tests/ui/139_testname_in_cfg_test_mod.rs:7:5
+   |
+LL |     fn stale_name() {}
+   |     ^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-test-name-format` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_test_name_format)]`
+
+error: aborting due to 1 previous error

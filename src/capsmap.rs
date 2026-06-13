@@ -29,10 +29,6 @@ pub enum CapsMapError {
 }
 
 impl CapsMap {
-    pub fn rvs_len(&self) -> usize {
-        self.entries.len()
-    }
-
     /// 构造一个空的能力映射表。
     pub fn rvs_new() -> Self {
         Self::default()
@@ -65,28 +61,13 @@ impl CapsMap {
         Ok(Self { entries })
     }
 
-    /// 按名索骥：先查全名，再查尾名。
-    /// 全名若 `std::fs::read_to_string`，尾名即 `read_to_string`。
-    /// 路径调用如 `Vec::new` 亦可匹配 `alloc::vec::Vec::new`。
+    /// 按名索骥：精确匹配，不做后缀匹配。
+    ///
+    /// caps 文件中的键必须使用 rustc 给出的 def_path（全限定路径），
+    /// 如 `std::io::Read::read` 或 `core::option::unwrap`。
+    /// 短名只在警告输出时作为辅助信息显示给人类，不参与查找。
     pub fn rvs_lookup(&self, name: &str) -> Option<&CapabilitySet> {
-        if let Some(caps) = self.entries.get(name) {
-            return Some(caps);
-        }
-        for (key, caps) in &self.entries {
-            if name.ends_with(&format!("::{key}")) || key.ends_with(&format!("::{name}")) {
-                return Some(caps);
-            }
-        }
-        None
-    }
-
-    /// 合并两个能力映射表：self 的条目优先，other 的同名键被覆盖。
-    pub fn rvs_merge(self, other: Self) -> Self {
-        let mut entries = other.entries;
-        for (key, caps) in self.entries {
-            entries.insert(key, caps);
-        }
-        Self { entries }
+        self.entries.get(name)
     }
 
     /// Extend this capsmap with entries from another.
@@ -100,12 +81,13 @@ impl CapsMap {
     /// Load all capability files from a directory, merging them in layer order.
     ///
     /// Layer priority (highest last, overrides earlier):
-    ///   1. seed   — manually maintained low-level overrides (lowest priority)
-    ///   2. std    — auto-generated std/core/alloc caps (overrides seed)
-    ///   3. deps   — auto-generated external dependency caps (overrides std)
-    ///   4. ext    — manually maintained project-specific caps (highest priority)
+    ///   1. std      — auto-generated std/core/alloc caps (lowest priority)
+    ///   2. deps     — auto-generated external dependency caps (overrides std)
+    ///   3. seed     — manually maintained low-level overrides (overrides auto-generated)
+    ///   4. suppress — corrections for std/core/alloc functions whose inferred caps are too broad
+    ///   5. ext      — manually maintained project-specific caps (highest priority)
     ///
-    /// Files not named seed/std/deps/ext are loaded alphabetically after ext.
+    /// Files not named std/deps/seed/suppress/ext are loaded alphabetically after ext.
     pub fn rvs_load_from_dir_BIMS(dir: &Path) -> Result<Self, CapsMapError> {
         let mut result = Self::rvs_new();
         if !dir.is_dir() {
@@ -122,9 +104,9 @@ impl CapsMap {
                 files.push(path);
             }
         }
-        // Sort: seed first, then std, deps, ext, then alphabetical for others.
+        // Sort: std first, then deps, seed, ext, then alphabetical for others.
         // Files loaded later override earlier ones (rvs_extend_from_M).
-        const LAYER_ORDER: &[&str] = &["seed", "std", "deps", "ext"];
+        const LAYER_ORDER: &[&str] = &["std", "deps", "seed", "suppress", "ext"];
         files.sort_by(|a, b| {
             let a_name = a
                 .file_name()
@@ -203,10 +185,13 @@ mod tests {
     }
 
     #[test]
-    fn test_20260425_capsmap_lookup_suffix_match() {
+    fn test_20260425_capsmap_lookup_exact_only() {
+        // Suffix matching has been removed — all lookups are exact.
         let cm = CapsMap::rvs_parse("HashMap::new=").unwrap();
-        let caps = cm.rvs_lookup("std::collections::HashMap::new");
-        assert!(caps.is_some());
+        // Exact match works
+        assert!(cm.rvs_lookup("HashMap::new").is_some());
+        // Suffix match does NOT work anymore
+        assert!(cm.rvs_lookup("std::collections::HashMap::new").is_none());
     }
 
     #[test]
@@ -226,5 +211,23 @@ mod tests {
         let cm = CapsMap::rvs_parse("danger=ABIMPSTU").unwrap();
         let caps = cm.rvs_lookup("danger").unwrap();
         assert_eq!(caps.rvs_len(), 8);
+    }
+
+    #[test]
+    fn test_20260611_seed_overrides_std() {
+        let dir = std::env::temp_dir().join("test_20260611_seed_overrides_std");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("seed"), "func=S\nother_func=P\n").unwrap();
+        std::fs::write(dir.join("std"), "func=U\nother_func=U\nnew_func=M\n").unwrap();
+        let cm = CapsMap::rvs_load_from_dir_BIMS(&dir).unwrap();
+        let caps = cm.rvs_lookup("func").unwrap();
+        assert!(caps.rvs_contains(Capability::S));
+        assert!(!caps.rvs_contains(Capability::U));
+        let other = cm.rvs_lookup("other_func").unwrap();
+        assert!(other.rvs_contains(Capability::P));
+        assert!(!other.rvs_contains(Capability::U));
+        let new_func = cm.rvs_lookup("new_func").unwrap();
+        assert!(new_func.rvs_contains(Capability::M));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

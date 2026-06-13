@@ -1,0 +1,29 @@
+error: static ref requires {S} but fn has {} (missing S(SideEffect))
+  --> $DIR/tests/ui/52_infer_static_ref.rs:6:5
+   |
+LL |     COUNTER
+   |     ^^^^^^^
+   |
+   = note: `#[deny(rivus::rvs_static_ref)]` on by default
+
+error: reads static but suffix lacks S
+  --> $DIR/tests/ui/52_infer_static_ref.rs:6:5
+   |
+LL |     COUNTER
+   |     ^^^^^^^
+   |
+   = note: `-D rivus::rvs-missing-side-effect` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_side_effect)]`
+
+error: good fn 'rvs_read_counter' not called by any test
+  --> $DIR/tests/ui/52_infer_static_ref.rs:5:1
+   |
+LL | / fn rvs_read_counter() -> i32 {
+LL | |     COUNTER
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
+
+error: aborting due to 3 previous errors

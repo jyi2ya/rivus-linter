@@ -165,6 +165,7 @@ impl CapabilitySet {
     }
 
     /// 返回能力集中能力的个数。
+    #[cfg(test)]
     pub fn rvs_len(&self) -> usize {
         self.0.len()
     }
@@ -172,6 +173,11 @@ impl CapabilitySet {
     /// 向能力集中插入一项能力。
     pub fn rvs_insert_M(&mut self, cap: Capability) {
         self.0.insert(cap);
+    }
+
+    /// 从能力集中移除一项能力。
+    pub fn rvs_remove_M(&mut self, cap: Capability) {
+        self.0.remove(&cap);
     }
 }
 

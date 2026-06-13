@@ -1,0 +1,21 @@
+error: .unwrap_or_default() swallows errors
+  --> $DIR/tests/ui/79_error_swallow_unwrap_or_default.rs:4:14
+   |
+LL |     let _x = "abc".parse::<i32>().unwrap_or_default();
+   |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-error-swallow` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_error_swallow)]`
+
+error: good fn 'rvs_bar' not called by any test
+  --> $DIR/tests/ui/79_error_swallow_unwrap_or_default.rs:3:1
+   |
+LL | / fn rvs_bar() {
+LL | |     let _x = "abc".parse::<i32>().unwrap_or_default();
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
+
+error: aborting due to 2 previous errors

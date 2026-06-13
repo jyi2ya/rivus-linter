@@ -1,0 +1,10 @@
+error: 'bad_pub_fn' missing rvs_ prefix
+  --> $DIR/tests/ui/88_pub_fn_missing_rvs.rs:3:1
+   |
+LL | pub fn bad_pub_fn() {}
+   | ^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-non-rvs-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_non_rvs_fn)]`
+
+error: aborting due to 1 previous error

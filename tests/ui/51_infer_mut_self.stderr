@@ -1,0 +1,32 @@
+error: type 'Foo' missing #[derive(Debug)]
+  --> $DIR/tests/ui/51_infer_mut_self.rs:3:1
+   |
+LL | struct Foo;
+   | ^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-missing-debug-derive` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_debug_derive)]`
+
+error: &mut param but suffix lacks M
+  --> $DIR/tests/ui/51_infer_mut_self.rs:5:5
+   |
+LL | /     fn rvs_modify(&mut self) {
+LL | |         let _ = 42;
+LL | |     }
+   | |_____^
+   |
+   = note: `-D rivus::rvs-missing-mutable` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_mutable)]`
+
+error: good fn 'rvs_modify' not called by any test
+  --> $DIR/tests/ui/51_infer_mut_self.rs:5:5
+   |
+LL | /     fn rvs_modify(&mut self) {
+LL | |         let _ = 42;
+LL | |     }
+   | |_____^
+   |
+   = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
+
+error: aborting due to 3 previous errors

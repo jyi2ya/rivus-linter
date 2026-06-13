@@ -1,0 +1,21 @@
+error: rvs_validate_email: validate returning Result<(),E> — use TryFrom returning Result<T,E>
+  --> $DIR/tests/ui/82_validate_returns_unit.rs:3:1
+   |
+LL | fn rvs_validate_email(raw: &str) -> Result<(), String> {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-validate-returns-unit` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_validate_returns_unit)]`
+
+error: good fn 'rvs_validate_email' not called by any test
+  --> $DIR/tests/ui/82_validate_returns_unit.rs:3:1
+   |
+LL | / fn rvs_validate_email(raw: &str) -> Result<(), String> {
+LL | |     Ok(())
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
+
+error: aborting due to 2 previous errors

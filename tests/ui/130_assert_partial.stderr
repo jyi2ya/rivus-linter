@@ -1,0 +1,14 @@
+error: param 'a' missing debug_assert!
+  --> $DIR/tests/ui/130_assert_partial.rs:4:35
+   |
+LL |   fn rvs_div(a: i32, b: i32) -> i32 {
+   |  ___________________________________^
+LL | |     debug_assert!(b != 0, "divisor must be non-zero");
+LL | |     a / b
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-missing-debug-assert` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_debug_assert)]`
+
+error: aborting due to 1 previous error

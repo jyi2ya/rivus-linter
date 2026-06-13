@@ -1,0 +1,31 @@
+error: may panic but suffix lacks P
+  --> $DIR/tests/ui/45_infer_unwrap.rs:3:1
+   |
+LL | / fn rvs_get_value(x: Option<i32>) -> i32 {
+LL | |     x.unwrap()
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-missing-panic` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_panic)]`
+
+error: {} → unwrap (core::option::unwrap) ({P}) missing P(Panic)
+  --> $DIR/tests/ui/45_infer_unwrap.rs:4:5
+   |
+LL |     x.unwrap()
+   |     ^^^^^^^^^^
+   |
+   = note: `#[deny(rivus::rvs_call_violation)]` on by default
+
+error: good fn 'rvs_get_value' not called by any test
+  --> $DIR/tests/ui/45_infer_unwrap.rs:3:1
+   |
+LL | / fn rvs_get_value(x: Option<i32>) -> i32 {
+LL | |     x.unwrap()
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
+
+error: aborting due to 3 previous errors

@@ -1,0 +1,33 @@
+error: P marker but no /// # Panics
+  --> $DIR/tests/ui/68_missing_panics_doc_marker.rs:4:1
+   |
+LL | / pub fn rvs_divide_P(a: i32, b: i32) -> i32 {
+LL | |     a / b
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-missing-panics-doc` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_panics_doc)]`
+
+error: param 'a' missing debug_assert!
+  --> $DIR/tests/ui/68_missing_panics_doc_marker.rs:4:44
+   |
+LL |   pub fn rvs_divide_P(a: i32, b: i32) -> i32 {
+   |  ____________________________________________^
+LL | |     a / b
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-missing-debug-assert` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_debug_assert)]`
+
+error: param 'b' missing debug_assert!
+  --> $DIR/tests/ui/68_missing_panics_doc_marker.rs:4:44
+   |
+LL |   pub fn rvs_divide_P(a: i32, b: i32) -> i32 {
+   |  ____________________________________________^
+LL | |     a / b
+LL | | }
+   | |_^
+
+error: aborting due to 3 previous errors

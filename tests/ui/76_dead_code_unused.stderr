@@ -1,0 +1,18 @@
+error: empty function body
+  --> $DIR/tests/ui/76_dead_code_unused.rs:4:1
+   |
+LL | fn rvs_dead_fn() {}
+   | ^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(rivus::rvs_empty_fn)]` on by default
+
+error: rvs_ function marked #[allow(dead_code/unused)]
+  --> $DIR/tests/ui/76_dead_code_unused.rs:4:1
+   |
+LL | fn rvs_dead_fn() {}
+   | ^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-dead-code` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_dead_code)]`
+
+error: aborting due to 2 previous errors

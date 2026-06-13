@@ -2,7 +2,7 @@
 
 fn rvs_add() {}
 
-pub fn rvs_raw_ptr(x: *const u8) -> u8 {
+pub unsafe fn rvs_raw_ptr(x: *const u8) -> u8 {
     rvs_add();
-    unsafe { *x }
+    *x
 }

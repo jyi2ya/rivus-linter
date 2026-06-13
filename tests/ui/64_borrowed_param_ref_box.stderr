@@ -1,0 +1,32 @@
+error: &Box — use &T instead
+  --> $DIR/tests/ui/64_borrowed_param_ref_box.rs:3:19
+   |
+LL | pub fn rvs_foo(b: &Box<i32>) -> i32 {
+   |                   ^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-borrowed-param` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_borrowed_param)]`
+
+error: pub fn 'rvs_foo' missing /// doc comment
+  --> $DIR/tests/ui/64_borrowed_param_ref_box.rs:3:1
+   |
+LL | / pub fn rvs_foo(b: &Box<i32>) -> i32 {
+LL | |     **b
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-missing-doc` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_doc)]`
+
+error: good fn 'rvs_foo' not called by any test
+  --> $DIR/tests/ui/64_borrowed_param_ref_box.rs:3:1
+   |
+LL | / pub fn rvs_foo(b: &Box<i32>) -> i32 {
+LL | |     **b
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
+
+error: aborting due to 3 previous errors

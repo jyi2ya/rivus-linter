@@ -1,0 +1,16 @@
+# ════════════════════════════════════════════════════════════════
+# caps/suppress — Corrections to std function inferred caps
+# ════════════════════════════════════════════════════════════════
+# This file holds manual corrections for std/core/alloc functions whose
+# caps were incorrectly inferred by infer-std (caps/std).
+#
+# For example, if infer-std marked a pure function as having P because
+# it calls unwrap internally, but we know the function never actually
+# panics, we add a correction here to override the inferred caps.
+#
+# Loading order: std -> deps -> seed -> suppress -> ext
+# This file is loaded AFTER seed and std, so it overrides both.
+#
+# Format: full_qualified_path=caps
+# Empty caps (=) means the function is pure (no capabilities).
+# ════════════════════════════════════════════════════════════════

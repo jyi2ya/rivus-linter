@@ -1,0 +1,18 @@
+error: type 'Svc' missing #[derive(Debug)]
+  --> $DIR/tests/ui/56_missing_allow_impl_method.rs:3:1
+   |
+LL | struct Svc;
+   | ^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-missing-debug-derive` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_debug_derive)]`
+
+error: empty function body
+  --> $DIR/tests/ui/56_missing_allow_impl_method.rs:6:5
+   |
+LL |     fn rvs_run_AI(&self) {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(rivus::rvs_empty_fn)]` on by default
+
+error: aborting due to 2 previous errors

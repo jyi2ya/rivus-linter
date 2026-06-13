@@ -1,0 +1,11 @@
+error[E0432]: unresolved import `bytes`
+  --> $DIR/tests/ui/91_wildcard_import_external.rs:3:5
+   |
+LL | use bytes::*;
+   |     ^^^^^ use of unresolved module or unlinked crate `bytes`
+   |
+   = help: you might be missing a crate named `bytes`
+
+error: aborting due to 1 previous error
+
+For more information about this error, try `rustc --explain E0432`.

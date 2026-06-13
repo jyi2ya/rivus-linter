@@ -1,0 +1,61 @@
+error: empty function body
+  --> $DIR/tests/ui/87_multiple_violations.rs:3:1
+   |
+LL | fn rvs_inner_ABI() {}
+   | ^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(rivus::rvs_empty_fn)]` on by default
+
+error: {} → {A, B, I} missing A(Async), B(Blocking), I(IO)
+  --> $DIR/tests/ui/87_multiple_violations.rs:5:5
+   |
+LL |     rvs_inner_ABI();
+   |     ^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(rivus::rvs_call_violation)]` on by default
+
+error: empty function body
+  --> $DIR/tests/ui/87_multiple_violations.rs:7:1
+   |
+LL | fn rvs_pure_M() {}
+   | ^^^^^^^^^^^^^^^^^^
+
+error: {} → {A, B, I} missing A(Async), B(Blocking), I(IO)
+  --> $DIR/tests/ui/87_multiple_violations.rs:9:5
+   |
+LL |     rvs_inner_ABI();
+   |     ^^^^^^^^^^^^^^^
+
+error: {} → {M} missing M(Mutable)
+  --> $DIR/tests/ui/87_multiple_violations.rs:10:5
+   |
+LL |     rvs_pure_M();
+   |     ^^^^^^^^^^^^
+
+error: good fn 'rvs_outer' not called by any test
+  --> $DIR/tests/ui/87_multiple_violations.rs:4:1
+   |
+LL | / fn rvs_outer() {
+LL | |     rvs_inner_ABI();
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
+
+error: good fn 'rvs_pure_M' not called by any test
+  --> $DIR/tests/ui/87_multiple_violations.rs:7:1
+   |
+LL | fn rvs_pure_M() {}
+   | ^^^^^^^^^^^^^^^^^^
+
+error: good fn 'rvs_caller' not called by any test
+  --> $DIR/tests/ui/87_multiple_violations.rs:8:1
+   |
+LL | / fn rvs_caller() {
+LL | |     rvs_inner_ABI();
+LL | |     rvs_pure_M();
+LL | | }
+   | |_^
+
+error: aborting due to 8 previous errors

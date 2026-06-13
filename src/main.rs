@@ -974,11 +974,27 @@ fn rvs_run_infer_std_BIMPS(path: &Path, output: Option<&Path>) -> Result<(), Str
 
     let callgraph = rvs_merge_callgraph_dir_BI(&cg_dir)?;
 
-    // Only load the seed file, NOT the entire caps/ directory.
-    // Loading the full caps/ dir would pick up the OLD caps/std from a previous
-    // infer-std run, which defeats the purpose of regenerating.
-    let seed_file = path.join("caps").join("seed");
-    let seed = rvs_load_seed_capsmap_BIMS(path, &seed_file);
+    // Load seed + suppress (but NOT std/deps/ext from a previous run).
+    // Loading the full caps/ dir would pick up the OLD caps/std, which
+    // defeats the purpose of regenerating.
+    let caps_dir = path.join("caps");
+    let mut seed = capsmap::CapsMap::rvs_new();
+    let seed_file = caps_dir.join("seed");
+    if seed_file.is_file() {
+        if let Ok(content) = std::fs::read_to_string(&seed_file) {
+            if let Ok(cm) = capsmap::CapsMap::rvs_parse(&content) {
+                seed.rvs_extend_from_M(cm);
+            }
+        }
+    }
+    let suppress_file = caps_dir.join("suppress");
+    if suppress_file.is_file() {
+        if let Ok(content) = std::fs::read_to_string(&suppress_file) {
+            if let Ok(cm) = capsmap::CapsMap::rvs_parse(&content) {
+                seed.rvs_extend_from_M(cm);
+            }
+        }
+    }
 
     let inferred = rvs_infer_caps_M(&callgraph, &seed);
 
@@ -988,9 +1004,8 @@ fn rvs_run_infer_std_BIMPS(path: &Path, output: Option<&Path>) -> Result<(), Str
     let std_crates: &[&str] = &["std::", "core::", "alloc::", "compiler_builtins::"];
     let std_only: BTreeMap<String, CapabilitySet> = inferred
         .iter()
-        .filter(|(name, caps)| {
+        .filter(|(name, _caps)| {
             !name.starts_with(&crate_prefix)
-                && !caps.rvs_is_empty()
                 && std_crates.iter().any(|prefix| name.starts_with(prefix))
         })
         .map(|(k, v)| (k.clone(), v.clone()))
@@ -1004,15 +1019,8 @@ fn rvs_run_infer_std_BIMPS(path: &Path, output: Option<&Path>) -> Result<(), Str
         if !is_std {
             continue;
         }
-        // Only check std functions that were inferred as pure (empty caps).
-        // If they already have caps, they're fine.
-        if let Some(caps) = inferred.get(func) {
-            if !caps.rvs_is_empty() {
-                continue;
-            }
-        }
         for callee in &behavior.calls {
-            if inferred.get(callee).is_some() {
+            if inferred.contains_key(callee) {
                 continue; // callee has known non-empty caps
             }
             if seed.rvs_lookup(callee).is_some() {
@@ -1141,7 +1149,7 @@ fn rvs_infer_caps_M(
             if behavior.has_async {
                 caps.rvs_insert_M(Capability::A);
             }
-            if behavior.is_unsafe_fn || behavior.has_unsafe_block {
+            if behavior.is_unsafe_fn {
                 caps.rvs_insert_M(Capability::U);
             }
             if behavior.has_mut_param {
@@ -1160,9 +1168,7 @@ fn rvs_infer_caps_M(
                 caps.rvs_insert_M(Capability::S);
                 caps.rvs_insert_M(Capability::T);
             }
-            if !caps.rvs_is_empty() {
-                inferred.insert(func.clone(), caps);
-            }
+            inferred.insert(func.clone(), caps);
         }
     }
     for behavior in callgraph.values() {
@@ -1175,22 +1181,68 @@ fn rvs_infer_caps_M(
         }
     }
 
-    let mut changed = true;
-    while changed {
-        changed = false;
-        for (caller, behavior) in callgraph {
+    // Build a "method@trait_path" → set-of-keys index for impl-union.
+    //
+    // Callgraph keys for impl methods now look like:
+    //   std::fs::read@std::io::Read     (trait impl method)
+    //   std::vec::push                   (inherent method, no @)
+    //
+    // When a callee is a trait method definition (e.g. `std::io::Read::read`),
+    // we construct "read@std::io::Read" and look up all matching keys.
+    let impl_index: HashMap<String, Vec<String>> = {
+        let mut idx: HashMap<String, Vec<String>> = HashMap::new();
+        for key in callgraph.keys() {
+            if let Some(at_pos) = key.find('@') {
+                // Everything after the module prefix and before @ is the method name.
+                // The full lookup key is "method@trait_path".
+                let suffix = &key[at_pos + 1..]; // "std::io::Read"
+                let method = &key[..at_pos]; // "std::fs::read"
+                let method_name = method.rsplit("::").next().unwrap_or(method);
+                let lookup = format!("{method_name}@{suffix}");
+                idx.entry(lookup).or_default().push(key.clone());
+            }
+        }
+        idx
+    };
+
+    // Propagation: iterate until fixpoint (no new caps are added).
+    //
+    // We use a bounded fixpoint loop (max 16 iterations, enough for
+    // the deepest call chains in std — typically <10 hops).
+    // Caps grow monotonically, so convergence is guaranteed.
+    //
+    // Seed entries are already inserted into `inferred` above, so we don't
+    // need to check the seed here — seed functions already have their
+    // final caps and propagation won't change them.
+    let max_iterations = 16;
+    for _iteration in 0..max_iterations {
+        let mut changed = false;
+        for (func, behavior) in callgraph {
             let mut combined = inferred
-                .get(caller)
+                .get(func)
                 .cloned()
                 .unwrap_or_else(CapabilitySet::rvs_new);
-
             for callee in &behavior.calls {
+                // Try direct lookup first (exact match in inferred or seed).
                 let callee_caps = inferred
                     .get(callee)
                     .or_else(|| seed.rvs_lookup(callee))
                     .cloned();
+
+                // If not found and callee doesn't contain @ (i.e. it's a
+                // trait method definition, not an impl method), try impl-union.
+                let callee_caps = callee_caps.or_else(|| {
+                    if !callee.contains('@') {
+                        rvs_resolve_impl_union_M(callee, &impl_index, &inferred)
+                    } else {
+                        None
+                    }
+                });
                 if let Some(cc) = callee_caps {
                     for cap in cc.rvs_iter() {
+                        if matches!(cap, Capability::A | Capability::U) {
+                            continue;
+                        }
                         if !combined.rvs_contains(cap) {
                             combined.rvs_insert_M(cap);
                             changed = true;
@@ -1198,10 +1250,75 @@ fn rvs_infer_caps_M(
                     }
                 }
             }
-            inferred.insert(caller.clone(), combined);
+            inferred.insert(func.clone(), combined);
+        }
+        if !changed {
+            break;
         }
     }
     inferred
+}
+
+/// Resolve a trait method callee by taking the union of all impl methods
+/// that implement the same trait.
+///
+/// Callee format: `std::io::Read::read` → method=`read`, trait=`Read`
+/// We look up `read@Read` in the impl_index to find all impl methods like
+/// `std::fs::impl::read@Read`, `std::io::cursor::impl::read@Read`, etc.
+///
+/// A and U are never propagated (detected from function signature only).
+/// All other caps (B, I, M, P, S, T) are eligible for ≥50% majority vote.
+fn rvs_resolve_impl_union_M(
+    callee: &str,
+    impl_index: &HashMap<String, Vec<String>>,
+    inferred: &BTreeMap<String, CapabilitySet>,
+) -> Option<CapabilitySet> {
+    // Callee is like "std::io::Read::read"
+    // Extract method name (last ::-segment) and trait path (everything before)
+    let Some((trait_path, method)) = callee.rsplit_once("::") else {
+        return None;
+    };
+
+    // Look up "method@trait_path" in the impl_index
+    // e.g. "read@std::io::Read"
+    let lookup_key = format!("{method}@{trait_path}");
+    let impl_keys = impl_index.get(&lookup_key)?;
+
+    // Majority-vote: a capability is propagated if it appears in ≥50% of impls.
+    // This avoids rare impls (e.g. RwLock::read having T) polluting the trait.
+    // A and U are never propagated (detected from function signature only).
+    // S and T are eligible for majority vote — if most impls have them,
+    // they should propagate. The vote naturally filters rare caps.
+    let mut cap_counts: HashMap<Capability, usize> = HashMap::new();
+    let mut total = 0usize;
+    for key in impl_keys {
+        if let Some(caps) = inferred.get(key) {
+            total += 1;
+            for cap in caps.rvs_iter() {
+                if !matches!(cap, Capability::A | Capability::U) {
+                    *cap_counts.entry(cap).or_default() += 1;
+                }
+            }
+        }
+    }
+
+    if total == 0 {
+        return None;
+    }
+
+    let threshold = total.div_ceil(2); // ≥50%
+    let mut union = CapabilitySet::rvs_new();
+    for (cap, count) in &cap_counts {
+        if *count >= threshold {
+            union.rvs_insert_M(*cap);
+        }
+    }
+
+    if !union.rvs_is_empty() {
+        Some(union)
+    } else {
+        None
+    }
 }
 
 fn rvs_format_capsmap(caps: &BTreeMap<String, CapabilitySet>) -> String {
@@ -1541,19 +1658,18 @@ mod tests {
 
     #[test]
     fn test_20260609_infer_caps_single_unsafe_block() {
+        // Unsafe blocks no longer trigger U — only `unsafe fn` declarations do.
         let mut callgraph: BTreeMap<String, ParsedFnBehavior> = BTreeMap::new();
         let mut behavior = rvs_make_behavior();
         behavior.has_unsafe_block = true;
-        callgraph.insert("my_crate::rvs_ffi_call_U".into(), behavior);
+        callgraph.insert("my_crate::rvs_ffi_call".into(), behavior);
         let seed = capsmap::CapsMap::rvs_new();
         let result = rvs_infer_caps_M(&callgraph, &seed);
-        let output = rvs_format_capsmap(&result);
-        rvs_snapshot("test_20260609_infer_caps_single_unsafe_block", &output);
-        let caps = result
-            .get("my_crate::rvs_ffi_call_U")
-            .expect("should have entry");
-        assert!(caps.rvs_contains(Capability::U));
-        assert_eq!(caps.rvs_len(), 1);
+        // No U — unsafe block alone does not give U.
+        // Function is still in inferred (with empty caps).
+        let caps = result.get("my_crate::rvs_ffi_call");
+        assert!(caps.is_some());
+        assert!(caps.unwrap().rvs_is_empty());
     }
 
     #[test]
@@ -1701,6 +1817,217 @@ mod tests {
         assert!(caps.rvs_contains(Capability::A));
         assert!(caps.rvs_contains(Capability::M));
         assert_eq!(caps.rvs_len(), 2);
+    }
+
+    #[test]
+    fn test_20260613_infer_caps_propagation_from_bimps_callee() {
+        // Reproduces a real-world bug: when a caller calls a callee that has
+        // BIMPS, but the callee is part of a larger dependency subgraph that
+        // contains cycles, the topological sort (Kahn's algorithm) cannot
+        // fully order these nodes. The unsorted "cycle" nodes are appended
+        // in BTreeMap (alphabetical) key order, which may place the caller
+        // BEFORE the callee. This means the callee's propagated caps haven't
+        // been computed yet when the caller is processed, so the caller
+        // misses B, I, S from the callee.
+        //
+        // The callgraph mirrors the real std::process::spawn scenario:
+        //   caller (std::process::impl::spawn) calls callee
+        //   callee (std::sys::process::unix::unix::impl::spawn) calls
+        //     a deep callee (in seed with BIS) AND a node in a cycle.
+        //   The cycle prevents Kahn's from processing callee normally,
+        //   so callee ends up in the "cycle nodes" section appended in
+        //   alphabetical order — AFTER the caller.
+        //
+        // After the fix, the caller should get BIMPS regardless of the
+        // ordering, because the propagation should handle cycle nodes
+        // correctly (e.g. by iterating until fixpoint or by a different
+        // approach).
+        let mut callgraph: BTreeMap<String, ParsedFnBehavior> = BTreeMap::new();
+
+        // Caller: has M from has_mut_param
+        let mut caller_behavior = rvs_make_behavior();
+        caller_behavior.has_mut_param = true;
+        caller_behavior
+            .calls
+            .insert("std::sys::process::unix::unix::impl::spawn".into());
+        callgraph.insert("std::process::impl::spawn".into(), caller_behavior);
+
+        // Callee: calls a seed function with BIS + a node in a cycle
+        let mut callee_behavior = rvs_make_behavior();
+        callee_behavior.has_mut_param = true;
+        callee_behavior.has_panic = true;
+        callee_behavior
+            .calls
+            .insert("std::sys::pal::unix::kernel_copy::rvs_write".into());
+        // This creates a cycle: cycle_a -> cycle_b -> cycle_a
+        callee_behavior.calls.insert("std::sys::cycle_a".into());
+        callgraph.insert(
+            "std::sys::process::unix::unix::impl::spawn".into(),
+            callee_behavior,
+        );
+
+        // Cycle nodes (block Kahn's from processing callee)
+        let mut cycle_a = rvs_make_behavior();
+        cycle_a.calls.insert("std::sys::cycle_b".into());
+        callgraph.insert("std::sys::cycle_a".into(), cycle_a);
+
+        let mut cycle_b = rvs_make_behavior();
+        cycle_b.calls.insert("std::sys::cycle_a".into());
+        callgraph.insert("std::sys::cycle_b".into(), cycle_b);
+
+        // Deep callee: leaf function in seed with BIS
+        let seed =
+            capsmap::CapsMap::rvs_parse("std::sys::pal::unix::kernel_copy::rvs_write=BIS").unwrap();
+
+        let result = rvs_infer_caps_M(&callgraph, &seed);
+        let output = rvs_format_capsmap(&result);
+        rvs_snapshot(
+            "test_20260613_infer_caps_propagation_from_bimps_callee",
+            &output,
+        );
+
+        // The callee should have BIMPS (BIS from seed callee + MP from flags)
+        let callee_caps = result
+            .get("std::sys::process::unix::unix::impl::spawn")
+            .expect("callee should have entry");
+        assert!(
+            callee_caps.rvs_contains(Capability::B),
+            "callee should have B from deep callee"
+        );
+        assert!(
+            callee_caps.rvs_contains(Capability::I),
+            "callee should have I from deep callee"
+        );
+        assert!(
+            callee_caps.rvs_contains(Capability::M),
+            "callee should have M from has_mut_param"
+        );
+        assert!(
+            callee_caps.rvs_contains(Capability::P),
+            "callee should have P from has_panic"
+        );
+        assert!(
+            callee_caps.rvs_contains(Capability::S),
+            "callee should have S from deep callee"
+        );
+
+        // The caller should also have BIMPS (BIS propagated from callee + M from flags)
+        let caller_caps = result
+            .get("std::process::impl::spawn")
+            .expect("caller should have entry");
+        assert!(
+            caller_caps.rvs_contains(Capability::B),
+            "caller should have B propagated from callee"
+        );
+        assert!(
+            caller_caps.rvs_contains(Capability::I),
+            "caller should have I propagated from callee"
+        );
+        assert!(
+            caller_caps.rvs_contains(Capability::M),
+            "caller should have M from has_mut_param"
+        );
+        assert!(
+            caller_caps.rvs_contains(Capability::S),
+            "caller should have S propagated from callee"
+        );
+    }
+
+    #[test]
+    fn test_20260613_impl_union_majority_vote() {
+        // Three impls of Read::read:
+        //   File::read   → BIMP (real I/O)
+        //   Cursor::read → MP   (in-memory)
+        //   &[u8]::read  → M    (pure read)
+        //
+        // Majority vote (≥50% = ≥2 out of 3):
+        //   M: 3/3 → ✅ propagate
+        //   P: 2/3 → ✅ propagate
+        //   B: 1/3 → ❌ don't propagate
+        //   I: 1/3 → ❌ don't propagate
+        let mut callgraph: BTreeMap<String, ParsedFnBehavior> = BTreeMap::new();
+
+        // The caller calls Read::read (trait method def, not in callgraph as key)
+        let mut caller = rvs_make_behavior();
+        caller.calls.insert("std::io::Read::read".into());
+        callgraph.insert("my_crate::rvs_copy".into(), caller);
+
+        // Three impl methods with @TraitPath suffix
+        let mut file_read = rvs_make_behavior();
+        file_read.has_mut_param = true;
+        file_read.has_panic = true;
+        file_read.calls.insert("libc::unix::read".into());
+        callgraph.insert("std::fs::read@std::io::Read".into(), file_read);
+
+        let mut cursor_read = rvs_make_behavior();
+        cursor_read.has_mut_param = true;
+        cursor_read.has_panic = true;
+        callgraph.insert("std::io::cursor::read@std::io::Read".into(), cursor_read);
+
+        let mut slice_read = rvs_make_behavior();
+        slice_read.has_mut_param = true;
+        callgraph.insert("std::io::impls::read@std::io::Read".into(), slice_read);
+
+        // libc::read has BI in seed
+        let seed = capsmap::CapsMap::rvs_parse("libc::unix::read=BI").unwrap();
+
+        let result = rvs_infer_caps_M(&callgraph, &seed);
+
+        // Caller should get MP (majority) but not B or I (minority)
+        let caller_caps = result.get("my_crate::rvs_copy").expect("caller exists");
+        assert!(caller_caps.rvs_contains(Capability::M), "M: 3/3 = majority");
+        assert!(caller_caps.rvs_contains(Capability::P), "P: 2/3 = majority");
+        assert!(
+            !caller_caps.rvs_contains(Capability::B),
+            "B: 1/3 = minority, should not propagate"
+        );
+        assert!(
+            !caller_caps.rvs_contains(Capability::I),
+            "I: 1/3 = minority, should not propagate"
+        );
+    }
+
+    #[test]
+    fn test_20260613_impl_union_no_cross_trait() {
+        // Two traits with same method name "read":
+        //   std::io::Read::read   → File impl has BIMP
+        //   std::sync::RwLock     → read impl has M (not a file read!)
+        //
+        // The caller calls Read::read. It should NOT pick up caps from
+        // RwLock's read method, because the @TraitPath differs.
+        let mut callgraph: BTreeMap<String, ParsedFnBehavior> = BTreeMap::new();
+
+        let mut caller = rvs_make_behavior();
+        caller.calls.insert("std::io::Read::read".into());
+        callgraph.insert("my_crate::rvs_read_data".into(), caller);
+
+        // Read impl: has B from libc
+        let mut file_read = rvs_make_behavior();
+        file_read.calls.insert("libc::unix::read".into());
+        callgraph.insert("std::fs::read@std::io::Read".into(), file_read);
+
+        // RwLock impl: completely unrelated
+        let mut rwlock_read = rvs_make_behavior();
+        rwlock_read.has_mut_param = true;
+        callgraph.insert(
+            "std::sync::rwlock::read@std::sync::RwLock".into(),
+            rwlock_read,
+        );
+
+        let seed = capsmap::CapsMap::rvs_parse("libc::unix::read=BI").unwrap();
+        let result = rvs_infer_caps_M(&callgraph, &seed);
+
+        let caller_caps = result
+            .get("my_crate::rvs_read_data")
+            .expect("caller exists");
+        assert!(
+            caller_caps.rvs_contains(Capability::B),
+            "should get B from Read::read impl"
+        );
+        assert!(
+            !caller_caps.rvs_contains(Capability::M),
+            "should NOT get M from RwLock::read (different trait)"
+        );
     }
 
     // ─── rvs_format_capsmap ────────────────────────────────────────────

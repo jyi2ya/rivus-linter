@@ -1,0 +1,35 @@
+error: may panic but suffix lacks P
+  --> $DIR/tests/ui/47_infer_assert.rs:3:1
+   |
+LL | / fn rvs_check_valid(x: i32) {
+LL | |     assert!(x > 0);
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-missing-panic` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_panic)]`
+
+error: param 'x' missing debug_assert!
+  --> $DIR/tests/ui/47_infer_assert.rs:3:28
+   |
+LL |   fn rvs_check_valid(x: i32) {
+   |  ____________________________^
+LL | |     assert!(x > 0);
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-missing-debug-assert` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_debug_assert)]`
+
+error: good fn 'rvs_check_valid' not called by any test
+  --> $DIR/tests/ui/47_infer_assert.rs:3:1
+   |
+LL | / fn rvs_check_valid(x: i32) {
+LL | |     assert!(x > 0);
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
+
+error: aborting due to 3 previous errors

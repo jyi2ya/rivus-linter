@@ -1,0 +1,34 @@
+error: unsafe code but suffix lacks U
+  --> $DIR/tests/ui/49_infer_unsafe_fn.rs:3:1
+   |
+LL | / unsafe fn rvs_dangerous() {
+LL | |     let _ = 42;
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-missing-unsafe` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_unsafe)]`
+
+error: unsafe fn missing /// # Safety
+  --> $DIR/tests/ui/49_infer_unsafe_fn.rs:3:1
+   |
+LL | / unsafe fn rvs_dangerous() {
+LL | |     let _ = 42;
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-missing-safety-doc` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_safety_doc)]`
+
+error: good fn 'rvs_dangerous' not called by any test
+  --> $DIR/tests/ui/49_infer_unsafe_fn.rs:3:1
+   |
+LL | / unsafe fn rvs_dangerous() {
+LL | |     let _ = 42;
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
+
+error: aborting due to 3 previous errors

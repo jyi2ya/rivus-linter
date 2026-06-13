@@ -1,0 +1,9 @@
+error: {} → {A, B, I} missing A(Async), B(Blocking), I(IO)
+  --> $DIR/tests/ui/148_calls_in_async_block.rs:10:9
+   |
+LL |         rvs_inner_ABI();
+   |         ^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(rivus::rvs_call_violation)]` on by default
+
+error: aborting due to 1 previous error

@@ -1,0 +1,11 @@
+error[E0433]: cannot find module or crate `color_eyre` in this scope
+  --> $DIR/tests/ui/61_banned_import_color_eyre.rs:3:5
+   |
+LL | use color_eyre::eyre::Result;
+   |     ^^^^^^^^^^ use of unresolved module or unlinked crate `color_eyre`
+   |
+   = help: you might be missing a crate named `color_eyre`
+
+error: aborting due to 1 previous error
+
+For more information about this error, try `rustc --explain E0433`.

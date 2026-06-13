@@ -1,0 +1,12 @@
+error: P marker but no /// # Panics
+  --> $DIR/tests/ui/74_fixme_comment.rs:4:1
+   |
+LL | / fn rvs_broken_P() {
+LL | |     panic!()
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-missing-panics-doc` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_panics_doc)]`
+
+error: aborting due to 1 previous error

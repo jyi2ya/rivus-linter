@@ -1,0 +1,23 @@
+error: unknown letters: E
+  --> $DIR/tests/ui/92_unknown_suffix_e_only.rs:3:1
+   |
+LL | / fn rvs_render_art_E() -> String {
+LL | |     String::new()
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-unknown-suffix-letter` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_unknown_suffix_letter)]`
+
+error: good fn 'rvs_render_art_E' not called by any test
+  --> $DIR/tests/ui/92_unknown_suffix_e_only.rs:3:1
+   |
+LL | / fn rvs_render_art_E() -> String {
+LL | |     String::new()
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
+
+error: aborting due to 2 previous errors

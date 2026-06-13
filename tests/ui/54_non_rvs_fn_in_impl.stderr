@@ -1,0 +1,36 @@
+error: type 'Svc' missing #[derive(Debug)]
+  --> $DIR/tests/ui/54_non_rvs_fn_in_impl.rs:3:1
+   |
+LL | struct Svc;
+   | ^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-missing-debug-derive` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_debug_derive)]`
+
+error: 'bad_method' missing rvs_ prefix
+  --> $DIR/tests/ui/54_non_rvs_fn_in_impl.rs:6:5
+   |
+LL |     fn bad_method(&self) {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-non-rvs-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_non_rvs_fn)]`
+
+error: empty function body
+  --> $DIR/tests/ui/54_non_rvs_fn_in_impl.rs:7:5
+   |
+LL |     fn rvs_good_method_M(&mut self) {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(rivus::rvs_empty_fn)]` on by default
+
+error: good fn 'rvs_good_method_M' not called by any test
+  --> $DIR/tests/ui/54_non_rvs_fn_in_impl.rs:7:5
+   |
+LL |     fn rvs_good_method_M(&mut self) {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
+
+error: aborting due to 4 previous errors

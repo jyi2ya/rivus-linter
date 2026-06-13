@@ -1,12 +1,3 @@
-error: 'std::panic::catch_unwind' not in capsmap
-  --> $DIR/tests/ui/34_catch_unwind.rs:4:13
-   |
-LL |     let _ = std::panic::catch_unwind(|| {});
-   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   |
-   = note: `-D rivus::rvs-unknown-callee` implied by `-D warnings`
-   = help: to override `-D warnings` add `#[allow(rivus::rvs_unknown_callee)]`
-
 error: catch_unwind — fix panic source instead
   --> $DIR/tests/ui/34_catch_unwind.rs:4:13
    |
@@ -36,4 +27,4 @@ LL | #![expect(non_snake_case)]
    = note: `-D unfulfilled-lint-expectations` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(unfulfilled_lint_expectations)]`
 
-error: aborting due to 4 previous errors
+error: aborting due to 3 previous errors

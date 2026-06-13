@@ -40,12 +40,16 @@ fn run_one_test(fixture: &Path, stderr_path: &Path, bless: bool) -> Result<(), S
         return Err(format!("cargo-rivus not found at {:?}", driver));
     }
 
-    // Parse // compile-flags: directives from the fixture
+    // Parse // compile-flags: and // check-pass directives from the fixture
     let source = fs::read_to_string(fixture).map_err(|e| format!("read {:?}: {e}", fixture))?;
     let mut extra_args: Vec<String> = Vec::new();
     let mut use_test_crate = false;
+    let mut check_pass = false;
     for line in source.lines() {
         let trimmed = line.trim();
+        if trimmed == "// check-pass" {
+            check_pass = true;
+        }
         if let Some(rest) = trimmed.strip_prefix("// compile-flags:") {
             for arg in rest.split_whitespace() {
                 if arg == "--test" {
@@ -83,6 +87,20 @@ fn run_one_test(fixture: &Path, stderr_path: &Path, bless: bool) -> Result<(), S
 
     let raw_stderr = String::from_utf8_lossy(&output.stderr);
     let actual = normalize_stderr(&raw_stderr);
+
+    if check_pass {
+        if !actual.is_empty() {
+            return Err(format!(
+                "{:?}: check-pass but got output:\n{}",
+                fixture.file_name().unwrap(),
+                actual
+            ));
+        }
+        if bless && stderr_path.exists() {
+            let _ = fs::remove_file(stderr_path);
+        }
+        return Ok(());
+    }
 
     if bless {
         if actual.is_empty() {

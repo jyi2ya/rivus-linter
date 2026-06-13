@@ -1,0 +1,16 @@
+error: duplicate test 'test_20260612_dup_case'
+  --> $DIR/tests/ui/140_testname_duplicate_same_file.rs:5:1
+   |
+LL | fn test_20260612_dup_case() {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-duplicate-test` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_duplicate_test)]`
+
+error: duplicate test 'test_20260612_dup_case'
+  --> $DIR/tests/ui/140_testname_duplicate_same_file.rs:9:5
+   |
+LL |     fn test_20260612_dup_case() {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: aborting due to 2 previous errors

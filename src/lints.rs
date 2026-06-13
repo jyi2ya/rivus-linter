@@ -268,26 +268,32 @@ impl<'a> Diagnostic<'a, ()> for Msg {
 
 // ─── Constants ───────────────────────────────────────────────────────────
 
+/// Spawn function def_paths — exact match only.
+/// Use rustc's def_path (full path as seen in callgraph).
+/// Short names shown here in comments for human reference.
 const SPAWN_FUNCTIONS: &[&str] = &[
-    "tokio::spawn",
+    // tokio::spawn
     "tokio::runtime::spawn",
     "tokio::task::spawn",
     "tokio::task::spawn_blocking",
     "tokio::task::spawn_local",
-    "std::thread::spawn",
-    "std::thread::Builder::spawn",
+    // std::thread::spawn
+    "std::thread::functions::spawn",
+    "std::thread::builder::spawn",
+    "std::thread::builder::spawn_unchecked",
+    "std::thread::lifecycle::spawn_unchecked",
+    // async_std::task::spawn
     "async_std::task::spawn",
     "async_std::task::spawn_blocking",
+    // smol::spawn
     "smol::spawn",
 ];
 
+/// Reflection def_paths — exact match only.
 const REFLECTION_PATHS: &[&str] = &[
-    "std::any::Any",
     "std::any::type_name",
     "std::any::type_id",
-    "any::Any",
-    "any::type_name",
-    "any::type_id",
+    "core::any::Any::type_id",
 ];
 
 const ERROR_SWALLOW_METHODS: &[&str] = &["ok", "unwrap_or_default"];
@@ -295,42 +301,14 @@ const CATCH_ALL_VARIANT_NAMES: &[&str] = &["Unknown", "Other", "UnknownError", "
 const VALIDATE_PREFIXES: &[&str] = &["validate", "check", "verify"];
 const BORROWED_TYPES: &[&str] = &["String", "Vec", "Box"];
 
+/// Exact match only — no suffix matching, no `format!` allocation.
 fn rvs_is_spawn_S(path: &str) -> bool {
-    SPAWN_FUNCTIONS.iter().any(|sf| {
-        if path == *sf || path.ends_with(&format!("::{sf}")) || sf.ends_with(&format!("::{path}")) {
-            return true;
-        }
-        rvs_path_matches_ignore_impl(path, sf)
-    })
+    SPAWN_FUNCTIONS.iter().any(|sf| *sf == path)
 }
 
+/// Exact match only.
 fn rvs_is_reflection_S(path: &str) -> bool {
-    REFLECTION_PATHS.iter().any(|rp| {
-        if path == *rp || path.ends_with(&format!("::{rp}")) || rp.ends_with(&format!("::{path}")) {
-            return true;
-        }
-        rvs_path_matches_ignore_impl(path, rp)
-    })
-}
-
-fn rvs_path_matches_ignore_impl(path: &str, pattern: &str) -> bool {
-    let path_segs: Vec<&str> = path.split("::").collect();
-    let pat_segs: Vec<&str> = pattern.split("::").collect();
-    if path_segs.len() < pat_segs.len() {
-        return false;
-    }
-    let extra = path_segs.len() - pat_segs.len();
-    let mut pi = 0;
-    for si in 0..pat_segs.len() {
-        while pi < extra + si && path_segs[pi] != pat_segs[si] {
-            pi += 1;
-        }
-        if pi >= path_segs.len() || path_segs[pi] != pat_segs[si] {
-            return false;
-        }
-        pi += 1;
-    }
-    true
+    REFLECTION_PATHS.iter().any(|rp| *rp == path)
 }
 
 // ─── Lint pass ───────────────────────────────────────────────────────────
@@ -563,7 +541,7 @@ impl<'tcx> LateLintPass<'tcx> for RivusLintPass {
                 && !self
                     .test_call_names
                     .iter()
-                    .any(|tc| tc.ends_with(&format!("::{name}")))
+                    .any(|tc| tc.rsplit("::").next().unwrap_or(tc) == name.as_str())
             {
                 cx.emit_span_lint(
                     RVS_UNTESTED_GOOD_FN,
@@ -1044,16 +1022,25 @@ fn rvs_scan_panic<'tcx>(tcx: rustc_middle::ty::TyCtxt<'tcx>, body: &Body<'tcx>) 
             ExprKind::Call(func, _) => {
                 if let ExprKind::Path(ref q) = func.kind {
                     let s = rvs_qp(q);
-                    if s.ends_with("::panic")
-                        || s.ends_with("::panic_fmt")
-                        || s.ends_with("::panic_any")
-                        || s.ends_with("::assert")
-                        || s.ends_with("::assert_eq")
-                        || s.ends_with("::assert_ne")
-                        || s.ends_with("::unreachable")
-                        || s.ends_with("::todo")
-                        || s.ends_with("::unimplemented")
-                    {
+                    // Match by last segment — these names are unambiguous
+                    // panic intrinsics in core::panicking
+                    let last = s.rsplit("::").next().unwrap_or(&s);
+                    if matches!(
+                        last,
+                        "panic"
+                            | "panic_fmt"
+                            | "panic_any"
+                            | "panic_str"
+                            | "panic_str_2015"
+                            | "panic_display"
+                            | "panic_nounwind"
+                            | "panic_bounds_check"
+                            | "panic_misaligned_pointer_dereference"
+                            | "panic_null_pointer_dereference"
+                            | "assert_failed"
+                            | "assert_matches_failed"
+                            | "unwrap_failed"
+                    ) {
                         f = true;
                     }
                 }
@@ -1116,7 +1103,8 @@ fn rvs_scan_stub<'tcx>(tcx: rustc_middle::ty::TyCtxt<'tcx>, body: &Body<'tcx>) -
         if let ExprKind::Call(func, _) = &e.kind {
             if let ExprKind::Path(ref q) = func.kind {
                 let s = rvs_qp(q);
-                if s.ends_with("::todo") || s.ends_with("::unimplemented") {
+                let last = s.rsplit("::").next().unwrap_or(&s);
+                if last == "todo" || last == "unimplemented" {
                     f = true;
                     return;
                 }
@@ -1207,9 +1195,8 @@ fn rvs_is_only_debug_asserts(e: &Expr<'_>) -> bool {
         ExprKind::Call(func, _) => {
             if let ExprKind::Path(ref q) = func.kind {
                 let s = rvs_qp(q);
-                s.ends_with("::debug_assert")
-                    || s.ends_with("::debug_assert_eq")
-                    || s.ends_with("::debug_assert_ne")
+                let last = s.rsplit("::").next().unwrap_or(&s);
+                last == "debug_assert" || last == "debug_assert_eq" || last == "debug_assert_ne"
             } else {
                 false
             }
@@ -1664,19 +1651,42 @@ fn rvs_def_path(cx: &LateContext<'_>, did: DefId) -> String {
     let tcx = cx.tcx;
     let dp = tcx.def_path(did);
     let mut parts = vec![tcx.crate_name(dp.krate).to_string()];
+    let mut has_impl = false;
     for d in &dp.data {
         match d.data {
             rustc_hir::definitions::DefPathData::TypeNs(s)
             | rustc_hir::definitions::DefPathData::ValueNs(s)
-            | rustc_hir::definitions::DefPathData::MacroNs(s) => parts.push(s.to_string()),
-            rustc_hir::definitions::DefPathData::Impl => parts.push("impl".into()),
+            | rustc_hir::definitions::DefPathData::MacroNs(s) => {
+                parts.push(s.to_string());
+            }
+            rustc_hir::definitions::DefPathData::Impl => {
+                // Skip the Impl segment entirely — the @TraitPath suffix
+                // already disambiguates trait impls, and inherent impls
+                // don't need disambiguation (method names are unique per type).
+                has_impl = true;
+            }
             rustc_hir::definitions::DefPathData::Closure => {
-                parts.push(format!("closure#{}", d.disambiguator))
+                parts.push(format!("closure#{}", d.disambiguator));
             }
             _ => {}
         }
     }
-    parts.join("::")
+    let mut path = parts.join("::");
+
+    if has_impl {
+        if let Some(assoc) = cx.tcx.opt_associated_item(did) {
+            let impl_def_id = assoc.container_id(cx.tcx);
+            if let rustc_hir::def::DefKind::Impl { of_trait: true } = cx.tcx.def_kind(impl_def_id) {
+                let trait_ref = cx.tcx.impl_trait_ref(impl_def_id);
+                let trait_def_id = trait_ref.skip_binder().def_id;
+                let trait_path = rvs_def_path(cx, trait_def_id);
+                path.push('@');
+                path.push_str(&trait_path);
+            }
+        }
+    }
+
+    path
 }
 
 fn rvs_ty_last_ident(ty: &rustc_hir::Ty<'_>) -> Option<String> {
@@ -1758,9 +1768,7 @@ impl RivusLintPass {
                     Msg::new(span, "async but suffix lacks A"),
                 );
             }
-            if (info.is_unsafe_fn || info.has_unsafe_block)
-                && !info.caps.rvs_contains(Capability::U)
-            {
+            if info.is_unsafe_fn && !info.caps.rvs_contains(Capability::U) {
                 cx.emit_span_lint(
                     RVS_MISSING_UNSAFE,
                     span,
@@ -1953,7 +1961,7 @@ impl RivusLintPass {
                                 );
                             }
                             let sp = rvs_qp(q);
-                            self.rvs_check_target_S(cx, e.span, &fp, Some(&sp), caps);
+                            self.rvs_check_target_S(cx, e.span, &fp, Some(&sp), caps, false);
                             let cn = fp.rsplit("::").next().unwrap_or(&fp);
                             if cn == "catch_unwind" {
                                 cx.emit_span_lint(
@@ -2022,7 +2030,8 @@ impl RivusLintPass {
                             Msg::new(e.span, "reflection — use trait dispatch instead"),
                         );
                     }
-                    self.rvs_check_target_S(cx, e.span, &fp, None, caps);
+                    let is_never = n == "expect" && rvs_is_never_expect(e);
+                    self.rvs_check_target_S(cx, e.span, &fp, Some(n), caps, is_never);
                 }
             }
             _ => {}
@@ -2056,6 +2065,7 @@ impl RivusLintPass {
         def_path: &str,
         src_path: Option<&str>,
         caps: &CapabilitySet,
+        is_never_expect: bool,
     ) {
         let cn = def_path.rsplit("::").next().unwrap_or(def_path);
         if let Some((_, cc)) = rvs_parse_function(cn) {
@@ -2073,13 +2083,17 @@ impl RivusLintPass {
             }
             return;
         }
-        if let Some(cc) = self
+        if let Some(mut cc) = self
             .rvs_lookup_caps(def_path)
             .or_else(|| src_path.and_then(|s| self.rvs_lookup_caps(s)))
+            .cloned()
         {
-            if !cc.rvs_is_empty() && !caps.rvs_can_call(cc) {
+            if is_never_expect {
+                cc.rvs_remove_M(Capability::P);
+            }
+            if !cc.rvs_is_empty() && !caps.rvs_can_call(&cc) {
                 let m: Vec<_> = caps
-                    .rvs_missing_for(cc)
+                    .rvs_missing_for(&cc)
                     .iter()
                     .map(|c| format!("{c}"))
                     .collect();
@@ -2393,6 +2407,19 @@ impl RivusLintPass {
                 let tck = cx.tcx.typeck(owner);
                 if let Some(did) = tck.type_dependent_def_id(e.hir_id) {
                     calls.insert(rvs_def_path(cx, did));
+                }
+            }
+            // Capture function references passed as arguments (e.g. `&func` passed
+            // to a `&dyn Fn` parameter).  These are not calls themselves, but the
+            // referenced function will eventually be called through dynamic dispatch.
+            // Recording them as edges allows capability propagation through dyn Fn.
+            ExprKind::AddrOf(_, _, inner) => {
+                if let ExprKind::Path(ref q) = inner.kind {
+                    if let Res::Def(k, did) = cx.qpath_res(q, inner.hir_id) {
+                        if matches!(k, DefKind::Fn | DefKind::AssocFn) {
+                            calls.insert(rvs_def_path(cx, did));
+                        }
+                    }
                 }
             }
             _ => {}

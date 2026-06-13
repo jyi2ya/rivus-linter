@@ -1,0 +1,10 @@
+error: test 'check_20260420_something' not test_YYYYMMDD_name
+  --> $DIR/tests/ui/59_testname_no_prefix.rs:5:1
+   |
+LL | fn check_20260420_something() {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-test-name-format` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_test_name_format)]`
+
+error: aborting due to 1 previous error

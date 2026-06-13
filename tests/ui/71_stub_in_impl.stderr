@@ -1,0 +1,31 @@
+error: type 'Svc' missing #[derive(Debug)]
+  --> $DIR/tests/ui/71_stub_in_impl.rs:3:1
+   |
+LL | struct Svc;
+   | ^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-missing-debug-derive` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_debug_derive)]`
+
+error: stub: todo!()/unimplemented!()
+  --> $DIR/tests/ui/71_stub_in_impl.rs:5:5
+   |
+LL | /     fn rvs_run_AI(&self) {
+LL | |         todo!("implement async run")
+LL | |     }
+   | |_____^
+   |
+   = note: `#[deny(rivus::rvs_stub_macro)]` on by default
+
+error: may panic but suffix lacks P
+  --> $DIR/tests/ui/71_stub_in_impl.rs:5:5
+   |
+LL | /     fn rvs_run_AI(&self) {
+LL | |         todo!("implement async run")
+LL | |     }
+   | |_____^
+   |
+   = note: `-D rivus::rvs-missing-panic` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_panic)]`
+
+error: aborting due to 3 previous errors

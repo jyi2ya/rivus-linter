@@ -1,0 +1,22 @@
+error: duplicate test 'test_20260612_triplicate'
+  --> $DIR/tests/ui/142_testname_triple_dup.rs:5:1
+   |
+LL | fn test_20260612_triplicate() {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-duplicate-test` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_duplicate_test)]`
+
+error: duplicate test 'test_20260612_triplicate'
+  --> $DIR/tests/ui/142_testname_triple_dup.rs:9:5
+   |
+LL |     fn test_20260612_triplicate() {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: duplicate test 'test_20260612_triplicate'
+  --> $DIR/tests/ui/142_testname_triple_dup.rs:14:5
+   |
+LL |     fn test_20260612_triplicate() {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: aborting due to 3 previous errors

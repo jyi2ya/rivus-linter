@@ -1,0 +1,34 @@
+error: {M} → sort (alloc::slice::sort) ({M, P}) missing P(Panic)
+  --> $DIR/tests/ui/86_pure_calls_mutable.rs:4:5
+   |
+LL |     arr.sort();
+   |     ^^^^^^^^^^
+   |
+   = note: `#[deny(rivus::rvs_call_violation)]` on by default
+
+error: {} → {M} missing M(Mutable)
+  --> $DIR/tests/ui/86_pure_calls_mutable.rs:8:5
+   |
+LL |     rvs_sort_M(&mut [3, 1, 2]);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: good fn 'rvs_sort_M' not called by any test
+  --> $DIR/tests/ui/86_pure_calls_mutable.rs:3:1
+   |
+LL | / fn rvs_sort_M(arr: &mut [i32]) {
+LL | |     arr.sort();
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
+
+error: good fn 'rvs_pure' not called by any test
+  --> $DIR/tests/ui/86_pure_calls_mutable.rs:7:1
+   |
+LL | / fn rvs_pure() {
+LL | |     rvs_sort_M(&mut [3, 1, 2]);
+LL | | }
+   | |_^
+
+error: aborting due to 4 previous errors

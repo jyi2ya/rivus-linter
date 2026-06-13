@@ -1,0 +1,22 @@
+error: type 'RepoError' missing #[derive(Debug)]
+  --> $DIR/tests/ui/81_catch_all_other.rs:3:1
+   |
+LL | / enum RepoError {
+LL | |     Io(std::io::Error),
+LL | |     Other(String),
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-missing-debug-derive` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_debug_derive)]`
+
+error: catch-all variant 'Other' in RepoError
+  --> $DIR/tests/ui/81_catch_all_other.rs:5:5
+   |
+LL |     Other(String),
+   |     ^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-catch-all-error-variant` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_catch_all_error_variant)]`
+
+error: aborting due to 2 previous errors

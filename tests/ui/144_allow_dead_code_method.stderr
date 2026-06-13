@@ -1,0 +1,12 @@
+error: rvs_ function marked #[allow(dead_code/unused)]
+  --> $DIR/tests/ui/144_allow_dead_code_method.rs:9:5
+   |
+LL | /     fn rvs_orphan(&self) {
+LL | |         let _ = 42;
+LL | |     }
+   | |_____^
+   |
+   = note: `-D rivus::rvs-dead-code` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_dead_code)]`
+
+error: aborting due to 1 previous error

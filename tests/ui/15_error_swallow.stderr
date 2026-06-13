@@ -7,22 +7,7 @@ LL |     x.ok();
    = note: `-D rivus::rvs-error-swallow` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_error_swallow)]`
 
-error: 'core::result::impl::ok' not in capsmap
-  --> $DIR/tests/ui/15_error_swallow.rs:5:5
-   |
-LL |     x.ok();
-   |     ^^^^^^
-   |
-   = note: `-D rivus::rvs-unknown-callee` implied by `-D warnings`
-   = help: to override `-D warnings` add `#[allow(rivus::rvs_unknown_callee)]`
-
 error: .unwrap_or_default() swallows errors
-  --> $DIR/tests/ui/15_error_swallow.rs:7:5
-   |
-LL |     y.unwrap_or_default();
-   |     ^^^^^^^^^^^^^^^^^^^^^
-
-error: 'core::result::impl::unwrap_or_default' not in capsmap
   --> $DIR/tests/ui/15_error_swallow.rs:7:5
    |
 LL |     y.unwrap_or_default();
@@ -65,4 +50,4 @@ LL | #![expect(non_snake_case)]
    = note: `-D unfulfilled-lint-expectations` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(unfulfilled_lint_expectations)]`
 
-error: aborting due to 7 previous errors
+error: aborting due to 5 previous errors

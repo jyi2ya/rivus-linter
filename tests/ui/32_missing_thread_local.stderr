@@ -1,13 +1,12 @@
-error: 'std::thread::local::impl::with' not in capsmap
+error: {} → with (std::thread::local::with) ({P}) missing P(Panic)
   --> $DIR/tests/ui/32_missing_thread_local.rs:10:5
    |
 LL |     COUNTER.with(|c| *c.borrow())
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
-   = note: `-D rivus::rvs-unknown-callee` implied by `-D warnings`
-   = help: to override `-D warnings` add `#[allow(rivus::rvs_unknown_callee)]`
+   = note: `#[deny(rivus::rvs_call_violation)]` on by default
 
-error: 'core::cell::impl::borrow' not in capsmap
+error: {} → borrow (core::cell::borrow) ({M}) missing M(Mutable)
   --> $DIR/tests/ui/32_missing_thread_local.rs:10:23
    |
 LL |     COUNTER.with(|c| *c.borrow())

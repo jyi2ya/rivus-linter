@@ -1,0 +1,27 @@
+error: type 'Svc' missing #[derive(Debug)]
+  --> $DIR/tests/ui/72_empty_fn_in_impl.rs:3:1
+   |
+LL | struct Svc;
+   | ^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-missing-debug-derive` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_debug_derive)]`
+
+error: empty function body
+  --> $DIR/tests/ui/72_empty_fn_in_impl.rs:5:5
+   |
+LL |     fn rvs_empty_method(&self) {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(rivus::rvs_empty_fn)]` on by default
+
+error: good fn 'rvs_empty_method' not called by any test
+  --> $DIR/tests/ui/72_empty_fn_in_impl.rs:5:5
+   |
+LL |     fn rvs_empty_method(&self) {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
+
+error: aborting due to 3 previous errors
