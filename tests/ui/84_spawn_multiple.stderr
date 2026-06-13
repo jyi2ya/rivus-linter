@@ -7,7 +7,7 @@ LL |     std::thread::spawn(|| {});
    = note: `-D rivus::rvs-spawn-warning` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_spawn_warning)]`
 
-error: {A, B, I, S} → std::thread::spawn (std::thread::functions::spawn) ({B, M, P, S}) missing M(Mutable), P(Panic)
+error: {A, B, I, S} → std::thread::spawn (std::thread::functions::spawn) ({B, P, S}) missing P(Panic)
   --> $DIR/tests/ui/84_spawn_multiple.rs:4:5
    |
 LL |     std::thread::spawn(|| {});
@@ -21,7 +21,7 @@ error: spawn: std::thread::functions::spawn — use structured concurrency
 LL |     std::thread::spawn(|| {});
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^
 
-error: {A, B, I, S} → std::thread::spawn (std::thread::functions::spawn) ({B, M, P, S}) missing M(Mutable), P(Panic)
+error: {A, B, I, S} → std::thread::spawn (std::thread::functions::spawn) ({B, P, S}) missing P(Panic)
   --> $DIR/tests/ui/84_spawn_multiple.rs:5:5
    |
 LL |     std::thread::spawn(|| {});

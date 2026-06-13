@@ -1,16 +1,145 @@
-# ════════════════════════════════════════════════════════════════
-# caps/suppress — Corrections to std function inferred caps
-# ════════════════════════════════════════════════════════════════
-# This file holds manual corrections for std/core/alloc functions whose
-# caps were incorrectly inferred by infer-std (caps/std).
-#
-# For example, if infer-std marked a pure function as having P because
-# it calls unwrap internally, but we know the function never actually
-# panics, we add a correction here to override the inferred caps.
-#
+# suppress — corrections for over-attributed std functions
+# Entries here "freeze" a function's caps — propagation cannot add to them.
 # Loading order: std -> deps -> seed -> suppress -> ext
-# This file is loaded AFTER seed and std, so it overrides both.
-#
-# Format: full_qualified_path=caps
-# Empty caps (=) means the function is pure (no capabilities).
+
 # ════════════════════════════════════════════════════════════════
+# Pure math functions with spurious S (has_static_ref on immutable lookup tables)
+# ════════════════════════════════════════════════════════════════
+
+# compiler_builtins sqrt variants — pure computation, S from immutable tables
+compiler_builtins::math::full_availability::sqrt::sqrt=
+compiler_builtins::math::full_availability::sqrt=
+compiler_builtins::math::full_availability::sqrtf128::sqrtf128=
+compiler_builtins::math::full_availability::sqrtf128=
+compiler_builtins::math::full_availability::sqrtf16::sqrtf16=
+compiler_builtins::math::full_availability::sqrtf16=
+compiler_builtins::math::full_availability::sqrtf::sqrtf=
+compiler_builtins::math::full_availability::sqrtf=
+compiler_builtins::math::libm_math::generic::sqrt::sqrt=
+compiler_builtins::math::libm_math::generic::sqrt::sqrt_round=
+compiler_builtins::math::libm_math::sqrt::sqrt=
+compiler_builtins::math::libm_math::sqrt::sqrtf128=
+compiler_builtins::math::libm_math::sqrt::sqrtf16=
+compiler_builtins::math::libm_math::sqrt::sqrtf=
+
+# compiler_builtins inverse trig/hyperbolic — pure computation, S from sqrt chain
+compiler_builtins::math::libm_math::acos::acos=
+compiler_builtins::math::libm_math::acosf::acosf=
+compiler_builtins::math::libm_math::acosh::acosh=
+compiler_builtins::math::libm_math::acoshf::acoshf=
+compiler_builtins::math::libm_math::asin::asin=
+compiler_builtins::math::libm_math::asinf::asinf=
+compiler_builtins::math::libm_math::asinh::asinh=
+compiler_builtins::math::libm_math::asinhf::asinhf=
+compiler_builtins::math::libm_math::hypot::hypot=
+compiler_builtins::math::libm_math::hypotf::hypotf=
+compiler_builtins::math::libm_math::k_tan::k_tan=
+
+# compiler_builtins fma — pure computation, S from static tables
+compiler_builtins::math::full_availability::fma::fma=
+compiler_builtins::math::full_availability::fma=
+compiler_builtins::math::full_availability::fmaf::fmaf=
+compiler_builtins::math::full_availability::fmaf=
+compiler_builtins::math::libm_math::fma::fma=
+compiler_builtins::math::libm_math::fma::fmaf=
+
+# compiler_builtins other math — pure computation, S from static tables
+# P from assertions/unwraps on algorithm invariants (spurious for math)
+compiler_builtins::math::libm_math::exp10::exp10=
+compiler_builtins::math::libm_math::exp10f::exp10f=
+compiler_builtins::math::libm_math::exp2::exp2=
+compiler_builtins::math::libm_math::exp2f::exp2f=
+compiler_builtins::math::libm_math::j0::common=
+compiler_builtins::math::libm_math::j0::j0=
+compiler_builtins::math::libm_math::j0::y0=
+compiler_builtins::math::libm_math::j0f::common=
+compiler_builtins::math::libm_math::j0f::j0f=
+compiler_builtins::math::libm_math::j0f::y0f=
+compiler_builtins::math::libm_math::j1::common=
+compiler_builtins::math::libm_math::j1::j1=
+compiler_builtins::math::libm_math::j1::y1=
+compiler_builtins::math::libm_math::j1f::common=
+compiler_builtins::math::libm_math::j1f::j1f=
+compiler_builtins::math::libm_math::j1f::y1f=
+compiler_builtins::math::libm_math::jn::jn=
+compiler_builtins::math::libm_math::jn::yn=
+compiler_builtins::math::libm_math::jnf::jnf=
+compiler_builtins::math::libm_math::jnf::ynf=
+compiler_builtins::math::libm_math::pow::pow=
+compiler_builtins::math::libm_math::powf::powf=
+compiler_builtins::math::libm_math::tan::tan=
+compiler_builtins::math::libm_math::tgamma::tgamma=
+compiler_builtins::math::libm_math::tgammaf::tgammaf=
+
+# ════════════════════════════════════════════════════════════════
+# Unicode/char functions with spurious S (immutable Unicode lookup tables)
+# ════════════════════════════════════════════════════════════════
+
+# Unicode data lookup functions — binary search on immutable tables
+core::unicode::unicode_data::alphabetic::lookup_slow=
+core::unicode::unicode_data::case_ignorable::lookup_slow=
+core::unicode::unicode_data::conversions::to_lower=
+core::unicode::unicode_data::conversions::to_title=
+core::unicode::unicode_data::conversions::to_upper=
+core::unicode::unicode_data::grapheme_extend::lookup_slow=
+core::unicode::unicode_data::lt::lookup_slow=
+core::unicode::unicode_data::n::lookup_slow=
+
+# Unicode data lookup wrappers — keep P (bounds-check panic), remove S
+core::unicode::unicode_data::alphabetic::lookup=P
+core::unicode::unicode_data::case_ignorable::lookup=P
+core::unicode::unicode_data::grapheme_extend::lookup=P
+core::unicode::unicode_data::lowercase::lookup=P
+core::unicode::unicode_data::lt::lookup=P
+core::unicode::unicode_data::n::lookup=P
+core::unicode::unicode_data::uppercase::lookup=P
+core::unicode::unicode_data::white_space::lookup=P
+
+# char methods — keep P (allocation/panic), remove S
+core::char::methods::char::case=P
+core::char::methods::char::escape_debug=P
+core::char::methods::char::escape_debug_ext=P
+core::char::methods::char::is_alphabetic=P
+core::char::methods::char::is_alphanumeric=P
+core::char::methods::char::is_case_ignorable=P
+core::char::methods::char::is_cased=P
+core::char::methods::char::is_grapheme_extended=P
+core::char::methods::char::is_lowercase=P
+core::char::methods::char::is_numeric=P
+core::char::methods::char::is_titlecase=P
+core::char::methods::char::is_uppercase=P
+core::char::methods::char::is_whitespace=P
+core::char::methods::char::to_lowercase=
+core::char::methods::char::to_titlecase=
+core::char::methods::char::to_uppercase=
+
+# ════════════════════════════════════════════════════════════════
+# String/number parsing with spurious S
+# ════════════════════════════════════════════════════════════════
+
+# alloc string — keep P (allocation), remove S from fmt internals
+alloc::str::str::to_lowercase=P
+alloc::str::str::to_uppercase=P
+alloc::str::to_lowercase::case_ignorable_then_cased=P
+alloc::str::to_lowercase::map_uppercase_sigma=P
+alloc::string::spec_to_string@alloc::string::SpecToString=P
+
+# Float parsing — keep P (parsing errors), remove S from static tables
+core::num::float_parse::from_str@core::str::traits::FromStr=P
+core::num::imp::dec2flt::dec2flt=P
+core::num::imp::dec2flt::lemire::compute_float=P
+
+# Pure computation with spurious P+S (algorithm invariant assertions + static tables)
+core::num::imp::dec2flt::lemire::compute_product_approx=
+core::num::imp::flt2dec::strategy::grisu::cached_power=
+
+# ════════════════════════════════════════════════════════════════
+# Other functions with spurious S
+# ════════════════════════════════════════════════════════════════
+
+# Waker creation — function pointer storage, no real side effect
+core::task::wake::LocalWaker::from_fn_ptr=
+core::task::wake::Waker::from_fn_ptr=
+
+# str escape — keep P (allocation), remove S
+core::str::str::escape_debug=P
