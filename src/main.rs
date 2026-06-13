@@ -701,6 +701,55 @@ fn rvs_load_seed_capsmap_BIMS(path: &Path, seed_path: &Path) -> capsmap::CapsMap
     }
 }
 
+/// Load all caps files from a directory, except `deps`.
+/// Used by infer-capsmap to avoid loading the file it's regenerating.
+fn rvs_load_caps_excluding_deps_BIMS(dir: &Path) -> capsmap::CapsMap {
+    let mut result = capsmap::CapsMap::rvs_new();
+    if !dir.is_dir() {
+        return result;
+    }
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("warning: {}: {e}", dir.display());
+            return result;
+        }
+    };
+    let mut files: Vec<std::path::PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.is_file()
+                && p.file_name()
+                    .is_some_and(|n| n != std::ffi::OsStr::new("deps"))
+        })
+        .collect();
+    // Same layer order as rvs_load_from_dir_BIMS
+    const LAYER_ORDER: &[&str] = &["std", "seed", "suppress", "ext"];
+    files.sort_by(|a, b| {
+        let a_name = a.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let b_name = b.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let a_layer = LAYER_ORDER.iter().position(|&n| n == a_name);
+        let b_layer = LAYER_ORDER.iter().position(|&n| n == b_name);
+        match (a_layer, b_layer) {
+            (Some(al), Some(bl)) => al.cmp(&bl),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => a_name.cmp(&b_name),
+        }
+    });
+    for path in &files {
+        let content = std::fs::read_to_string(path).unwrap_or_else(|e| {
+            eprintln!("warning: {}: {e}", path.display());
+            String::new()
+        });
+        if let Ok(cm) = capsmap::CapsMap::rvs_parse(&content) {
+            result.rvs_extend_from_M(cm);
+        }
+    }
+    result
+}
+
 fn rvs_write_capsmap_result_BIS(
     result: &str,
     default_path: &Path,
@@ -872,9 +921,14 @@ fn rvs_run_infer_capsmap_BIMPS(
     };
 
     let callgraph =
-        rvs_run_cargo_check_for_callgraph_BIMPS(path, vec![("RIVUS_CAPSMAP", abs_seed)])?;
+        rvs_run_cargo_check_for_callgraph_BIMPS(path, vec![("RIVUS_CAPSMAP", abs_seed.clone())])?;
 
-    let seed = rvs_load_seed_capsmap_BIMS(path, seed_capsmap);
+    // Load caps for inference, but exclude deps — it's what we're regenerating.
+    let seed = if seed_capsmap.is_dir() {
+        rvs_load_caps_excluding_deps_BIMS(seed_capsmap)
+    } else {
+        rvs_load_seed_capsmap_BIMS(path, seed_capsmap)
+    };
 
     let inferred = rvs_infer_caps_M(&callgraph, &seed);
 
