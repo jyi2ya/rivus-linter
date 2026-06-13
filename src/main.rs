@@ -500,13 +500,35 @@ fn rvs_run_report_BIMPS(path: &Path) {
     rvs_clean_dir(&build_dir);
     let mut cmd = Command::new(env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
     cmd.current_dir(path)
-        .env("RUSTC_WORKSPACE_WRAPPER", self_path)
+        .env("RUSTC_WORKSPACE_WRAPPER", &self_path)
         .env("RIVUS_ENABLED", "1")
         .env("RIVUS_REPORT", "1")
-        .env("RIVUS_REPORT_DIR", abs_report_dir)
-        .arg("check")
-        .arg("--target-dir")
-        .arg(&build_dir);
+        .env("RIVUS_REPORT_DIR", abs_report_dir);
+
+    // Load caps/ directory (same logic as check)
+    let project_caps = if path.is_absolute() {
+        path.join("caps")
+    } else {
+        std::env::current_dir()
+            .expect("current dir invalid")
+            .join(path)
+            .join("caps")
+    };
+    if project_caps.is_dir() {
+        cmd.env("RIVUS_CAPSMAP", &project_caps);
+    } else {
+        let built_in_caps = self_path.parent().and_then(|exe_dir| {
+            exe_dir
+                .parent()
+                .and_then(|p| p.parent())
+                .map(|root| root.join("caps"))
+        });
+        if let Some(dir) = built_in_caps.filter(|p| p.is_dir()) {
+            cmd.env("RIVUS_CAPSMAP", dir);
+        }
+    }
+
+    cmd.arg("check").arg("--target-dir").arg(&build_dir);
     let exit_status = cmd
         .spawn()
         .expect("could not run cargo")
@@ -862,8 +884,14 @@ fn rvs_run_infer_capsmap_BIMPS(
         .map_err(|e| format!("cannot write {}: {e}", cache_path.display()))?;
 
     let crate_name = rvs_detect_crate_name_BIS(path)?;
-    let (direct_external_calls, unknown_callees) =
-        rvs_collect_direct_external_deps(&callgraph, &crate_name, &seed, &inferred);
+    let impl_index = rvs_build_impl_index(&callgraph);
+    let (direct_external_calls, unknown_callees) = rvs_collect_direct_external_deps(
+        &callgraph,
+        &crate_name,
+        &seed,
+        &inferred,
+        &impl_index,
+    );
 
     if !unknown_callees.is_empty() {
         let mut msg = String::from(
@@ -1135,6 +1163,30 @@ impl From<JsonFnBehavior> for ParsedFnBehavior {
     }
 }
 
+/// Build a "method@trait_path" → set-of-keys index from callgraph keys.
+///
+/// Callgraph keys for trait impl methods look like:
+///   std::fs::read@std::io::Read
+///   kovi_plugin_irc_gateway::config::deserialize@serde::de::Deserialize
+///
+/// This index allows resolving trait method callees (e.g. `serde::de::Deserializer::deserialize_any`)
+/// by finding all impl methods with matching `@trait_path`.
+fn rvs_build_impl_index(
+    callgraph: &BTreeMap<String, ParsedFnBehavior>,
+) -> HashMap<String, Vec<String>> {
+    let mut idx: HashMap<String, Vec<String>> = HashMap::new();
+    for key in callgraph.keys() {
+        if let Some(at_pos) = key.find('@') {
+            let suffix = &key[at_pos + 1..];
+            let method = &key[..at_pos];
+            let method_name = method.rsplit("::").next().unwrap_or(method);
+            let lookup = format!("{method_name}@{suffix}");
+            idx.entry(lookup).or_default().push(key.clone());
+        }
+    }
+    idx
+}
+
 fn rvs_infer_caps_M(
     callgraph: &BTreeMap<String, ParsedFnBehavior>,
     seed: &capsmap::CapsMap,
@@ -1181,29 +1233,7 @@ fn rvs_infer_caps_M(
         }
     }
 
-    // Build a "method@trait_path" → set-of-keys index for impl-union.
-    //
-    // Callgraph keys for impl methods now look like:
-    //   std::fs::read@std::io::Read     (trait impl method)
-    //   std::vec::push                   (inherent method, no @)
-    //
-    // When a callee is a trait method definition (e.g. `std::io::Read::read`),
-    // we construct "read@std::io::Read" and look up all matching keys.
-    let impl_index: HashMap<String, Vec<String>> = {
-        let mut idx: HashMap<String, Vec<String>> = HashMap::new();
-        for key in callgraph.keys() {
-            if let Some(at_pos) = key.find('@') {
-                // Everything after the module prefix and before @ is the method name.
-                // The full lookup key is "method@trait_path".
-                let suffix = &key[at_pos + 1..]; // "std::io::Read"
-                let method = &key[..at_pos]; // "std::fs::read"
-                let method_name = method.rsplit("::").next().unwrap_or(method);
-                let lookup = format!("{method_name}@{suffix}");
-                idx.entry(lookup).or_default().push(key.clone());
-            }
-        }
-        idx
-    };
+    let impl_index = rvs_build_impl_index(&callgraph);
 
     // Propagation: iterate until fixpoint (no new caps are added).
     //
@@ -1314,11 +1344,10 @@ fn rvs_resolve_impl_union_M(
         }
     }
 
-    if !union.rvs_is_empty() {
-        Some(union)
-    } else {
-        None
-    }
+    // Return the union, even if empty. An empty result means "this trait
+    // method is known to be pure" (all impls are pure), which is different
+    // from None ("unknown — no impls found at all").
+    Some(union)
 }
 
 fn rvs_format_capsmap(caps: &BTreeMap<String, CapabilitySet>) -> String {
@@ -1349,6 +1378,7 @@ fn rvs_collect_direct_external_deps(
     crate_name: &str,
     seed: &capsmap::CapsMap,
     inferred: &BTreeMap<String, CapabilitySet>,
+    impl_index: &HashMap<String, Vec<String>>,
 ) -> (
     BTreeMap<String, CapabilitySet>,
     BTreeMap<String, BTreeSet<String>>,
@@ -1364,11 +1394,16 @@ fn rvs_collect_direct_external_deps(
             if callee.starts_with(&crate_prefix) {
                 continue;
             }
+            // Skip any callee already covered by loaded caps (std/deps/seed/ext)
             if seed.rvs_lookup(callee).is_some() {
                 continue;
             }
             if let Some(caps) = inferred.get(callee) {
                 known.entry(callee.clone()).or_insert_with(|| caps.clone());
+            } else if let Some(caps) =
+                rvs_resolve_impl_union_M(callee, impl_index, inferred)
+            {
+                known.entry(callee.clone()).or_insert(caps);
             } else {
                 unknown
                     .entry(callee.clone())
@@ -2141,22 +2176,22 @@ mod tests {
         // not silently skip them or mark them as pure.
         let mut callgraph: BTreeMap<String, ParsedFnBehavior> = BTreeMap::new();
         let mut behavior = rvs_make_behavior();
-        behavior.calls.insert("std::time::impl::now".into());
+        behavior.calls.insert("some_external_crate::unknown_fn".into());
         callgraph.insert("my_crate::caller".into(), behavior);
 
         let seed = capsmap::CapsMap::rvs_new();
         let inferred: BTreeMap<String, CapabilitySet> = BTreeMap::new();
 
         let (known, unknown) =
-            rvs_collect_direct_external_deps(&callgraph, "my_crate", &seed, &inferred);
+            rvs_collect_direct_external_deps(&callgraph, "my_crate", &seed, &inferred, &HashMap::new());
 
         assert!(known.is_empty());
         assert!(
-            unknown.contains_key("std::time::impl::now"),
+            unknown.contains_key("some_external_crate::unknown_fn"),
             "unknown callee must be reported as error"
         );
         assert_eq!(unknown.len(), 1);
-        assert!(unknown["std::time::impl::now"].contains("my_crate::caller"));
+        assert!(unknown["some_external_crate::unknown_fn"].contains("my_crate::caller"));
     }
 
     #[test]
@@ -2164,21 +2199,21 @@ mod tests {
         // If a callee IS in the inferred map, it goes to known, not unknown.
         let mut callgraph: BTreeMap<String, ParsedFnBehavior> = BTreeMap::new();
         let mut behavior = rvs_make_behavior();
-        behavior.calls.insert("std::fs::read_to_string".into());
+        behavior.calls.insert("some_external_crate::known_fn".into());
         callgraph.insert("my_crate::caller".into(), behavior);
 
         let seed = capsmap::CapsMap::rvs_new();
         let mut inferred: BTreeMap<String, CapabilitySet> = BTreeMap::new();
         inferred.insert(
-            "std::fs::read_to_string".into(),
+            "some_external_crate::known_fn".into(),
             CapabilitySet::rvs_from_validated("BI"),
         );
 
         let (known, unknown) =
-            rvs_collect_direct_external_deps(&callgraph, "my_crate", &seed, &inferred);
+            rvs_collect_direct_external_deps(&callgraph, "my_crate", &seed, &inferred, &HashMap::new());
 
         let caps = known
-            .get("std::fs::read_to_string")
+            .get("some_external_crate::known_fn")
             .expect("should have entry in known");
         assert!(caps.rvs_contains(Capability::B));
         assert!(caps.rvs_contains(Capability::I));
@@ -2197,7 +2232,7 @@ mod tests {
         let inferred: BTreeMap<String, CapabilitySet> = BTreeMap::new();
 
         let (known, unknown) =
-            rvs_collect_direct_external_deps(&callgraph, "my_crate", &seed, &inferred);
+            rvs_collect_direct_external_deps(&callgraph, "my_crate", &seed, &inferred, &HashMap::new());
 
         assert!(!known.contains_key("std::fs::write"));
         assert!(!unknown.contains_key("std::fs::write"));
