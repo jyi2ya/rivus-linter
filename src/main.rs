@@ -1467,7 +1467,7 @@ fn rvs_infer_caps_M(
                 });
                 if let Some(cc) = callee_caps {
                     for cap in cc.rvs_iter() {
-                        if matches!(cap, Capability::A | Capability::U) {
+                        if matches!(cap, Capability::A | Capability::M | Capability::U) {
                             continue;
                         }
                         if !combined.rvs_contains(cap) {
@@ -2181,10 +2181,10 @@ mod tests {
         //   &[u8]::read  → M    (pure read)
         //
         // Majority vote (≥50% = ≥2 out of 3):
-        //   M: 3/3 → ✅ propagate
         //   P: 2/3 → ✅ propagate
         //   B: 1/3 → ❌ don't propagate
         //   I: 1/3 → ❌ don't propagate
+        //   M: 3/3 → ❌ don't propagate (inferred from signature only)
         let mut callgraph: BTreeMap<String, ParsedFnBehavior> = BTreeMap::new();
 
         // The caller calls Read::read (trait method def, not in callgraph as key)
@@ -2213,9 +2213,10 @@ mod tests {
 
         let result = rvs_infer_caps_M(&callgraph, &seed);
 
-        // Caller should get MP (majority) but not B or I (minority)
+        // Caller should get P (majority) but not B, I, or M
+        // M is not propagated — only inferred from has_mut_param
         let caller_caps = result.get("my_crate::rvs_copy").expect("caller exists");
-        assert!(caller_caps.rvs_contains(Capability::M), "M: 3/3 = majority");
+        assert!(!caller_caps.rvs_contains(Capability::M), "M: not propagated");
         assert!(caller_caps.rvs_contains(Capability::P), "P: 2/3 = majority");
         assert!(
             !caller_caps.rvs_contains(Capability::B),
