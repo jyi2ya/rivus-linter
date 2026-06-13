@@ -1,4 +1,4 @@
-error: {M} → sort (alloc::slice::sort) ({M, P}) missing P(Panic)
+error: {M} → sort (alloc::slice::[T]::sort) ({M, P}) missing P(Panic)
   --> $DIR/tests/ui/86_pure_calls_mutable.rs:4:5
    |
 LL |     arr.sort();

@@ -2216,7 +2216,10 @@ mod tests {
         // Caller should get P (majority) but not B, I, or M
         // M is not propagated — only inferred from has_mut_param
         let caller_caps = result.get("my_crate::rvs_copy").expect("caller exists");
-        assert!(!caller_caps.rvs_contains(Capability::M), "M: not propagated");
+        assert!(
+            !caller_caps.rvs_contains(Capability::M),
+            "M: not propagated"
+        );
         assert!(caller_caps.rvs_contains(Capability::P), "P: 2/3 = majority");
         assert!(
             !caller_caps.rvs_contains(Capability::B),
@@ -2461,5 +2464,50 @@ mod tests {
 
         assert!(!known.contains_key("std::fs::write"));
         assert!(!unknown.contains_key("std::fs::write"));
+    }
+
+    #[test]
+    fn test_20260613_inherent_impl_no_collision() {
+        // Regression test for def_path collision:
+        // Before the fix, rvs_def_path dropped the type name from
+        // inherent impl blocks, causing SystemTime::now() and
+        // Instant::now() to both appear as "std::time::now" in the
+        // callgraph.  The seed entry "std::time::SystemTime::now=S"
+        // could not match "std::time::now".
+        //
+        // After the fix, inherent impl methods include the type name:
+        //   SystemTime::now() → "std::time::SystemTime::now"
+        //   Instant::now()    → "std::time::Instant::now"
+        //
+        // This test verifies that seed entries with the full
+        // Type::method path are correctly matched when they appear as
+        // callees in the callgraph.
+
+        // Simulate a caller that calls SystemTime::now (now with the
+        // correct def_path that includes the type name).
+        let mut callgraph: BTreeMap<String, ParsedFnBehavior> = BTreeMap::new();
+        let mut behavior = rvs_make_behavior();
+        behavior.calls.insert("std::time::SystemTime::now".into());
+        callgraph.insert("my_crate::rvs_get_time".into(), behavior);
+
+        // Seed entry uses the full path with the type name.
+        let seed = capsmap::CapsMap::rvs_parse("std::time::SystemTime::now=S").unwrap();
+
+        let inferred: BTreeMap<String, CapabilitySet> = BTreeMap::new();
+
+        let (known, unknown) = rvs_collect_direct_external_deps(
+            &callgraph,
+            "my_crate",
+            &seed,
+            &inferred,
+            &HashMap::new(),
+        );
+
+        // The callee should be found in seed (not known, not unknown).
+        assert!(
+            !unknown.contains_key("std::time::SystemTime::now"),
+            "seed entry should match the full def_path"
+        );
+        assert!(!known.contains_key("std::time::SystemTime::now"));
     }
 }

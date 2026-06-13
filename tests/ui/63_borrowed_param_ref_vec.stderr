@@ -1,11 +1,3 @@
-error: {} → iter (core::slice::iter) ({M}) missing M(Mutable)
-  --> $DIR/tests/ui/63_borrowed_param_ref_vec.rs:4:5
-   |
-LL |     xs.iter().sum()
-   |     ^^^^^^^^^
-   |
-   = note: `#[deny(rivus::rvs_call_violation)]` on by default
-
 error: &Vec — use &[T] instead
   --> $DIR/tests/ui/63_borrowed_param_ref_vec.rs:3:20
    |
@@ -37,4 +29,4 @@ LL | | }
    = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
 
-error: aborting due to 4 previous errors
+error: aborting due to 3 previous errors

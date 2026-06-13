@@ -1650,6 +1650,23 @@ fn rvs_plast(q: &QPath<'_>) -> Option<String> {
 fn rvs_def_path(cx: &LateContext<'_>, did: DefId) -> String {
     let tcx = cx.tcx;
     let dp = tcx.def_path(did);
+    // If `did` is an associated item (method) inside an inherent impl,
+    // we recover the self-type name from the impl block to insert into
+    // the path.  `DefPathData::Impl` does not carry the type name — we
+    // must look it up via `tcx.type_of(impl_def_id)`.
+    let inherent_impl_ty: Option<String> = cx
+        .tcx
+        .opt_associated_item(did)
+        .map(|assoc| (assoc, assoc.container_id(cx.tcx)))
+        .and_then(|(_, impl_def_id)| {
+            if let rustc_hir::def::DefKind::Impl { of_trait: false } = cx.tcx.def_kind(impl_def_id)
+            {
+                rvs_inherent_impl_type_name(cx, impl_def_id)
+            } else {
+                None
+            }
+        });
+
     let mut parts = vec![tcx.crate_name(dp.krate).to_string()];
     let mut has_impl = false;
     for d in &dp.data {
@@ -1660,9 +1677,14 @@ fn rvs_def_path(cx: &LateContext<'_>, did: DefId) -> String {
                 parts.push(s.to_string());
             }
             rustc_hir::definitions::DefPathData::Impl => {
-                // Skip the Impl segment entirely — the @TraitPath suffix
-                // already disambiguates trait impls, and inherent impls
-                // don't need disambiguation (method names are unique per type).
+                // For inherent impls, insert the self-type name so that
+                // methods on different types with the same name don't
+                // collide (e.g. `SystemTime::now` vs `Instant::now`).
+                // For trait impls, the `@TraitPath` suffix handles
+                // disambiguation.
+                if let Some(ref ty_name) = inherent_impl_ty {
+                    parts.push(ty_name.clone());
+                }
                 has_impl = true;
             }
             rustc_hir::definitions::DefPathData::Closure => {
@@ -1687,6 +1709,28 @@ fn rvs_def_path(cx: &LateContext<'_>, did: DefId) -> String {
     }
 
     path
+}
+
+/// Extract the type name from an inherent impl block's self-type.
+///
+/// For `impl SystemTime { fn now() }` this returns `"SystemTime"`.
+/// Returns `None` for complex types (generics, tuples, etc.) where a
+/// simple name cannot be extracted.
+fn rvs_inherent_impl_type_name(cx: &LateContext<'_>, impl_def_id: DefId) -> Option<String> {
+    let self_ty = cx.tcx.type_of(impl_def_id).skip_binder();
+    let ty_str = self_ty.to_string();
+    // Extract the last path segment — for `SystemTime` this is just
+    // "SystemTime", for `alloc::vec::Vec<T>` it would be "Vec".
+    // We only care about the simple type name, not generic args.
+    match self_ty.kind() {
+        rustc_middle::ty::TyKind::Adt(adt_def, _) => {
+            cx.tcx.item_name(adt_def.did()).to_string().into()
+        }
+        _ => {
+            // Fallback: take the last `::` segment of the type string
+            ty_str.rsplit("::").next().map(|s| s.to_string())
+        }
+    }
 }
 
 fn rvs_ty_last_ident(ty: &rustc_hir::Ty<'_>) -> Option<String> {

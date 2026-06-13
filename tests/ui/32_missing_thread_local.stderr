@@ -1,16 +1,10 @@
-error: {} → with (std::thread::local::with) ({P}) missing P(Panic)
+error: {} → with (std::thread::local::LocalKey::with) ({P}) missing P(Panic)
   --> $DIR/tests/ui/32_missing_thread_local.rs:10:5
    |
 LL |     COUNTER.with(|c| *c.borrow())
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
    = note: `#[deny(rivus::rvs_call_violation)]` on by default
-
-error: {} → borrow (core::cell::borrow) ({M}) missing M(Mutable)
-  --> $DIR/tests/ui/32_missing_thread_local.rs:10:23
-   |
-LL |     COUNTER.with(|c| *c.borrow())
-   |                       ^^^^^^^^^^
 
 error: good fn 'rvs_get_tls' not called by any test
   --> $DIR/tests/ui/32_missing_thread_local.rs:9:1
@@ -32,4 +26,4 @@ LL | #![expect(non_snake_case)]
    = note: `-D unfulfilled-lint-expectations` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(unfulfilled_lint_expectations)]`
 
-error: aborting due to 4 previous errors
+error: aborting due to 3 previous errors
