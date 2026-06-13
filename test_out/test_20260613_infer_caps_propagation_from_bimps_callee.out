@@ -1,5 +1,5 @@
-std::process::impl::spawn=BIMPS
+std::process::impl::spawn=BIMPS # Blocking IO Mutable Panic SideEffect
 std::sys::cycle_a=
 std::sys::cycle_b=
-std::sys::pal::unix::kernel_copy::rvs_write=BIS
-std::sys::process::unix::unix::impl::spawn=BIMPS
+std::sys::pal::unix::kernel_copy::rvs_write=BIS # Blocking IO SideEffect
+std::sys::process::unix::unix::impl::spawn=BIMPS # Blocking IO Mutable Panic SideEffect

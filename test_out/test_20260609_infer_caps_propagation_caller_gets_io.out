@@ -1,2 +1,2 @@
-my_crate::rvs_process=BI
-std::fs::read_to_string=BI
+my_crate::rvs_process=BI # Blocking IO
+std::fs::read_to_string=BI # Blocking IO

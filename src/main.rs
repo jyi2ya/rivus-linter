@@ -1354,8 +1354,18 @@ fn rvs_format_capsmap(caps: &BTreeMap<String, CapabilitySet>) -> String {
     let mut lines: Vec<String> = caps
         .iter()
         .map(|(name, cs)| {
-            let caps_str: String = cs.rvs_iter().map(|c| c.rvs_as_char()).collect();
-            format!("{name}={caps_str}")
+            let caps_vec: Vec<Capability> = cs.rvs_iter().collect();
+            let caps_str: String = caps_vec.iter().map(|c| c.rvs_as_char()).collect();
+            if caps_str.is_empty() {
+                format!("{name}=")
+            } else {
+                let desc: String = caps_vec
+                    .iter()
+                    .map(|c| c.rvs_description())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                format!("{name}={caps_str} # {desc}")
+            }
         })
         .collect();
     lines.sort();
@@ -2084,7 +2094,7 @@ mod tests {
         );
         let output = rvs_format_capsmap(&map);
         rvs_snapshot("test_20260609_format_capsmap_single_entry", &output);
-        assert_eq!(output, "std::fs::read=BI\n");
+        assert_eq!(output, "std::fs::read=BI # Blocking IO\n");
     }
 
     #[test]
