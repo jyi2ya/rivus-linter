@@ -182,6 +182,14 @@ enum Commands {
         #[arg(short = 'o', long = "output")]
         output: Option<PathBuf>,
     },
+    /// Show why a function has its caps (prints callees and their caps)
+    Why {
+        /// Function def_path to explain (e.g. std::fs::read)
+        function: String,
+        /// Path to project directory (must contain Cargo.toml)
+        #[arg(default_value = ".")]
+        path: PathBuf,
+    },
     /// Display the detailed tool manual
     Usage,
 }
@@ -244,6 +252,12 @@ fn main() -> ExitCode {
         }
         Some(Commands::Annotate { path }) => {
             if let Err(e) = rvs_run_annotate_BIMPS(&path) {
+                eprintln!("Error: {e}");
+                return ExitCode::from(2u8);
+            }
+        }
+        Some(Commands::Why { function, path }) => {
+            if let Err(e) = rvs_run_why_BIMPS(&function, &path) {
                 eprintln!("Error: {e}");
                 return ExitCode::from(2u8);
             }
@@ -438,6 +452,7 @@ struct JsonFnBehavior {
     has_static_ref: bool,
     has_static_mut_ref: bool,
     has_thread_local_ref: bool,
+    #[serde(default)]
     is_trait_impl: bool,
 }
 
@@ -897,6 +912,124 @@ fn rvs_run_annotate_BIMPS(path: &Path) -> Result<(), String> {
         rename_map.len(),
         files_changed
     );
+    Ok(())
+}
+
+/// # Panics
+///
+/// Panics if the current executable path, current directory, or cargo cannot be resolved.
+fn rvs_run_why_BIMPS(function: &str, path: &Path) -> Result<(), String> {
+    if !path.is_dir() {
+        return Err(format!("'{}' is not a directory", path.display()));
+    }
+
+    // Reuse cached callgraph if available, otherwise collect fresh.
+    // Merge both rivus-callgraph (project deps) and rivus-callgraph-std (std).
+    let cg_dir = path.join("target").join("rivus-callgraph");
+    let cg_std_dir = path.join("target").join("rivus-callgraph-std");
+    let callgraph = if cg_dir.is_dir() || cg_std_dir.is_dir() {
+        let mut merged = BTreeMap::new();
+        if cg_dir.is_dir() {
+            merged.append(&mut rvs_merge_callgraph_dir_BI(&cg_dir)?);
+        }
+        if cg_std_dir.is_dir() {
+            merged.append(&mut rvs_merge_callgraph_dir_BI(&cg_std_dir)?);
+        }
+        merged
+    } else {
+        eprintln!("(no cached callgraph found, collecting fresh...)");
+        rvs_run_cargo_check_for_callgraph_BIMPS(path, vec![])?
+    };
+
+    // Load caps (all layers except deps)
+    let caps_dir = path.join("caps");
+    let seed = if caps_dir.is_dir() {
+        rvs_load_caps_excluding_deps_BIMS(&caps_dir)
+    } else {
+        capsmap::CapsMap::rvs_new()
+    };
+
+    let inferred = rvs_infer_caps_M(&callgraph, &seed);
+    let impl_index = rvs_build_impl_index(&callgraph);
+
+    // Find the function
+    let Some(behavior) = callgraph.get(function) else {
+        let candidates: Vec<&String> = callgraph
+            .keys()
+            .filter(|k| k.contains(function))
+            .take(10)
+            .collect();
+        if candidates.is_empty() {
+            return Err(format!("function '{function}' not found in callgraph"));
+        }
+        eprintln!("Exact match not found. Did you mean:");
+        for c in &candidates {
+            let caps_str = inferred.get(*c).map(|cs| {
+                let s: String = cs.rvs_iter().map(|c| c.rvs_as_char()).collect();
+                if s.is_empty() { " (pure)".to_string() } else { format!(" = {s}") }
+            }).unwrap_or_else(|| " (unknown)".to_string());
+            eprintln!("  {c}{caps_str}");
+        }
+        return Ok(());
+    };
+
+    // Print the function's own caps
+    let own_caps = inferred.get(function);
+    let caps_str = match own_caps {
+        Some(cs) => {
+            let s: String = cs.rvs_iter().map(|c| c.rvs_as_char()).collect();
+            if s.is_empty() {
+                " (pure)".to_string()
+            } else {
+                let desc: String = cs.rvs_iter().map(|c| c.rvs_description()).collect::<Vec<_>>().join(" ");
+                format!(" = {s} ({desc})")
+            }
+        }
+        None => " (not in inferred)".to_string(),
+    };
+    println!("{function}{caps_str}");
+    println!();
+
+    if behavior.calls.is_empty() {
+        println!("  (no callees)");
+        return Ok(());
+    }
+
+    // Print each callee and its caps
+    let mut callees: Vec<(&String, Option<CapabilitySet>)> = behavior
+        .calls
+        .iter()
+        .map(|callee| {
+            let caps = inferred
+                .get(callee)
+                .cloned()
+                .or_else(|| seed.rvs_lookup(callee).cloned())
+                .or_else(|| {
+                    if !callee.contains('@') {
+                        rvs_resolve_impl_union_M(callee, &impl_index, &inferred)
+                    } else {
+                        None
+                    }
+                });
+            (callee, caps)
+        })
+        .collect();
+    callees.sort_by(|a, b| a.0.cmp(b.0));
+
+    println!("  callees:");
+    for (callee, caps) in &callees {
+        let s = match caps {
+            Some(cs) if !cs.rvs_is_empty() => {
+                let chars: String = cs.rvs_iter().map(|c| c.rvs_as_char()).collect();
+                let desc: String = cs.rvs_iter().map(|c| c.rvs_description()).collect::<Vec<_>>().join(" ");
+                format!("{chars} ({desc})")
+            }
+            Some(_) => "(pure)".to_string(),
+            None => "(unknown)".to_string(),
+        };
+        println!("    {callee}: {s}");
+    }
+
     Ok(())
 }
 
