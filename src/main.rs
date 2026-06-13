@@ -742,8 +742,14 @@ fn rvs_load_caps_excluding_deps_BIMS(dir: &Path) -> capsmap::CapsMap {
     // Same layer order as rvs_load_from_dir_BIMS
     const LAYER_ORDER: &[&str] = &["std", "seed", "suppress", "ext"];
     files.sort_by(|a, b| {
-        let a_name = a.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        let b_name = b.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let a_name = a
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let b_name = b
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
         let a_layer = LAYER_ORDER.iter().position(|&n| n == a_name);
         let b_layer = LAYER_ORDER.iter().position(|&n| n == b_name);
         match (a_layer, b_layer) {
@@ -787,19 +793,13 @@ fn rvs_detect_crate_name_BIS(path: &Path) -> Result<String, String> {
     let cargo_toml = path.join("Cargo.toml");
     let content = std::fs::read_to_string(&cargo_toml)
         .map_err(|e| format!("cannot read {}: {e}", cargo_toml.display()))?;
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix("name") {
-            let rest = rest.trim();
-            if let Some(rest) = rest.strip_prefix('=') {
-                let name = rest.trim().trim_matches('"').trim_matches('\'');
-                if !name.is_empty() {
-                    return Ok(name.replace('-', "_"));
-                }
-            }
-        }
-    }
-    Err("Cargo.toml missing [package].name".into())
+    let doc: toml_edit::DocumentMut = content
+        .parse()
+        .map_err(|e| format!("invalid TOML in {}: {e}", cargo_toml.display()))?;
+    doc["package"]["name"]
+        .as_str()
+        .map(|s| s.replace('-', "_"))
+        .ok_or_else(|| format!("{}: missing [package].name", cargo_toml.display()))
 }
 
 fn rvs_clean_dir(path: &Path) {
@@ -964,10 +964,17 @@ fn rvs_run_why_BIMPS(function: &str, path: &Path) -> Result<(), String> {
         }
         eprintln!("Exact match not found. Did you mean:");
         for c in &candidates {
-            let caps_str = inferred.get(*c).map(|cs| {
-                let s: String = cs.rvs_iter().map(|c| c.rvs_as_char()).collect();
-                if s.is_empty() { " (pure)".to_string() } else { format!(" = {s}") }
-            }).unwrap_or_else(|| " (unknown)".to_string());
+            let caps_str = inferred
+                .get(*c)
+                .map(|cs| {
+                    let s: String = cs.rvs_iter().map(|c| c.rvs_as_char()).collect();
+                    if s.is_empty() {
+                        " (pure)".to_string()
+                    } else {
+                        format!(" = {s}")
+                    }
+                })
+                .unwrap_or_else(|| " (unknown)".to_string());
             eprintln!("  {c}{caps_str}");
         }
         return Ok(());
@@ -981,7 +988,11 @@ fn rvs_run_why_BIMPS(function: &str, path: &Path) -> Result<(), String> {
             if s.is_empty() {
                 " (pure)".to_string()
             } else {
-                let desc: String = cs.rvs_iter().map(|c| c.rvs_description()).collect::<Vec<_>>().join(" ");
+                let desc: String = cs
+                    .rvs_iter()
+                    .map(|c| c.rvs_description())
+                    .collect::<Vec<_>>()
+                    .join(" ");
                 format!(" = {s} ({desc})")
             }
         }
@@ -1021,7 +1032,11 @@ fn rvs_run_why_BIMPS(function: &str, path: &Path) -> Result<(), String> {
         let s = match caps {
             Some(cs) if !cs.rvs_is_empty() => {
                 let chars: String = cs.rvs_iter().map(|c| c.rvs_as_char()).collect();
-                let desc: String = cs.rvs_iter().map(|c| c.rvs_description()).collect::<Vec<_>>().join(" ");
+                let desc: String = cs
+                    .rvs_iter()
+                    .map(|c| c.rvs_description())
+                    .collect::<Vec<_>>()
+                    .join(" ");
                 format!("{chars} ({desc})")
             }
             Some(_) => "(pure)".to_string(),
@@ -1072,13 +1087,8 @@ fn rvs_run_infer_capsmap_BIMPS(
 
     let crate_name = rvs_detect_crate_name_BIS(path)?;
     let impl_index = rvs_build_impl_index(&callgraph);
-    let (direct_external_calls, unknown_callees) = rvs_collect_direct_external_deps(
-        &callgraph,
-        &crate_name,
-        &seed,
-        &inferred,
-        &impl_index,
-    );
+    let (direct_external_calls, unknown_callees) =
+        rvs_collect_direct_external_deps(&callgraph, &crate_name, &seed, &inferred, &impl_index);
 
     if !unknown_callees.is_empty() {
         let mut msg = String::from(
@@ -1597,9 +1607,7 @@ fn rvs_collect_direct_external_deps(
             }
             if let Some(caps) = inferred.get(callee) {
                 known.entry(callee.clone()).or_insert_with(|| caps.clone());
-            } else if let Some(caps) =
-                rvs_resolve_impl_union_M(callee, impl_index, inferred)
-            {
+            } else if let Some(caps) = rvs_resolve_impl_union_M(callee, impl_index, inferred) {
                 known.entry(callee.clone()).or_insert(caps);
             } else {
                 unknown
@@ -2373,14 +2381,21 @@ mod tests {
         // not silently skip them or mark them as pure.
         let mut callgraph: BTreeMap<String, ParsedFnBehavior> = BTreeMap::new();
         let mut behavior = rvs_make_behavior();
-        behavior.calls.insert("some_external_crate::unknown_fn".into());
+        behavior
+            .calls
+            .insert("some_external_crate::unknown_fn".into());
         callgraph.insert("my_crate::caller".into(), behavior);
 
         let seed = capsmap::CapsMap::rvs_new();
         let inferred: BTreeMap<String, CapabilitySet> = BTreeMap::new();
 
-        let (known, unknown) =
-            rvs_collect_direct_external_deps(&callgraph, "my_crate", &seed, &inferred, &HashMap::new());
+        let (known, unknown) = rvs_collect_direct_external_deps(
+            &callgraph,
+            "my_crate",
+            &seed,
+            &inferred,
+            &HashMap::new(),
+        );
 
         assert!(known.is_empty());
         assert!(
@@ -2396,7 +2411,9 @@ mod tests {
         // If a callee IS in the inferred map, it goes to known, not unknown.
         let mut callgraph: BTreeMap<String, ParsedFnBehavior> = BTreeMap::new();
         let mut behavior = rvs_make_behavior();
-        behavior.calls.insert("some_external_crate::known_fn".into());
+        behavior
+            .calls
+            .insert("some_external_crate::known_fn".into());
         callgraph.insert("my_crate::caller".into(), behavior);
 
         let seed = capsmap::CapsMap::rvs_new();
@@ -2406,8 +2423,13 @@ mod tests {
             CapabilitySet::rvs_from_validated("BI"),
         );
 
-        let (known, unknown) =
-            rvs_collect_direct_external_deps(&callgraph, "my_crate", &seed, &inferred, &HashMap::new());
+        let (known, unknown) = rvs_collect_direct_external_deps(
+            &callgraph,
+            "my_crate",
+            &seed,
+            &inferred,
+            &HashMap::new(),
+        );
 
         let caps = known
             .get("some_external_crate::known_fn")
@@ -2428,8 +2450,13 @@ mod tests {
         let seed = capsmap::CapsMap::rvs_parse("std::fs::write=BI").unwrap();
         let inferred: BTreeMap<String, CapabilitySet> = BTreeMap::new();
 
-        let (known, unknown) =
-            rvs_collect_direct_external_deps(&callgraph, "my_crate", &seed, &inferred, &HashMap::new());
+        let (known, unknown) = rvs_collect_direct_external_deps(
+            &callgraph,
+            "my_crate",
+            &seed,
+            &inferred,
+            &HashMap::new(),
+        );
 
         assert!(!known.contains_key("std::fs::write"));
         assert!(!unknown.contains_key("std::fs::write"));

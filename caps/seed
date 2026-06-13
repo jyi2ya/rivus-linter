@@ -1137,6 +1137,7 @@ core::core_arch::x86::avx512vbmi::vpmultishiftqb128=
 core::core_arch::x86::avx512vbmi::vpmultishiftqb256=
 core::core_arch::x86::avx512vnni::vpdpbssd_128=
 core::core_arch::x86::avx512vnni::vpdpbssd_256=
+toml_edit::item::as_str=
 core::core_arch::x86::avx512vnni::vpdpbssds_128=
 core::core_arch::x86::avx512vnni::vpdpbssds_256=
 core::core_arch::x86::avx512vnni::vpdpbsud_128=
