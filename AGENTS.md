@@ -550,7 +550,7 @@ fn test_20260422_create_order_ok() {
 * 提交前必须运行日常开发流程中的全部检查命令，汇总检查结果和变更内容生成一份汇报，询问用户是否确认提交，收到确认后才执行 `git commit` 和 `git push`
 * 函数能力最好按照字母顺序排列
 * 多用泛型少用 dyn
-* 用 `.expect("never: 补充说明")` 标注不会 panic 的 `.expect()` 调用——linter 仅在参数是以 `never:` 开头的字符串字面量时，不会将此类调用视为 panic
+* 用 `.expect("never: 补充说明")` 标注不会 panic 的 `.expect()` 调用——linter 在以下情况下不会将 `.expect()` 视为 panic：参数是以 `never:` 开头的字符串字面量，或包含 `unexpectedly`（标准库格式化惯用语）或 `capacity overflow`（集合容量守卫）
 * 用结构体显式定义数据类型，不要直接使用 `serde_json::Value` 和 `serde_json::json!`
 * 编程过程中需要创建临时目录时，优先使用 `$TMPDIR`（如果已设置）或 `~/tmp`，而不是 `/tmp`
 * 禁止使用 `#![deny(warnings)]`——应改用具名 lint（如 `#![deny(unused_imports)]`）

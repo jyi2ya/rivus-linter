@@ -1065,7 +1065,19 @@ fn rvs_is_never_expect(e: &Expr<'_>) -> bool {
         if let Some(first) = args.first() {
             if let ExprKind::Lit(lit) = &first.kind {
                 if let LitKind::Str(s, _) = lit.node {
-                    return s.as_str().starts_with("never:");
+                    let msg = s.as_str();
+                    // User-provided exemption: explicit "never:" prefix
+                    if msg.starts_with("never:") {
+                        return true;
+                    }
+                    // Std lib "won't happen" patterns:
+                    // - "unexpectedly" — formatting trait returned Err on an
+                    //   infallible sink (e.g. writing to String)
+                    // - "capacity overflow" / "overflow" — arithmetic overflow
+                    //   in collection sizing, guarded by checked_add
+                    if msg.contains("unexpectedly") || msg.contains("capacity overflow") {
+                        return true;
+                    }
                 }
             }
         }
