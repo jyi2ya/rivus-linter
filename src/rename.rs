@@ -8,28 +8,26 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use ra_ap_ide::{
-    AnalysisHost, FilePosition, FileStructureConfig, Indel, RenameConfig, SourceChange,
+    Analysis, AnalysisHost, FilePosition, FileStructureConfig, Indel, RenameConfig, SourceChange,
     StructureNodeKind,
 };
 use ra_ap_ide_db::SymbolKind;
 use ra_ap_load_cargo::{LoadCargoConfig, ProcMacroServerChoice, load_workspace_at};
 use ra_ap_project_model::{CargoConfig, RustLibSource};
 
-/// Strips `rvs_` prefix and capability suffix from all `rvs_` functions in the
-/// workspace at `path`, renaming them to their plain base names.
-///
-/// For example, `rvs_write_db_ABI` becomes `write_db`, `rvs_add` becomes `add`.
-///
-/// # Errors
-///
-/// Returns an error string if the workspace cannot be loaded or if file I/O fails.
-pub fn rvs_strip_BIS(path: &Path) -> Result<(), String> {
-    debug_assert!(path.is_dir(), "path must be a directory");
+/// Represents a function/method found via rust-analyzer's file structure.
+struct FunctionNode {
+    name: String,
+    position: FilePosition,
+    is_rvs_prefixed: bool,
+    is_in_trait_impl: bool,
+}
 
-    let canonical_path = path
-        .canonicalize()
-        .map_err(|e| format!("cannot canonicalize '{}': {e}", path.display()))?;
-
+/// Loads the rust-analyzer workspace at `canonical_path` and returns the
+/// analysis handle, VFS, and a list of local `.rs` file paths.
+fn rvs_load_workspace_BIS(
+    canonical_path: &Path,
+) -> Result<(Analysis, ra_ap_vfs::Vfs, Vec<PathBuf>), String> {
     let cargo_config = CargoConfig {
         sysroot: Some(RustLibSource::Discover),
         set_test: true,
@@ -44,17 +42,14 @@ pub fn rvs_strip_BIS(path: &Path) -> Result<(), String> {
     };
 
     let (db, vfs, _proc_macro) =
-        load_workspace_at(&canonical_path, &cargo_config, &load_config, &|_| {})
+        load_workspace_at(canonical_path, &cargo_config, &load_config, &|_| {})
             .map_err(|e| format!("failed to load workspace: {e}"))?;
 
     let host = AnalysisHost::with_database(db);
     let analysis = host.analysis();
 
-    let mut rename_map: HashMap<String, String> = HashMap::new();
     let mut local_files: Vec<PathBuf> = Vec::new();
-
-    for (file_id, vfs_path) in vfs.iter() {
-        // Only process local .rs files
+    for (_file_id, vfs_path) in vfs.iter() {
         let raw_path = match vfs_path.as_path() {
             Some(p) => p,
             None => continue,
@@ -63,121 +58,24 @@ pub fn rvs_strip_BIS(path: &Path) -> Result<(), String> {
         if !abs_path.to_string_lossy().ends_with(".rs") {
             continue;
         }
-        // Skip dependency/external files — only process files under the workspace root
-        if !rvs_is_local_file(abs_path, &canonical_path) {
+        if !rvs_is_local_file(abs_path, canonical_path) {
             continue;
         }
         local_files.push(abs_path.to_path_buf());
-
-        let structure_config = FileStructureConfig {
-            exclude_locals: true,
-        };
-        let nodes = match analysis.file_structure(&structure_config, file_id) {
-            Ok(nodes) => nodes,
-            Err(_) => continue,
-        };
-
-        // Read source to detect rvs_ prefix at navigation_range position
-        let source = match std::fs::read_to_string(abs_path) {
-            Ok(s) => s,
-            Err(_) => continue,
-        };
-
-        for node in &nodes {
-            match node.kind {
-                StructureNodeKind::SymbolKind(sym) => {
-                    if !matches!(sym, SymbolKind::Function | SymbolKind::Method) {
-                        continue;
-                    }
-                }
-                _ => continue,
-            }
-
-            let nav_start = u32::from(node.navigation_range.start()) as usize;
-            let nav_end = u32::from(node.navigation_range.end()) as usize;
-
-            if nav_start + 4 > source.len() {
-                continue;
-            }
-            let prefix = source.get(nav_start..nav_start + 4);
-            if prefix != Some("rvs_") {
-                continue;
-            }
-
-            if let Some(full_name) = source.get(nav_start..nav_end)
-                && let Some(new_name) = rvs_compute_strip_name(full_name)
-                && new_name != full_name
-            {
-                rename_map.insert(full_name.to_string(), new_name);
-            }
-        }
     }
 
-    if rename_map.is_empty() {
-        println!("No rvs_ functions found to strip.");
-        return Ok(());
-    }
-
-    let mut sorted_renames: Vec<(String, String)> = rename_map.into_iter().collect();
-    sorted_renames.sort_by_key(|a| std::cmp::Reverse(a.0.len()));
-
-    let mut files_changed = 0usize;
-    for file_path in &local_files {
-        let mut text = match std::fs::read_to_string(file_path) {
-            Ok(t) => t,
-            Err(_) => continue,
-        };
-        let mut changed = false;
-        for (old_name, new_name) in &sorted_renames {
-            if text.contains(old_name.as_str()) {
-                text = text.replace(old_name.as_str(), new_name.as_str());
-                changed = true;
-            }
-        }
-        if changed {
-            std::fs::write(file_path, &text)
-                .map_err(|e| format!("cannot write {}: {e}", file_path.display()))?;
-            files_changed += 1;
-        }
-    }
-
-    println!(
-        "Strip complete: renamed {} function(s) in {} file(s).",
-        sorted_renames.len(),
-        files_changed
-    );
-    Ok(())
+    Ok((analysis, vfs, local_files))
 }
 
-pub fn rvs_apply_ra_renames_BIS(
-    path: &Path,
-    rename_map: &HashMap<String, String>,
-) -> Result<usize, String> {
-    let canonical_path = path
-        .canonicalize()
-        .map_err(|e| format!("cannot canonicalize '{}': {e}", path.display()))?;
-
-    let cargo_config = CargoConfig {
-        sysroot: Some(RustLibSource::Discover),
-        set_test: true,
-        ..CargoConfig::default()
-    };
-    let load_config = LoadCargoConfig {
-        load_out_dirs_from_check: true,
-        with_proc_macro_server: ProcMacroServerChoice::Sysroot,
-        prefill_caches: true,
-        num_worker_threads: 0,
-        proc_macro_processes: 1,
-    };
-
-    let (db, vfs, _proc_macro) =
-        load_workspace_at(&canonical_path, &cargo_config, &load_config, &|_| {})
-            .map_err(|e| format!("failed to load workspace: {e}"))?;
-
-    let host = AnalysisHost::with_database(db);
-    let analysis = host.analysis();
-
-    let mut file_edits: HashMap<PathBuf, Vec<Indel>> = HashMap::new();
+/// Finds all function/method definitions in local files and returns
+/// a list of [`FunctionNode`]s with name, position, and context flags.
+fn rvs_find_functions_MS(
+    analysis: &Analysis,
+    vfs: &ra_ap_vfs::Vfs,
+    _local_files: &[PathBuf],
+    canonical_path: &Path,
+) -> Vec<FunctionNode> {
+    let mut functions: Vec<FunctionNode> = Vec::new();
 
     for (file_id, vfs_path) in vfs.iter() {
         let raw_path = match vfs_path.as_path() {
@@ -185,10 +83,7 @@ pub fn rvs_apply_ra_renames_BIS(
             None => continue,
         };
         let abs_path: &Path = raw_path.as_ref();
-        if !abs_path.to_string_lossy().ends_with(".rs") {
-            continue;
-        }
-        if !rvs_is_local_file(abs_path, &canonical_path) {
+        if !rvs_is_local_file(abs_path, canonical_path) {
             continue;
         }
 
@@ -205,6 +100,7 @@ pub fn rvs_apply_ra_renames_BIS(
             Err(_) => continue,
         };
 
+        // Collect trait impl ranges so we can flag functions inside them.
         let mut trait_impl_ranges: Vec<ra_ap_ide::TextRange> = Vec::new();
         for node in &nodes {
             if let StructureNodeKind::SymbolKind(SymbolKind::Impl) = node.kind {
@@ -230,43 +126,65 @@ pub fn rvs_apply_ra_renames_BIS(
             if nav_end > source.len() {
                 continue;
             }
-            let name = source.get(nav_start..nav_end).unwrap_or("");
-
-            if name.starts_with("rvs_") {
+            let name = source.get(nav_start..nav_end).unwrap_or("").to_string();
+            if name.is_empty() {
                 continue;
             }
 
-            if trait_impl_ranges
+            let is_rvs_prefixed = name.starts_with("rvs_");
+            let is_in_trait_impl = trait_impl_ranges
                 .iter()
-                .any(|r| r.contains_range(node.navigation_range))
-            {
-                continue;
+                .any(|r| r.contains_range(node.navigation_range));
+
+            functions.push(FunctionNode {
+                name,
+                position: FilePosition {
+                    file_id,
+                    offset: node.navigation_range.start(),
+                },
+                is_rvs_prefixed,
+                is_in_trait_impl,
+            });
+        }
+    }
+
+    functions
+}
+
+/// Performs semantic renames using rust-analyzer for each entry in `rename_map`.
+/// Returns the number of files changed.
+fn rvs_apply_renames_BIS(
+    analysis: &Analysis,
+    vfs: &ra_ap_vfs::Vfs,
+    functions: &[FunctionNode],
+    rename_map: &HashMap<String, String>,
+) -> Result<usize, String> {
+    let mut file_edits: HashMap<PathBuf, Vec<Indel>> = HashMap::new();
+
+    let rename_config = RenameConfig {
+        prefer_no_std: false,
+        prefer_prelude: true,
+        prefer_absolute: false,
+        show_conflicts: false,
+    };
+
+    for func in functions {
+        let Some(new_name) = rename_map.get(func.name.as_str()) else {
+            continue;
+        };
+
+        match analysis.rename(func.position, new_name.as_str(), &rename_config) {
+            Ok(Ok(source_change)) => {
+                rvs_collect_edits(&source_change, vfs, &mut file_edits);
             }
-
-            let Some(new_name) = rename_map.get(name) else {
-                continue;
-            };
-
-            let position = FilePosition {
-                file_id,
-                offset: node.navigation_range.start(),
-            };
-            let rename_config = RenameConfig {
-                prefer_no_std: false,
-                prefer_prelude: true,
-                prefer_absolute: false,
-                show_conflicts: false,
-            };
-            match analysis.rename(position, new_name.as_str(), &rename_config) {
-                Ok(Ok(source_change)) => {
-                    rvs_collect_edits(&source_change, &vfs, &mut file_edits);
-                }
-                Ok(Err(e)) => {
-                    eprintln!("warning: RA cannot rename '{name}' -> '{new_name}': {e}");
-                }
-                Err(e) => {
-                    eprintln!("warning: RA rename failed for '{name}': {e}");
-                }
+            Ok(Err(e)) => {
+                eprintln!(
+                    "warning: RA cannot rename '{}' -> '{}': {e}",
+                    func.name, new_name
+                );
+            }
+            Err(e) => {
+                eprintln!("warning: RA rename failed for '{}': {e}", func.name);
             }
         }
     }
@@ -289,6 +207,84 @@ pub fn rvs_apply_ra_renames_BIS(
     }
 
     Ok(files_changed)
+}
+
+/// Strips `rvs_` prefix and capability suffix from all `rvs_` functions in the
+/// workspace at `path`, renaming them to their plain base names.
+///
+/// For example, `rvs_write_db_ABI` becomes `write_db`, `rvs_add` becomes `add`.
+///
+/// # Errors
+///
+/// Returns an error string if the workspace cannot be loaded or if file I/O fails.
+pub fn rvs_strip_BIS(path: &Path) -> Result<(), String> {
+    debug_assert!(path.is_dir(), "path must be a directory");
+
+    let canonical_path = path
+        .canonicalize()
+        .map_err(|e| format!("cannot canonicalize '{}': {e}", path.display()))?;
+
+    // 1. Load workspace
+    let (analysis, vfs, _local_files) = rvs_load_workspace_BIS(&canonical_path)?;
+
+    // 2. Find all functions
+    let functions = rvs_find_functions_MS(&analysis, &vfs, &_local_files, &canonical_path);
+
+    // 3. Build rename_map from rvs_-prefixed functions
+    let mut rename_map: HashMap<String, String> = HashMap::new();
+    for func in &functions {
+        if !func.is_rvs_prefixed {
+            continue;
+        }
+        if let Some(new_name) = rvs_compute_strip_name(&func.name) {
+            if new_name != func.name {
+                rename_map.insert(func.name.clone(), new_name);
+            }
+        }
+    }
+
+    if rename_map.is_empty() {
+        println!("No rvs_ functions found to strip.");
+        return Ok(());
+    }
+
+    let rename_count = rename_map.len();
+
+    // 4. Apply semantic renames via rust-analyzer
+    let files_changed = rvs_apply_renames_BIS(&analysis, &vfs, &functions, &rename_map)?;
+
+    // 5. Print summary
+    println!(
+        "Strip complete: renamed {} function(s) in {} file(s).",
+        rename_count, files_changed
+    );
+    Ok(())
+}
+
+/// Applies rust-analyzer semantic renames for non-`rvs_`-prefixed, non-trait-impl
+/// functions using the provided rename map.
+///
+/// Returns the number of files changed.
+pub fn rvs_apply_ra_renames_BIS(
+    path: &Path,
+    rename_map: &HashMap<String, String>,
+) -> Result<usize, String> {
+    let canonical_path = path
+        .canonicalize()
+        .map_err(|e| format!("cannot canonicalize '{}': {e}", path.display()))?;
+
+    // 1. Load workspace
+    let (analysis, vfs, _local_files) = rvs_load_workspace_BIS(&canonical_path)?;
+
+    // 2. Find all functions, then filter: skip rvs_-prefixed and trait impl methods
+    let all_functions = rvs_find_functions_MS(&analysis, &vfs, &_local_files, &canonical_path);
+    let eligible: Vec<FunctionNode> = all_functions
+        .into_iter()
+        .filter(|f| !f.is_rvs_prefixed && !f.is_in_trait_impl)
+        .collect();
+
+    // 3. Apply semantic renames
+    rvs_apply_renames_BIS(&analysis, &vfs, &eligible, rename_map)
 }
 
 fn rvs_collect_edits(
