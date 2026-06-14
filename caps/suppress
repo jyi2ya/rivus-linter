@@ -1,1 +1,6 @@
 # suppress
+
+# ─── Allocation capacity overflow (never triggers in practice) ──
+# capacity_overflow only fires when usize arithmetic overflows during
+# Vec/String resizing — effectively impossible on 64-bit systems.
+alloc::raw_vec::capacity_overflow=

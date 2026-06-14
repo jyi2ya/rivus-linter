@@ -1544,13 +1544,16 @@ fn rvs_infer_caps_M(
     // the deepest call chains in std — typically <10 hops).
     // Caps grow monotonically, so convergence is guaranteed.
     //
-    // Seed entries are already inserted into `inferred` above, so we don't
-    // need to check the seed here — seed functions already have their
-    // final caps and propagation won't change them.
+    // Seed entries are frozen — their caps are fixed and cannot be changed
+    // by propagation. Skip them during the propagation loop.
     let max_iterations = 16;
     for _iteration in 0..max_iterations {
         let mut changed = false;
         for (func, behavior) in callgraph {
+            // Skip seed entries — they are frozen.
+            if seed.rvs_lookup(func).is_some() {
+                continue;
+            }
             let mut combined = inferred
                 .get(func)
                 .cloned()
@@ -1950,6 +1953,51 @@ mod tests {
             &format!("{result:?}"),
         );
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_20260613_seed_freeze_prevents_propagation() {
+        // Seed entry should freeze caps — even if callee is P, the seed entry
+        // (empty) should prevent P from appearing on the function.
+        let mut callgraph: BTreeMap<String, ParsedFnBehavior> = BTreeMap::new();
+
+        // capacity_overflow: pure function that calls panic (has_panic = true)
+        let mut cap_overflow = rvs_make_behavior();
+        cap_overflow.has_panic = true;
+        cap_overflow.calls.insert("core::panicking::panic".into());
+        callgraph.insert("alloc::raw_vec::capacity_overflow".into(), cap_overflow);
+
+        // panic: true panic
+        let mut panic = rvs_make_behavior();
+        panic.has_panic = true;
+        callgraph.insert("core::panicking::panic".into(), panic);
+
+        // handle_error: calls capacity_overflow
+        let mut handle_error = rvs_make_behavior();
+        handle_error
+            .calls
+            .insert("alloc::raw_vec::capacity_overflow".into());
+        callgraph.insert("alloc::raw_vec::handle_error".into(), handle_error);
+
+        // Seed freezes capacity_overflow to empty (no P)
+        let seed = capsmap::CapsMap::rvs_parse(
+            "alloc::raw_vec::capacity_overflow=\nalloc::raw_vec::handle_error=\n",
+        )
+        .unwrap();
+
+        let result = rvs_infer_caps_M(&callgraph, &seed);
+
+        let cap_caps = result.get("alloc::raw_vec::capacity_overflow");
+        assert!(
+            cap_caps.is_none_or(|c| c.rvs_is_empty()),
+            "capacity_overflow should be frozen to empty by seed, got: {cap_caps:?}"
+        );
+
+        let handle_caps = result.get("alloc::raw_vec::handle_error");
+        assert!(
+            handle_caps.is_none_or(|c| c.rvs_is_empty()),
+            "handle_error should be frozen to empty by seed, got: {handle_caps:?}"
+        );
     }
 
     #[test]

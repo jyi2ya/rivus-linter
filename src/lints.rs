@@ -987,36 +987,45 @@ impl FnInfo {
 
 // ─── Body scanners ───────────────────────────────────────────────────────
 
-fn rvs_scan_panic<'tcx>(tcx: rustc_middle::ty::TyCtxt<'tcx>, body: &Body<'tcx>) -> bool {
-    let mut f = false;
+/// Check if an expression originates from a `debug_assert!` macro expansion.
+/// These expand to `panic!` calls in debug builds, but should not be treated
+/// as real panics or recorded as callgraph edges.
+fn rvs_is_from_debug_assert(e: &Expr<'_>) -> bool {
+    if !e.span.from_expansion() {
+        return false;
+    }
     let da = Symbol::intern("debug_assert");
     let dae = Symbol::intern("debug_assert_eq");
     let dan = Symbol::intern("debug_assert_ne");
+    let mut expn_id = e.span.ctxt().outer_expn_data().parent;
+    while expn_id != rustc_span::ExpnId::root() {
+        let expn = expn_id.expn_data();
+        if let rustc_span::ExpnKind::Macro(rustc_span::MacroKind::Bang, name) = expn.kind {
+            if name == da || name == dae || name == dan {
+                return true;
+            }
+        }
+        expn_id = expn.parent;
+    }
+    let outer_expn = e.span.ctxt().outer_expn_data();
+    if let rustc_span::ExpnKind::Macro(rustc_span::MacroKind::Bang, name) = outer_expn.kind {
+        if name == da || name == dae || name == dan {
+            return true;
+        }
+    }
+    false
+}
+
+fn rvs_scan_panic<'tcx>(tcx: rustc_middle::ty::TyCtxt<'tcx>, body: &Body<'tcx>) -> bool {
+    let mut f = false;
     rvs_walk_closures(tcx, body.value, |e| {
         if f {
             return;
         }
         // debug_assert! expands to panic! calls at runtime, but these are
         // intentional debug-only checks, not user-written panics. Skip them.
-        if e.span.from_expansion() {
-            let mut expn_id = e.span.ctxt().outer_expn_data().parent;
-            while expn_id != rustc_span::ExpnId::root() {
-                let expn = expn_id.expn_data();
-                if let rustc_span::ExpnKind::Macro(rustc_span::MacroKind::Bang, name) = expn.kind {
-                    if name == da || name == dae || name == dan {
-                        return;
-                    }
-                }
-                expn_id = expn.parent;
-            }
-            // Also check the outermost expansion itself
-            let outer_expn = e.span.ctxt().outer_expn_data();
-            if let rustc_span::ExpnKind::Macro(rustc_span::MacroKind::Bang, name) = outer_expn.kind
-            {
-                if name == da || name == dae || name == dan {
-                    return;
-                }
-            }
+        if rvs_is_from_debug_assert(e) {
+            return;
         }
         match &e.kind {
             ExprKind::Call(func, _) => {
@@ -2448,37 +2457,44 @@ impl RivusLintPass {
             }
         });
 
-        rvs_walk_closures(cx.tcx, body.value, |e| match &e.kind {
-            ExprKind::Call(func, _) => {
-                if let ExprKind::Path(ref q) = func.kind {
-                    if let Res::Def(k, did) = cx.qpath_res(q, func.hir_id) {
-                        if matches!(k, DefKind::Fn | DefKind::AssocFn | DefKind::Variant) {
-                            calls.insert(rvs_def_path(cx, did));
+        rvs_walk_closures(cx.tcx, body.value, |e| {
+            // Skip debug_assert! expansions — they introduce panic calls
+            // that should not be recorded as callgraph edges.
+            if rvs_is_from_debug_assert(e) {
+                return;
+            }
+            match &e.kind {
+                ExprKind::Call(func, _) => {
+                    if let ExprKind::Path(ref q) = func.kind {
+                        if let Res::Def(k, did) = cx.qpath_res(q, func.hir_id) {
+                            if matches!(k, DefKind::Fn | DefKind::AssocFn | DefKind::Variant) {
+                                calls.insert(rvs_def_path(cx, did));
+                            }
                         }
                     }
                 }
-            }
-            ExprKind::MethodCall(..) => {
-                let owner = e.hir_id.owner.def_id;
-                let tck = cx.tcx.typeck(owner);
-                if let Some(did) = tck.type_dependent_def_id(e.hir_id) {
-                    calls.insert(rvs_def_path(cx, did));
+                ExprKind::MethodCall(..) => {
+                    let owner = e.hir_id.owner.def_id;
+                    let tck = cx.tcx.typeck(owner);
+                    if let Some(did) = tck.type_dependent_def_id(e.hir_id) {
+                        calls.insert(rvs_def_path(cx, did));
+                    }
                 }
-            }
-            // Capture function references passed as arguments (e.g. `&func` passed
-            // to a `&dyn Fn` parameter).  These are not calls themselves, but the
-            // referenced function will eventually be called through dynamic dispatch.
-            // Recording them as edges allows capability propagation through dyn Fn.
-            ExprKind::AddrOf(_, _, inner) => {
-                if let ExprKind::Path(ref q) = inner.kind {
-                    if let Res::Def(k, did) = cx.qpath_res(q, inner.hir_id) {
-                        if matches!(k, DefKind::Fn | DefKind::AssocFn) {
-                            calls.insert(rvs_def_path(cx, did));
+                // Capture function references passed as arguments (e.g. `&func` passed
+                // to a `&dyn Fn` parameter).  These are not calls themselves, but the
+                // referenced function will eventually be called through dynamic dispatch.
+                // Recording them as edges allows capability propagation through dyn Fn.
+                ExprKind::AddrOf(_, _, inner) => {
+                    if let ExprKind::Path(ref q) = inner.kind {
+                        if let Res::Def(k, did) = cx.qpath_res(q, inner.hir_id) {
+                            if matches!(k, DefKind::Fn | DefKind::AssocFn) {
+                                calls.insert(rvs_def_path(cx, did));
+                            }
                         }
                     }
                 }
+                _ => {}
             }
-            _ => {}
         });
 
         let has_async = sig.header.asyncness.is_async();
