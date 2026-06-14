@@ -1221,9 +1221,8 @@ fn rvs_run_infer_std_BIMPS(path: &Path, output: Option<&Path>) -> Result<(), Str
         }
     }
 
-    let mut inferred = rvs_infer_caps_M(&callgraph, &seed);
-
-    // Generate trait-definition aliases and merge into inferred.
+    // Pre-generate trait-definition aliases before inference so that
+    // propagation sees the correct caps for trait definition paths.
     //
     // In build-std mode, trait method *definitions* appear in the callgraph
     // (they have a body).  But in normal (non-build-std) compilation, core/std
@@ -1232,27 +1231,96 @@ fn rvs_run_infer_std_BIMPS(path: &Path, output: Option<&Path>) -> Result<(), Str
     // exist in the callgraph.  The impl path `module::method@TraitPath` *is*
     // present.
     //
-    // For every `method@TraitPath` entry we apply the same majority-vote
-    // logic used by rvs_resolve_impl_union and store the result under the
-    // trait-definition path `TraitPath::method`.  This ensures both the
-    // unknown-callee check and the std output include these aliases.
-    let impl_index = rvs_build_impl_index(&callgraph);
-    let mut seen_aliases: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let impl_keys: Vec<String> = inferred
-        .keys()
-        .filter(|k| k.contains('@'))
-        .cloned()
+    // We generate aliases using majority-vote over std impls only, then inject
+    // them into the callgraph as seed entries so propagation uses the correct
+    // values.  Only std/core/alloc/compiler_builtins impls participate — we
+    // don't want a tokio impl's B/I to pollute a core trait method.
+    let std_crates: &[&str] = &["std::", "core::", "alloc::", "compiler_builtins::"];
+    let pre_index = rvs_build_impl_index(&callgraph);
+    // Quick first-pass inference (signature-only, no propagation) to get
+    // impl caps for voting.
+    let pre_inferred: BTreeMap<String, CapabilitySet> = {
+        let mut m = BTreeMap::new();
+        for (func, behavior) in &callgraph {
+            if let Some(caps) = seed.rvs_lookup(func) {
+                m.insert(func.clone(), caps.clone());
+            } else {
+                let mut caps = CapabilitySet::rvs_new();
+                if behavior.has_async {
+                    caps.rvs_insert_M(Capability::A);
+                }
+                if behavior.is_unsafe_fn {
+                    caps.rvs_insert_M(Capability::U);
+                }
+                if behavior.has_mut_param {
+                    caps.rvs_insert_M(Capability::M);
+                }
+                if behavior.has_panic {
+                    caps.rvs_insert_M(Capability::P);
+                }
+                if behavior.has_static_mut_ref {
+                    caps.rvs_insert_M(Capability::S);
+                    caps.rvs_insert_M(Capability::U);
+                } else if behavior.has_static_ref {
+                    caps.rvs_insert_M(Capability::S);
+                }
+                if behavior.has_thread_local_ref {
+                    caps.rvs_insert_M(Capability::S);
+                    caps.rvs_insert_M(Capability::T);
+                }
+                m.insert(func.clone(), caps);
+            }
+        }
+        m
+    };
+    let std_pre_inferred: BTreeMap<String, CapabilitySet> = pre_inferred
+        .iter()
+        .filter(|(k, _)| std_crates.iter().any(|p| k.starts_with(p)))
+        .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
-    for key in impl_keys {
+    let mut alias_seed = seed.clone();
+    let mut seen_aliases: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for key in std_pre_inferred.keys() {
         if let Some(at_pos) = key.find('@') {
             let trait_path = &key[at_pos + 1..];
             let method_full = &key[..at_pos];
             if let Some(method_name) = method_full.rsplit("::").next() {
                 let alias = format!("{trait_path}::{method_name}");
                 if seen_aliases.insert(alias.clone()) {
-                    if let Some(voted) = rvs_resolve_impl_union_M(&alias, &impl_index, &inferred) {
-                        // Override any existing entry (including empty seed entries)
-                        // with the vote result.
+                    if let Some(voted) =
+                        rvs_resolve_impl_union_M(&alias, &pre_index, &std_pre_inferred)
+                    {
+                        let caps_str: String = voted.rvs_iter().map(|c| c.rvs_as_char()).collect();
+                        let line = format!("{alias}={caps_str}");
+                        if let Ok(tmp) = capsmap::CapsMap::rvs_parse(&line) {
+                            alias_seed.rvs_extend_from_M(tmp);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let mut inferred = rvs_infer_caps_M(&callgraph, &alias_seed);
+
+    // Also inject aliases into inferred (for the std_only output filter).
+    let impl_index = rvs_build_impl_index(&callgraph);
+    let std_inferred: BTreeMap<String, CapabilitySet> = inferred
+        .iter()
+        .filter(|(k, _)| std_crates.iter().any(|p| k.starts_with(p)))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    let mut seen_aliases2: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for key in std_inferred.keys() {
+        if let Some(at_pos) = key.find('@') {
+            let trait_path = &key[at_pos + 1..];
+            let method_full = &key[..at_pos];
+            if let Some(method_name) = method_full.rsplit("::").next() {
+                let alias = format!("{trait_path}::{method_name}");
+                if seen_aliases2.insert(alias.clone()) {
+                    if let Some(voted) =
+                        rvs_resolve_impl_union_M(&alias, &impl_index, &std_inferred)
+                    {
                         inferred.insert(alias, voted);
                     }
                 }
@@ -1263,7 +1331,6 @@ fn rvs_run_infer_std_BIMPS(path: &Path, output: Option<&Path>) -> Result<(), Str
     // Build std capsmap from callgraph inference.
     let crate_name = rvs_detect_crate_name_BIS(path)?;
     let crate_prefix = format!("{crate_name}::");
-    let std_crates: &[&str] = &["std::", "core::", "alloc::", "compiler_builtins::"];
 
     // Collect inferred caps for std/core/alloc/compiler_builtins functions.
     let std_only: BTreeMap<String, CapabilitySet> = inferred

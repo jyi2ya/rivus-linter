@@ -1281,3 +1281,12 @@ hashbrown::rustc_entry::RustcVacantEntry::insert=
 hashbrown::rustc_entry::RustcVacantEntry::insert_entry=
 hashbrown::rustc_entry::RustcVacantEntry::into_key=
 hashbrown::rustc_entry::RustcVacantEntry::key=
+# ─── Third-party trait defs called by std (no std impls) ──
+addr2line::lookup::LookupContinuation::resume=
+object::read::elf::compression::CompressionHeader::ch_size=
+object::read::elf::compression::CompressionHeader::ch_type=
+object::read::elf::section::SectionHeader::sh_flags=
+object::read::elf::symbol::Sym::st_name=
+object::read::elf::symbol::Sym::st_shndx=
+object::read::elf::symbol::Sym::st_size=
+object::read::elf::symbol::Sym::st_value=
