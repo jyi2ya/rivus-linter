@@ -6,12 +6,6 @@ LL |     arr.sort();
    |
    = note: `#[deny(rivus::rvs_call_violation)]` on by default
 
-error: {} → {M} missing M(Mutable)
-  --> $DIR/tests/ui/86_pure_calls_mutable.rs:8:5
-   |
-LL |     rvs_sort_M(&mut [3, 1, 2]);
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
-
 error: good fn 'rvs_sort_M' not called by any test
   --> $DIR/tests/ui/86_pure_calls_mutable.rs:3:1
    |
@@ -31,4 +25,4 @@ LL | |     rvs_sort_M(&mut [3, 1, 2]);
 LL | | }
    | |_^
 
-error: aborting due to 4 previous errors
+error: aborting due to 3 previous errors

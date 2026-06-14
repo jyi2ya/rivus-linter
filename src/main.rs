@@ -1589,18 +1589,11 @@ fn rvs_infer_caps_M(
                     }
                 });
                 if let Some(cc) = callee_caps {
-                    // Check if this came from impl-union resolution
-                    let from_impl_union =
-                        inferred.get(callee).is_none() && seed.rvs_lookup(callee).is_none();
                     for cap in cc.rvs_iter() {
-                        // A and U are never propagated (signature-only capabilities).
-                        // M is propagated for direct calls but NOT for impl-union
-                        // (trait method aliases), because M should come from the
-                        // function's own &mut parameters, not from trait method votes.
-                        if matches!(cap, Capability::A | Capability::U) {
-                            continue;
-                        }
-                        if from_impl_union && matches!(cap, Capability::M) {
+                        // A, M, U are never propagated (signature-only capabilities).
+                        // They are inferred from the function's own signature, not
+                        // from what it calls.
+                        if matches!(cap, Capability::A | Capability::M | Capability::U) {
                             continue;
                         }
                         if !combined.rvs_contains(cap) {
@@ -2410,13 +2403,10 @@ mod tests {
     }
 
     #[test]
-    fn test_20260614_m_propagates_from_direct_call() {
-        // When function A directly calls function B (which has &mut params, hence M),
-        // M should propagate to A. This is different from impl-union (trait method
-        // aliases) where M should NOT propagate.
-        //
-        // This test verifies that annotate produces consistent results with check:
-        // if a callee has M from &mut params, the caller also gets M.
+    fn test_20260614_m_not_propagated_from_direct_call() {
+        // M is a signature-only capability — it is NOT propagated through calls,
+        // just like A and U. A function gets M only if it has &mut parameters
+        // in its own signature. The call rule in check also exempts A/M/U.
         let mut callgraph: BTreeMap<String, ParsedFnBehavior> = BTreeMap::new();
 
         // caller has no &mut params of its own
@@ -2435,8 +2425,8 @@ mod tests {
 
         let caller_caps = result.get("my_crate::handle").expect("caller exists");
         assert!(
-            caller_caps.rvs_contains(Capability::M),
-            "M should propagate from direct callee"
+            !caller_caps.rvs_contains(Capability::M),
+            "M should NOT propagate — signature-only capability"
         );
         assert!(caller_caps.rvs_contains(Capability::A), "A from has_async");
     }

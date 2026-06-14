@@ -10,7 +10,7 @@ LL | | }
    = note: `-D rivus::rvs-missing-debug-assert` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_debug_assert)]`
 
-error: {} → {A, B, I} missing A(Async), B(Blocking), I(IO)
+error: {} → {A, B, I} missing B(Blocking), I(IO)
   --> $DIR/tests/ui/151_calls_in_match_guard.rs:10:14
    |
 LL |         n if rvs_check_ABI(n) => {}

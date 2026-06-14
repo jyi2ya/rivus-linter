@@ -126,13 +126,27 @@ impl CapabilitySet {
 
     /// 调用之规：我有，方可调你。
     /// 你有的每一个能力，我都必须有，方为合规。
+    ///
+    /// 但 A、M、U 三个签名推断能力不参与调用规则检查——它们只从函数自身的
+    /// 签名推断（has_async / has_mut_param / is_unsafe_fn），不通过传播获得。
+    /// 强制检查它们会导致 annotate 与 check 不一致（annotate 不传播这些能力，
+    /// 但 check 会报违规）。
     pub fn rvs_can_call(&self, other: &Self) -> bool {
-        other.0.iter().all(|cap| self.0.contains(cap))
+        other.0.iter().all(|cap| {
+            matches!(cap, Capability::A | Capability::M | Capability::U) || self.0.contains(cap)
+        })
     }
 
     /// 算一算，调它还差几道功夫。
+    /// 同样排除 A、M、U（签名推断能力，不参与调用规则）。
     pub fn rvs_missing_for(&self, other: &Self) -> BTreeSet<Capability> {
-        other.0.difference(&self.0).copied().collect()
+        other
+            .0
+            .iter()
+            .filter(|cap| !matches!(cap, Capability::A | Capability::M | Capability::U))
+            .copied()
+            .filter(|cap| !self.0.contains(cap))
+            .collect()
     }
 
     /// 我的能力是否全在你允许的范围之内。
@@ -400,6 +414,30 @@ mod tests {
         let missing = a.rvs_missing_for(&b);
         assert_eq!(missing.len(), 1);
         assert!(missing.contains(&Capability::P));
+    }
+
+    #[test]
+    fn test_20260614_can_call_excludes_amu() {
+        // A, M, U are signature-only capabilities — they don't participate
+        // in the call rule. A function without M can call one with M, etc.
+        let caller = CapabilitySet::rvs_from_validated("B");
+        let callee_m = CapabilitySet::rvs_from_validated("BM");
+        let callee_a = CapabilitySet::rvs_from_validated("BA");
+        let callee_u = CapabilitySet::rvs_from_validated("BU");
+        assert!(caller.rvs_can_call(&callee_m), "missing M should not block");
+        assert!(caller.rvs_can_call(&callee_a), "missing A should not block");
+        assert!(caller.rvs_can_call(&callee_u), "missing U should not block");
+    }
+
+    #[test]
+    fn test_20260614_missing_for_excludes_amu() {
+        let caller = CapabilitySet::rvs_from_validated("B");
+        let callee = CapabilitySet::rvs_from_validated("ABMPSU");
+        let missing = caller.rvs_missing_for(&callee);
+        // Only P and S should be missing — A, M, U are excluded from call rule
+        assert_eq!(missing.len(), 2);
+        assert!(missing.contains(&Capability::P));
+        assert!(missing.contains(&Capability::S));
     }
 
     #[test]

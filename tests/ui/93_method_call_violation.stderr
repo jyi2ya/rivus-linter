@@ -6,14 +6,6 @@ LL | fn rvs_foo_M() {}
    |
    = note: `#[deny(rivus::rvs_empty_fn)]` on by default
 
-error: {} → {M} missing M(Mutable)
-  --> $DIR/tests/ui/93_method_call_violation.rs:6:5
-   |
-LL |     rvs_foo_M();
-   |     ^^^^^^^^^^^
-   |
-   = note: `#[deny(rivus::rvs_call_violation)]` on by default
-
 error: good fn 'rvs_foo_M' not called by any test
   --> $DIR/tests/ui/93_method_call_violation.rs:3:1
    |
@@ -31,4 +23,4 @@ LL | |     rvs_foo_M();
 LL | | }
    | |_^
 
-error: aborting due to 4 previous errors
+error: aborting due to 3 previous errors

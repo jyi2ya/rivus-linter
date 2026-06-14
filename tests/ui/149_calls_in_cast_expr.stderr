@@ -1,4 +1,4 @@
-error: {} → {A, B, I} missing A(Async), B(Blocking), I(IO)
+error: {} → {A, B, I} missing B(Blocking), I(IO)
   --> $DIR/tests/ui/149_calls_in_cast_expr.rs:9:13
    |
 LL |     let _ = rvs_inner_ABI() as i64;

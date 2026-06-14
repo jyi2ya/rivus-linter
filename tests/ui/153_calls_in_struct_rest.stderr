@@ -1,4 +1,4 @@
-error: {} → {A, B, I} missing A(Async), B(Blocking), I(IO)
+error: {} → {A, B, I} missing B(Blocking), I(IO)
   --> $DIR/tests/ui/153_calls_in_struct_rest.rs:19:22
    |
 LL |     let _ = Foo { x: rvs_a_ABI(), ..rvs_b_ABI() };
@@ -6,7 +6,7 @@ LL |     let _ = Foo { x: rvs_a_ABI(), ..rvs_b_ABI() };
    |
    = note: `#[deny(rivus::rvs_call_violation)]` on by default
 
-error: {} → {A, B, I} missing A(Async), B(Blocking), I(IO)
+error: {} → {A, B, I} missing B(Blocking), I(IO)
   --> $DIR/tests/ui/153_calls_in_struct_rest.rs:19:37
    |
 LL |     let _ = Foo { x: rvs_a_ABI(), ..rvs_b_ABI() };
