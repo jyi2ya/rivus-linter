@@ -1221,24 +1221,9 @@ fn rvs_run_infer_std_BIMPS(path: &Path, output: Option<&Path>) -> Result<(), Str
         }
     }
 
-    let inferred = rvs_infer_caps_M(&callgraph, &seed);
+    let mut inferred = rvs_infer_caps_M(&callgraph, &seed);
 
-    // Build std capsmap from callgraph inference.
-    let crate_name = rvs_detect_crate_name_BIS(path)?;
-    let crate_prefix = format!("{crate_name}::");
-    let std_crates: &[&str] = &["std::", "core::", "alloc::", "compiler_builtins::"];
-
-    // Collect inferred caps for std/core/alloc/compiler_builtins functions.
-    let mut std_only: BTreeMap<String, CapabilitySet> = inferred
-        .iter()
-        .filter(|(name, _caps)| {
-            !name.starts_with(&crate_prefix)
-                && std_crates.iter().any(|prefix| name.starts_with(prefix))
-        })
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect();
-
-    // Generate trait-definition aliases.
+    // Generate trait-definition aliases and merge into inferred.
     //
     // In build-std mode, trait method *definitions* appear in the callgraph
     // (they have a body).  But in normal (non-build-std) compilation, core/std
@@ -1247,31 +1232,48 @@ fn rvs_run_infer_std_BIMPS(path: &Path, output: Option<&Path>) -> Result<(), Str
     // exist in the callgraph.  The impl path `module::method@TraitPath` *is*
     // present.
     //
-    // To bridge this gap, for every `method@TraitPath` entry in std_only we
-    // also emit `TraitPath::method_name` with the same caps.  When multiple
-    // impls share the same trait method, the union of all impl caps is used
-    // (matching the majority-vote semantics of rvs_resolve_impl_union).
-    let mut trait_aliases: BTreeMap<String, CapabilitySet> = BTreeMap::new();
-    for (key, caps) in &std_only {
+    // For every `method@TraitPath` entry we apply the same majority-vote
+    // logic used by rvs_resolve_impl_union and store the result under the
+    // trait-definition path `TraitPath::method`.  This ensures both the
+    // unknown-callee check and the std output include these aliases.
+    let impl_index = rvs_build_impl_index(&callgraph);
+    let mut seen_aliases: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let impl_keys: Vec<String> = inferred
+        .keys()
+        .filter(|k| k.contains('@'))
+        .cloned()
+        .collect();
+    for key in impl_keys {
         if let Some(at_pos) = key.find('@') {
             let trait_path = &key[at_pos + 1..];
             let method_full = &key[..at_pos];
             if let Some(method_name) = method_full.rsplit("::").next() {
                 let alias = format!("{trait_path}::{method_name}");
-                let entry = trait_aliases.entry(alias).or_default();
-                for cap in caps.rvs_iter() {
-                    entry.rvs_insert_M(cap);
+                if seen_aliases.insert(alias.clone()) {
+                    if let Some(voted) = rvs_resolve_impl_union_M(&alias, &impl_index, &inferred) {
+                        // Override any existing entry (including empty seed entries)
+                        // with the vote result.
+                        inferred.insert(alias, voted);
+                    }
                 }
             }
         }
     }
-    // Also add inherent-impl method aliases: in build-std the callgraph
-    // has `module::Type::method`, but non-build-std compilation may
-    // resolve to different paths.  These are already correct thanks to
-    // the def_path fix, so no aliasing needed here.
-    for (alias, caps) in trait_aliases {
-        std_only.entry(alias).or_insert(caps);
-    }
+
+    // Build std capsmap from callgraph inference.
+    let crate_name = rvs_detect_crate_name_BIS(path)?;
+    let crate_prefix = format!("{crate_name}::");
+    let std_crates: &[&str] = &["std::", "core::", "alloc::", "compiler_builtins::"];
+
+    // Collect inferred caps for std/core/alloc/compiler_builtins functions.
+    let std_only: BTreeMap<String, CapabilitySet> = inferred
+        .iter()
+        .filter(|(name, _caps)| {
+            !name.starts_with(&crate_prefix)
+                && std_crates.iter().any(|prefix| name.starts_with(prefix))
+        })
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
 
     // Check for std functions that have callees outside the inferred map.
     // These are functions whose capabilities could not be fully determined.

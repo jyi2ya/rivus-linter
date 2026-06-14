@@ -9,6 +9,14 @@ LL | | }
    = note: `-D rivus::rvs-missing-panics-doc` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_panics_doc)]`
 
+error: {P} → to_string (alloc::string::ToString::to_string) ({B, I, P, S}) missing B(Blocking), I(IO), S(SideEffect)
+  --> $DIR/tests/ui/77_reflection_usage_type_name.rs:4:5
+   |
+LL |     std::any::type_name::<i32>().to_string()
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(rivus::rvs_call_violation)]` on by default
+
 error: pub fn 'rvs_process_P' missing /// doc comment
   --> $DIR/tests/ui/77_reflection_usage_type_name.rs:3:1
    |
@@ -20,4 +28,4 @@ LL | | }
    = note: `-D rivus::rvs-missing-doc` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_doc)]`
 
-error: aborting due to 2 previous errors
+error: aborting due to 3 previous errors
