@@ -81,8 +81,12 @@ fn rvs_find_functions_MS(
         let raw_path = match vfs_path.as_path() {
             Some(p) => p,
             None => continue,
-        };
-        let abs_path: &Path = raw_path.as_ref();
+        }
+        .as_ref();
+        let abs_path: &Path = raw_path;
+        if !abs_path.to_string_lossy().ends_with(".rs") {
+            continue;
+        }
         if !rvs_is_local_file(abs_path, canonical_path) {
             continue;
         }
