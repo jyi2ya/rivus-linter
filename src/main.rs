@@ -816,10 +816,7 @@ fn rvs_clean_dir(path: &Path) {
 /// layers from `caps/` (excluding `deps`).
 fn rvs_load_callgraph_and_caps_BIMS(
     path: &Path,
-) -> (
-    BTreeMap<String, ParsedFnBehavior>,
-    capsmap::CapsMap,
-) {
+) -> (BTreeMap<String, ParsedFnBehavior>, capsmap::CapsMap) {
     // Load callgraph: reuse cached if available, otherwise collect fresh.
     let cg_dir = path.join("target").join("rivus-callgraph");
     let cg_std_dir = path.join("target").join("rivus-callgraph-std");
@@ -1592,8 +1589,18 @@ fn rvs_infer_caps_M(
                     }
                 });
                 if let Some(cc) = callee_caps {
+                    // Check if this came from impl-union resolution
+                    let from_impl_union =
+                        inferred.get(callee).is_none() && seed.rvs_lookup(callee).is_none();
                     for cap in cc.rvs_iter() {
-                        if matches!(cap, Capability::A | Capability::M | Capability::U) {
+                        // A and U are never propagated (signature-only capabilities).
+                        // M is propagated for direct calls but NOT for impl-union
+                        // (trait method aliases), because M should come from the
+                        // function's own &mut parameters, not from trait method votes.
+                        if matches!(cap, Capability::A | Capability::U) {
+                            continue;
+                        }
+                        if from_impl_union && matches!(cap, Capability::M) {
                             continue;
                         }
                         if !combined.rvs_contains(cap) {
@@ -2400,6 +2407,38 @@ mod tests {
             !caller_caps.rvs_contains(Capability::I),
             "I: 1/3 = minority, should not propagate"
         );
+    }
+
+    #[test]
+    fn test_20260614_m_propagates_from_direct_call() {
+        // When function A directly calls function B (which has &mut params, hence M),
+        // M should propagate to A. This is different from impl-union (trait method
+        // aliases) where M should NOT propagate.
+        //
+        // This test verifies that annotate produces consistent results with check:
+        // if a callee has M from &mut params, the caller also gets M.
+        let mut callgraph: BTreeMap<String, ParsedFnBehavior> = BTreeMap::new();
+
+        // caller has no &mut params of its own
+        let mut caller = rvs_make_behavior();
+        caller.has_async = true;
+        caller.calls.insert("my_crate::sort_inplace".into());
+        callgraph.insert("my_crate::handle".into(), caller);
+
+        // callee has &mut param → gets M from signature
+        let mut callee = rvs_make_behavior();
+        callee.has_mut_param = true;
+        callgraph.insert("my_crate::sort_inplace".into(), callee);
+
+        let seed = capsmap::CapsMap::rvs_new();
+        let result = rvs_infer_caps_M(&callgraph, &seed);
+
+        let caller_caps = result.get("my_crate::handle").expect("caller exists");
+        assert!(
+            caller_caps.rvs_contains(Capability::M),
+            "M should propagate from direct callee"
+        );
+        assert!(caller_caps.rvs_contains(Capability::A), "A from has_async");
     }
 
     #[test]

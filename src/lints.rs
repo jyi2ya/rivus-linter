@@ -967,22 +967,34 @@ impl FnInfo {
                 sig.header.safety,
                 rustc_hir::HeaderSafety::Normal(Safety::Unsafe)
             ),
-            has_mut_param: sig.decl.inputs.iter().any(|t| {
-                matches!(
-                    t.kind,
-                    TyKind::Ref(
-                        _,
-                        rustc_hir::MutTy {
-                            mutbl: Mutability::Mut,
-                            ..
-                        }
-                    )
-                )
-            }),
+            has_mut_param: rvs_has_mutable_params(sig, body),
             has_panic: rvs_scan_panic(tcx, body),
             has_unsafe_block: rvs_scan_unsafe(tcx, body),
         })
     }
+}
+
+/// Check if a function has mutable parameters — either `&mut` references
+/// in the type signature. This drives the M capability from the signature.
+///
+/// Note: `mut foo: T` bindings on by-value parameters are NOT counted as M
+/// because in Rust 2024 edition, the `mut` keyword on parameters is purely
+/// cosmetic (the HIR records `BindingMode(No, Not)` for all params). Moreover,
+/// a by-value `mut` binding only modifies a local copy — it doesn't affect the
+/// caller's state. Only `&mut` references truly modify the caller's state.
+fn rvs_has_mutable_params(sig: &rustc_hir::FnSig<'_>, _body: &Body<'_>) -> bool {
+    sig.decl.inputs.iter().any(|t| {
+        matches!(
+            t.kind,
+            TyKind::Ref(
+                _,
+                rustc_hir::MutTy {
+                    mutbl: Mutability::Mut,
+                    ..
+                }
+            )
+        )
+    })
 }
 
 // ─── Body scanners ───────────────────────────────────────────────────────
@@ -2511,18 +2523,7 @@ impl RivusLintPass {
             sig.header.safety,
             rustc_hir::HeaderSafety::Normal(Safety::Unsafe)
         );
-        let has_mut_param = sig.decl.inputs.iter().any(|t| {
-            matches!(
-                t.kind,
-                TyKind::Ref(
-                    _,
-                    rustc_hir::MutTy {
-                        mutbl: Mutability::Mut,
-                        ..
-                    }
-                )
-            )
-        });
+        let has_mut_param = rvs_has_mutable_params(sig, body);
         let has_panic = rvs_scan_panic(cx.tcx, body);
         let has_unsafe_block = rvs_scan_unsafe(cx.tcx, body);
 
