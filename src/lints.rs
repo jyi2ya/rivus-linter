@@ -2463,6 +2463,15 @@ impl RivusLintPass {
             if rvs_is_from_debug_assert(e) {
                 return;
             }
+            // Skip expect/unwrap calls that are exempted by "never:" prefix
+            // or std lib "won't happen" patterns — these should not create
+            // callgraph edges that propagate P.
+            if let ExprKind::MethodCall(p, ..) = &e.kind {
+                let n = p.ident.name.as_str();
+                if n == "expect" && rvs_is_never_expect(e) {
+                    return;
+                }
+            }
             match &e.kind {
                 ExprKind::Call(func, _) => {
                     if let ExprKind::Path(ref q) = func.kind {
