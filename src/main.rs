@@ -1227,7 +1227,9 @@ fn rvs_run_infer_std_BIMPS(path: &Path, output: Option<&Path>) -> Result<(), Str
     let crate_name = rvs_detect_crate_name_BIS(path)?;
     let crate_prefix = format!("{crate_name}::");
     let std_crates: &[&str] = &["std::", "core::", "alloc::", "compiler_builtins::"];
-    let std_only: BTreeMap<String, CapabilitySet> = inferred
+
+    // Collect inferred caps for std/core/alloc/compiler_builtins functions.
+    let mut std_only: BTreeMap<String, CapabilitySet> = inferred
         .iter()
         .filter(|(name, _caps)| {
             !name.starts_with(&crate_prefix)
@@ -1235,6 +1237,41 @@ fn rvs_run_infer_std_BIMPS(path: &Path, output: Option<&Path>) -> Result<(), Str
         })
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
+
+    // Generate trait-definition aliases.
+    //
+    // In build-std mode, trait method *definitions* appear in the callgraph
+    // (they have a body).  But in normal (non-build-std) compilation, core/std
+    // are pre-compiled rlibs — the trait definition body is invisible, so the
+    // def_path at the call site resolves to `TraitPath::method` which does NOT
+    // exist in the callgraph.  The impl path `module::method@TraitPath` *is*
+    // present.
+    //
+    // To bridge this gap, for every `method@TraitPath` entry in std_only we
+    // also emit `TraitPath::method_name` with the same caps.  When multiple
+    // impls share the same trait method, the union of all impl caps is used
+    // (matching the majority-vote semantics of rvs_resolve_impl_union).
+    let mut trait_aliases: BTreeMap<String, CapabilitySet> = BTreeMap::new();
+    for (key, caps) in &std_only {
+        if let Some(at_pos) = key.find('@') {
+            let trait_path = &key[at_pos + 1..];
+            let method_full = &key[..at_pos];
+            if let Some(method_name) = method_full.rsplit("::").next() {
+                let alias = format!("{trait_path}::{method_name}");
+                let entry = trait_aliases.entry(alias).or_default();
+                for cap in caps.rvs_iter() {
+                    entry.rvs_insert_M(cap);
+                }
+            }
+        }
+    }
+    // Also add inherent-impl method aliases: in build-std the callgraph
+    // has `module::Type::method`, but non-build-std compilation may
+    // resolve to different paths.  These are already correct thanks to
+    // the def_path fix, so no aliasing needed here.
+    for (alias, caps) in trait_aliases {
+        std_only.entry(alias).or_insert(caps);
+    }
 
     // Check for std functions that have callees outside the inferred map.
     // These are functions whose capabilities could not be fully determined.

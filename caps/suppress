@@ -117,12 +117,12 @@ core::char::methods::char::to_uppercase=
 # String/number parsing with spurious S
 # ════════════════════════════════════════════════════════════════
 
-# alloc string — keep P (allocation), remove S from fmt internals
-alloc::str::str::to_lowercase=P
-alloc::str::str::to_uppercase=P
-alloc::str::to_lowercase::case_ignorable_then_cased=P
-alloc::str::to_lowercase::map_uppercase_sigma=P
-alloc::string::spec_to_string@alloc::string::SpecToString=P
+# alloc string
+alloc::str::str::to_lowercase=
+alloc::str::str::to_uppercase=
+alloc::str::to_lowercase::case_ignorable_then_cased=
+alloc::str::to_lowercase::map_uppercase_sigma=
+alloc::string::spec_to_string@alloc::string::SpecToString=
 
 # Float parsing — keep P (parsing errors), remove S from static tables
 core::num::float_parse::from_str@core::str::traits::FromStr=P
