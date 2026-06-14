@@ -808,6 +808,52 @@ fn rvs_clean_dir(path: &Path) {
     }
 }
 
+/// Load callgraph and caps for a project, used by annotate, why, and similar
+/// commands that need inferred capabilities.
+///
+/// This function merges cached callgraphs from both project (`rivus-callgraph`)
+/// and std (`rivus-callgraph-std`) builds when available, and loads all caps
+/// layers from `caps/` (excluding `deps`).
+fn rvs_load_callgraph_and_caps_BIMS(
+    path: &Path,
+) -> (
+    BTreeMap<String, ParsedFnBehavior>,
+    capsmap::CapsMap,
+) {
+    // Load callgraph: reuse cached if available, otherwise collect fresh.
+    let cg_dir = path.join("target").join("rivus-callgraph");
+    let cg_std_dir = path.join("target").join("rivus-callgraph-std");
+    let callgraph = if cg_dir.is_dir() || cg_std_dir.is_dir() {
+        let mut merged = BTreeMap::new();
+        if cg_dir.is_dir() {
+            if let Ok(cg) = rvs_merge_callgraph_dir_BI(&cg_dir) {
+                merged.extend(cg);
+            }
+        }
+        if cg_std_dir.is_dir() {
+            if let Ok(cg) = rvs_merge_callgraph_dir_BI(&cg_std_dir) {
+                merged.extend(cg);
+            }
+        }
+        merged
+    } else {
+        eprintln!("(no cached callgraph found, collecting fresh...)");
+        rvs_run_cargo_check_for_callgraph_BIMPS(path, vec![]).unwrap_or_default()
+    };
+
+    // Load caps: all layers from caps/ dir (excluding deps).
+    let caps_dir = path.join("caps");
+    let seed = if caps_dir.is_dir() {
+        rvs_load_caps_excluding_deps_BIMS(&caps_dir)
+    } else {
+        // Fall back to legacy capsmap.txt
+        let seed_path = path.join("capsmap.txt");
+        rvs_load_seed_capsmap_BIMS(path, &seed_path)
+    };
+
+    (callgraph, seed)
+}
+
 /// # Panics
 ///
 /// Panics if the current executable path, current directory, or cargo cannot be resolved.
@@ -857,11 +903,7 @@ fn rvs_run_annotate_BIMPS(path: &Path) -> Result<(), String> {
         return Err(format!("'{}' is not a directory", path.display()));
     }
 
-    let callgraph = rvs_run_cargo_check_for_callgraph_BIMPS(path, vec![])?;
-
-    let seed_path = path.join("capsmap.txt");
-    let seed = rvs_load_seed_capsmap_BIMS(path, &seed_path);
-
+    let (callgraph, seed) = rvs_load_callgraph_and_caps_BIMS(path);
     let inferred = rvs_infer_caps_M(&callgraph, &seed);
 
     let workspace_name = rvs_detect_crate_name_BIS(path)?;
@@ -923,32 +965,7 @@ fn rvs_run_why_BIMPS(function: &str, path: &Path) -> Result<(), String> {
         return Err(format!("'{}' is not a directory", path.display()));
     }
 
-    // Reuse cached callgraph if available, otherwise collect fresh.
-    // Merge both rivus-callgraph (project deps) and rivus-callgraph-std (std).
-    let cg_dir = path.join("target").join("rivus-callgraph");
-    let cg_std_dir = path.join("target").join("rivus-callgraph-std");
-    let callgraph = if cg_dir.is_dir() || cg_std_dir.is_dir() {
-        let mut merged = BTreeMap::new();
-        if cg_dir.is_dir() {
-            merged.append(&mut rvs_merge_callgraph_dir_BI(&cg_dir)?);
-        }
-        if cg_std_dir.is_dir() {
-            merged.append(&mut rvs_merge_callgraph_dir_BI(&cg_std_dir)?);
-        }
-        merged
-    } else {
-        eprintln!("(no cached callgraph found, collecting fresh...)");
-        rvs_run_cargo_check_for_callgraph_BIMPS(path, vec![])?
-    };
-
-    // Load caps (all layers except deps)
-    let caps_dir = path.join("caps");
-    let seed = if caps_dir.is_dir() {
-        rvs_load_caps_excluding_deps_BIMS(&caps_dir)
-    } else {
-        capsmap::CapsMap::rvs_new()
-    };
-
+    let (callgraph, seed) = rvs_load_callgraph_and_caps_BIMS(path);
     let inferred = rvs_infer_caps_M(&callgraph, &seed);
     let impl_index = rvs_build_impl_index(&callgraph);
 
