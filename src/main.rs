@@ -271,61 +271,79 @@ fn main() -> ExitCode {
 
 // ─── Check subcommand ────────────────────────────────────────────────────
 
-/// # Panics
+/// Resolve the capsmap path for the lint pass.
 ///
-/// Panics if the current executable path is invalid or cargo cannot be spawned.
-fn rvs_run_cargo_check_BIMPS(capsmap: Option<PathBuf>, extra_args: Vec<String>) -> Result<(), i32> {
-    let self_path = env::current_exe().expect("current executable path invalid");
-    let mut cmd = Command::new(env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
-    cmd.env("RUSTC_WORKSPACE_WRAPPER", &self_path)
-        .env("RIVUS_ENABLED", "1");
+/// Priority: user-provided > target/rivus-inferred-capsmap.txt > caps/ dir > built-in caps/ dir.
+/// Sets `RIVUS_CAPSMAP` on `cmd` if a capsmap source is found.
+fn rvs_resolve_capsmap_BIS(
+    cmd: &mut Command,
+    user_capsmap: Option<&Path>,
+    project_path: &Path,
+    self_path: &Path,
+) {
+    // 1. User-provided capsmap (explicit -m flag)
+    let resolved = user_capsmap.and_then(|p| {
+        if p.exists() {
+            Some(p.to_path_buf())
+        } else {
+            eprintln!("Warning: capsmap '{}' not found, ignoring", p.display());
+            None
+        }
+    });
 
-    // Resolve capsmap: user-provided > inferred > built-in caps/ directory
-    let resolved_capsmap = capsmap
-        .and_then(|p| {
-            if p.exists() {
-                Some(p)
-            } else {
-                eprintln!("Warning: capsmap '{}' not found, ignoring", p.display());
-                None
-            }
-        })
-        .or_else(|| {
-            let inferred = PathBuf::from("target/rivus-inferred-capsmap.txt");
-            if inferred.exists() {
-                Some(inferred)
-            } else {
-                None
-            }
-        });
+    // 2. target/rivus-inferred-capsmap.txt (from infer-capsmap)
+    let resolved = resolved.or_else(|| {
+        let inferred = project_path
+            .join("target")
+            .join("rivus-inferred-capsmap.txt");
+        if inferred.exists() {
+            Some(inferred)
+        } else {
+            None
+        }
+    });
 
-    if let Some(ref p) = resolved_capsmap {
+    if let Some(p) = resolved {
         let abs = if p.is_absolute() {
-            p.clone()
+            p
         } else {
             std::env::current_dir()
                 .expect("current dir invalid")
                 .join(p)
         };
         cmd.env("RIVUS_CAPSMAP", abs);
-    } else {
-        // No user capsmap — try the project's caps/ directory first,
-        // then fall back to the linter's built-in caps/ directory.
-        let project_caps = std::env::current_dir().ok().map(|cwd| cwd.join("caps"));
-        let project_caps_dir = project_caps.as_ref().filter(|p| p.is_dir());
-
-        let built_in_caps = self_path.parent().and_then(|exe_dir| {
-            exe_dir
-                .parent()
-                .and_then(|p| p.parent())
-                .map(|root| root.join("caps"))
-        });
-        let built_in_caps_dir = built_in_caps.as_ref().filter(|p| p.is_dir());
-
-        if let Some(dir) = project_caps_dir.or(built_in_caps_dir) {
-            cmd.env("RIVUS_CAPSMAP", dir);
-        }
+        return;
     }
+
+    // 3. Project caps/ directory, then built-in caps/ directory
+    let project_caps = project_path.join("caps");
+    if project_caps.is_dir() {
+        cmd.env("RIVUS_CAPSMAP", project_caps);
+        return;
+    }
+
+    let built_in_caps = self_path.parent().and_then(|exe_dir| {
+        exe_dir
+            .parent()
+            .and_then(|p| p.parent())
+            .map(|root| root.join("caps"))
+    });
+    if let Some(dir) = built_in_caps.filter(|p| p.is_dir()) {
+        cmd.env("RIVUS_CAPSMAP", dir);
+    }
+}
+
+/// # Panics
+///
+/// Panics if the current executable path is invalid or cargo cannot be spawned.
+fn rvs_run_cargo_check_BIMPS(capsmap: Option<PathBuf>, extra_args: Vec<String>) -> Result<(), i32> {
+    let self_path = env::current_exe().expect("current executable path invalid");
+    let project_path = PathBuf::from(".");
+    let mut cmd = Command::new(env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
+    cmd.env("RUSTC_WORKSPACE_WRAPPER", &self_path)
+        .env("RIVUS_ENABLED", "1");
+
+    rvs_resolve_capsmap_BIS(&mut cmd, capsmap.as_deref(), &project_path, &self_path);
 
     cmd.arg("check").arg("--tests").args(&extra_args);
     let exit_status = cmd
@@ -520,30 +538,12 @@ fn rvs_run_report_BIMPS(path: &Path) {
         .env("RIVUS_REPORT", "1")
         .env("RIVUS_REPORT_DIR", abs_report_dir);
 
-    // Load caps/ directory (same logic as check)
-    let project_caps = if path.is_absolute() {
-        path.join("caps")
-    } else {
-        std::env::current_dir()
-            .expect("current dir invalid")
-            .join(path)
-            .join("caps")
-    };
-    if project_caps.is_dir() {
-        cmd.env("RIVUS_CAPSMAP", &project_caps);
-    } else {
-        let built_in_caps = self_path.parent().and_then(|exe_dir| {
-            exe_dir
-                .parent()
-                .and_then(|p| p.parent())
-                .map(|root| root.join("caps"))
-        });
-        if let Some(dir) = built_in_caps.filter(|p| p.is_dir()) {
-            cmd.env("RIVUS_CAPSMAP", dir);
-        }
-    }
+    rvs_resolve_capsmap_BIS(&mut cmd, None, path, &self_path);
 
-    cmd.arg("check").arg("--target-dir").arg(&build_dir);
+    cmd.arg("check")
+        .arg("--tests")
+        .arg("--target-dir")
+        .arg(&build_dir);
     let exit_status = cmd
         .spawn()
         .expect("could not run cargo")
