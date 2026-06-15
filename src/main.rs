@@ -333,28 +333,123 @@ fn rvs_resolve_capsmap_BIS(
     }
 }
 
+/// Configuration for running `cargo check` with the rivus lint pass.
+struct CargoCheckConfig<'a> {
+    project_path: &'a Path,
+    /// Use RUSTC_WRAPPER (wraps all crates) instead of RUSTC_WORKSPACE_WRAPPER (workspace only).
+    wrap_all_crates: bool,
+    /// Pass --tests to cargo check.
+    with_tests: bool,
+    /// Use -Zbuild-std with nightly toolchain.
+    build_std: bool,
+    /// User-provided capsmap path (highest priority).
+    user_capsmap: Option<&'a Path>,
+    /// Extra environment variables to set.
+    extra_env: Vec<(&'a str, String)>,
+    /// Extra cargo check arguments.
+    extra_args: Vec<&'a str>,
+    /// Output subdirectory name under target/ (e.g. "rivus-build", "rivus-report-build").
+    /// If None, uses default target/ directory.
+    target_subdir: Option<&'a str>,
+}
+
+/// Runs `cargo check` with the rivus lint pass configured according to `config`.
+/// Returns `Ok(())` on success, `Err(message)` on failure.
+///
 /// # Panics
 ///
 /// Panics if the current executable path is invalid or cargo cannot be spawned.
-fn rvs_run_cargo_check_BIMPS(capsmap: Option<PathBuf>, extra_args: Vec<String>) -> Result<(), i32> {
+fn rvs_run_cargo_check_impl_BIMPS(config: &CargoCheckConfig) -> Result<(), String> {
     let self_path = env::current_exe().expect("current executable path invalid");
-    let project_path = PathBuf::from(".");
-    let mut cmd = Command::new(env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
-    cmd.env("RUSTC_WORKSPACE_WRAPPER", &self_path)
-        .env("RIVUS_ENABLED", "1");
+    let cargo = env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+    let mut cmd = Command::new(&cargo);
 
-    rvs_resolve_capsmap_BIS(&mut cmd, capsmap.as_deref(), &project_path, &self_path);
+    if config.build_std {
+        // build-std uses --manifest-path instead of current_dir, and requires nightly.
+        cmd.env("RUSTUP_TOOLCHAIN", "nightly");
+        cmd.arg("--manifest-path")
+            .arg(config.project_path.join("Cargo.toml"));
+    } else {
+        cmd.current_dir(config.project_path);
+    }
 
-    cmd.arg("check").arg("--tests").args(&extra_args);
+    let wrapper_env = if config.wrap_all_crates {
+        "RUSTC_WRAPPER"
+    } else {
+        "RUSTC_WORKSPACE_WRAPPER"
+    };
+    cmd.env(wrapper_env, &self_path).env("RIVUS_ENABLED", "1");
+
+    for (key, val) in &config.extra_env {
+        cmd.env(key, val);
+    }
+
+    // Resolve capsmap only when not in callgraph-only mode
+    // (callgraph-only mode passes capsmap via extra_env as RIVUS_CAPSMAP).
+    let has_callgraph_env = config
+        .extra_env
+        .iter()
+        .any(|(k, _)| *k == "RIVUS_CALLGRAPH");
+    if !has_callgraph_env {
+        rvs_resolve_capsmap_BIS(
+            &mut cmd,
+            config.user_capsmap,
+            config.project_path,
+            &self_path,
+        );
+    }
+
+    cmd.arg("check");
+    if config.with_tests {
+        cmd.arg("--tests");
+    }
+    if config.build_std {
+        cmd.arg("-Zbuild-std=std,core,alloc");
+        cmd.arg("--target").arg(rvs_host_triple_BIMPS());
+    }
+    if let Some(subdir) = config.target_subdir {
+        let target_dir = config.project_path.join("target").join(subdir);
+        cmd.arg("--target-dir").arg(&target_dir);
+    }
+    for arg in &config.extra_args {
+        cmd.arg(arg);
+    }
+
     let exit_status = cmd
         .spawn()
         .expect("could not run cargo")
         .wait()
         .expect("failed to wait for cargo?");
-    if exit_status.success() {
-        Ok(())
-    } else {
-        Err(exit_status.code().unwrap_or(-1))
+    if !exit_status.success() {
+        return Err(format!(
+            "cargo check failed (exit code {:?})",
+            exit_status.code()
+        ));
+    }
+    Ok(())
+}
+
+/// # Panics
+///
+/// Panics if the current executable path is invalid or cargo cannot be spawned.
+fn rvs_run_cargo_check_BIMPS(capsmap: Option<PathBuf>, extra_args: Vec<String>) -> Result<(), i32> {
+    let project_path = Path::new(".");
+    let extra_args_ref: Vec<&str> = extra_args.iter().map(|s| s.as_str()).collect();
+    match rvs_run_cargo_check_impl_BIMPS(&CargoCheckConfig {
+        project_path,
+        wrap_all_crates: false,
+        with_tests: true,
+        build_std: false,
+        user_capsmap: capsmap.as_deref(),
+        extra_env: vec![],
+        extra_args: extra_args_ref,
+        target_subdir: None,
+    }) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            eprintln!("{e}");
+            Err(1)
+        }
     }
 }
 
@@ -524,33 +619,30 @@ fn rvs_build_report(entries: &[FnEntry]) -> Report {
 /// Panics if the current executable path, current directory, or cargo cannot be resolved.
 fn rvs_run_report_BIMPS(path: &Path) {
     let report_dir = path.join("target").join("rivus-report");
-    let build_dir = path.join("target").join("rivus-report-build");
-    let self_path = env::current_exe().expect("current executable path invalid");
     let abs_report_dir = std::env::current_dir()
         .expect("current dir invalid")
         .join(&report_dir);
     rvs_clean_dir(&report_dir);
-    rvs_clean_dir(&build_dir);
-    let mut cmd = Command::new(env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
-    cmd.current_dir(path)
-        .env("RUSTC_WORKSPACE_WRAPPER", &self_path)
-        .env("RIVUS_ENABLED", "1")
-        .env("RIVUS_REPORT", "1")
-        .env("RIVUS_REPORT_DIR", abs_report_dir);
+    rvs_clean_dir(&path.join("target").join("rivus-report-build"));
 
-    rvs_resolve_capsmap_BIS(&mut cmd, None, path, &self_path);
-
-    cmd.arg("check")
-        .arg("--tests")
-        .arg("--target-dir")
-        .arg(&build_dir);
-    let exit_status = cmd
-        .spawn()
-        .expect("could not run cargo")
-        .wait()
-        .expect("failed to wait for cargo?");
-    if !exit_status.success() {
-        process::exit(exit_status.code().unwrap_or(-1));
+    if let Err(e) = rvs_run_cargo_check_impl_BIMPS(&CargoCheckConfig {
+        project_path: path,
+        wrap_all_crates: false,
+        with_tests: true,
+        build_std: false,
+        user_capsmap: None,
+        extra_env: vec![
+            ("RIVUS_REPORT", "1".into()),
+            (
+                "RIVUS_REPORT_DIR",
+                abs_report_dir.to_string_lossy().into_owned(),
+            ),
+        ],
+        extra_args: vec![],
+        target_subdir: Some("rivus-report-build"),
+    }) {
+        eprintln!("{e}");
+        process::exit(1);
     }
 
     let mut all_entries: Vec<FnEntry> = Vec::new();
@@ -598,8 +690,8 @@ fn rvs_parse_report_json(json: &str) -> Result<Vec<FnEntry>, String> {
 // ─── Setup subcommand ────────────────────────────────────────────────────
 
 fn rvs_run_setup_BIMS(path: &Path) {
-    if !path.is_dir() {
-        eprintln!("Error: '{}' is not a directory", path.display());
+    if let Err(e) = rvs_ensure_project_dir_P(path) {
+        eprintln!("Error: {e}");
         process::exit(2);
     }
 
@@ -859,35 +951,34 @@ fn rvs_run_cargo_check_for_callgraph_BIMPS(
     extra_env: Vec<(&str, PathBuf)>,
 ) -> Result<BTreeMap<String, ParsedFnBehavior>, String> {
     let cg_dir = path.join("target").join("rivus-callgraph");
-    let cg_target_dir = path.join("target").join("rivus-build");
-
-    rvs_clean_dir(&cg_dir);
-    rvs_clean_dir(&cg_target_dir);
-
-    let self_path = env::current_exe().expect("current executable path invalid");
     let abs_cg_dir = std::env::current_dir()
         .expect("current dir invalid")
         .join(&cg_dir);
 
-    let mut cmd = Command::new(env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
-    cmd.current_dir(path)
-        .env("RUSTC_WRAPPER", self_path)
-        .env("RIVUS_ENABLED", "1")
-        .env("RIVUS_CALLGRAPH", "1")
-        .env("RIVUS_CALLGRAPH_DIR", &abs_cg_dir);
-    for (key, val) in &extra_env {
-        cmd.env(key, val);
-    }
-    cmd.arg("check").arg("--target-dir").arg(&cg_target_dir);
+    rvs_clean_dir(&cg_dir);
+    rvs_clean_dir(&path.join("target").join("rivus-build"));
 
-    let exit_status = cmd
-        .spawn()
-        .expect("could not run cargo")
-        .wait()
-        .expect("failed to wait for cargo?");
-    if !exit_status.success() {
-        return Err("cargo check failed — fix compilation errors first".into());
+    let mut env_vars: Vec<(&str, String)> = vec![
+        ("RIVUS_CALLGRAPH", "1".into()),
+        (
+            "RIVUS_CALLGRAPH_DIR",
+            abs_cg_dir.to_string_lossy().into_owned(),
+        ),
+    ];
+    for (key, val) in &extra_env {
+        env_vars.push((key, val.to_string_lossy().into_owned()));
     }
+
+    rvs_run_cargo_check_impl_BIMPS(&CargoCheckConfig {
+        project_path: path,
+        wrap_all_crates: true,
+        with_tests: false,
+        build_std: false,
+        user_capsmap: None,
+        extra_env: env_vars,
+        extra_args: vec![],
+        target_subdir: Some("rivus-build"),
+    })?;
 
     rvs_merge_callgraph_dir_BI(&cg_dir)
 }
@@ -896,9 +987,7 @@ fn rvs_run_cargo_check_for_callgraph_BIMPS(
 ///
 /// Panics if the current executable path, current directory, or cargo cannot be resolved.
 fn rvs_run_annotate_BIMPS(path: &Path) -> Result<(), String> {
-    if !path.is_dir() {
-        return Err(format!("'{}' is not a directory", path.display()));
-    }
+    rvs_ensure_project_dir_P(path)?;
 
     let (callgraph, seed) = rvs_load_callgraph_and_caps_BIMS(path);
     let inferred = rvs_infer_caps_M(&callgraph, &seed);
@@ -925,7 +1014,7 @@ fn rvs_run_annotate_BIMPS(path: &Path) -> Result<(), String> {
             skip_names.insert(short_name.to_string());
             continue;
         }
-        let caps_str: String = caps.rvs_iter().map(|c| c.rvs_as_char()).collect();
+        let caps_str = rvs_caps_to_string_P(caps);
         let new_name = if caps_str.is_empty() {
             format!("rvs_{short_name}")
         } else {
@@ -958,9 +1047,7 @@ fn rvs_run_annotate_BIMPS(path: &Path) -> Result<(), String> {
 ///
 /// Panics if the current executable path, current directory, or cargo cannot be resolved.
 fn rvs_run_why_BIMPS(function: &str, path: &Path) -> Result<(), String> {
-    if !path.is_dir() {
-        return Err(format!("'{}' is not a directory", path.display()));
-    }
+    rvs_ensure_project_dir_P(path)?;
 
     let (callgraph, seed) = rvs_load_callgraph_and_caps_BIMS(path);
     let inferred = rvs_infer_caps_M(&callgraph, &seed);
@@ -981,7 +1068,7 @@ fn rvs_run_why_BIMPS(function: &str, path: &Path) -> Result<(), String> {
             let caps_str = inferred
                 .get(*c)
                 .map(|cs| {
-                    let s: String = cs.rvs_iter().map(|c| c.rvs_as_char()).collect();
+                    let s = rvs_caps_to_string_P(cs);
                     if s.is_empty() {
                         " (pure)".to_string()
                     } else {
@@ -998,7 +1085,7 @@ fn rvs_run_why_BIMPS(function: &str, path: &Path) -> Result<(), String> {
     let own_caps = inferred.get(function);
     let caps_str = match own_caps {
         Some(cs) => {
-            let s: String = cs.rvs_iter().map(|c| c.rvs_as_char()).collect();
+            let s = rvs_caps_to_string_P(cs);
             if s.is_empty() {
                 " (pure)".to_string()
             } else {
@@ -1045,7 +1132,7 @@ fn rvs_run_why_BIMPS(function: &str, path: &Path) -> Result<(), String> {
     for (callee, caps) in &callees {
         let s = match caps {
             Some(cs) if !cs.rvs_is_empty() => {
-                let chars: String = cs.rvs_iter().map(|c| c.rvs_as_char()).collect();
+                let chars = rvs_caps_to_string_P(cs);
                 let desc: String = cs
                     .rvs_iter()
                     .map(|c| c.rvs_description())
@@ -1070,9 +1157,7 @@ fn rvs_run_infer_capsmap_BIMPS(
     seed_capsmap: &Path,
     output: Option<&Path>,
 ) -> Result<(), String> {
-    if !path.is_dir() {
-        return Err(format!("'{}' is not a directory", path.display()));
-    }
+    rvs_ensure_project_dir_P(path)?;
 
     let abs_seed = if seed_capsmap.is_absolute() {
         seed_capsmap.to_path_buf()
@@ -1105,20 +1190,11 @@ fn rvs_run_infer_capsmap_BIMPS(
         rvs_collect_direct_external_deps(&callgraph, &crate_name, &seed, &inferred, &impl_index);
 
     if !unknown_callees.is_empty() {
-        let mut msg = String::from(
+        return Err(rvs_format_unknown_callees_P(
+            &unknown_callees,
             "error: the following external functions have no capability data.\n\
              Add them to caps/seed or caps/ext with the correct capability markers:\n\n",
-        );
-        for (callee, callers) in &unknown_callees {
-            msg.push_str(&format!("  {callee}=\n"));
-            for caller in callers.iter().take(3) {
-                msg.push_str(&format!("    called by: {caller}\n"));
-            }
-            if callers.len() > 3 {
-                msg.push_str(&format!("    ... and {} more\n", callers.len() - 3));
-            }
-        }
-        return Err(msg);
+        ));
     }
 
     let deps_result = rvs_format_capsmap(&direct_external_calls);
@@ -1161,55 +1237,36 @@ fn rvs_merge_callgraph_dir_BI(cg_dir: &Path) -> Result<BTreeMap<String, ParsedFn
 ///
 /// Panics if the current executable path, current directory, or cargo cannot be resolved.
 fn rvs_run_infer_std_BIMPS(path: &Path, output: Option<&Path>) -> Result<(), String> {
-    if !path.is_dir() {
-        return Err(format!("'{}' is not a directory", path.display()));
-    }
+    rvs_ensure_project_dir_P(path)?;
     let cargo_toml = path.join("Cargo.toml");
     if !cargo_toml.exists() {
         return Err(format!("'{}' is not a Cargo project", path.display()));
     }
 
     let cg_dir = path.join("target").join("rivus-callgraph-std");
-    let cg_target_dir = path.join("target").join("rivus-build-std");
+    let abs_cg_dir = std::env::current_dir()
+        .expect("current dir invalid")
+        .join(&cg_dir);
 
-    if cg_dir.exists() {
-        let _ = std::fs::remove_dir_all(&cg_dir);
-    }
-    if cg_target_dir.exists() {
-        let _ = std::fs::remove_dir_all(&cg_target_dir);
-    }
+    rvs_clean_dir(&cg_dir);
+    rvs_clean_dir(&path.join("target").join("rivus-build-std"));
 
-    {
-        let self_path = env::current_exe().expect("current executable path invalid");
-        let abs_cg_dir = std::env::current_dir()
-            .expect("current dir invalid")
-            .join(&cg_dir);
-        // Use RUSTUP_TOOLCHAIN=nightly instead of `+nightly` arg, because
-        // CARGO env var may point to cargo-rivus (our own binary) which
-        // doesn't understand +nightly.
-        let mut cmd = Command::new(env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
-        cmd.env("RUSTUP_TOOLCHAIN", "nightly")
-            .env("RUSTC_WRAPPER", self_path)
-            .env("RIVUS_ENABLED", "1")
-            .env("RIVUS_CALLGRAPH", "1")
-            .env("RIVUS_CALLGRAPH_DIR", &abs_cg_dir)
-            .arg("check")
-            .arg("-Zbuild-std=std,core,alloc")
-            .arg("--manifest-path")
-            .arg(&cargo_toml)
-            .arg("--target")
-            .arg(rvs_host_triple_BIMPS())
-            .arg("--target-dir")
-            .arg(&cg_target_dir);
-        let exit_status = cmd
-            .spawn()
-            .expect("could not run cargo")
-            .wait()
-            .expect("failed to wait for cargo?");
-        if !exit_status.success() {
-            return Err("cargo +nightly check -Zbuild-std failed".into());
-        }
-    }
+    rvs_run_cargo_check_impl_BIMPS(&CargoCheckConfig {
+        project_path: path,
+        wrap_all_crates: true,
+        with_tests: false,
+        build_std: true,
+        user_capsmap: None,
+        extra_env: vec![
+            ("RIVUS_CALLGRAPH", "1".into()),
+            (
+                "RIVUS_CALLGRAPH_DIR",
+                abs_cg_dir.to_string_lossy().into_owned(),
+            ),
+        ],
+        extra_args: vec![],
+        target_subdir: Some("rivus-build-std"),
+    })?;
 
     let callgraph = rvs_merge_callgraph_dir_BI(&cg_dir)?;
 
@@ -1218,19 +1275,13 @@ fn rvs_run_infer_std_BIMPS(path: &Path, output: Option<&Path>) -> Result<(), Str
     // defeats the purpose of regenerating.
     let caps_dir = path.join("caps");
     let mut seed = capsmap::CapsMap::rvs_new();
-    let seed_file = caps_dir.join("seed");
-    if seed_file.is_file() {
-        if let Ok(content) = std::fs::read_to_string(&seed_file) {
-            if let Ok(cm) = capsmap::CapsMap::rvs_parse(&content) {
-                seed.rvs_extend_from_M(cm);
-            }
-        }
-    }
-    let suppress_file = caps_dir.join("suppress");
-    if suppress_file.is_file() {
-        if let Ok(content) = std::fs::read_to_string(&suppress_file) {
-            if let Ok(cm) = capsmap::CapsMap::rvs_parse(&content) {
-                seed.rvs_extend_from_M(cm);
+    for name in &["seed", "suppress"] {
+        let path = caps_dir.join(name);
+        if path.is_file() {
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                if let Ok(cm) = capsmap::CapsMap::rvs_parse(&content) {
+                    seed.rvs_extend_from_M(cm);
+                }
             }
         }
     }
@@ -1259,30 +1310,7 @@ fn rvs_run_infer_std_BIMPS(path: &Path, output: Option<&Path>) -> Result<(), Str
             if let Some(caps) = seed.rvs_lookup(func) {
                 m.insert(func.clone(), caps.clone());
             } else {
-                let mut caps = CapabilitySet::rvs_new();
-                if behavior.has_async {
-                    caps.rvs_insert_M(Capability::A);
-                }
-                if behavior.is_unsafe_fn {
-                    caps.rvs_insert_M(Capability::U);
-                }
-                if behavior.has_mut_param {
-                    caps.rvs_insert_M(Capability::M);
-                }
-                if behavior.has_panic {
-                    caps.rvs_insert_M(Capability::P);
-                }
-                if behavior.has_static_mut_ref {
-                    caps.rvs_insert_M(Capability::S);
-                    caps.rvs_insert_M(Capability::U);
-                } else if behavior.has_static_ref {
-                    caps.rvs_insert_M(Capability::S);
-                }
-                if behavior.has_thread_local_ref {
-                    caps.rvs_insert_M(Capability::S);
-                    caps.rvs_insert_M(Capability::T);
-                }
-                m.insert(func.clone(), caps);
+                m.insert(func.clone(), rvs_infer_signature_caps_P(behavior));
             }
         }
         m
@@ -1293,25 +1321,12 @@ fn rvs_run_infer_std_BIMPS(path: &Path, output: Option<&Path>) -> Result<(), Str
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
     let mut alias_seed = seed.clone();
-    let mut seen_aliases: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for key in std_pre_inferred.keys() {
-        if let Some(at_pos) = key.find('@') {
-            let trait_path = &key[at_pos + 1..];
-            let method_full = &key[..at_pos];
-            if let Some(method_name) = method_full.rsplit("::").next() {
-                let alias = format!("{trait_path}::{method_name}");
-                if seen_aliases.insert(alias.clone()) {
-                    if let Some(voted) =
-                        rvs_resolve_impl_union_M(&alias, &pre_index, &std_pre_inferred)
-                    {
-                        let caps_str: String = voted.rvs_iter().map(|c| c.rvs_as_char()).collect();
-                        let line = format!("{alias}={caps_str}");
-                        if let Ok(tmp) = capsmap::CapsMap::rvs_parse(&line) {
-                            alias_seed.rvs_extend_from_M(tmp);
-                        }
-                    }
-                }
-            }
+    let pre_aliases = rvs_generate_trait_aliases_MP(&std_pre_inferred, &pre_index);
+    for (k, v) in &pre_aliases {
+        let caps_str = rvs_caps_to_string_P(v);
+        let line = format!("{k}={caps_str}");
+        if let Ok(tmp) = capsmap::CapsMap::rvs_parse(&line) {
+            alias_seed.rvs_extend_from_M(tmp);
         }
     }
 
@@ -1324,23 +1339,8 @@ fn rvs_run_infer_std_BIMPS(path: &Path, output: Option<&Path>) -> Result<(), Str
         .filter(|(k, _)| std_crates.iter().any(|p| k.starts_with(p)))
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
-    let mut seen_aliases2: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for key in std_inferred.keys() {
-        if let Some(at_pos) = key.find('@') {
-            let trait_path = &key[at_pos + 1..];
-            let method_full = &key[..at_pos];
-            if let Some(method_name) = method_full.rsplit("::").next() {
-                let alias = format!("{trait_path}::{method_name}");
-                if seen_aliases2.insert(alias.clone()) {
-                    if let Some(voted) =
-                        rvs_resolve_impl_union_M(&alias, &impl_index, &std_inferred)
-                    {
-                        inferred.insert(alias, voted);
-                    }
-                }
-            }
-        }
-    }
+    let post_aliases = rvs_generate_trait_aliases_MP(&std_inferred, &impl_index);
+    inferred.extend(post_aliases);
 
     // Build std capsmap from callgraph inference.
     let crate_name = rvs_detect_crate_name_BIS(path)?;
@@ -1383,20 +1383,11 @@ fn rvs_run_infer_std_BIMPS(path: &Path, output: Option<&Path>) -> Result<(), Str
     }
 
     if !unknown.is_empty() {
-        let mut msg = String::from(
+        return Err(rvs_format_unknown_callees_P(
+            &unknown,
             "error: the following functions are called by std but have no capability data.\n\
              Add them to caps/seed with the correct capability markers:\n\n",
-        );
-        for (callee, callers) in &unknown {
-            msg.push_str(&format!("  {callee}=\n"));
-            for caller in callers.iter().take(3) {
-                msg.push_str(&format!("    called by: {caller}\n"));
-            }
-            if callers.len() > 3 {
-                msg.push_str(&format!("    ... and {} more\n", callers.len() - 3));
-            }
-        }
-        return Err(msg);
+        ));
     }
 
     let result = rvs_format_capsmap(&std_only);
@@ -1504,6 +1495,91 @@ fn rvs_build_impl_index(
     idx
 }
 
+/// Infer capabilities from behavioral flags alone (no propagation).
+/// Used by both `rvs_infer_caps_M` and `rvs_run_infer_std_BIMPS`.
+fn rvs_infer_signature_caps_P(behavior: &ParsedFnBehavior) -> CapabilitySet {
+    let mut caps = CapabilitySet::rvs_new();
+    if behavior.has_async {
+        caps.rvs_insert_M(Capability::A);
+    }
+    if behavior.is_unsafe_fn {
+        caps.rvs_insert_M(Capability::U);
+    }
+    if behavior.has_mut_param {
+        caps.rvs_insert_M(Capability::M);
+    }
+    if behavior.has_panic {
+        caps.rvs_insert_M(Capability::P);
+    }
+    if behavior.has_static_mut_ref {
+        caps.rvs_insert_M(Capability::S);
+        caps.rvs_insert_M(Capability::U);
+    } else if behavior.has_static_ref {
+        caps.rvs_insert_M(Capability::S);
+    }
+    if behavior.has_thread_local_ref {
+        caps.rvs_insert_M(Capability::S);
+        caps.rvs_insert_M(Capability::T);
+    }
+    caps
+}
+
+/// Format an error message for unknown callees (functions with no capability data).
+fn rvs_format_unknown_callees_P(
+    unknown: &BTreeMap<String, BTreeSet<String>>,
+    header: &str,
+) -> String {
+    let mut msg = String::from(header);
+    for (callee, callers) in unknown {
+        msg.push_str(&format!("  {callee}=\n"));
+        for caller in callers.iter().take(3) {
+            msg.push_str(&format!("    called by: {caller}\n"));
+        }
+        if callers.len() > 3 {
+            msg.push_str(&format!("    ... and {} more\n", callers.len() - 3));
+        }
+    }
+    msg
+}
+
+/// Generate trait-method aliases (e.g. `std::io::Read::read`) from impl-method keys
+/// (e.g. `std::fs::read@std::io::Read`) by majority-vote resolution.
+fn rvs_generate_trait_aliases_MP(
+    inferred: &BTreeMap<String, CapabilitySet>,
+    impl_index: &HashMap<String, Vec<String>>,
+) -> BTreeMap<String, CapabilitySet> {
+    let mut aliases = BTreeMap::new();
+    let mut seen = HashSet::new();
+    for key in inferred.keys() {
+        if let Some(at_pos) = key.find('@') {
+            let trait_path = &key[at_pos + 1..];
+            let method_full = &key[..at_pos];
+            if let Some(method_name) = method_full.rsplit("::").next() {
+                let alias = format!("{trait_path}::{method_name}");
+                if seen.insert(alias.clone()) {
+                    if let Some(voted) = rvs_resolve_impl_union_M(&alias, impl_index, inferred) {
+                        aliases.insert(alias, voted);
+                    }
+                }
+            }
+        }
+    }
+    aliases
+}
+
+/// Convert a `CapabilitySet` to its uppercase letter string (e.g. {B,I} → "BI").
+fn rvs_caps_to_string_P(caps: &CapabilitySet) -> String {
+    caps.rvs_iter().map(|c| c.rvs_as_char()).collect()
+}
+
+/// Validate that `path` is a directory, returning an error message if not.
+fn rvs_ensure_project_dir_P(path: &Path) -> Result<(), String> {
+    if !path.is_dir() {
+        return Err(format!("'{}' is not a directory", path.display()));
+    }
+    Ok(())
+}
+
 fn rvs_infer_caps_M(
     callgraph: &BTreeMap<String, ParsedFnBehavior>,
     seed: &capsmap::CapsMap,
@@ -1514,30 +1590,7 @@ fn rvs_infer_caps_M(
         if let Some(caps) = seed.rvs_lookup(func) {
             inferred.insert(func.clone(), caps.clone());
         } else {
-            let mut caps = CapabilitySet::rvs_new();
-            if behavior.has_async {
-                caps.rvs_insert_M(Capability::A);
-            }
-            if behavior.is_unsafe_fn {
-                caps.rvs_insert_M(Capability::U);
-            }
-            if behavior.has_mut_param {
-                caps.rvs_insert_M(Capability::M);
-            }
-            if behavior.has_panic {
-                caps.rvs_insert_M(Capability::P);
-            }
-            if behavior.has_static_mut_ref {
-                caps.rvs_insert_M(Capability::S);
-                caps.rvs_insert_M(Capability::U);
-            } else if behavior.has_static_ref {
-                caps.rvs_insert_M(Capability::S);
-            }
-            if behavior.has_thread_local_ref {
-                caps.rvs_insert_M(Capability::S);
-                caps.rvs_insert_M(Capability::T);
-            }
-            inferred.insert(func.clone(), caps);
+            inferred.insert(func.clone(), rvs_infer_signature_caps_P(behavior));
         }
     }
     for behavior in callgraph.values() {
@@ -1677,13 +1730,12 @@ fn rvs_format_capsmap(caps: &BTreeMap<String, CapabilitySet>) -> String {
     let mut lines: Vec<String> = caps
         .iter()
         .map(|(name, cs)| {
-            let caps_vec: Vec<Capability> = cs.rvs_iter().collect();
-            let caps_str: String = caps_vec.iter().map(|c| c.rvs_as_char()).collect();
+            let caps_str = rvs_caps_to_string_P(cs);
             if caps_str.is_empty() {
                 format!("{name}=")
             } else {
-                let desc: String = caps_vec
-                    .iter()
+                let desc: String = cs
+                    .rvs_iter()
                     .map(|c| c.rvs_description())
                     .collect::<Vec<_>>()
                     .join(" ");
