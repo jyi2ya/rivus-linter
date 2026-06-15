@@ -365,13 +365,9 @@ fn rvs_run_cargo_check_impl_BIMPS(config: &CargoCheckConfig) -> Result<(), Strin
     let mut cmd = Command::new(&cargo);
 
     if config.build_std {
-        // build-std uses --manifest-path instead of current_dir, and requires nightly.
         cmd.env("RUSTUP_TOOLCHAIN", "nightly");
-        cmd.arg("--manifest-path")
-            .arg(config.project_path.join("Cargo.toml"));
-    } else {
-        cmd.current_dir(config.project_path);
     }
+    cmd.current_dir(config.project_path);
 
     let wrapper_env = if config.wrap_all_crates {
         "RUSTC_WRAPPER"
@@ -641,8 +637,10 @@ fn rvs_run_report_BIMPS(path: &Path) {
         extra_args: vec![],
         target_subdir: Some("rivus-report-build"),
     }) {
-        eprintln!("{e}");
-        process::exit(1);
+        // Report mode should still produce output even if lint violations
+        // (deny-level errors) cause cargo check to fail. The report JSON
+        // is written by the lint pass before compilation aborts.
+        eprintln!("warning: {e}");
     }
 
     let mut all_entries: Vec<FnEntry> = Vec::new();
