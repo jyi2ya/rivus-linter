@@ -35,19 +35,23 @@ impl CapsMap {
     }
 
     /// 册子一行一行翻，键值各归其位。
-    /// 注释以井号起，等号为界，空行跳过。
+    /// 注释以井号起，但井号在键中合法（如 `closure#0`），
+    /// 因此只取等号之后的值部分中的注释。
+    /// 行首 `#` 注释整行。
     pub fn rvs_parse(content: &str) -> Result<Self, CapsMapError> {
         let mut entries = BTreeMap::new();
         for (i, raw_line) in content.lines().enumerate() {
             let line_num = i + 1;
-            let line = raw_line.split('#').next().unwrap_or("").trim();
-            if line.is_empty() {
+            let trimmed = raw_line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
                 continue;
             }
-            let (key, value) = line
+            let (key, value) = trimmed
                 .split_once('=')
                 .ok_or(CapsMapError::MissingSeparator { line: line_num })?;
             let key = key.trim().to_string();
+            // Only strip comments from the value part, not the key.
+            // Keys may contain '#' (e.g. closure#0 in def_path).
             let value = value.split('#').next().unwrap_or("").trim();
             let caps =
                 CapabilitySet::rvs_from_str(value).map_err(|e| CapsMapError::InvalidCaps {
@@ -176,6 +180,17 @@ mod tests {
     fn test_20260425_capsmap_parse_missing_separator() {
         let result = CapsMap::rvs_parse("no_equals");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_20260615_capsmap_parse_hash_in_key() {
+        // Def paths may contain '#' (e.g. closure#0 in rustc def_path).
+        // The '#' in the key must not be treated as a comment marker.
+        let cm = CapsMap::rvs_parse("exr::image::closure#0::crop_samples=P # Panic").unwrap();
+        let caps = cm
+            .rvs_lookup("exr::image::closure#0::crop_samples")
+            .unwrap();
+        assert!(caps.rvs_contains(Capability::P));
     }
 
     #[test]
