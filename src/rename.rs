@@ -257,7 +257,10 @@ pub fn rvs_strip_BIS(path: &Path) -> Result<(), String> {
     // 4. Apply semantic renames via rust-analyzer
     let files_changed = rvs_apply_renames_BIS(&analysis, &vfs, &functions, &rename_map)?;
 
-    // 5. Print summary
+    // 5. Invalidate cached callgraph (function names changed, old cache is stale)
+    rvs_invalidate_callgraph_cache_BIS(path);
+
+    // 6. Print summary
     println!(
         "Strip complete: renamed {} function(s) in {} file(s).",
         rename_count, files_changed
@@ -288,7 +291,14 @@ pub fn rvs_apply_ra_renames_BIS(
         .collect();
 
     // 3. Apply semantic renames
-    rvs_apply_renames_BIS(&analysis, &vfs, &eligible, rename_map)
+    let files_changed = rvs_apply_renames_BIS(&analysis, &vfs, &eligible, rename_map)?;
+
+    // 4. Invalidate cached callgraph (function names changed, old cache is stale)
+    if files_changed > 0 {
+        rvs_invalidate_callgraph_cache_BIS(path);
+    }
+
+    Ok(files_changed)
 }
 
 fn rvs_collect_edits(
@@ -340,6 +350,20 @@ fn rvs_compute_strip_name(name: &str) -> Option<String> {
 fn rvs_is_local_file(file_path: &Path, workspace_root: &Path) -> bool {
     // Files under the workspace root are local
     file_path.starts_with(workspace_root)
+}
+
+/// Removes cached callgraph directories after a rename operation.
+/// Function names in the source have changed, so the old callgraph
+/// (keyed by function def_path) is stale and must not be reused.
+fn rvs_invalidate_callgraph_cache_BIS(project_path: &Path) {
+    for dir_name in &["rivus-callgraph", "rivus-callgraph-std"] {
+        let dir = project_path.join("target").join(dir_name);
+        if dir.is_dir() {
+            if let Err(e) = std::fs::remove_dir_all(&dir) {
+                eprintln!("warning: cannot remove {}: {e}", dir.display());
+            }
+        }
+    }
 }
 
 #[cfg(test)]
