@@ -184,11 +184,6 @@ impl CapabilitySet {
         self.0.insert(cap);
     }
 
-    /// 从能力集中移除一项能力。
-    #[cfg(test)]
-    pub fn rvs_remove_M(&mut self, cap: Capability) {
-        self.0.remove(&cap);
-    }
 }
 
 impl fmt::Display for CapabilitySet {
