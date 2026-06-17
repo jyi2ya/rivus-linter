@@ -553,7 +553,6 @@ struct JsonReportEntry {
 struct JsonFnBehavior {
     calls: BTreeSet<String>,
     has_async: bool,
-    has_unsafe_block: bool,
     is_unsafe_fn: bool,
     has_mut_param: bool,
     has_static_ref: bool,
@@ -1350,7 +1349,6 @@ fn rvs_parse_callgraph(json: &str) -> Result<BTreeMap<String, ParsedFnBehavior>,
 struct ParsedFnBehavior {
     calls: BTreeSet<String>,
     has_async: bool,
-    has_unsafe_block: bool,
     is_unsafe_fn: bool,
     has_mut_param: bool,
     has_static_ref: bool,
@@ -1363,7 +1361,6 @@ impl ParsedFnBehavior {
     fn rvs_merge_M(&mut self, other: &Self) {
         self.calls.extend(other.calls.iter().cloned());
         self.has_async |= other.has_async;
-        self.has_unsafe_block |= other.has_unsafe_block;
         self.is_unsafe_fn |= other.is_unsafe_fn;
         self.has_mut_param |= other.has_mut_param;
         self.has_static_ref |= other.has_static_ref;
@@ -1378,7 +1375,6 @@ impl From<JsonFnBehavior> for ParsedFnBehavior {
         Self {
             calls: j.calls,
             has_async: j.has_async,
-            has_unsafe_block: j.has_unsafe_block,
             is_unsafe_fn: j.is_unsafe_fn,
             has_mut_param: j.has_mut_param,
             has_static_ref: j.has_static_ref,
@@ -1885,8 +1881,7 @@ mod tests {
         ParsedFnBehavior {
             calls: BTreeSet::new(),
             has_async: false,
-            has_unsafe_block: false,
-            is_unsafe_fn: false,
+                is_unsafe_fn: false,
             has_mut_param: false,
             has_static_ref: false,
             has_static_mut_ref: false,
@@ -2003,8 +1998,7 @@ mod tests {
         // Unsafe blocks no longer trigger U — only `unsafe fn` declarations do.
         let mut callgraph: BTreeMap<String, ParsedFnBehavior> = BTreeMap::new();
         let mut behavior = rvs_make_behavior();
-        behavior.has_unsafe_block = true;
-        callgraph.insert("my_crate::rvs_ffi_call".into(), behavior);
+                callgraph.insert("my_crate::rvs_ffi_call".into(), behavior);
         let seed = capsmap::CapsMap::rvs_new();
         let result = rvs_infer_caps_M(&callgraph, &seed);
         // No U — unsafe block alone does not give U.
@@ -2441,8 +2435,7 @@ mod tests {
             "my_crate::rvs_add": {
                 "calls": ["my_crate::rvs_helper"],
                 "has_async": false,
-                "has_unsafe_block": false,
-                "is_unsafe_fn": false,
+                                "is_unsafe_fn": false,
                 "has_mut_param": false,
                                 "has_static_ref": false,
                 "has_static_mut_ref": false,
@@ -2452,8 +2445,7 @@ mod tests {
             "my_crate::rvs_write_BI": {
                 "calls": ["std::fs::write"],
                 "has_async": false,
-                "has_unsafe_block": false,
-                "is_unsafe_fn": false,
+                                "is_unsafe_fn": false,
                 "has_mut_param": false,
                                 "has_static_ref": false,
                 "has_static_mut_ref": false,

@@ -7,7 +7,7 @@ use std::path::Path;
 use rustc_errors::{Diag, DiagCtxtHandle, Diagnostic, Level};
 use rustc_hir::def::DefKind;
 use rustc_hir::{
-    Block, BlockCheckMode, Body, Expr, ExprKind, FnRetTy, GenericArg, HirId, Impl, ImplItem,
+    Block, Body, Expr, ExprKind, FnRetTy, GenericArg, HirId, Impl, ImplItem,
     ImplItemImplKind, ImplItemKind, Item, ItemKind, Mutability, PatKind, QPath, Safety, TraitFn,
     TraitItem, TraitItemKind, TyKind, UseKind, VariantData, attrs::AttributeKind, def::Res,
     def_id::DefId,
@@ -304,7 +304,6 @@ fn rvs_is_reflection_S(path: &str) -> bool {
 pub struct FnBehavior {
     pub calls: BTreeSet<String>,
     pub has_async: bool,
-    pub has_unsafe_block: bool,
     pub is_unsafe_fn: bool,
     pub has_mut_param: bool,
     pub has_static_ref: bool,
@@ -925,7 +924,6 @@ struct FnInfo {
     is_async: bool,
     is_unsafe_fn: bool,
     has_mut_param: bool,
-    has_unsafe_block: bool,
 }
 
 impl FnInfo {
@@ -933,7 +931,7 @@ impl FnInfo {
         name: &str,
         sig: &rustc_hir::FnSig<'_>,
         body: &Body<'tcx>,
-        tcx: rustc_middle::ty::TyCtxt<'tcx>,
+        _tcx: rustc_middle::ty::TyCtxt<'tcx>,
     ) -> Option<Self> {
         let (_, caps) = rvs_parse_function(name)?;
         Some(Self {
@@ -945,7 +943,6 @@ impl FnInfo {
                 rustc_hir::HeaderSafety::Normal(Safety::Unsafe)
             ),
             has_mut_param: rvs_has_mutable_params(sig, body),
-            has_unsafe_block: rvs_scan_unsafe(tcx, body),
         })
     }
 }
@@ -974,25 +971,6 @@ fn rvs_has_mutable_params(sig: &rustc_hir::FnSig<'_>, _body: &Body<'_>) -> bool 
 }
 
 // ─── Body scanners ───────────────────────────────────────────────────────
-
-fn rvs_scan_unsafe<'tcx>(tcx: rustc_middle::ty::TyCtxt<'tcx>, body: &Body<'tcx>) -> bool {
-    let mut f = false;
-    rvs_walk_closures(tcx, body.value, |e| {
-        if f {
-            return;
-        }
-        if let ExprKind::Block(b, _) = &e.kind {
-            if matches!(b.rules, BlockCheckMode::UnsafeBlock(_)) {
-                // format_args! macro expansion introduces `unsafe { Arguments::new(...) }`
-                // as an implementation detail. Skip these — the user didn't write the unsafe block.
-                if !b.span.from_expansion() {
-                    f = true;
-                }
-            }
-        }
-    });
-    f
-}
 
 fn rvs_scan_stub<'tcx>(tcx: rustc_middle::ty::TyCtxt<'tcx>, body: &Body<'tcx>) -> bool {
     let mut f = false;
@@ -1834,47 +1812,15 @@ impl RivusLintPass {
         _hir_id: HirId,
         caps: &CapabilitySet,
         is_test: bool,
-        caller_name: &str,
-        info: &FnInfo,
+        _caller_name: &str,
+        _info: &FnInfo,
     ) {
-        let collect_cg = self.collect_callgraph;
-        let mut cg_edges: Vec<String> = Vec::new();
-        let mut has_static_ref = false;
-        let mut has_static_mut_ref = false;
-        let mut has_thread_local_ref = false;
-        if collect_cg {
-            rvs_walk_closures(cx.tcx, body.value, |e| {
-                if let ExprKind::Path(ref q) = e.kind {
-                    if let Res::Def(kind, did) = cx.qpath_res(q, e.hir_id) {
-                        if let DefKind::Static { mutability, .. } = kind {
-                            match mutability {
-                                Mutability::Mut => has_static_mut_ref = true,
-                                Mutability::Not => {
-                                    if let Some(local_did) = did.as_local() {
-                                        let owner_id = rustc_hir::OwnerId { def_id: local_did };
-                                        let attrs =
-                                            cx.tcx.hir_attrs(rustc_hir::HirId::from(owner_id));
-                                        if rvs_has_attr(attrs, "thread_local") {
-                                            has_thread_local_ref = true;
-                                        }
-                                    }
-                                    has_static_ref = true;
-                                }
-                            }
-                        }
-                    }
-                }
-            });
-        }
         rvs_walk_closures(cx.tcx, body.value, |e| match &e.kind {
             ExprKind::Call(func, _) => {
                 if let ExprKind::Path(ref q) = func.kind {
                     if let Res::Def(k, did) = cx.qpath_res(q, func.hir_id) {
                         if matches!(k, DefKind::Fn | DefKind::AssocFn | DefKind::Variant) {
                             let fp = rvs_def_path(cx, did);
-                            if collect_cg {
-                                cg_edges.push(fp.clone());
-                            }
                             if !is_test && rvs_is_spawn_S(&fp) {
                                 cx.emit_span_lint(
                                     RVS_SPAWN_WARNING,
@@ -1945,9 +1891,6 @@ impl RivusLintPass {
                 let tck = cx.tcx.typeck(owner);
                 if let Some(did) = tck.type_dependent_def_id(e.hir_id) {
                     let fp = rvs_def_path(cx, did);
-                    if collect_cg {
-                        cg_edges.push(fp.clone());
-                    }
                     if !is_test && rvs_is_spawn_S(&fp) {
                         cx.emit_span_lint(
                             RVS_SPAWN_WARNING,
@@ -1967,25 +1910,6 @@ impl RivusLintPass {
             }
             _ => {}
         });
-        if collect_cg {
-            let entry = self
-                .callgraph
-                .entry(caller_name.to_string())
-                .or_insert_with(|| FnBehavior {
-                    calls: BTreeSet::new(),
-                    has_async: info.is_async,
-                    has_unsafe_block: info.has_unsafe_block,
-                    is_unsafe_fn: info.is_unsafe_fn,
-                    has_mut_param: info.has_mut_param,
-                    has_static_ref,
-                    has_static_mut_ref,
-                    has_thread_local_ref,
-                    is_trait_impl: false,
-                });
-            for callee in cg_edges {
-                entry.calls.insert(callee);
-            }
-        }
     }
 
     fn rvs_check_target_S<'tcx>(
@@ -2359,7 +2283,6 @@ impl RivusLintPass {
             rustc_hir::HeaderSafety::Normal(Safety::Unsafe)
         );
         let has_mut_param = rvs_has_mutable_params(sig, body);
-        let has_unsafe_block = rvs_scan_unsafe(cx.tcx, body);
 
         let entry = self
             .callgraph
@@ -2367,7 +2290,6 @@ impl RivusLintPass {
             .or_insert_with(|| FnBehavior {
                 calls: BTreeSet::new(),
                 has_async,
-                has_unsafe_block,
                 is_unsafe_fn,
                 has_mut_param,
                 has_static_ref,
