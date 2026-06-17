@@ -1,11 +1,3 @@
-error: {M} → sort (alloc::slice::[T]::sort) ({M, P}) missing P(Panic)
-  --> $DIR/tests/ui/86_pure_calls_mutable.rs:4:5
-   |
-LL |     arr.sort();
-   |     ^^^^^^^^^^
-   |
-   = note: `#[deny(rivus::rvs_call_violation)]` on by default
-
 error: good fn 'rvs_sort_M' not called by any test
   --> $DIR/tests/ui/86_pure_calls_mutable.rs:3:1
    |
@@ -25,4 +17,4 @@ LL | |     rvs_sort_M(&mut [3, 1, 2]);
 LL | | }
    | |_^
 
-error: aborting due to 3 previous errors
+error: aborting due to 2 previous errors

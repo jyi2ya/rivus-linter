@@ -401,7 +401,7 @@ fn rvs_run_cargo_check_impl_BIMPS(config: &CargoCheckConfig) -> Result<(), Strin
     }
     if config.build_std {
         cmd.arg("-Zbuild-std=std,core,alloc");
-        cmd.arg("--target").arg(rvs_host_triple_BIMPS());
+        cmd.arg("--target").arg(rvs_host_triple_BIMS());
     }
     if let Some(subdir) = config.target_subdir {
         let target_dir = config.project_path.join("target").join(subdir);
@@ -502,7 +502,6 @@ impl fmt::Display for Report {
             Capability::B,
             Capability::I,
             Capability::M,
-            Capability::P,
             Capability::S,
             Capability::T,
             Capability::U,
@@ -557,7 +556,6 @@ struct JsonFnBehavior {
     has_unsafe_block: bool,
     is_unsafe_fn: bool,
     has_mut_param: bool,
-    has_panic: bool,
     has_static_ref: bool,
     has_static_mut_ref: bool,
     has_thread_local_ref: bool,
@@ -688,7 +686,7 @@ fn rvs_parse_report_json(json: &str) -> Result<Vec<FnEntry>, String> {
 // ─── Setup subcommand ────────────────────────────────────────────────────
 
 fn rvs_run_setup_BIMS(path: &Path) {
-    if let Err(e) = rvs_ensure_project_dir_P(path) {
+    if let Err(e) = rvs_ensure_project_dir(path) {
         eprintln!("Error: {e}");
         process::exit(2);
     }
@@ -746,65 +744,10 @@ fn rvs_run_setup_BIMS(path: &Path) {
                 seed_path.display()
             );
         }
-    } else {
-        // Legacy: inject into capsmap.txt
-        let capsmap_path = path.join("capsmap.txt");
-        if capsmap_path.exists() {
-            let capsmap_content = std::fs::read_to_string(&capsmap_path).unwrap_or_else(|e| {
-                eprintln!("Error: cannot read '{}': {e}", capsmap_path.display());
-                process::exit(2);
-            });
-            let (new_capsmap, spawn_count) = rvs_inject_spawn_capsmap_M(&capsmap_content);
-            if spawn_count > 0 {
-                std::fs::write(&capsmap_path, &new_capsmap).unwrap_or_else(|e| {
-                    eprintln!("Error: cannot write '{}': {e}", capsmap_path.display());
-                    process::exit(2);
-                });
-                println!(
-                    "Injected {spawn_count} spawn capsmap entries into {}",
-                    capsmap_path.display()
-                );
-            } else {
-                println!(
-                    "All spawn capsmap entries already present in {}",
-                    capsmap_path.display()
-                );
-            }
-        }
     }
 }
 
 // ─── InferCapsmap subcommand ─────────────────────────────────────────────
-
-fn rvs_load_seed_capsmap_BIMS(path: &Path, seed_path: &Path) -> capsmap::CapsMap {
-    // Try loading as directory first (caps/ dir), then as single file
-    if seed_path.is_dir() {
-        capsmap::CapsMap::rvs_load_from_dir_BIMS(seed_path).unwrap_or_else(|e| {
-            eprintln!("warning: {}: {e}", seed_path.display());
-            capsmap::CapsMap::rvs_new()
-        })
-    } else if seed_path.is_file() {
-        let content = std::fs::read_to_string(seed_path).unwrap_or_else(|e| {
-            eprintln!("warning: {}: {e}", seed_path.display());
-            String::new()
-        });
-        capsmap::CapsMap::rvs_parse(&content).unwrap_or_else(|e| {
-            eprintln!("warning: {}: {e}", seed_path.display());
-            capsmap::CapsMap::rvs_new()
-        })
-    } else {
-        // Try path.join("caps") as directory
-        let caps_dir = path.join("caps");
-        if caps_dir.is_dir() {
-            capsmap::CapsMap::rvs_load_from_dir_BIMS(&caps_dir).unwrap_or_else(|e| {
-                eprintln!("warning: {}: {e}", caps_dir.display());
-                capsmap::CapsMap::rvs_new()
-            })
-        } else {
-            capsmap::CapsMap::rvs_new()
-        }
-    }
-}
 
 /// Load all caps files from a directory, except `deps`.
 /// Used by infer-capsmap to avoid loading the file it's regenerating.
@@ -933,9 +876,7 @@ fn rvs_load_callgraph_and_caps_BIMS(
     let seed = if caps_dir.is_dir() {
         rvs_load_caps_excluding_deps_BIMS(&caps_dir)
     } else {
-        // Fall back to legacy capsmap.txt
-        let seed_path = path.join("capsmap.txt");
-        rvs_load_seed_capsmap_BIMS(path, &seed_path)
+        capsmap::CapsMap::rvs_new()
     };
 
     (callgraph, seed)
@@ -985,7 +926,7 @@ fn rvs_run_cargo_check_for_callgraph_BIMPS(
 ///
 /// Panics if the current executable path, current directory, or cargo cannot be resolved.
 fn rvs_run_annotate_BIMPS(path: &Path) -> Result<(), String> {
-    rvs_ensure_project_dir_P(path)?;
+    rvs_ensure_project_dir(path)?;
 
     let (callgraph, seed) = rvs_load_callgraph_and_caps_BIMS(path);
     let inferred = rvs_infer_caps_M(&callgraph, &seed);
@@ -1012,7 +953,7 @@ fn rvs_run_annotate_BIMPS(path: &Path) -> Result<(), String> {
             skip_names.insert(short_name.to_string());
             continue;
         }
-        let caps_str = rvs_caps_to_string_P(caps);
+        let caps_str = rvs_caps_to_string(caps);
         let new_name = if caps_str.is_empty() {
             format!("rvs_{short_name}")
         } else {
@@ -1045,7 +986,7 @@ fn rvs_run_annotate_BIMPS(path: &Path) -> Result<(), String> {
 ///
 /// Panics if the current executable path, current directory, or cargo cannot be resolved.
 fn rvs_run_why_BIMPS(function: &str, path: &Path) -> Result<(), String> {
-    rvs_ensure_project_dir_P(path)?;
+    rvs_ensure_project_dir(path)?;
 
     let (callgraph, seed) = rvs_load_callgraph_and_caps_BIMS(path);
     let inferred = rvs_infer_caps_M(&callgraph, &seed);
@@ -1066,7 +1007,7 @@ fn rvs_run_why_BIMPS(function: &str, path: &Path) -> Result<(), String> {
             let caps_str = inferred
                 .get(*c)
                 .map(|cs| {
-                    let s = rvs_caps_to_string_P(cs);
+                    let s = rvs_caps_to_string(cs);
                     if s.is_empty() {
                         " (pure)".to_string()
                     } else {
@@ -1083,7 +1024,7 @@ fn rvs_run_why_BIMPS(function: &str, path: &Path) -> Result<(), String> {
     let own_caps = inferred.get(function);
     let caps_str = match own_caps {
         Some(cs) => {
-            let s = rvs_caps_to_string_P(cs);
+            let s = rvs_caps_to_string(cs);
             if s.is_empty() {
                 " (pure)".to_string()
             } else {
@@ -1130,7 +1071,7 @@ fn rvs_run_why_BIMPS(function: &str, path: &Path) -> Result<(), String> {
     for (callee, caps) in &callees {
         let s = match caps {
             Some(cs) if !cs.rvs_is_empty() => {
-                let chars = rvs_caps_to_string_P(cs);
+                let chars = rvs_caps_to_string(cs);
                 let desc: String = cs
                     .rvs_iter()
                     .map(|c| c.rvs_description())
@@ -1155,7 +1096,7 @@ fn rvs_run_infer_capsmap_BIMPS(
     seed_capsmap: &Path,
     output: Option<&Path>,
 ) -> Result<(), String> {
-    rvs_ensure_project_dir_P(path)?;
+    rvs_ensure_project_dir(path)?;
 
     let abs_seed = if seed_capsmap.is_absolute() {
         seed_capsmap.to_path_buf()
@@ -1171,8 +1112,15 @@ fn rvs_run_infer_capsmap_BIMPS(
     // Load caps for inference, but exclude deps — it's what we're regenerating.
     let seed = if seed_capsmap.is_dir() {
         rvs_load_caps_excluding_deps_BIMS(seed_capsmap)
+    } else if seed_capsmap.is_file() {
+        let content = std::fs::read_to_string(seed_capsmap)
+            .map_err(|e| format!("cannot read {}: {e}", seed_capsmap.display()))?;
+        capsmap::CapsMap::rvs_parse(&content).unwrap_or_else(|e| {
+            eprintln!("warning: {}: {e}", seed_capsmap.display());
+            capsmap::CapsMap::rvs_new()
+        })
     } else {
-        rvs_load_seed_capsmap_BIMS(path, seed_capsmap)
+        capsmap::CapsMap::rvs_new()
     };
 
     let inferred = rvs_infer_caps_M(&callgraph, &seed);
@@ -1188,7 +1136,7 @@ fn rvs_run_infer_capsmap_BIMPS(
         rvs_collect_direct_external_deps(&callgraph, &crate_name, &seed, &inferred, &impl_index);
 
     if !unknown_callees.is_empty() {
-        return Err(rvs_format_unknown_callees_P(
+        return Err(rvs_format_unknown_callees(
             &unknown_callees,
             "error: the following external functions have no capability data.\n\
              Add them to caps/seed or caps/ext with the correct capability markers:\n\n",
@@ -1235,7 +1183,7 @@ fn rvs_merge_callgraph_dir_BI(cg_dir: &Path) -> Result<BTreeMap<String, ParsedFn
 ///
 /// Panics if the current executable path, current directory, or cargo cannot be resolved.
 fn rvs_run_infer_std_BIMPS(path: &Path, output: Option<&Path>) -> Result<(), String> {
-    rvs_ensure_project_dir_P(path)?;
+    rvs_ensure_project_dir(path)?;
     let cargo_toml = path.join("Cargo.toml");
     if !cargo_toml.exists() {
         return Err(format!("'{}' is not a Cargo project", path.display()));
@@ -1308,7 +1256,7 @@ fn rvs_run_infer_std_BIMPS(path: &Path, output: Option<&Path>) -> Result<(), Str
             if let Some(caps) = seed.rvs_lookup(func) {
                 m.insert(func.clone(), caps.clone());
             } else {
-                m.insert(func.clone(), rvs_infer_signature_caps_P(behavior));
+                m.insert(func.clone(), rvs_infer_signature_caps(behavior));
             }
         }
         m
@@ -1321,7 +1269,7 @@ fn rvs_run_infer_std_BIMPS(path: &Path, output: Option<&Path>) -> Result<(), Str
     let mut alias_seed = seed.clone();
     let pre_aliases = rvs_generate_trait_aliases_MP(&std_pre_inferred, &pre_index);
     for (k, v) in &pre_aliases {
-        let caps_str = rvs_caps_to_string_P(v);
+        let caps_str = rvs_caps_to_string(v);
         let line = format!("{k}={caps_str}");
         if let Ok(tmp) = capsmap::CapsMap::rvs_parse(&line) {
             alias_seed.rvs_extend_from_M(tmp);
@@ -1381,7 +1329,7 @@ fn rvs_run_infer_std_BIMPS(path: &Path, output: Option<&Path>) -> Result<(), Str
     }
 
     if !unknown.is_empty() {
-        return Err(rvs_format_unknown_callees_P(
+        return Err(rvs_format_unknown_callees(
             &unknown,
             "error: the following functions are called by std but have no capability data.\n\
              Add them to caps/seed with the correct capability markers:\n\n",
@@ -1396,7 +1344,7 @@ fn rvs_run_infer_std_BIMPS(path: &Path, output: Option<&Path>) -> Result<(), Str
 /// # Panics
 ///
 /// Panics if `rustc -vV` cannot be executed or returns a non-zero exit status.
-fn rvs_host_triple_BIMPS() -> String {
+fn rvs_host_triple_BIMS() -> String {
     let output = Command::new("rustc")
         .arg("-vV")
         .output()
@@ -1430,7 +1378,6 @@ struct ParsedFnBehavior {
     has_unsafe_block: bool,
     is_unsafe_fn: bool,
     has_mut_param: bool,
-    has_panic: bool,
     has_static_ref: bool,
     has_static_mut_ref: bool,
     has_thread_local_ref: bool,
@@ -1444,7 +1391,6 @@ impl ParsedFnBehavior {
         self.has_unsafe_block |= other.has_unsafe_block;
         self.is_unsafe_fn |= other.is_unsafe_fn;
         self.has_mut_param |= other.has_mut_param;
-        self.has_panic |= other.has_panic;
         self.has_static_ref |= other.has_static_ref;
         self.has_static_mut_ref |= other.has_static_mut_ref;
         self.has_thread_local_ref |= other.has_thread_local_ref;
@@ -1460,7 +1406,6 @@ impl From<JsonFnBehavior> for ParsedFnBehavior {
             has_unsafe_block: j.has_unsafe_block,
             is_unsafe_fn: j.is_unsafe_fn,
             has_mut_param: j.has_mut_param,
-            has_panic: j.has_panic,
             has_static_ref: j.has_static_ref,
             has_static_mut_ref: j.has_static_mut_ref,
             has_thread_local_ref: j.has_thread_local_ref,
@@ -1495,7 +1440,7 @@ fn rvs_build_impl_index(
 
 /// Infer capabilities from behavioral flags alone (no propagation).
 /// Used by both `rvs_infer_caps_M` and `rvs_run_infer_std_BIMPS`.
-fn rvs_infer_signature_caps_P(behavior: &ParsedFnBehavior) -> CapabilitySet {
+fn rvs_infer_signature_caps(behavior: &ParsedFnBehavior) -> CapabilitySet {
     let mut caps = CapabilitySet::rvs_new();
     if behavior.has_async {
         caps.rvs_insert_M(Capability::A);
@@ -1505,9 +1450,6 @@ fn rvs_infer_signature_caps_P(behavior: &ParsedFnBehavior) -> CapabilitySet {
     }
     if behavior.has_mut_param {
         caps.rvs_insert_M(Capability::M);
-    }
-    if behavior.has_panic {
-        caps.rvs_insert_M(Capability::P);
     }
     if behavior.has_static_mut_ref {
         caps.rvs_insert_M(Capability::S);
@@ -1523,7 +1465,7 @@ fn rvs_infer_signature_caps_P(behavior: &ParsedFnBehavior) -> CapabilitySet {
 }
 
 /// Format an error message for unknown callees (functions with no capability data).
-fn rvs_format_unknown_callees_P(
+fn rvs_format_unknown_callees(
     unknown: &BTreeMap<String, BTreeSet<String>>,
     header: &str,
 ) -> String {
@@ -1566,12 +1508,12 @@ fn rvs_generate_trait_aliases_MP(
 }
 
 /// Convert a `CapabilitySet` to its uppercase letter string (e.g. {B,I} → "BI").
-fn rvs_caps_to_string_P(caps: &CapabilitySet) -> String {
+fn rvs_caps_to_string(caps: &CapabilitySet) -> String {
     caps.rvs_iter().map(|c| c.rvs_as_char()).collect()
 }
 
 /// Validate that `path` is a directory, returning an error message if not.
-fn rvs_ensure_project_dir_P(path: &Path) -> Result<(), String> {
+fn rvs_ensure_project_dir(path: &Path) -> Result<(), String> {
     if !path.is_dir() {
         return Err(format!("'{}' is not a directory", path.display()));
     }
@@ -1588,7 +1530,7 @@ fn rvs_infer_caps_M(
         if let Some(caps) = seed.rvs_lookup(func) {
             inferred.insert(func.clone(), caps.clone());
         } else {
-            inferred.insert(func.clone(), rvs_infer_signature_caps_P(behavior));
+            inferred.insert(func.clone(), rvs_infer_signature_caps(behavior));
         }
     }
     for behavior in callgraph.values() {
@@ -1728,7 +1670,7 @@ fn rvs_format_capsmap(caps: &BTreeMap<String, CapabilitySet>) -> String {
     let mut lines: Vec<String> = caps
         .iter()
         .map(|(name, cs)| {
-            let caps_str = rvs_caps_to_string_P(cs);
+            let caps_str = rvs_caps_to_string(cs);
             if caps_str.is_empty() {
                 format!("{name}=")
             } else {
@@ -1923,7 +1865,7 @@ mod tests {
 
     #[test]
     fn test_20260608_json_parse_test_fn() {
-        let json = r#"[{"name":"test_20260608_foo","caps":"P","lines":3,"is_test":true,"allows_dead_code":false}]"#;
+        let json = r#"[{"name":"test_20260608_foo","caps":"S","lines":3,"is_test":true,"allows_dead_code":false}]"#;
         let entries = rvs_parse_report_json(json).unwrap();
         assert_eq!(entries.len(), 1);
         assert!(entries[0].is_test);
@@ -2002,7 +1944,6 @@ mod tests {
             has_unsafe_block: false,
             is_unsafe_fn: false,
             has_mut_param: false,
-            has_panic: false,
             has_static_ref: false,
             has_static_mut_ref: false,
             has_thread_local_ref: false,
@@ -2028,15 +1969,12 @@ mod tests {
         // (empty) should prevent P from appearing on the function.
         let mut callgraph: BTreeMap<String, ParsedFnBehavior> = BTreeMap::new();
 
-        // capacity_overflow: pure function that calls panic (has_panic = true)
         let mut cap_overflow = rvs_make_behavior();
-        cap_overflow.has_panic = true;
         cap_overflow.calls.insert("core::panicking::panic".into());
         callgraph.insert("alloc::raw_vec::capacity_overflow".into(), cap_overflow);
 
         // panic: true panic
         let mut panic = rvs_make_behavior();
-        panic.has_panic = true;
         callgraph.insert("core::panicking::panic".into(), panic);
 
         // handle_error: calls capacity_overflow
@@ -2086,18 +2024,17 @@ mod tests {
     #[test]
     fn test_20260609_infer_caps_single_panic() {
         let mut callgraph: BTreeMap<String, ParsedFnBehavior> = BTreeMap::new();
-        let mut behavior = rvs_make_behavior();
-        behavior.has_panic = true;
-        callgraph.insert("my_crate::rvs_divide_P".into(), behavior);
+        let behavior = rvs_make_behavior();
+        callgraph.insert("my_crate::rvs_divide".into(), behavior);
         let seed = capsmap::CapsMap::rvs_new();
         let result = rvs_infer_caps_M(&callgraph, &seed);
         let output = rvs_format_capsmap(&result);
         rvs_snapshot("test_20260609_infer_caps_single_panic", &output);
         let caps = result
-            .get("my_crate::rvs_divide_P")
+            .get("my_crate::rvs_divide")
             .expect("should have entry");
-        assert!(caps.rvs_contains(Capability::P));
-        assert_eq!(caps.rvs_len(), 1);
+        assert!(caps.rvs_is_empty());
+        assert_eq!(caps.rvs_len(), 0);
     }
 
     #[test]
@@ -2231,11 +2168,9 @@ mod tests {
 
     #[test]
     fn test_20260609_infer_caps_seed_override() {
-        // Function is in seed with BI, but behavioral flags say has_panic=true.
         // Seed should win — the inferred result should only have BI, not P.
         let mut callgraph: BTreeMap<String, ParsedFnBehavior> = BTreeMap::new();
         let mut behavior = rvs_make_behavior();
-        behavior.has_panic = true;
         callgraph.insert("my_crate::rvs_read_BI".into(), behavior);
 
         let seed = capsmap::CapsMap::rvs_parse("my_crate::rvs_read_BI=BI").unwrap();
@@ -2249,7 +2184,7 @@ mod tests {
         assert!(caps.rvs_contains(Capability::B));
         assert!(caps.rvs_contains(Capability::I));
         assert!(
-            !caps.rvs_contains(Capability::P),
+            !caps.rvs_contains(Capability::T),
             "seed should override behavioral flags"
         );
         assert_eq!(caps.rvs_len(), 2);
@@ -2316,7 +2251,6 @@ mod tests {
         // Callee: calls a seed function with BIS + a node in a cycle
         let mut callee_behavior = rvs_make_behavior();
         callee_behavior.has_mut_param = true;
-        callee_behavior.has_panic = true;
         callee_behavior
             .calls
             .insert("std::sys::pal::unix::kernel_copy::rvs_write".into());
@@ -2364,10 +2298,6 @@ mod tests {
             "callee should have M from has_mut_param"
         );
         assert!(
-            callee_caps.rvs_contains(Capability::P),
-            "callee should have P from has_panic"
-        );
-        assert!(
             callee_caps.rvs_contains(Capability::S),
             "callee should have S from deep callee"
         );
@@ -2397,51 +2327,42 @@ mod tests {
     #[test]
     fn test_20260613_impl_union_majority_vote() {
         // Three impls of Read::read:
-        //   File::read   → BIMP (real I/O)
-        //   Cursor::read → MP   (in-memory)
-        //   &[u8]::read  → M    (pure read)
+        //   File::read   → BI (real I/O, from libc::read seed)
+        //   Cursor::read → (empty, in-memory)
+        //   &[u8]::read  → (empty, pure read)
         //
         // Majority vote (≥50% = ≥2 out of 3):
-        //   P: 2/3 → ✅ propagate
         //   B: 1/3 → ❌ don't propagate
         //   I: 1/3 → ❌ don't propagate
         //   M: 3/3 → ❌ don't propagate (inferred from signature only)
         let mut callgraph: BTreeMap<String, ParsedFnBehavior> = BTreeMap::new();
 
-        // The caller calls Read::read (trait method def, not in callgraph as key)
         let mut caller = rvs_make_behavior();
         caller.calls.insert("std::io::Read::read".into());
         callgraph.insert("my_crate::rvs_copy".into(), caller);
 
-        // Three impl methods with @TraitPath suffix
         let mut file_read = rvs_make_behavior();
         file_read.has_mut_param = true;
-        file_read.has_panic = true;
         file_read.calls.insert("libc::unix::read".into());
         callgraph.insert("std::fs::read@std::io::Read".into(), file_read);
 
         let mut cursor_read = rvs_make_behavior();
         cursor_read.has_mut_param = true;
-        cursor_read.has_panic = true;
         callgraph.insert("std::io::cursor::read@std::io::Read".into(), cursor_read);
 
         let mut slice_read = rvs_make_behavior();
         slice_read.has_mut_param = true;
         callgraph.insert("std::io::impls::read@std::io::Read".into(), slice_read);
 
-        // libc::read has BI in seed
         let seed = capsmap::CapsMap::rvs_parse("libc::unix::read=BI").unwrap();
 
         let result = rvs_infer_caps_M(&callgraph, &seed);
 
-        // Caller should get P (majority) but not B, I, or M
-        // M is not propagated — only inferred from has_mut_param
         let caller_caps = result.get("my_crate::rvs_copy").expect("caller exists");
         assert!(
             !caller_caps.rvs_contains(Capability::M),
             "M: not propagated"
         );
-        assert!(caller_caps.rvs_contains(Capability::P), "P: 2/3 = majority");
         assert!(
             !caller_caps.rvs_contains(Capability::B),
             "B: 1/3 = minority, should not propagate"
@@ -2579,8 +2500,7 @@ mod tests {
                 "has_unsafe_block": false,
                 "is_unsafe_fn": false,
                 "has_mut_param": false,
-                "has_panic": false,
-                "has_static_ref": false,
+                                "has_static_ref": false,
                 "has_static_mut_ref": false,
                 "has_thread_local_ref": false,
                 "is_trait_impl": false
@@ -2591,8 +2511,7 @@ mod tests {
                 "has_unsafe_block": false,
                 "is_unsafe_fn": false,
                 "has_mut_param": false,
-                "has_panic": true,
-                "has_static_ref": false,
+                                "has_static_ref": false,
                 "has_static_mut_ref": false,
                 "has_thread_local_ref": false,
                 "is_trait_impl": false
@@ -2607,13 +2526,11 @@ mod tests {
             .get("my_crate::rvs_add")
             .expect("should find rvs_add");
         assert!(add_behavior.calls.contains("my_crate::rvs_helper"));
-        assert!(!add_behavior.has_panic);
 
         let write_behavior = result
             .get("my_crate::rvs_write_BI")
             .expect("should find rvs_write_BI");
         assert!(write_behavior.calls.contains("std::fs::write"));
-        assert!(write_behavior.has_panic);
     }
 
     #[test]

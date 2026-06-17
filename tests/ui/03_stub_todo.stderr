@@ -16,17 +16,6 @@ LL | | }
    |
    = note: `#[deny(rivus::rvs_stub_macro)]` on by default
 
-error: may panic but suffix lacks P
-  --> $DIR/tests/ui/03_stub_todo.rs:5:1
-   |
-LL | / fn rvs_stub() {
-LL | |     todo!()
-LL | | }
-   | |_^
-   |
-   = note: `-D rivus::rvs-missing-panic` implied by `-D warnings`
-   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_panic)]`
-
 error: good fn 'rvs_add' not called by any test
   --> $DIR/tests/ui/03_stub_todo.rs:3:1
    |
@@ -53,4 +42,4 @@ LL | #![expect(non_snake_case)]
    = note: `-D unfulfilled-lint-expectations` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(unfulfilled_lint_expectations)]`
 
-error: aborting due to 6 previous errors
+error: aborting due to 5 previous errors

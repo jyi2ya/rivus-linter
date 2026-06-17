@@ -53,9 +53,11 @@ cargo rivus check -- --features foo  # 传递额外 cargo check 参数
 ```
 
 选项：
-- `-m, --capsmap <PATH>` — capsmap 文件或目录路径。不指定时按以下顺序查找：（1）`target/rivus-inferred-capsmap.txt`；（2）尝试使用随工具分发的内置 `caps/` 目录（开发模式下通常可用）；若以上都不可用，则由 lint 驱动层继续回退到项目自身的 `caps/` 目录和旧格式 `capsmap.txt`
+- `-m, --capsmap <PATH>` — capsmap 文件或目录路径。不指定时按以下顺序查找：（1）`target/rivus-inferred-capsmap.txt`；（2）尝试使用随工具分发的内置 `caps/` 目录（开发模式下通常可用）；若以上都不可用，则由 lint 驱动层在目标项目上下文中继续查找 `caps/` 目录
 
-注意：相对路径按当前工作目录解析，而默认回退链中的项目 `caps/` / `capsmap.txt` 仅在 CLI 未成功设置 `RIVUS_CAPSMAP` 时，才由 lint 驱动层在目标项目上下文中继续查找。
+注意：相对路径按当前工作目录解析，而默认回退链中的项目 `caps/` 仅在 CLI 未成功设置 `RIVUS_CAPSMAP` 时，才由 lint 驱动层在目标项目上下文中继续查找。
+
+注意：`check` 默认编译 `--tests`（含测试代码），因此 `#[test]` 函数也会被分析。`infer-capsmap` 和 `infer-std` 不编译测试代码。
 
 退出码：`check` 成功时返回 `0`；失败时透传底层 `cargo check` 的退出码。`infer-capsmap` / `infer-std` 在工具自身运行失败时返回 `2`。warning 不影响退出码。
 
@@ -90,7 +92,6 @@ Total: 42 functions, 890 lines
   (good)          30 fns    650 lines  73.0% |██████████████████████░░░░░░░░|
   (pure)          12 fns    200 lines  22.5% |██████████░░░░░░░░░░░░░░░░░░░░|
   M(Mutable)      10 fns    300 lines  33.7% |█████████████░░░░░░░░░░░░░░░░░|
-  P(Panic)         5 fns    100 lines  11.2% |████░░░░░░░░░░░░░░░░░░░░░░░░░░|
 ```
 
 ---
@@ -99,7 +100,7 @@ Total: 42 functions, 890 lines
 
 收集调用图并从种子标注自底向上推断 capsmap。对每个 `rvs_` 函数，聚合其所有被调用方的能力，得到保守上界。`PATH` 必须是一个可成功执行 `cargo check` 的 Cargo 项目。
 
-推断分两步：首先对不在种子中的函数，直接从行为特征推断能力（`async fn` → A、`unsafe` → U、`&mut` 参数 → M、`panic!`/`unwrap()` → P、`static` 引用 → S、`static mut` 引用 → S+U、`thread_local!` 引用 → S+T）；然后通过固定点迭代，将所有被调用方的能力沿调用图向上传播。若同一函数同时被识别为普通 `static` 引用和 `thread_local!` 引用，结果会合并为 `S+T`（幂等）。种子中的条目作为推断的起点（下界），传播可能在其基础上累加更多能力。
+推断分两步：首先对不在种子中的函数，直接从行为特征推断能力（`async fn` → A、`unsafe` → U、`&mut` 参数 → M、`static` 引用 → S、`static mut` 引用 → S+U、`thread_local!` 引用 → S+T）；然后通过固定点迭代，将所有被调用方的能力沿调用图向上传播。若同一函数同时被识别为普通 `static` 引用和 `thread_local!` 引用，结果会合并为 `S+T`（幂等）。种子中的条目作为推断的起点（下界），传播可能在其基础上累加更多能力。
 
 ```bash
 cargo rivus infer-capsmap                    # 写入 <PATH>/target/rivus-inferred-capsmap.txt 并输出到 stdout
@@ -119,7 +120,7 @@ cargo rivus infer-capsmap -m caps/           # 指定种子目录
 
 通过 `-Zbuild-std` 编译 std/core/alloc，推断标准库函数的能力标注。需要 nightly Rust；命令实际会调用 `cargo +nightly check`，如果本机没有可用的 nightly toolchain 会直接失败。`PATH` 必须是一个有效的 Cargo 项目。
 
-注意：该命令只会从 `PATH/caps` 加载种子 capsmap（按 caps 目录的正常合并规则加载），并在其基础上推断标准库条目；不会读取 `PATH/capsmap.txt`。若 `PATH/caps` 不存在，则以空种子继续推断。
+注意：该命令只会从 `PATH/caps` 加载 `seed` 和 `suppress` 文件（不加载 `std`/`deps`/`ext`，因为那些是上一次生成的结果，会干扰重新生成），并在其基础上推断标准库条目。
 
 ```bash
 cargo rivus infer-std                    # 写入 <PATH>/target/rivus-std-capsmap.txt 并输出到 stdout
@@ -140,7 +141,7 @@ cargo rivus infer-std -o caps/std        # 写入 <PATH>/target/rivus-std-capsma
 - 如果目标项目已有部分 clippy lint，只注入不存在的条目
 - 已存在的 lint 值不会被覆盖
 - `AGENTS.md` 每次覆盖写入（确保与最新 `rivus.md` 同步）
-- 如果项目已有 `caps/seed`，向其中注入 spawn 条目；否则若已有 `capsmap.txt`，向其注入（兼容旧格式）。如果两者都不存在，spawn 条目不会被注入
+- 如果项目已有 `caps/seed`，向其中注入 spawn 条目。如果 `caps/seed` 不存在，spawn 条目不会被注入
 
 注入的 clippy lint 分为以下几类：
 - **防 panic**：`string_slice`、`indexing_slicing`、`unwrap_used`、`panic`、`todo` 等
@@ -178,14 +179,17 @@ cargo rivus strip /path/to  # 指定目录
 
 ## `cargo rivus annotate [PATH]`
 
-对项目中所有函数进行能力推断，然后添加 `rvs_` 前缀和能力后缀。当前为 stub 实现。
+对项目中所有函数进行能力推断，然后添加 `rvs_` 前缀和能力后缀。使用 rust-analyzer 的语义分析引擎进行重命名。
 
 ```bash
 cargo rivus annotate           # 当前目录
 cargo rivus annotate /path/to  # 指定目录
 ```
 
-注意：该功能尚未完全实现，当前会返回错误。
+注意：
+- 需要项目能成功 `cargo check`
+- annotate 后 `#[serde(default = "...")]` 等字符串字面量中的函数引用不会自动更新，需要手动修复
+- annotate 会删除 `target/rivus-callgraph` 和 `target/rivus-callgraph-std` 缓存（函数名已变，旧缓存失效）
 
 ---
 
@@ -197,14 +201,15 @@ cargo rivus annotate /path/to  # 指定目录
 
 ```
 caps/
-├── seed      # 手动维护的底层基线（panicking、分配、I/O 内部、编译器内部、async 展开等）
+├── seed      # 手动维护的底层基线（分配、I/O 内部、编译器内部、async 展开等）
 ├── std       # std/core/alloc 的全量条目（可通过 infer-std 自动生成）
-└── deps      # 第三方依赖条目
+├── deps      # 第三方依赖条目
+├── suppress  # 修正条目（覆盖 std/deps 中过宽的能力标记）
+└── ext       # 项目特定条目（最高优先级）
 ```
 
-目录内的文件按 `seed` 优先、其余字母序加载。后加载的文件覆盖先加载的文件中同名条目。
-
-**单文件形式**：项目根目录下的 `capsmap.txt` 文件。
+目录内的文件按固定层级顺序加载（后加载的覆盖先加载的）：
+`std` → `deps` → `seed` → `suppress` → `ext` → 其余文件按字母序。
 
 每行一个条目，格式：
 
@@ -218,12 +223,11 @@ caps/
 std::fs::read_to_string=BI     # 阻塞+I/O（失败由 Result 表达）
 std::collections::HashMap::new=  # 纯函数，无能力
 std::process::exit=S           # 副作用：终止进程
-core::panicking::panic=P       # 可能 panic
 ```
 
-- linter 对 capsmap 中的键做双向后缀匹配：`name.ends_with("::key")` 或 `key.ends_with("::name")` 均可命中。先查全名精确匹配，找不到再做双向后缀匹配。如果匹配到了错误的条目，在代码里把调用路径写长一点以消除歧义
+- linter 对 capsmap 中的键做精确匹配（全限定路径完全一致）。不支持后缀匹配——caps 文件中的键必须使用 rustc 给出的 def_path
 - 如果 linter 报告某函数"既非 rvs_-prefixed nor in capsmap"，你需要补全 capsmap。方法优先级：检查源码 > 编写测试验证行为 > 合理猜测
-- caps 文件中的条目使用 rustc-driver 解析出的全限定路径（如 `core::result::impl::expect=P`），而非源码中的短名
+- caps 文件中的条目使用 rustc-driver 解析出的全限定路径（如 `core::result::impl::expect=`），而非源码中的短名
 
 ---
 
@@ -263,7 +267,6 @@ core::panicking::panic=P       # 可能 panic
 | `MissingSafetyDocWarning` | `unsafe fn` 缺少 `/// # Safety` 文档段 |
 | `BorrowedParamWarning` | 参数或结构体字段使用 `&String`/`&Vec<T>`/`&Box<T>`——应改用 `&str`/`&[T]`/`&T` |
 | `MissingDebugWarning` | struct/enum 缺少 `#[derive(Debug)]` |
-| `MissingPanicsDocWarning` | 带 `P` 标记的函数缺少 `/// # Panics` 文档段 |
 | `IntoImplWarning` | 直接实现 `Into`——应实现 `From`，`Into` 会自动提供 |
 | `ConsumedArgOnErrorWarning` | 函数返回 `Result<(), E>` 时消费了 owned 参数但错误类型中未保留该参数。注意：仅检查错误类型名称中是否包含参数类型标识符（如 `RunError<Cli>` 包含 `Cli`），无法深入检查错误枚举的变体字段——如果参数确实被保留在变体中（如 `AppError::Failed { cli: Box<Cli> }`），属于误报 |
 | `DerefPolymorphismWarning` | 实现了 `Deref`——可能用 Deref 模拟继承，应改用组合 |
@@ -279,19 +282,18 @@ core::panicking::panic=P       # 可能 panic
 
 ## 推断提示
 
-所有推断提示均以 `warning:` 前缀输出，不影响退出码。`MissingPanic` 尤其值得关注——函数可能 panic 但未在标记中声明。
+所有推断提示均以 `warning:` 前缀输出，不影响退出码。
 
 | InferenceKind | 含义 |
 |---------------|------|
 | `MissingAsync` | 函数声明为 `async fn` 但后缀缺少 `A` |
 | `MissingUnsafe` | 函数含 `unsafe` 块或声明为 `unsafe fn` 但后缀缺少 `U` |
 | `MissingMutable` | 函数有 `&mut` 参数（含 `&mut self`）但后缀缺少 `M` |
-| `MissingPanic` | 函数调用了 `panic!`/`assert!`/`assert_eq!`/`assert_ne!`/`unreachable!`/`todo!`/`unimplemented!`/`.unwrap()`/`.expect()`（不含 `debug_assert!`）但后缀缺少 `P`。**例外**：`.expect("never: ...")` 不视为 panic（仅限字符串字面量参数）。HIR 层面会检测这些宏展开后的路径（包括 `panic_fmt`、`panic_any` 等） |
 | `MissingSideEffect` | 函数读取了 `static` 变量但后缀缺少 `S` |
 | `MissingThreadLocal` | 函数读取了 `thread_local!` 变量但后缀缺少 `T`（同时需要 `S`，参见 `StaticRef`） |
 | `NonAlphabeticalSuffix` | 能力后缀字母未按字母序排列 |
 | `DuplicateSuffixLetter` | 能力后缀中有重复字母 |
-| `UnknownSuffixLetter` | 能力后缀包含不在 `ABIMPSTU` 中的字母——已知字母仍正常提取，未知字母仅报告提示 |
+| `UnknownSuffixLetter` | 能力后缀包含不在 `ABIMSTU` 中的字母——已知字母仍正常提取，未知字母仅报告提示 |
 
 ---
 
@@ -315,4 +317,4 @@ core::panicking::panic=P       # 可能 panic
 
 ## setup 命令的 spawn 处理
 
-`cargo rivus setup` 会自动在目标项目的 `caps/seed`（或 `capsmap.txt`）中注入 spawn 函数条目，确保 linter 能识别这些调用。仅在目标文件已存在时注入；已在 capsmap 中的条目不会被重复添加。所有注入的 clippy lint 均为 `warn` 级别。
+`cargo rivus setup` 会自动在目标项目的 `caps/seed` 中注入 spawn 函数条目，确保 linter 能识别这些调用。仅在 `caps/seed` 已存在时注入；已在 capsmap 中的条目不会被重复添加。所有注入的 clippy lint 均为 `warn` 级别。

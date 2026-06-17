@@ -27,7 +27,7 @@ fn normalize_stderr(raw: &str) -> String {
     let dir_str = dir.to_string_lossy().to_string();
     let mut out = raw.to_string();
     out = out.replace(&dir_str, "$DIR");
-    for cap in ['A', 'B', 'I', 'M', 'P', 'S', 'T', 'U'] {
+    for cap in ['A', 'B', 'I', 'M', 'S', 'T', 'U'] {
         out = out.replace(&format!("rivus::rvs_{cap}"), &format!("rivus::rvs_{cap}"));
     }
     let lines: Vec<&str> = out.lines().filter(|l| !l.contains("generated")).collect();

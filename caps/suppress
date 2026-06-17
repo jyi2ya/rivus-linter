@@ -4,3 +4,46 @@
 # capacity_overflow only fires when usize arithmetic overflows during
 # Vec/String resizing — effectively impossible on 64-bit systems.
 alloc::raw_vec::capacity_overflow=
+
+# ─── char/unicode methods: S from reading immutable static tables ──
+# These functions read `static` arrays of Unicode property data (e.g.
+# SHORT_OFFSET_RUNS). The arrays are pure compile-time constant data
+# with no interior mutability — reading them is semantically pure.
+# The linter marks them S because it cannot distinguish immutable
+# data tables from mutable global state.
+
+# char methods that delegate to unicode lookup tables
+core::char::methods::char::is_alphabetic=
+core::char::methods::char::is_alphanumeric=
+core::char::methods::char::is_lowercase=
+core::char::methods::char::is_uppercase=
+core::char::methods::char::is_whitespace=
+core::char::methods::char::is_numeric=
+core::char::methods::char::is_cased=
+core::char::methods::char::is_case_ignorable=
+core::char::methods::char::is_grapheme_extended=
+core::char::methods::char::is_titlecase=
+core::char::methods::char::to_lowercase=
+core::char::methods::char::to_uppercase=
+core::char::methods::char::to_titlecase=
+core::char::methods::char::case=
+core::char::methods::char::escape_debug=
+core::char::methods::char::escape_debug_ext=
+
+# unicode_data lookup functions — read immutable static tables
+core::unicode::unicode_data::alphabetic::lookup=
+core::unicode::unicode_data::alphabetic::lookup_slow=
+core::unicode::unicode_data::case_ignorable::lookup=
+core::unicode::unicode_data::case_ignorable::lookup_slow=
+core::unicode::unicode_data::conversions::to_lower=
+core::unicode::unicode_data::conversions::to_title=
+core::unicode::unicode_data::conversions::to_upper=
+core::unicode::unicode_data::grapheme_extend::lookup=
+core::unicode::unicode_data::grapheme_extend::lookup_slow=
+core::unicode::unicode_data::lowercase::lookup=
+core::unicode::unicode_data::lt::lookup=
+core::unicode::unicode_data::lt::lookup_slow=
+core::unicode::unicode_data::n::lookup=
+core::unicode::unicode_data::n::lookup_slow=
+core::unicode::unicode_data::uppercase::lookup=
+core::unicode::unicode_data::white_space::lookup=

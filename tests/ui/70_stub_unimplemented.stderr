@@ -1,22 +1,22 @@
 error: stub: todo!()/unimplemented!()
   --> $DIR/tests/ui/70_stub_unimplemented.rs:3:1
    |
-LL | / fn rvs_parse_P() -> i32 {
+LL | / fn rvs_parse() -> i32 {
 LL | |     unimplemented!()
 LL | | }
    | |_^
    |
    = note: `#[deny(rivus::rvs_stub_macro)]` on by default
 
-error: P marker but no /// # Panics
+error: good fn 'rvs_parse' not called by any test
   --> $DIR/tests/ui/70_stub_unimplemented.rs:3:1
    |
-LL | / fn rvs_parse_P() -> i32 {
+LL | / fn rvs_parse() -> i32 {
 LL | |     unimplemented!()
 LL | | }
    | |_^
    |
-   = note: `-D rivus::rvs-missing-panics-doc` implied by `-D warnings`
-   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_panics_doc)]`
+   = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
 
 error: aborting due to 2 previous errors

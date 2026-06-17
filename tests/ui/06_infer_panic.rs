@@ -2,7 +2,7 @@
 
 fn rvs_add() {}
 
-fn rvs_pure_calls_panic_P() {
+fn rvs_pure_calls_panic() {
     rvs_add();
     panic!("oops");
 }

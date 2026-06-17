@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
-/// 能力之七德：异步、阻塞、读写、可变、惊慌、副作用、线程、不安。
+/// 能力之七德：异步、阻塞、读写、可变、副作用、线程、不安。
 /// 七德既立，函数之名即为契约，调用之际便有章法。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Capability {
@@ -9,7 +9,6 @@ pub enum Capability {
     B,
     I,
     M,
-    P,
     S,
     T,
     U,
@@ -23,7 +22,6 @@ impl Capability {
             'B' => Some(Self::B),
             'I' => Some(Self::I),
             'M' => Some(Self::M),
-            'P' => Some(Self::P),
             'S' => Some(Self::S),
             'T' => Some(Self::T),
             'U' => Some(Self::U),
@@ -38,7 +36,6 @@ impl Capability {
             Self::B => 'B',
             Self::I => 'I',
             Self::M => 'M',
-            Self::P => 'P',
             Self::S => 'S',
             Self::T => 'T',
             Self::U => 'U',
@@ -52,7 +49,6 @@ impl Capability {
             Self::B => "Blocking",
             Self::I => "IO",
             Self::M => "Mutable",
-            Self::P => "Panic",
             Self::S => "SideEffect",
             Self::T => "ThreadLocal",
             Self::U => "Unsafe",
@@ -66,7 +62,7 @@ impl fmt::Display for Capability {
     }
 }
 
-const VALID_SUFFIX_CHARS: &[char] = &['A', 'B', 'I', 'M', 'P', 'S', 'T', 'U'];
+const VALID_SUFFIX_CHARS: &[char] = &['A', 'B', 'I', 'M', 'S', 'T', 'U'];
 
 /// 一组能力，如同一面旗——旗上画的，便是这函数的本事。
 /// 旗上没画的，便是它干不了的。
@@ -98,7 +94,6 @@ impl CapabilitySet {
                 'B' => Capability::B,
                 'I' => Capability::I,
                 'M' => Capability::M,
-                'P' => Capability::P,
                 'S' => Capability::S,
                 'T' => Capability::T,
                 'U' => Capability::U,
@@ -190,6 +185,7 @@ impl CapabilitySet {
     }
 
     /// 从能力集中移除一项能力。
+    #[cfg(test)]
     pub fn rvs_remove_M(&mut self, cap: Capability) {
         self.0.remove(&cap);
     }
@@ -231,7 +227,7 @@ pub fn rvs_parse_function(name: &str) -> Option<(&str, CapabilitySet)> {
 
 /// 拆解单个片段：去掉 rvs_ 前缀后，萃取能力后缀。
 ///
-/// 后缀必须全是大写字母。若所有字母都是合法能力字母（ABIMPSTU），
+/// 后缀必须全是大写字母。若所有字母都是合法能力字母（ABIMSTU），
 /// 直接萃取。若含未知大写字母（如 E），仍萃取已知部分，
 /// 由调用方负责报告未知字母警告。
 fn rvs_parse_segment(name: &str) -> Option<(&str, CapabilitySet)> {
@@ -267,7 +263,7 @@ pub fn rvs_extract_raw_suffix(name: &str) -> String {
     String::new()
 }
 
-/// 从原始后缀中萃取未知（非 ABIMPSTU）的大写字母，按出现顺序去重。
+/// 从原始后缀中萃取未知（非 ABIMSTU）的大写字母，按出现顺序去重。
 pub fn rvs_extract_unknown_suffix_letters(raw_suffix: &str) -> Vec<char> {
     let mut seen = BTreeSet::new();
     let mut result = Vec::new();
@@ -289,7 +285,6 @@ mod tests {
         assert_eq!(Capability::rvs_from_char('B'), Some(Capability::B));
         assert_eq!(Capability::rvs_from_char('I'), Some(Capability::I));
         assert_eq!(Capability::rvs_from_char('M'), Some(Capability::M));
-        assert_eq!(Capability::rvs_from_char('P'), Some(Capability::P));
         assert_eq!(Capability::rvs_from_char('S'), Some(Capability::S));
         assert_eq!(Capability::rvs_from_char('T'), Some(Capability::T));
         assert_eq!(Capability::rvs_from_char('U'), Some(Capability::U));
@@ -317,7 +312,6 @@ mod tests {
         assert_eq!(Capability::B.rvs_description(), "Blocking");
         assert_eq!(Capability::I.rvs_description(), "IO");
         assert_eq!(Capability::M.rvs_description(), "Mutable");
-        assert_eq!(Capability::P.rvs_description(), "Panic");
         assert_eq!(Capability::S.rvs_description(), "SideEffect");
         assert_eq!(Capability::T.rvs_description(), "ThreadLocal");
         assert_eq!(Capability::U.rvs_description(), "Unsafe");
@@ -337,7 +331,6 @@ mod tests {
         assert!(set.rvs_contains(Capability::B));
         assert!(set.rvs_contains(Capability::I));
         assert!(set.rvs_contains(Capability::M));
-        assert!(!set.rvs_contains(Capability::P));
         assert_eq!(set.rvs_len(), 4);
     }
 
@@ -363,18 +356,17 @@ mod tests {
 
     #[test]
     fn test_20260425_from_validated() {
-        let set = CapabilitySet::rvs_from_validated("ABPSU");
-        assert_eq!(set.rvs_len(), 5);
+        let set = CapabilitySet::rvs_from_validated("ABSU");
+        assert_eq!(set.rvs_len(), 4);
         assert!(set.rvs_contains(Capability::A));
         assert!(set.rvs_contains(Capability::B));
-        assert!(set.rvs_contains(Capability::P));
         assert!(set.rvs_contains(Capability::S));
         assert!(set.rvs_contains(Capability::U));
     }
 
     #[test]
     fn test_20260425_can_call_superset() {
-        let caller = CapabilitySet::rvs_from_validated("ABIMP");
+        let caller = CapabilitySet::rvs_from_validated("ABIM");
         let callee = CapabilitySet::rvs_from_validated("ABI");
         assert!(caller.rvs_can_call(&callee));
     }
@@ -389,7 +381,7 @@ mod tests {
     #[test]
     fn test_20260425_can_call_missing_cap() {
         let caller = CapabilitySet::rvs_from_validated("AB");
-        let callee = CapabilitySet::rvs_from_validated("ABP");
+        let callee = CapabilitySet::rvs_from_validated("ABT");
         assert!(!caller.rvs_can_call(&callee));
     }
 
@@ -410,10 +402,10 @@ mod tests {
     #[test]
     fn test_20260425_missing_for_has_missing() {
         let a = CapabilitySet::rvs_from_validated("AB");
-        let b = CapabilitySet::rvs_from_validated("ABP");
+        let b = CapabilitySet::rvs_from_validated("ABT");
         let missing = a.rvs_missing_for(&b);
         assert_eq!(missing.len(), 1);
-        assert!(missing.contains(&Capability::P));
+        assert!(missing.contains(&Capability::T));
     }
 
     #[test]
@@ -432,11 +424,11 @@ mod tests {
     #[test]
     fn test_20260614_missing_for_excludes_amu() {
         let caller = CapabilitySet::rvs_from_validated("B");
-        let callee = CapabilitySet::rvs_from_validated("ABMPSU");
+        let callee = CapabilitySet::rvs_from_validated("ABSTU");
         let missing = caller.rvs_missing_for(&callee);
-        // Only P and S should be missing — A, M, U are excluded from call rule
+        // Only S and T should be missing — A, M, U are excluded from call rule
         assert_eq!(missing.len(), 2);
-        assert!(missing.contains(&Capability::P));
+        assert!(missing.contains(&Capability::T));
         assert!(missing.contains(&Capability::S));
     }
 
@@ -449,7 +441,7 @@ mod tests {
 
     #[test]
     fn test_20260425_is_subset_of_false() {
-        let set = CapabilitySet::rvs_from_validated("ABP");
+        let set = CapabilitySet::rvs_from_validated("ABT");
         let allowed = CapabilitySet::rvs_from_validated("ABM");
         assert!(!set.rvs_is_subset_of(&allowed));
     }
@@ -467,7 +459,6 @@ mod tests {
         assert!(good.rvs_contains(Capability::A));
         assert!(good.rvs_contains(Capability::B));
         assert!(good.rvs_contains(Capability::M));
-        assert!(!good.rvs_contains(Capability::P));
         assert!(!good.rvs_contains(Capability::I));
         assert!(!good.rvs_contains(Capability::S));
         assert!(!good.rvs_contains(Capability::T));
@@ -487,9 +478,9 @@ mod tests {
 
     #[test]
     fn test_20260425_contains() {
-        let set = CapabilitySet::rvs_from_validated("MP");
+        let set = CapabilitySet::rvs_from_validated("MS");
         assert!(set.rvs_contains(Capability::M));
-        assert!(set.rvs_contains(Capability::P));
+        assert!(set.rvs_contains(Capability::S));
         assert!(!set.rvs_contains(Capability::A));
     }
 
@@ -600,14 +591,13 @@ mod tests {
 
     #[test]
     fn test_20260515_parse_suffix_with_unknown_letter_e() {
-        let (base, caps) = rvs_parse_function("rvs_execute_effects_ABEIMP").unwrap();
+        let (base, caps) = rvs_parse_function("rvs_execute_effects_BEIMS").unwrap();
         assert_eq!(base, "execute_effects");
-        assert!(caps.rvs_contains(Capability::A));
         assert!(caps.rvs_contains(Capability::B));
         assert!(caps.rvs_contains(Capability::I));
         assert!(caps.rvs_contains(Capability::M));
-        assert!(caps.rvs_contains(Capability::P));
-        assert_eq!(caps.rvs_len(), 5);
+        assert!(caps.rvs_contains(Capability::S));
+        assert_eq!(caps.rvs_len(), 4);
     }
 
     #[test]
@@ -619,27 +609,27 @@ mod tests {
 
     #[test]
     fn test_20260515_parse_suffix_mixed_aeip() {
-        let (base, caps) = rvs_parse_function("rvs_render_msg_AEIP").unwrap();
+        let (base, caps) = rvs_parse_function("rvs_render_msg_AEIS").unwrap();
         assert_eq!(base, "render_msg");
         assert!(caps.rvs_contains(Capability::A));
         assert!(caps.rvs_contains(Capability::I));
-        assert!(caps.rvs_contains(Capability::P));
+        assert!(caps.rvs_contains(Capability::S));
         assert_eq!(caps.rvs_len(), 3);
     }
 
     #[test]
     fn test_20260515_extract_raw_suffix_with_unknown() {
-        assert_eq!(rvs_extract_raw_suffix("rvs_foo_ABEIMP"), "ABEIMP");
+        assert_eq!(rvs_extract_raw_suffix("rvs_foo_BEIMS"), "BEIMS");
         assert_eq!(rvs_extract_raw_suffix("rvs_bar_E"), "E");
-        assert_eq!(rvs_extract_raw_suffix("rvs_baz_AEIP"), "AEIP");
+        assert_eq!(rvs_extract_raw_suffix("rvs_baz_AEIS"), "AEIS");
     }
 
     #[test]
     fn test_20260515_extract_unknown_suffix_letters() {
-        assert_eq!(rvs_extract_unknown_suffix_letters("ABEIMP"), vec!['E']);
-        assert_eq!(rvs_extract_unknown_suffix_letters("AEIP"), vec!['E']);
+        assert_eq!(rvs_extract_unknown_suffix_letters("BEIMS"), vec!['E']);
+        assert_eq!(rvs_extract_unknown_suffix_letters("AEIS"), vec!['E']);
         assert_eq!(rvs_extract_unknown_suffix_letters("E"), vec!['E']);
-        assert!(rvs_extract_unknown_suffix_letters("ABIMP").is_empty());
+        assert!(rvs_extract_unknown_suffix_letters("ABMS").is_empty());
         assert!(rvs_extract_unknown_suffix_letters("").is_empty());
     }
 }

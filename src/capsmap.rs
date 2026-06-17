@@ -186,11 +186,11 @@ mod tests {
     fn test_20260615_capsmap_parse_hash_in_key() {
         // Def paths may contain '#' (e.g. closure#0 in rustc def_path).
         // The '#' in the key must not be treated as a comment marker.
-        let cm = CapsMap::rvs_parse("exr::image::closure#0::crop_samples=P # Panic").unwrap();
+        let cm = CapsMap::rvs_parse("exr::image::closure#0::crop_samples=S # SideEffect").unwrap();
         let caps = cm
             .rvs_lookup("exr::image::closure#0::crop_samples")
             .unwrap();
-        assert!(caps.rvs_contains(Capability::P));
+        assert!(caps.rvs_contains(Capability::S));
     }
 
     #[test]
@@ -223,23 +223,23 @@ mod tests {
 
     #[test]
     fn test_20260425_capsmap_parse_all_caps() {
-        let cm = CapsMap::rvs_parse("danger=ABIMPSTU").unwrap();
+        let cm = CapsMap::rvs_parse("danger=ABIMSTU").unwrap();
         let caps = cm.rvs_lookup("danger").unwrap();
-        assert_eq!(caps.rvs_len(), 8);
+        assert_eq!(caps.rvs_len(), 7);
     }
 
     #[test]
     fn test_20260611_seed_overrides_std() {
         let dir = std::env::temp_dir().join("test_20260611_seed_overrides_std");
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("seed"), "func=S\nother_func=P\n").unwrap();
+        std::fs::write(dir.join("seed"), "func=S\nother_func=T\n").unwrap();
         std::fs::write(dir.join("std"), "func=U\nother_func=U\nnew_func=M\n").unwrap();
         let cm = CapsMap::rvs_load_from_dir_BIMS(&dir).unwrap();
         let caps = cm.rvs_lookup("func").unwrap();
         assert!(caps.rvs_contains(Capability::S));
         assert!(!caps.rvs_contains(Capability::U));
         let other = cm.rvs_lookup("other_func").unwrap();
-        assert!(other.rvs_contains(Capability::P));
+        assert!(other.rvs_contains(Capability::T));
         assert!(!other.rvs_contains(Capability::U));
         let new_func = cm.rvs_lookup("new_func").unwrap();
         assert!(new_func.rvs_contains(Capability::M));

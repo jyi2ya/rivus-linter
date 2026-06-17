@@ -1,23 +1,23 @@
-error: P marker but no /// # Panics
+error: pub fn 'rvs_process' missing /// doc comment
   --> $DIR/tests/ui/77_reflection_usage_type_name.rs:3:1
    |
-LL | / pub fn rvs_process_P() -> String {
-LL | |     std::any::type_name::<i32>().to_string()
-LL | | }
-   | |_^
-   |
-   = note: `-D rivus::rvs-missing-panics-doc` implied by `-D warnings`
-   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_panics_doc)]`
-
-error: pub fn 'rvs_process_P' missing /// doc comment
-  --> $DIR/tests/ui/77_reflection_usage_type_name.rs:3:1
-   |
-LL | / pub fn rvs_process_P() -> String {
+LL | / pub fn rvs_process() -> String {
 LL | |     std::any::type_name::<i32>().to_string()
 LL | | }
    | |_^
    |
    = note: `-D rivus::rvs-missing-doc` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_doc)]`
+
+error: good fn 'rvs_process' not called by any test
+  --> $DIR/tests/ui/77_reflection_usage_type_name.rs:3:1
+   |
+LL | / pub fn rvs_process() -> String {
+LL | |     std::any::type_name::<i32>().to_string()
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
 
 error: aborting due to 2 previous errors

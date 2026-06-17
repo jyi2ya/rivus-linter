@@ -1,14 +1,3 @@
-error: P marker but no /// # Panics
-  --> $DIR/tests/ui/27_spawn_warning.rs:3:1
-   |
-LL | / pub fn rvs_spawn_ABIMPS() {
-LL | |     std::thread::spawn(|| {});
-LL | | }
-   | |_^
-   |
-   = note: `-D rivus::rvs-missing-panics-doc` implied by `-D warnings`
-   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_panics_doc)]`
-
 error: spawn: std::thread::functions::spawn — use structured concurrency
   --> $DIR/tests/ui/27_spawn_warning.rs:4:5
    |
@@ -18,10 +7,10 @@ LL |     std::thread::spawn(|| {});
    = note: `-D rivus::rvs-spawn-warning` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_spawn_warning)]`
 
-error: pub fn 'rvs_spawn_ABIMPS' missing /// doc comment
+error: pub fn 'rvs_spawn_ABIMS' missing /// doc comment
   --> $DIR/tests/ui/27_spawn_warning.rs:3:1
    |
-LL | / pub fn rvs_spawn_ABIMPS() {
+LL | / pub fn rvs_spawn_ABIMS() {
 LL | |     std::thread::spawn(|| {});
 LL | | }
    | |_^
@@ -29,4 +18,4 @@ LL | | }
    = note: `-D rivus::rvs-missing-doc` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_doc)]`
 
-error: aborting due to 3 previous errors
+error: aborting due to 2 previous errors

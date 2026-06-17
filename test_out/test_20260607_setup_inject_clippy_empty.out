@@ -1,4 +1,4 @@
-count: 38
+count: 39
 [package]
 name = "test"
 
@@ -45,3 +45,4 @@ use_debug = "warn"
 dbg_macro = "warn"
 allow_attributes = "warn"
 allow_attributes_without_reason = "warn"
+manual_ok_err = "allow"
