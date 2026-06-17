@@ -41,6 +41,7 @@ pub const CLIPPY_LINTS: &[(&str, &str)] = &[
     ("dbg_macro", "warn"),
     ("allow_attributes", "warn"),
     ("allow_attributes_without_reason", "warn"),
+    ("manual_ok_err", "allow"),
 ];
 
 pub const SPAWN_CAPSMAP_ENTRIES: &[(&str, &str)] = &[

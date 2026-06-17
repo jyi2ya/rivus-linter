@@ -7,11 +7,11 @@
 /// # Panics
 ///
 /// Never panics.
-fn rvs_foo_P() {
+fn rvs_foo() {
     let _ = 42;
 }
 
 #[test]
 fn test_20260612_suffix_no_duplicate_ok() {
-    rvs_foo_P();
+    rvs_foo();
 }

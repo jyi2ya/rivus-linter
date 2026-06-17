@@ -6,18 +6,6 @@ LL | fn rvs_add() {}
    |
    = note: `#[deny(rivus::rvs_empty_fn)]` on by default
 
-error: P marker but no /// # Panics
-  --> $DIR/tests/ui/06_infer_panic.rs:5:1
-   |
-LL | / fn rvs_pure_calls_panic_P() {
-LL | |     rvs_add();
-LL | |     panic!("oops");
-LL | | }
-   | |_^
-   |
-   = note: `-D rivus::rvs-missing-panics-doc` implied by `-D warnings`
-   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_panics_doc)]`
-
 error: good fn 'rvs_add' not called by any test
   --> $DIR/tests/ui/06_infer_panic.rs:3:1
    |
@@ -27,4 +15,22 @@ LL | fn rvs_add() {}
    = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
 
-error: aborting due to 3 previous errors
+error: good fn 'rvs_pure_calls_panic' not called by any test
+  --> $DIR/tests/ui/06_infer_panic.rs:5:1
+   |
+LL | / fn rvs_pure_calls_panic() {
+LL | |     rvs_add();
+LL | |     panic!("oops");
+LL | | }
+   | |_^
+
+error: this lint expectation is unfulfilled
+  --> $DIR/tests/ui/06_infer_panic.rs:1:11
+   |
+LL | #![expect(non_snake_case)]
+   |           ^^^^^^^^^^^^^^
+   |
+   = note: `-D unfulfilled-lint-expectations` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unfulfilled_lint_expectations)]`
+
+error: aborting due to 4 previous errors

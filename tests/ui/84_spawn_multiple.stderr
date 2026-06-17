@@ -7,24 +7,10 @@ LL |     std::thread::spawn(|| {});
    = note: `-D rivus::rvs-spawn-warning` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_spawn_warning)]`
 
-error: {A, B, I, S} → std::thread::spawn (std::thread::functions::spawn) ({B, I, P, S}) missing P(Panic)
-  --> $DIR/tests/ui/84_spawn_multiple.rs:4:5
-   |
-LL |     std::thread::spawn(|| {});
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
-   |
-   = note: `#[deny(rivus::rvs_call_violation)]` on by default
-
 error: spawn: std::thread::functions::spawn — use structured concurrency
   --> $DIR/tests/ui/84_spawn_multiple.rs:5:5
    |
 LL |     std::thread::spawn(|| {});
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^
 
-error: {A, B, I, S} → std::thread::spawn (std::thread::functions::spawn) ({B, I, P, S}) missing P(Panic)
-  --> $DIR/tests/ui/84_spawn_multiple.rs:5:5
-   |
-LL |     std::thread::spawn(|| {});
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
-
-error: aborting due to 4 previous errors
+error: aborting due to 2 previous errors

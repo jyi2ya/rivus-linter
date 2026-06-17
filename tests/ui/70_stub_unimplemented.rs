@@ -1,5 +1,5 @@
 #![allow(non_snake_case)]
 
-fn rvs_parse_P() -> i32 {
+fn rvs_parse() -> i32 {
     unimplemented!()
 }

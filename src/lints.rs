@@ -4,7 +4,6 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::Path;
 
-use rustc_ast::ast::LitKind;
 use rustc_errors::{Diag, DiagCtxtHandle, Diagnostic, Level};
 use rustc_hir::def::DefKind;
 use rustc_hir::{
@@ -65,11 +64,6 @@ rvs_declare!(
 );
 rvs_declare!(RVS_NON_RVS_FN, Warn, "function missing rvs_ prefix");
 rvs_declare!(
-    RVS_MISSING_PANICS_DOC,
-    Warn,
-    "function with P marker missing /// # Panics doc"
-);
-rvs_declare!(
     RVS_UNKNOWN_CALLEE,
     Warn,
     "call to function neither rvs_-prefixed nor in capsmap"
@@ -78,11 +72,6 @@ rvs_declare!(
     RVS_MISSING_MUTABLE,
     Warn,
     "function has &mut param but suffix lacks M"
-);
-rvs_declare!(
-    RVS_MISSING_PANIC,
-    Warn,
-    "function may panic but suffix lacks P"
 );
 rvs_declare!(RVS_MISSING_ASYNC, Warn, "async fn but suffix lacks A");
 rvs_declare!(RVS_MISSING_UNSAFE, Warn, "unsafe code but suffix lacks U");
@@ -206,10 +195,8 @@ pub static RIVUS_LINTS: &[&rustc_lint::Lint] = &[
     RVS_MISSING_DEBUG_ASSERT,
     RVS_MISSING_ALLOW,
     RVS_NON_RVS_FN,
-    RVS_MISSING_PANICS_DOC,
     RVS_UNKNOWN_CALLEE,
     RVS_MISSING_MUTABLE,
-    RVS_MISSING_PANIC,
     RVS_MISSING_ASYNC,
     RVS_MISSING_UNSAFE,
     RVS_MISSING_SIDE_EFFECT,
@@ -320,7 +307,6 @@ pub struct FnBehavior {
     pub has_unsafe_block: bool,
     pub is_unsafe_fn: bool,
     pub has_mut_param: bool,
-    pub has_panic: bool,
     pub has_static_ref: bool,
     pub has_static_mut_ref: bool,
     pub has_thread_local_ref: bool,
@@ -406,15 +392,7 @@ impl RivusLintPass {
             if exe_caps.is_dir() {
                 exe_caps
             } else {
-                // Last resort: legacy capsmap.txt
-                let path = manifest_dir.join("capsmap.txt");
-                self.capsmap = Some(match std::fs::read_to_string(&path) {
-                    Ok(c) => CapsMap::rvs_parse(&c).unwrap_or_else(|e| {
-                        eprintln!("warning: {}: {e}", path.display());
-                        CapsMap::rvs_new()
-                    }),
-                    Err(_) => CapsMap::rvs_new(),
-                });
+                self.capsmap = Some(CapsMap::rvs_new());
                 return;
             }
         };
@@ -947,7 +925,6 @@ struct FnInfo {
     is_async: bool,
     is_unsafe_fn: bool,
     has_mut_param: bool,
-    has_panic: bool,
     has_unsafe_block: bool,
 }
 
@@ -968,7 +945,6 @@ impl FnInfo {
                 rustc_hir::HeaderSafety::Normal(Safety::Unsafe)
             ),
             has_mut_param: rvs_has_mutable_params(sig, body),
-            has_panic: rvs_scan_panic(tcx, body),
             has_unsafe_block: rvs_scan_unsafe(tcx, body),
         })
     }
@@ -998,113 +974,6 @@ fn rvs_has_mutable_params(sig: &rustc_hir::FnSig<'_>, _body: &Body<'_>) -> bool 
 }
 
 // ─── Body scanners ───────────────────────────────────────────────────────
-
-/// Check if an expression originates from a `debug_assert!` macro expansion.
-/// These expand to `panic!` calls in debug builds, but should not be treated
-/// as real panics or recorded as callgraph edges.
-fn rvs_is_from_debug_assert(e: &Expr<'_>) -> bool {
-    if !e.span.from_expansion() {
-        return false;
-    }
-    let da = Symbol::intern("debug_assert");
-    let dae = Symbol::intern("debug_assert_eq");
-    let dan = Symbol::intern("debug_assert_ne");
-    let mut expn_id = e.span.ctxt().outer_expn_data().parent;
-    while expn_id != rustc_span::ExpnId::root() {
-        let expn = expn_id.expn_data();
-        if let rustc_span::ExpnKind::Macro(rustc_span::MacroKind::Bang, name) = expn.kind {
-            if name == da || name == dae || name == dan {
-                return true;
-            }
-        }
-        expn_id = expn.parent;
-    }
-    let outer_expn = e.span.ctxt().outer_expn_data();
-    if let rustc_span::ExpnKind::Macro(rustc_span::MacroKind::Bang, name) = outer_expn.kind {
-        if name == da || name == dae || name == dan {
-            return true;
-        }
-    }
-    false
-}
-
-fn rvs_scan_panic<'tcx>(tcx: rustc_middle::ty::TyCtxt<'tcx>, body: &Body<'tcx>) -> bool {
-    let mut f = false;
-    rvs_walk_closures(tcx, body.value, |e| {
-        if f {
-            return;
-        }
-        // debug_assert! expands to panic! calls at runtime, but these are
-        // intentional debug-only checks, not user-written panics. Skip them.
-        if rvs_is_from_debug_assert(e) {
-            return;
-        }
-        match &e.kind {
-            ExprKind::Call(func, _) => {
-                if let ExprKind::Path(ref q) = func.kind {
-                    let s = rvs_qp(q);
-                    // Match by last segment — these names are unambiguous
-                    // panic intrinsics in core::panicking
-                    let last = s.rsplit("::").next().unwrap_or(&s);
-                    if matches!(
-                        last,
-                        "panic"
-                            | "panic_fmt"
-                            | "panic_any"
-                            | "panic_str"
-                            | "panic_str_2015"
-                            | "panic_display"
-                            | "panic_nounwind"
-                            | "panic_bounds_check"
-                            | "panic_misaligned_pointer_dereference"
-                            | "panic_null_pointer_dereference"
-                            | "assert_failed"
-                            | "assert_matches_failed"
-                            | "unwrap_failed"
-                    ) {
-                        f = true;
-                    }
-                }
-            }
-            ExprKind::MethodCall(p, ..) => {
-                let n = p.ident.name.as_str();
-                if n == "unwrap" {
-                    f = true;
-                }
-                if n == "expect" && !rvs_is_never_expect(e) {
-                    f = true;
-                }
-            }
-            _ => {}
-        }
-    });
-    f
-}
-
-fn rvs_is_never_expect(e: &Expr<'_>) -> bool {
-    if let ExprKind::MethodCall(_, _, args, _) = &e.kind {
-        if let Some(first) = args.first() {
-            if let ExprKind::Lit(lit) = &first.kind {
-                if let LitKind::Str(s, _) = lit.node {
-                    let msg = s.as_str();
-                    // User-provided exemption: explicit "never:" prefix
-                    if msg.starts_with("never:") {
-                        return true;
-                    }
-                    // Std lib "won't happen" patterns:
-                    // - "unexpectedly" — formatting trait returned Err on an
-                    //   infallible sink (e.g. writing to String)
-                    // - "capacity overflow" / "overflow" — arithmetic overflow
-                    //   in collection sizing, guarded by checked_add
-                    if msg.contains("unexpectedly") || msg.contains("capacity overflow") {
-                        return true;
-                    }
-                }
-            }
-        }
-    }
-    false
-}
 
 fn rvs_scan_unsafe<'tcx>(tcx: rustc_middle::ty::TyCtxt<'tcx>, body: &Body<'tcx>) -> bool {
     let mut f = false;
@@ -1859,13 +1728,6 @@ impl RivusLintPass {
                     Msg::new(span, "&mut param but suffix lacks M"),
                 );
             }
-            if info.has_panic && !info.caps.rvs_contains(Capability::P) {
-                cx.emit_span_lint(
-                    RVS_MISSING_PANIC,
-                    span,
-                    Msg::new(span, "may panic but suffix lacks P"),
-                );
-            }
             let raw = &info.raw_suffix;
             if !raw.is_empty() {
                 let mut cv: Vec<char> = raw.chars().collect();
@@ -1906,13 +1768,6 @@ impl RivusLintPass {
                         ),
                     );
                 }
-            }
-            if info.caps.rvs_contains(Capability::P) && !rvs_has_doc_section(cx, hir_id, "Panics") {
-                cx.emit_span_lint(
-                    RVS_MISSING_PANICS_DOC,
-                    span,
-                    Msg::new(span, "P marker but no /// # Panics"),
-                );
             }
 
             self.rvs_check_calls_MS(cx, body, hir_id, &info.caps, is_test, name, &info);
@@ -2038,7 +1893,7 @@ impl RivusLintPass {
                                 );
                             }
                             let sp = rvs_qp(q);
-                            self.rvs_check_target_S(cx, e.span, &fp, Some(&sp), caps, false);
+                            self.rvs_check_target_S(cx, e.span, &fp, Some(&sp), caps);
                             let cn = fp.rsplit("::").next().unwrap_or(&fp);
                             if cn == "catch_unwind" {
                                 cx.emit_span_lint(
@@ -2107,8 +1962,7 @@ impl RivusLintPass {
                             Msg::new(e.span, "reflection — use trait dispatch instead"),
                         );
                     }
-                    let is_never = n == "expect" && rvs_is_never_expect(e);
-                    self.rvs_check_target_S(cx, e.span, &fp, Some(n), caps, is_never);
+                    self.rvs_check_target_S(cx, e.span, &fp, Some(n), caps);
                 }
             }
             _ => {}
@@ -2123,7 +1977,6 @@ impl RivusLintPass {
                     has_unsafe_block: info.has_unsafe_block,
                     is_unsafe_fn: info.is_unsafe_fn,
                     has_mut_param: info.has_mut_param,
-                    has_panic: info.has_panic,
                     has_static_ref,
                     has_static_mut_ref,
                     has_thread_local_ref,
@@ -2142,7 +1995,6 @@ impl RivusLintPass {
         def_path: &str,
         src_path: Option<&str>,
         caps: &CapabilitySet,
-        is_never_expect: bool,
     ) {
         let cn = def_path.rsplit("::").next().unwrap_or(def_path);
         if let Some((_, cc)) = rvs_parse_function(cn) {
@@ -2160,14 +2012,11 @@ impl RivusLintPass {
             }
             return;
         }
-        if let Some(mut cc) = self
+        if let Some(cc) = self
             .rvs_lookup_caps(def_path)
             .or_else(|| src_path.and_then(|s| self.rvs_lookup_caps(s)))
             .cloned()
         {
-            if is_never_expect {
-                cc.rvs_remove_M(Capability::P);
-            }
             if !cc.rvs_is_empty() && !caps.rvs_can_call(&cc) {
                 let m: Vec<_> = caps
                     .rvs_missing_for(&cc)
@@ -2470,20 +2319,6 @@ impl RivusLintPass {
         });
 
         rvs_walk_closures(cx.tcx, body.value, |e| {
-            // Skip debug_assert! expansions — they introduce panic calls
-            // that should not be recorded as callgraph edges.
-            if rvs_is_from_debug_assert(e) {
-                return;
-            }
-            // Skip expect/unwrap calls that are exempted by "never:" prefix
-            // or std lib "won't happen" patterns — these should not create
-            // callgraph edges that propagate P.
-            if let ExprKind::MethodCall(p, ..) = &e.kind {
-                let n = p.ident.name.as_str();
-                if n == "expect" && rvs_is_never_expect(e) {
-                    return;
-                }
-            }
             match &e.kind {
                 ExprKind::Call(func, _) => {
                     if let ExprKind::Path(ref q) = func.kind {
@@ -2524,7 +2359,6 @@ impl RivusLintPass {
             rustc_hir::HeaderSafety::Normal(Safety::Unsafe)
         );
         let has_mut_param = rvs_has_mutable_params(sig, body);
-        let has_panic = rvs_scan_panic(cx.tcx, body);
         let has_unsafe_block = rvs_scan_unsafe(cx.tcx, body);
 
         let entry = self
@@ -2536,7 +2370,6 @@ impl RivusLintPass {
                 has_unsafe_block,
                 is_unsafe_fn,
                 has_mut_param,
-                has_panic,
                 has_static_ref,
                 has_static_mut_ref,
                 has_thread_local_ref,

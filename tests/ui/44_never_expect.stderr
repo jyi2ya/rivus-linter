@@ -1,14 +1,3 @@
-error: P marker but no /// # Panics
-  --> $DIR/tests/ui/44_never_expect.rs:7:1
-   |
-LL | / fn rvs_normal_expect_P() {
-LL | |     let _: i32 = "42".parse().expect("might fail");
-LL | | }
-   | |_^
-   |
-   = note: `-D rivus::rvs-missing-panics-doc` implied by `-D warnings`
-   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_panics_doc)]`
-
 error: good fn 'rvs_never_expect' not called by any test
   --> $DIR/tests/ui/44_never_expect.rs:3:1
    |
@@ -20,4 +9,21 @@ LL | | }
    = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
 
-error: aborting due to 2 previous errors
+error: good fn 'rvs_normal_expect' not called by any test
+  --> $DIR/tests/ui/44_never_expect.rs:7:1
+   |
+LL | / fn rvs_normal_expect() {
+LL | |     let _: i32 = "42".parse().expect("might fail");
+LL | | }
+   | |_^
+
+error: this lint expectation is unfulfilled
+  --> $DIR/tests/ui/44_never_expect.rs:1:11
+   |
+LL | #![expect(non_snake_case)]
+   |           ^^^^^^^^^^^^^^
+   |
+   = note: `-D unfulfilled-lint-expectations` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unfulfilled_lint_expectations)]`
+
+error: aborting due to 3 previous errors
