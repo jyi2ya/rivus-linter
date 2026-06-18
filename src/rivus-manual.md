@@ -54,9 +54,9 @@ cargo rivus check -- --features foo  # 传递额外 cargo check 参数
 ```
 
 选项：
-- `-m, --capsmap <PATH>` — capsmap 文件或目录路径。不指定时按以下顺序查找：（1）`target/rivus-inferred-capsmap.txt`；（2）尝试使用随工具分发的内置 `caps/` 目录（开发模式下通常可用）；若以上都不可用，则由 lint 驱动层在目标项目上下文中继续查找 `caps/` 目录
+- `-m, --capsmap <PATH>` — capsmap 文件或目录路径。不指定时按以下优先级查找：（1）`target/rivus-inferred-capsmap.txt`；（2）项目 `caps/` 目录；（3）随工具分发的内置 `caps/` 目录。找到的路径通过 `RIVUS_CAPSMAP` 环境变量传递给 lint 驱动层。
 
-注意：相对路径按当前工作目录解析，而默认回退链中的项目 `caps/` 仅在 CLI 未成功设置 `RIVUS_CAPSMAP` 时，才由 lint 驱动层在目标项目上下文中继续查找。
+注意：capsmap 的查找和加载完全由 CLI 层（`rvs_resolve_capsmap_BIS`）控制。lint 驱动层只读 `RIVUS_CAPSMAP` 环境变量，不做任何额外的回退查找。caps 目录使用统一的层级加载器（`CapsMap::rvs_load_dir_BIS`），按 `std → deps → seed → suppress → ext → 其余字母序` 的固定顺序合并。
 
 注意：`check` 默认编译 `--tests`（含测试代码），因此 `#[test]` 函数也会被分析。`infer-capsmap` 和 `infer-std` 不编译测试代码。
 

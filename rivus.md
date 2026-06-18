@@ -162,10 +162,10 @@ async fn rvs_send_email_ABIS(email: &Validated<Email>, body: &str) -> Result<(),
 推荐在 crate 根（`lib.rs` 或 `main.rs`）加一行全局标注即可：
 
 ```rust
-#![expect(non_snake_case, reason = "rvs_ functions use uppercase capability suffixes")]
+#![allow(non_snake_case, reason = "rvs_ functions use uppercase capability suffixes")]
 ```
 
-此标注可从外层作用域继承——如果在 crate 级（`#![expect(non_snake_case)]`）、文件级、`mod` 级、`impl` 块或 `trait` 定义上标注了 `#[allow(non_snake_case)]` 或 `#[expect(non_snake_case)]`，则内部的所有 `rvs_` 函数均视为已覆盖，无需逐个重复标注。
+此标注可从外层作用域继承——如果在 crate 级（`#![allow(non_snake_case)]`）、文件级、`mod` 级、`impl` 块或 `trait` 定义上标注了 `#[allow(non_snake_case)]` 或 `#[expect(non_snake_case)]`，则内部的所有 `rvs_` 函数均视为已覆盖，无需逐个重复标注。推荐使用 `allow` 而非 `expect`，因为交付时通常会执行 `cargo rivus strip` 移除 `rvs_` 前缀和后缀，此时 `expect` 会产生 `unfulfilled_lint_expectation` 警告。
 
 ### 能力字母表
 
