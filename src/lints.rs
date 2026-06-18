@@ -7,10 +7,9 @@ use std::path::Path;
 use rustc_errors::{Diag, DiagCtxtHandle, Diagnostic, Level};
 use rustc_hir::def::DefKind;
 use rustc_hir::{
-    Block, Body, Expr, ExprKind, FnRetTy, GenericArg, HirId, Impl, ImplItem,
-    ImplItemImplKind, ImplItemKind, Item, ItemKind, Mutability, PatKind, QPath, Safety, TraitFn,
-    TraitItem, TraitItemKind, TyKind, UseKind, VariantData, attrs::AttributeKind, def::Res,
-    def_id::DefId,
+    Block, Body, Expr, ExprKind, FnRetTy, GenericArg, HirId, Impl, ImplItem, ImplItemImplKind,
+    ImplItemKind, Item, ItemKind, Mutability, PatKind, QPath, Safety, TraitFn, TraitItem,
+    TraitItemKind, TyKind, UseKind, VariantData, attrs::AttributeKind, def::Res, def_id::DefId,
 };
 use rustc_lint::{LateContext, LateLintPass, LintContext, LintPass};
 use rustc_span::{Span, Symbol};
@@ -310,6 +309,7 @@ pub struct FnBehavior {
     pub has_static_mut_ref: bool,
     pub has_thread_local_ref: bool,
     pub is_trait_impl: bool,
+    pub is_test: bool,
 }
 
 #[derive(Debug)]
@@ -352,56 +352,16 @@ impl RivusLintPass {
         }
         if let Ok(path_str) = std::env::var("RIVUS_CAPSMAP") {
             let path = std::path::PathBuf::from(&path_str);
-            self.capsmap = Some(if path.is_dir() {
-                match CapsMap::rvs_load_from_dir_BIMS(&path) {
-                    Ok(cm) => cm,
-                    Err(e) => {
-                        eprintln!("warning: caps/: {e}");
-                        CapsMap::rvs_new()
-                    }
-                }
-            } else {
-                match std::fs::read_to_string(&path) {
-                    Ok(c) => CapsMap::rvs_parse(&c).unwrap_or_else(|e| {
-                        eprintln!("warning: {}: {e}", path.display());
-                        CapsMap::rvs_new()
-                    }),
-                    Err(e) => {
-                        eprintln!("warning: {}: {e}", path.display());
-                        CapsMap::rvs_new()
-                    }
+            self.capsmap = Some(match CapsMap::rvs_load_BIS(&path) {
+                Ok(cm) => cm,
+                Err(e) => {
+                    eprintln!("warning: {}: {e}", path.display());
+                    CapsMap::rvs_new()
                 }
             });
-            return;
-        }
-        // Second: caps/ directory — try CARGO_MANIFEST_DIR first, then exe dir
-        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|_| std::path::PathBuf::from("."));
-        let caps_dir = manifest_dir.join("caps");
-        let caps_dir = if caps_dir.is_dir() {
-            caps_dir
         } else {
-            // Fallback: look for caps/ relative to the linter binary itself
-            let exe_dir = std::env::current_exe()
-                .ok()
-                .and_then(|p| p.parent().map(|p| p.to_path_buf()))
-                .unwrap_or_else(|| std::path::PathBuf::from("."));
-            let exe_caps = exe_dir.join("caps");
-            if exe_caps.is_dir() {
-                exe_caps
-            } else {
-                self.capsmap = Some(CapsMap::rvs_new());
-                return;
-            }
-        };
-        self.capsmap = Some(match CapsMap::rvs_load_from_dir_BIMS(&caps_dir) {
-            Ok(cm) => cm,
-            Err(e) => {
-                eprintln!("warning: caps/: {e}");
-                CapsMap::rvs_new()
-            }
-        });
+            self.capsmap = Some(CapsMap::rvs_new());
+        }
     }
 
     fn rvs_lookup_caps(&self, name: &str) -> Option<&CapabilitySet> {
@@ -603,7 +563,7 @@ impl<'tcx> LateLintPass<'tcx> for RivusLintPass {
                         false,
                     );
                 }
-                self.rvs_collect_callgraph_for_item_M(cx, item.hir_id(), sig, body, false);
+                self.rvs_collect_callgraph_for_item_M(cx, item.hir_id(), sig, body, false, is_test);
                 if self.should_emit_lints && is_test {
                     self.test_names
                         .entry(name.to_string())
@@ -771,7 +731,14 @@ impl<'tcx> LateLintPass<'tcx> for RivusLintPass {
                     false,
                 );
             }
-            self.rvs_collect_callgraph_for_item_M(cx, impl_item.hir_id(), sig, body, is_trait_impl);
+            self.rvs_collect_callgraph_for_item_M(
+                cx,
+                impl_item.hir_id(),
+                sig,
+                body,
+                is_trait_impl,
+                is_test,
+            );
             if self.should_emit_lints && is_test {
                 self.test_names
                     .entry(name.to_string())
@@ -810,7 +777,7 @@ impl<'tcx> LateLintPass<'tcx> for RivusLintPass {
                     true,
                 );
             }
-            self.rvs_collect_callgraph_for_item_M(cx, trait_item.hir_id(), sig, body, false);
+            self.rvs_collect_callgraph_for_item_M(cx, trait_item.hir_id(), sig, body, false, false);
         }
     }
 }
@@ -2207,6 +2174,7 @@ impl RivusLintPass {
         sig: &rustc_hir::FnSig<'tcx>,
         body: &Body<'tcx>,
         is_trait_impl: bool,
+        is_test: bool,
     ) {
         if !self.collect_callgraph {
             return;
@@ -2296,6 +2264,7 @@ impl RivusLintPass {
                 has_static_mut_ref,
                 has_thread_local_ref,
                 is_trait_impl,
+                is_test,
             });
         for callee in calls {
             entry.calls.insert(callee);

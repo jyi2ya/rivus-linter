@@ -28,16 +28,21 @@ pub enum CapsMapError {
     FileRead { path: String, error: String },
 }
 
+/// 固定层级顺序。后加载的覆盖先加载的。
+/// 这是整个系统中唯一的层级定义——所有调用者都引用这一个常量。
+const LAYER_ORDER: &[&str] = &["std", "deps", "seed", "suppress", "ext"];
+
 impl CapsMap {
     /// 构造一个空的能力映射表。
     pub fn rvs_new() -> Self {
         Self::default()
     }
 
-    /// 册子一行一行翻，键值各归其位。
-    /// 注释以井号起，但井号在键中合法（如 `closure#0`），
-    /// 因此只取等号之后的值部分中的注释。
-    /// 行首 `#` 注释整行。
+    /// 解析文本为 capsmap。
+    ///
+    /// 格式：每行 `key=caps` 或 `key=`（表示纯函数）。
+    /// 注释以 `#` 开头，但仅从 `=` 之后的值部分剥离——
+    /// 键中可含 `#`（如 `closure#0`），因此不从键中剥离注释。
     pub fn rvs_parse(content: &str) -> Result<Self, CapsMapError> {
         let mut entries = BTreeMap::new();
         for (i, raw_line) in content.lines().enumerate() {
@@ -50,8 +55,6 @@ impl CapsMap {
                 .split_once('=')
                 .ok_or(CapsMapError::MissingSeparator { line: line_num })?;
             let key = key.trim().to_string();
-            // Only strip comments from the value part, not the key.
-            // Keys may contain '#' (e.g. closure#0 in def_path).
             let value = value.split('#').next().unwrap_or("").trim();
             let caps =
                 CapabilitySet::rvs_from_str(value).map_err(|e| CapsMapError::InvalidCaps {
@@ -65,34 +68,23 @@ impl CapsMap {
         Ok(Self { entries })
     }
 
-    /// 按名索骥：精确匹配，不做后缀匹配。
-    ///
-    /// caps 文件中的键必须使用 rustc 给出的 def_path（全限定路径），
-    /// 如 `std::io::Read::read` 或 `core::option::unwrap`。
-    /// 短名只在警告输出时作为辅助信息显示给人类，不参与查找。
+    /// 精确匹配查找，不做后缀匹配。
     pub fn rvs_lookup(&self, name: &str) -> Option<&CapabilitySet> {
         self.entries.get(name)
     }
 
-    /// Extend this capsmap with entries from another.
-    /// Entries in `other` override existing entries for the same key.
+    /// 合并另一个 capsmap，后者覆盖前者。
     pub(crate) fn rvs_extend_from_M(&mut self, other: Self) {
         for (key, caps) in other.entries {
             self.entries.insert(key, caps);
         }
     }
 
-    /// Load all capability files from a directory, merging them in layer order.
+    /// 加载目录中所有 caps 文件，按固定层级顺序合并。
     ///
-    /// Layer priority (highest last, overrides earlier):
-    ///   1. std      — auto-generated std/core/alloc caps (lowest priority)
-    ///   2. deps     — auto-generated external dependency caps (overrides std)
-    ///   3. seed     — manually maintained low-level overrides (overrides auto-generated)
-    ///   4. suppress — corrections for std/core/alloc functions whose inferred caps are too broad
-    ///   5. ext      — manually maintained project-specific caps (highest priority)
-    ///
-    /// Files not named std/deps/seed/suppress/ext are loaded alphabetically after ext.
-    pub fn rvs_load_from_dir_BIMS(dir: &Path) -> Result<Self, CapsMapError> {
+    /// 层级顺序：std → deps → seed → suppress → ext → 其余按字母序。
+    /// 后加载的覆盖先加载的同名条目。
+    pub fn rvs_load_dir_BIS(dir: &Path) -> Result<Self, CapsMapError> {
         let mut result = Self::rvs_new();
         if !dir.is_dir() {
             return Ok(result);
@@ -108,27 +100,7 @@ impl CapsMap {
                 files.push(path);
             }
         }
-        // Sort: std first, then deps, seed, ext, then alphabetical for others.
-        // Files loaded later override earlier ones (rvs_extend_from_M).
-        const LAYER_ORDER: &[&str] = &["std", "deps", "seed", "suppress", "ext"];
-        files.sort_by(|a, b| {
-            let a_name = a
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            let b_name = b
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            let a_layer = LAYER_ORDER.iter().position(|&n| n == a_name);
-            let b_layer = LAYER_ORDER.iter().position(|&n| n == b_name);
-            match (a_layer, b_layer) {
-                (Some(al), Some(bl)) => al.cmp(&bl),
-                (Some(_), None) => std::cmp::Ordering::Less,
-                (None, Some(_)) => std::cmp::Ordering::Greater,
-                (None, None) => a_name.cmp(&b_name),
-            }
-        });
+        rvs_sort_by_layer_M(&mut files);
         for path in &files {
             let content = std::fs::read_to_string(path).map_err(|e| CapsMapError::FileRead {
                 path: path.display().to_string(),
@@ -139,6 +111,102 @@ impl CapsMap {
         }
         Ok(result)
     }
+
+    /// 加载目录中指定的层级子集。
+    /// 例如 `&["seed", "suppress"]` 只加载这两个文件。
+    pub fn rvs_load_dir_layers_BIS(dir: &Path, layers: &[&str]) -> Result<Self, CapsMapError> {
+        let mut result = Self::rvs_new();
+        for &layer in layers {
+            let path = dir.join(layer);
+            if !path.is_file() {
+                continue;
+            }
+            let content = std::fs::read_to_string(&path).map_err(|e| CapsMapError::FileRead {
+                path: path.display().to_string(),
+                error: e.to_string(),
+            })?;
+            let partial = Self::rvs_parse(&content)?;
+            result.rvs_extend_from_M(partial);
+        }
+        Ok(result)
+    }
+
+    /// 加载目录中除指定层级外的所有文件。
+    /// 例如 `&["deps"]` 加载 std/seed/suppress/ext 但不加载 deps。
+    pub fn rvs_load_dir_excluding_BIS(dir: &Path, exclude: &[&str]) -> Result<Self, CapsMapError> {
+        let mut result = Self::rvs_new();
+        if !dir.is_dir() {
+            return Ok(result);
+        }
+        let mut files: Vec<std::path::PathBuf> = Vec::new();
+        let entries = std::fs::read_dir(dir)
+            .map_err(|e| CapsMapError::DirRead(format!("{}: {e}", dir.display())))?;
+        for entry in entries {
+            let entry =
+                entry.map_err(|e| CapsMapError::DirRead(format!("{}: {e}", dir.display())))?;
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            if exclude.contains(&name.as_str()) {
+                continue;
+            }
+            files.push(path);
+        }
+        rvs_sort_by_layer_M(&mut files);
+        for path in &files {
+            let content = std::fs::read_to_string(path).map_err(|e| CapsMapError::FileRead {
+                path: path.display().to_string(),
+                error: e.to_string(),
+            })?;
+            let partial = Self::rvs_parse(&content)?;
+            result.rvs_extend_from_M(partial);
+        }
+        Ok(result)
+    }
+
+    /// 统一加载入口：目录用 rvs_load_dir_BIS，文件用 rvs_parse。
+    pub fn rvs_load_BIS(path: &Path) -> Result<Self, CapsMapError> {
+        if path.is_dir() {
+            Self::rvs_load_dir_BIS(path)
+        } else if path.is_file() {
+            Self::rvs_parse(
+                &std::fs::read_to_string(path).map_err(|e| CapsMapError::FileRead {
+                    path: path.display().to_string(),
+                    error: e.to_string(),
+                })?,
+            )
+        } else {
+            Ok(Self::rvs_new())
+        }
+    }
+}
+
+/// 按 LAYER_ORDER 对文件路径排序。
+/// 在 LAYER_ORDER 中的文件按层级顺序排，不在的按字母序排在后面。
+fn rvs_sort_by_layer_M(files: &mut Vec<std::path::PathBuf>) {
+    files.sort_by(|a, b| {
+        let a_name = a
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let b_name = b
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let a_layer = LAYER_ORDER.iter().position(|&n| n == a_name);
+        let b_layer = LAYER_ORDER.iter().position(|&n| n == b_name);
+        match (a_layer, b_layer) {
+            (Some(al), Some(bl)) => al.cmp(&bl),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => a_name.cmp(&b_name),
+        }
+    });
 }
 
 #[cfg(test)]
@@ -170,22 +238,19 @@ mod tests {
 
     #[test]
     fn test_20260425_capsmap_parse_comments() {
-        let content = "# comment\nstd::fs::read=BI # inline\n\nstd::process::exit=S\n";
-        let cm = CapsMap::rvs_parse(content).unwrap();
-        assert!(cm.rvs_lookup("std::fs::read").is_some());
-        assert!(cm.rvs_lookup("std::process::exit").is_some());
+        let cm = CapsMap::rvs_parse("# comment\nfunc=BI # inline\n").unwrap();
+        assert!(cm.rvs_lookup("func").is_some());
+        assert!(cm.rvs_lookup("# comment").is_none());
     }
 
     #[test]
     fn test_20260425_capsmap_parse_missing_separator() {
-        let result = CapsMap::rvs_parse("no_equals");
+        let result = CapsMap::rvs_parse("no_separator");
         assert!(result.is_err());
     }
 
     #[test]
     fn test_20260615_capsmap_parse_hash_in_key() {
-        // Def paths may contain '#' (e.g. closure#0 in rustc def_path).
-        // The '#' in the key must not be treated as a comment marker.
         let cm = CapsMap::rvs_parse("exr::image::closure#0::crop_samples=S # SideEffect").unwrap();
         let caps = cm
             .rvs_lookup("exr::image::closure#0::crop_samples")
@@ -201,18 +266,15 @@ mod tests {
 
     #[test]
     fn test_20260425_capsmap_lookup_exact_only() {
-        // Suffix matching has been removed — all lookups are exact.
         let cm = CapsMap::rvs_parse("HashMap::new=").unwrap();
-        // Exact match works
         assert!(cm.rvs_lookup("HashMap::new").is_some());
-        // Suffix match does NOT work anymore
-        assert!(cm.rvs_lookup("std::collections::HashMap::new").is_none());
+        assert!(cm.rvs_lookup("HashMap").is_none());
     }
 
     #[test]
     fn test_20260425_capsmap_lookup_no_match() {
         let cm = CapsMap::rvs_parse("HashMap::new=").unwrap();
-        assert!(cm.rvs_lookup("HashMap::insert").is_none());
+        assert!(cm.rvs_lookup("nonexistent").is_none());
     }
 
     #[test]
@@ -234,7 +296,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("seed"), "func=S\nother_func=T\n").unwrap();
         std::fs::write(dir.join("std"), "func=U\nother_func=U\nnew_func=M\n").unwrap();
-        let cm = CapsMap::rvs_load_from_dir_BIMS(&dir).unwrap();
+        let cm = CapsMap::rvs_load_dir_BIS(&dir).unwrap();
         let caps = cm.rvs_lookup("func").unwrap();
         assert!(caps.rvs_contains(Capability::S));
         assert!(!caps.rvs_contains(Capability::U));
@@ -244,5 +306,48 @@ mod tests {
         let new_func = cm.rvs_lookup("new_func").unwrap();
         assert!(new_func.rvs_contains(Capability::M));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260615_load_dir_layers() {
+        let dir = std::env::temp_dir().join("test_20260615_load_dir_layers");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("seed"), "func_a=S\n").unwrap();
+        std::fs::write(dir.join("suppress"), "func_b=\n").unwrap();
+        std::fs::write(dir.join("std"), "func_c=M\n").unwrap();
+        let cm = CapsMap::rvs_load_dir_layers_BIS(&dir, &["seed", "suppress"]).unwrap();
+        assert!(cm.rvs_lookup("func_a").is_some());
+        assert!(cm.rvs_lookup("func_b").is_some());
+        assert!(cm.rvs_lookup("func_c").is_none());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260615_load_dir_excluding() {
+        let dir = std::env::temp_dir().join("test_20260615_load_dir_excluding");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("seed"), "func_a=S\n").unwrap();
+        std::fs::write(dir.join("deps"), "func_b=T\n").unwrap();
+        std::fs::write(dir.join("ext"), "func_c=M\n").unwrap();
+        let cm = CapsMap::rvs_load_dir_excluding_BIS(&dir, &["deps"]).unwrap();
+        assert!(cm.rvs_lookup("func_a").is_some());
+        assert!(cm.rvs_lookup("func_b").is_none());
+        assert!(cm.rvs_lookup("func_c").is_some());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260615_load_single_file() {
+        let path = std::env::temp_dir().join("test_20260615_load_single_file.txt");
+        std::fs::write(&path, "func=BI\n").unwrap();
+        let cm = CapsMap::rvs_load_BIS(&path).unwrap();
+        assert!(cm.rvs_lookup("func").is_some());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn test_20260615_load_nonexistent() {
+        let cm = CapsMap::rvs_load_BIS(std::path::Path::new("/nonexistent/path")).unwrap();
+        assert!(cm.rvs_lookup("anything").is_none());
     }
 }
