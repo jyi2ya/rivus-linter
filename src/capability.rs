@@ -183,7 +183,6 @@ impl CapabilitySet {
     pub fn rvs_insert_M(&mut self, cap: Capability) {
         self.0.insert(cap);
     }
-
 }
 
 impl fmt::Display for CapabilitySet {
