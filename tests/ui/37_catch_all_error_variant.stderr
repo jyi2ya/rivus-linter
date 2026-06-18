@@ -19,13 +19,4 @@ LL |     Unknown(String),
    = note: `-D rivus::rvs-catch-all-error-variant` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_catch_all_error_variant)]`
 
-error: this lint expectation is unfulfilled
-  --> $DIR/tests/ui/37_catch_all_error_variant.rs:1:11
-   |
-LL | #![expect(non_snake_case)]
-   |           ^^^^^^^^^^^^^^
-   |
-   = note: `-D unfulfilled-lint-expectations` implied by `-D warnings`
-   = help: to override `-D warnings` add `#[allow(unfulfilled_lint_expectations)]`
-
-error: aborting due to 3 previous errors
+error: aborting due to 2 previous errors

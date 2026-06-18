@@ -15,13 +15,4 @@ LL | fn rvs_unused() {}
    = note: `-D rivus::rvs-dead-code` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_dead_code)]`
 
-error: this lint expectation is unfulfilled
-  --> $DIR/tests/ui/40_dead_code.rs:1:11
-   |
-LL | #![expect(non_snake_case)]
-   |           ^^^^^^^^^^^^^^
-   |
-   = note: `-D unfulfilled-lint-expectations` implied by `-D warnings`
-   = help: to override `-D warnings` add `#[allow(unfulfilled_lint_expectations)]`
-
-error: aborting due to 3 previous errors
+error: aborting due to 2 previous errors

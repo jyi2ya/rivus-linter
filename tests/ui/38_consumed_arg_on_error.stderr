@@ -18,13 +18,4 @@ LL | | }
    = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
 
-error: this lint expectation is unfulfilled
-  --> $DIR/tests/ui/38_consumed_arg_on_error.rs:1:11
-   |
-LL | #![expect(non_snake_case)]
-   |           ^^^^^^^^^^^^^^
-   |
-   = note: `-D unfulfilled-lint-expectations` implied by `-D warnings`
-   = help: to override `-D warnings` add `#[allow(unfulfilled_lint_expectations)]`
-
-error: aborting due to 3 previous errors
+error: aborting due to 2 previous errors

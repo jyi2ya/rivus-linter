@@ -1,4 +1,4 @@
-#![expect(non_snake_case)]
+#![allow(non_snake_case)]
 
 pub fn rvs_swallow() {
     let x: Result<i32, ()> = Ok(5);
