@@ -40,6 +40,9 @@ fn run_one_test(fixture: &Path, stderr_path: &Path, bless: bool) -> Result<(), S
         return Err(format!("cargo-rivus not found at {:?}", driver));
     }
 
+    // Locate caps/ directory (next to the driver binary's source tree)
+    let caps_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("caps");
+
     // Parse // compile-flags: and // check-pass directives from the fixture
     let source = fs::read_to_string(fixture).map_err(|e| format!("read {:?}: {e}", fixture))?;
     let mut extra_args: Vec<String> = Vec::new();
@@ -63,6 +66,7 @@ fn run_one_test(fixture: &Path, stderr_path: &Path, bless: bool) -> Result<(), S
 
     let mut cmd = Command::new(&driver);
     cmd.env("RIVUS_ENABLED", "1")
+        .env("RIVUS_CAPSMAP", &caps_dir)
         .arg("rustc")
         .arg("--edition=2024")
         .arg("--emit=metadata")

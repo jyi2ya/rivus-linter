@@ -35,12 +35,4 @@ LL | pub fn rvs_add() {}
    |
    = note: `#[deny(rivus::rvs_untested_good_fn)]` implied by `#[deny(warnings)]`
 
-error: this lint expectation is unfulfilled
-  --> $DIR/tests/ui/22_deny_warnings.rs:1:11
-   |
-LL | #![expect(non_snake_case)]
-   |           ^^^^^^^^^^^^^^
-   |
-   = note: `#[deny(unfulfilled_lint_expectations)]` implied by `#[deny(warnings)]`
-
-error: aborting due to 5 previous errors
+error: aborting due to 4 previous errors

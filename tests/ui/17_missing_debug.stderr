@@ -9,13 +9,4 @@ LL | | }
    = note: `-D rivus::rvs-missing-debug-derive` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_debug_derive)]`
 
-error: this lint expectation is unfulfilled
-  --> $DIR/tests/ui/17_missing_debug.rs:1:11
-   |
-LL | #![expect(non_snake_case)]
-   |           ^^^^^^^^^^^^^^
-   |
-   = note: `-D unfulfilled-lint-expectations` implied by `-D warnings`
-   = help: to override `-D warnings` add `#[allow(unfulfilled_lint_expectations)]`
-
-error: aborting due to 2 previous errors
+error: aborting due to 1 previous error

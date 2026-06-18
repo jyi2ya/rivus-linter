@@ -21,13 +21,4 @@ LL | | }
    = note: `-D rivus::rvs-deref-polymorphism` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_deref_polymorphism)]`
 
-error: this lint expectation is unfulfilled
-  --> $DIR/tests/ui/36_deref_polymorphism.rs:1:11
-   |
-LL | #![expect(non_snake_case)]
-   |           ^^^^^^^^^^^^^^
-   |
-   = note: `-D unfulfilled-lint-expectations` implied by `-D warnings`
-   = help: to override `-D warnings` add `#[allow(unfulfilled_lint_expectations)]`
-
-error: aborting due to 3 previous errors
+error: aborting due to 2 previous errors

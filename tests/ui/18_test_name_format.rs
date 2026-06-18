@@ -1,5 +1,5 @@
 // compile-flags: --test
-#![expect(non_snake_case)]
+#![allow(non_snake_case)]
 
 pub fn rvs_add() {
     let x = 1;

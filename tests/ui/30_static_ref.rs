@@ -1,4 +1,4 @@
-#![expect(non_snake_case)]
+#![allow(non_snake_case)]
 
 static COUNTER: u32 = 0;
 

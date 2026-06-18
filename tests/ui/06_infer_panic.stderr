@@ -24,13 +24,4 @@ LL | |     panic!("oops");
 LL | | }
    | |_^
 
-error: this lint expectation is unfulfilled
-  --> $DIR/tests/ui/06_infer_panic.rs:1:11
-   |
-LL | #![expect(non_snake_case)]
-   |           ^^^^^^^^^^^^^^
-   |
-   = note: `-D unfulfilled-lint-expectations` implied by `-D warnings`
-   = help: to override `-D warnings` add `#[allow(unfulfilled_lint_expectations)]`
-
-error: aborting due to 4 previous errors
+error: aborting due to 3 previous errors

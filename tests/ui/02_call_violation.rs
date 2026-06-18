@@ -1,4 +1,4 @@
-#![expect(non_snake_case)]
+#![allow(non_snake_case)]
 
 fn rvs_read_file_BI() {}
 fn rvs_pure() {
