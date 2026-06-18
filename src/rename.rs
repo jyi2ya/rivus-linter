@@ -69,7 +69,7 @@ fn rvs_load_workspace_BIS(
 
 /// Finds all function/method definitions in local files and returns
 /// a list of [`FunctionNode`]s with name, position, and context flags.
-fn rvs_find_functions_MS(
+fn rvs_find_functions_BMIS(
     analysis: &Analysis,
     vfs: &ra_ap_vfs::Vfs,
     _local_files: &[PathBuf],
@@ -232,7 +232,7 @@ pub fn rvs_strip_BIS(path: &Path) -> Result<(), String> {
     let (analysis, vfs, _local_files) = rvs_load_workspace_BIS(&canonical_path)?;
 
     // 2. Find all functions
-    let functions = rvs_find_functions_MS(&analysis, &vfs, &_local_files, &canonical_path);
+    let functions = rvs_find_functions_BMIS(&analysis, &vfs, &_local_files, &canonical_path);
 
     // 3. Build rename_map from rvs_-prefixed functions
     let mut rename_map: HashMap<String, String> = HashMap::new();
@@ -284,7 +284,7 @@ pub fn rvs_apply_ra_renames_BIS(
     let (analysis, vfs, _local_files) = rvs_load_workspace_BIS(&canonical_path)?;
 
     // 2. Find all functions, then filter: skip rvs_-prefixed and trait impl methods
-    let all_functions = rvs_find_functions_MS(&analysis, &vfs, &_local_files, &canonical_path);
+    let all_functions = rvs_find_functions_BMIS(&analysis, &vfs, &_local_files, &canonical_path);
     let eligible: Vec<FunctionNode> = all_functions
         .into_iter()
         .filter(|f| !f.is_rvs_prefixed && !f.is_in_trait_impl)
