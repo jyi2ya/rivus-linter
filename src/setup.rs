@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use toml_edit::{DocumentMut, Item, Table};
 
 pub const CLIPPY_LINTS: &[(&str, &str)] = &[
@@ -43,58 +41,6 @@ pub const CLIPPY_LINTS: &[(&str, &str)] = &[
     ("allow_attributes_without_reason", "warn"),
     ("manual_ok_err", "allow"),
 ];
-
-pub const SPAWN_CAPSMAP_ENTRIES: &[(&str, &str)] = &[
-    ("tokio::spawn", "AS"),
-    ("tokio::runtime::spawn", "AS"),
-    ("tokio::task::spawn", "AS"),
-    ("tokio::task::spawn_blocking", "BIS"),
-    ("tokio::task::spawn_local", "AST"),
-    ("std::thread::spawn", "BS"),
-    ("std::thread::Builder::spawn", "BS"),
-    ("async_std::task::spawn", "AS"),
-    ("async_std::task::spawn_blocking", "BIS"),
-    ("smol::spawn", "AS"),
-];
-
-/// Inject spawn capsmap entries into an existing capsmap string.
-/// Returns the new capsmap string and the count of injected entries.
-pub fn rvs_inject_spawn_capsmap_M(capsmap: &str) -> (String, usize) {
-    let mut existing_keys: HashSet<&str> = HashSet::new();
-    for line in capsmap.lines() {
-        let line = line.split('#').next().unwrap_or("").trim();
-        if line.is_empty() {
-            continue;
-        }
-        if let Some((key, _)) = line.split_once('=') {
-            existing_keys.insert(key.trim());
-        }
-    }
-
-    let missing: Vec<(&str, &str)> = SPAWN_CAPSMAP_ENTRIES
-        .iter()
-        .filter(|(key, _)| !existing_keys.contains(*key))
-        .copied()
-        .collect();
-
-    if missing.is_empty() {
-        return (capsmap.to_string(), 0);
-    }
-
-    let mut result = capsmap.to_string();
-    if !result.ends_with('\n') {
-        result.push('\n');
-    }
-    result.push_str("\n# ─── 非结构化 spawn 函数（并发 goto）─────────────────────────\n");
-    result.push_str("# spawn 创建的后台任务不受调用方作用域约束，容易导致资源泄漏、错误丢失。\n");
-    result
-        .push_str("# 应改用 join!、JoinSet、FuturesUnordered、thread::scope 等结构化并发原语。\n");
-    for (key, caps) in &missing {
-        result.push_str(&format!("{key}={caps}\n"));
-    }
-
-    (result, missing.len())
-}
 
 /// Inject clippy lint rules into a Cargo.toml string.
 /// Returns the new Cargo.toml string and the count of injected lints.
@@ -161,33 +107,5 @@ mod tests {
         debug_assert!(result.contains("string_slice = \"deny\""));
         debug_assert!(result.contains("unwrap_used = \"warn\""));
         debug_assert_eq!(count, CLIPPY_LINTS.len() - 2);
-    }
-
-    #[test]
-    fn test_20260515_inject_spawn_capsmap_empty() {
-        let input = "HashMap::new=\nVec::push=\n";
-        let (result, count) = rvs_inject_spawn_capsmap_M(input);
-        debug_assert_eq!(count, SPAWN_CAPSMAP_ENTRIES.len());
-        debug_assert!(result.contains("tokio::spawn=AS"));
-        debug_assert!(result.contains("std::thread::spawn=BS"));
-    }
-
-    #[test]
-    fn test_20260515_inject_spawn_capsmap_idempotent() {
-        let input = "HashMap::new=\n";
-        let (first, count1) = rvs_inject_spawn_capsmap_M(input);
-        let (second, count2) = rvs_inject_spawn_capsmap_M(&first);
-        debug_assert!(count1 > 0);
-        debug_assert_eq!(count2, 0);
-        debug_assert_eq!(first, second);
-    }
-
-    #[test]
-    fn test_20260515_inject_spawn_capsmap_partial() {
-        let input = "HashMap::new=\ntokio::spawn=AS\nstd::thread::spawn=BS\n";
-        let (result, count) = rvs_inject_spawn_capsmap_M(input);
-        debug_assert!(count > 0);
-        debug_assert!(count < SPAWN_CAPSMAP_ENTRIES.len());
-        debug_assert!(result.contains("tokio::task::spawn=AS"));
     }
 }

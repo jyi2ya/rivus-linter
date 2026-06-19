@@ -63,6 +63,7 @@ use_debug = "warn"
 dbg_macro = "warn"
 allow_attributes = "warn"
 allow_attributes_without_reason = "warn"
+manual_ok_err = "allow"
 
 [package.metadata.rust-analyzer]
 rustc_private = true
