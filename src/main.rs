@@ -35,7 +35,7 @@ mod rename;
 mod setup;
 
 use capability::{Capability, CapabilitySet};
-use setup::{rvs_inject_clippy_lints_M, rvs_inject_spawn_capsmap_M};
+use setup::rvs_inject_clippy_lints_M;
 
 const RIVUS_MD: &str = include_str!("../rivus.md");
 const RIVUS_MANUAL: &str = include_str!("rivus-manual.md");
@@ -719,31 +719,6 @@ fn rvs_run_setup_BIMS(path: &Path) {
             "All clippy lints already present in {}",
             cargo_toml_path.display()
         );
-    }
-
-    let caps_dir = path.join("caps");
-    let seed_path = caps_dir.join("seed");
-    if caps_dir.is_dir() && seed_path.exists() {
-        let seed_content = std::fs::read_to_string(&seed_path).unwrap_or_else(|e| {
-            eprintln!("Error: cannot read '{}': {e}", seed_path.display());
-            process::exit(2);
-        });
-        let (new_seed, spawn_count) = rvs_inject_spawn_capsmap_M(&seed_content);
-        if spawn_count > 0 {
-            std::fs::write(&seed_path, &new_seed).unwrap_or_else(|e| {
-                eprintln!("Error: cannot write '{}': {e}", seed_path.display());
-                process::exit(2);
-            });
-            println!(
-                "Injected {spawn_count} spawn capsmap entries into {}",
-                seed_path.display()
-            );
-        } else {
-            println!(
-                "All spawn capsmap entries already present in {}",
-                seed_path.display()
-            );
-        }
     }
 }
 
@@ -1901,37 +1876,6 @@ mod tests {
         let (result, count) = rvs_inject_clippy_lints_M(input);
         assert!(result.contains("string_slice = \"deny\""));
         assert_eq!(count, setup::CLIPPY_LINTS.len() - 1);
-    }
-
-    #[test]
-    fn test_20260607_setup_spawn_capsmap_empty() {
-        let input = "HashMap::new=\n";
-        let (result, count) = rvs_inject_spawn_capsmap_M(input);
-        rvs_snapshot(
-            "test_20260607_setup_spawn_capsmap_empty",
-            &format!("count: {count}\n{result}"),
-        );
-        assert_eq!(count, setup::SPAWN_CAPSMAP_ENTRIES.len());
-        assert!(result.contains("tokio::spawn=AS"));
-    }
-
-    #[test]
-    fn test_20260607_setup_spawn_capsmap_idempotent() {
-        let input = "HashMap::new=\n";
-        let (first, c1) = rvs_inject_spawn_capsmap_M(input);
-        let (second, c2) = rvs_inject_spawn_capsmap_M(&first);
-        assert!(c1 > 0);
-        assert_eq!(c2, 0);
-        assert_eq!(first, second);
-    }
-
-    #[test]
-    fn test_20260607_setup_spawn_capsmap_partial() {
-        let input = "tokio::spawn=AS\nstd::thread::spawn=BS\n";
-        let (result, count) = rvs_inject_spawn_capsmap_M(input);
-        assert!(count > 0);
-        assert!(count < setup::SPAWN_CAPSMAP_ENTRIES.len());
-        assert!(result.contains("tokio::task::spawn=AS"));
     }
 
     // ─── rvs_infer_caps_M ────────────────────────────────────────────────

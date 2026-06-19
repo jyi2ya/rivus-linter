@@ -19,6 +19,7 @@
 | `cargo rivus setup` | 为新项目注入 AGENTS.md 和 clippy lint |
 | `cargo rivus strip` | 移除所有 `rvs_` 前缀和能力后缀 |
 | `cargo rivus annotate` | 推断能力并添加 `rvs_` 前缀和后缀 |
+| `cargo rivus why` | 显示某函数为何具有当前能力（列出被调用方及其能力） |
 | `cargo rivus usage` | 显示本手册 |
 
 ---
@@ -150,7 +151,7 @@ cargo rivus infer-std -o caps/std        # 写入 <PATH>/target/rivus-std-capsma
 - **内存安全**：`mem_forget`、`undocumented_unsafe_blocks`、`multiple_unsafe_ops_per_block` 等
 - **数值正确性**：`float_cmp`、`float_cmp_const`、`cast_sign_loss`、`invalid_upcast_comparisons` 等
 - **杂项**：`rc_mutex`、`debug_assert_with_mut_call`、`dbg_macro`、`allow_attributes` 等
-- **spawn 的识别与 capsmap 注入**：`cargo rivus setup` 注入的 spawn 条目仅用于让 linter 识别这些调用路径。当前注入的能力字母为工具内置约定，应以生成结果和 lint 实际输出为准
+- **spawn 的识别**：linter 通过内置的 spawn 函数路径列表自动识别 spawn 调用并发出 `SpawnWarning`。spawn 函数的能力由 callgraph 推断，不需要手动注入 capsmap
 
 ```bash
 cargo rivus setup .           # 当前目录
@@ -315,6 +316,6 @@ std::process::exit=S           # 副作用：终止进程
 
 ---
 
-## setup 命令的 spawn 处理
+## spawn 函数的识别
 
-`cargo rivus setup` 会自动在目标项目的 `caps/seed` 中注入 spawn 函数条目，确保 linter 能识别这些调用。仅在 `caps/seed` 已存在时注入；已在 capsmap 中的条目不会被重复添加。所有注入的 clippy lint 均为 `warn` 级别。
+linter 内置了一个 spawn 函数路径列表（`tokio::spawn`、`std::thread::spawn` 等），在 HIR 分析时自动识别这些调用并发出 `SpawnWarning`。spawn 函数的能力标注由 `infer-capsmap` 通过 callgraph 自动推断，不需要手动在 `caps/seed` 中注入条目。
