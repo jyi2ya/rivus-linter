@@ -40,6 +40,7 @@ pub const CLIPPY_LINTS: &[(&str, &str)] = &[
     ("allow_attributes", "warn"),
     ("allow_attributes_without_reason", "warn"),
     ("manual_ok_err", "allow"),
+    ("manual_unwrap_or_default", "allow"),
 ];
 
 /// Inject clippy lint rules into a Cargo.toml string.
