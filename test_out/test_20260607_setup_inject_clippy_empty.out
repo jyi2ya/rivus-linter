@@ -1,4 +1,4 @@
-count: 39
+count: 40
 [package]
 name = "test"
 
@@ -46,3 +46,4 @@ dbg_macro = "warn"
 allow_attributes = "warn"
 allow_attributes_without_reason = "warn"
 manual_ok_err = "allow"
+manual_unwrap_or_default = "allow"

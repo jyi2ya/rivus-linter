@@ -872,7 +872,7 @@ fn rvs_run_annotate_BIMPS(path: &Path) -> Result<(), String> {
         if short_name.starts_with(|c: char| c.is_ascii_uppercase()) {
             continue;
         }
-        if short_name == "main" || short_name == "new" || short_name == "drop" {
+        if full_path == &format!("{workspace_name}::main") {
             continue;
         }
         if callgraph.get(full_path).is_some_and(|b| b.is_test) {
