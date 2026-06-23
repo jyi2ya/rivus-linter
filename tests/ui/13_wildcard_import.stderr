@@ -33,4 +33,13 @@ LL | pub fn rvs_read() {}
    = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
 
-error: aborting due to 4 previous errors
+error: ok fn 'rvs_read' not called by any test
+  --> $DIR/tests/ui/13_wildcard_import.rs:5:1
+   |
+LL | pub fn rvs_read() {}
+   | ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-untested-ok-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_ok_fn)]`
+
+error: aborting due to 5 previous errors

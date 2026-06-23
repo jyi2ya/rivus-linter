@@ -17,4 +17,23 @@ LL | |     let _: i32 = "42".parse().expect("might fail");
 LL | | }
    | |_^
 
-error: aborting due to 2 previous errors
+error: ok fn 'rvs_never_expect' not called by any test
+  --> $DIR/tests/ui/44_never_expect.rs:3:1
+   |
+LL | / fn rvs_never_expect() {
+LL | |     let _: i32 = "42".parse().expect("never: parsed from literal");
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-untested-ok-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_ok_fn)]`
+
+error: ok fn 'rvs_normal_expect' not called by any test
+  --> $DIR/tests/ui/44_never_expect.rs:7:1
+   |
+LL | / fn rvs_normal_expect() {
+LL | |     let _: i32 = "42".parse().expect("might fail");
+LL | | }
+   | |_^
+
+error: aborting due to 4 previous errors

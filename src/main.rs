@@ -446,6 +446,8 @@ struct Report {
     pure_line_count: usize,
     good_fn_count: usize,
     good_line_count: usize,
+    ok_fn_count: usize,
+    ok_line_count: usize,
     total_fn_count: usize,
     total_line_count: usize,
 }
@@ -468,6 +470,7 @@ impl fmt::Display for Report {
 
         let bar_width = 30;
         let mut rows: Vec<(String, usize, usize)> = Vec::new();
+        rows.push(("(ok)".to_string(), self.ok_fn_count, self.ok_line_count));
         rows.push((
             "(good)".to_string(),
             self.good_fn_count,
@@ -484,6 +487,7 @@ impl fmt::Display for Report {
             Capability::B,
             Capability::I,
             Capability::M,
+            Capability::P,
             Capability::S,
             Capability::T,
             Capability::U,
@@ -544,6 +548,8 @@ struct JsonFnBehavior {
     is_trait_impl: bool,
     #[serde(default)]
     is_test: bool,
+    #[serde(default)]
+    is_port_method: bool,
 }
 
 fn rvs_build_report(entries: &[FnEntry]) -> Report {
@@ -552,9 +558,12 @@ fn rvs_build_report(entries: &[FnEntry]) -> Report {
     let mut pure_line_count = 0usize;
     let mut good_fn_count = 0usize;
     let mut good_line_count = 0usize;
+    let mut ok_fn_count = 0usize;
+    let mut ok_line_count = 0usize;
     let mut total_fn_count = 0usize;
     let mut total_line_count = 0usize;
     let good_allowed = CapabilitySet::rvs_from_good_caps();
+    let ok_allowed = CapabilitySet::rvs_from_ok_caps();
 
     for func in entries {
         if func.is_test || func.allows_dead_code {
@@ -578,6 +587,11 @@ fn rvs_build_report(entries: &[FnEntry]) -> Report {
             good_fn_count += 1;
             good_line_count += func.line_count;
         }
+
+        if func.capabilities.rvs_is_subset_of(&ok_allowed) {
+            ok_fn_count += 1;
+            ok_line_count += func.line_count;
+        }
     }
 
     Report {
@@ -586,6 +600,8 @@ fn rvs_build_report(entries: &[FnEntry]) -> Report {
         pure_line_count,
         good_fn_count,
         good_line_count,
+        ok_fn_count,
+        ok_line_count,
         total_fn_count,
         total_line_count,
     }
@@ -986,7 +1002,7 @@ fn rvs_run_why_BIMPS(function: &str, path: &Path) -> Result<(), String> {
                 .or_else(|| seed.rvs_lookup(callee).cloned())
                 .or_else(|| {
                     if !callee.contains('@') {
-                        rvs_resolve_impl_union_M(callee, &impl_index, &inferred)
+                        rvs_resolve_impl_union_M(callee, &impl_index, &inferred, &callgraph)
                     } else {
                         None
                     }
@@ -1162,7 +1178,7 @@ fn rvs_run_infer_std_BIMPS(path: &Path, output: Option<&Path>) -> Result<(), Str
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
     let mut alias_seed = seed.clone();
-    let pre_aliases = rvs_generate_trait_aliases_MP(&std_pre_inferred, &pre_index);
+    let pre_aliases = rvs_generate_trait_aliases_MP(&std_pre_inferred, &pre_index, &callgraph);
     for (k, v) in &pre_aliases {
         let caps_str = rvs_caps_to_string(v);
         let line = format!("{k}={caps_str}");
@@ -1180,7 +1196,7 @@ fn rvs_run_infer_std_BIMPS(path: &Path, output: Option<&Path>) -> Result<(), Str
         .filter(|(k, _)| std_crates.iter().any(|p| k.starts_with(p)))
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
-    let post_aliases = rvs_generate_trait_aliases_MP(&std_inferred, &impl_index);
+    let post_aliases = rvs_generate_trait_aliases_MP(&std_inferred, &impl_index, &callgraph);
     inferred.extend(post_aliases);
 
     // Build std capsmap from callgraph inference.
@@ -1277,6 +1293,7 @@ struct ParsedFnBehavior {
     has_thread_local_ref: bool,
     is_trait_impl: bool,
     is_test: bool,
+    is_port_method: bool,
 }
 
 impl ParsedFnBehavior {
@@ -1290,6 +1307,7 @@ impl ParsedFnBehavior {
         self.has_thread_local_ref |= other.has_thread_local_ref;
         self.is_trait_impl |= other.is_trait_impl;
         self.is_test |= other.is_test;
+        self.is_port_method |= other.is_port_method;
     }
 }
 
@@ -1305,6 +1323,7 @@ impl From<JsonFnBehavior> for ParsedFnBehavior {
             has_thread_local_ref: j.has_thread_local_ref,
             is_trait_impl: j.is_trait_impl,
             is_test: j.is_test,
+            is_port_method: j.is_port_method,
         }
     }
 }
@@ -1336,6 +1355,14 @@ fn rvs_build_impl_index(
 /// Infer capabilities from behavioral flags alone (no propagation).
 /// Used by both `rvs_infer_caps_M` and `rvs_run_infer_std_BIMPS`.
 fn rvs_infer_signature_caps(behavior: &ParsedFnBehavior) -> CapabilitySet {
+    // Port trait methods get ONLY P — no other caps, no signature inference.
+    // The whole point of a Port is that callers see a clean interface,
+    // not the I/O capabilities of the real implementation behind it.
+    if behavior.is_port_method {
+        let mut caps = CapabilitySet::rvs_new();
+        caps.rvs_insert_M(Capability::P);
+        return caps;
+    }
     let mut caps = CapabilitySet::rvs_new();
     if behavior.has_async {
         caps.rvs_insert_M(Capability::A);
@@ -1382,6 +1409,7 @@ fn rvs_format_unknown_callees(
 fn rvs_generate_trait_aliases_MP(
     inferred: &BTreeMap<String, CapabilitySet>,
     impl_index: &HashMap<String, Vec<String>>,
+    callgraph: &BTreeMap<String, ParsedFnBehavior>,
 ) -> BTreeMap<String, CapabilitySet> {
     let mut aliases = BTreeMap::new();
     let mut seen = HashSet::new();
@@ -1392,7 +1420,9 @@ fn rvs_generate_trait_aliases_MP(
             if let Some(method_name) = method_full.rsplit("::").next() {
                 let alias = format!("{trait_path}::{method_name}");
                 if seen.insert(alias.clone()) {
-                    if let Some(voted) = rvs_resolve_impl_union_M(&alias, impl_index, inferred) {
+                    if let Some(voted) =
+                        rvs_resolve_impl_union_M(&alias, impl_index, inferred, callgraph)
+                    {
                         aliases.insert(alias, voted);
                     }
                 }
@@ -1456,6 +1486,10 @@ fn rvs_infer_caps_M(
             if seed.rvs_lookup(func).is_some() {
                 continue;
             }
+            // Port trait methods are frozen at {P} — no propagation changes them.
+            if behavior.is_port_method {
+                continue;
+            }
             let mut combined = inferred
                 .get(func)
                 .cloned()
@@ -1471,7 +1505,7 @@ fn rvs_infer_caps_M(
                 // trait method definition, not an impl method), try impl-union.
                 let callee_caps = callee_caps.or_else(|| {
                     if !callee.contains('@') {
-                        rvs_resolve_impl_union_M(callee, &impl_index, &inferred)
+                        rvs_resolve_impl_union_M(callee, &impl_index, &inferred, &callgraph)
                     } else {
                         None
                     }
@@ -1507,12 +1541,14 @@ fn rvs_infer_caps_M(
 /// We look up `read@Read` in the impl_index to find all impl methods like
 /// `std::fs::impl::read@Read`, `std::io::cursor::impl::read@Read`, etc.
 ///
-/// A and U are never propagated (detected from function signature only).
-/// All other caps (B, I, M, P, S, T) are eligible for ≥50% majority vote.
+/// Port trait methods (is_port_method) always resolve to {P} — no voting.
+/// For non-Port traits: A and U are never propagated (signature-only).
+/// All other caps (B, I, M, S, T) are eligible for ≥50% majority vote.
 fn rvs_resolve_impl_union_M(
     callee: &str,
     impl_index: &HashMap<String, Vec<String>>,
     inferred: &BTreeMap<String, CapabilitySet>,
+    callgraph: &BTreeMap<String, ParsedFnBehavior>,
 ) -> Option<CapabilitySet> {
     // Callee is like "std::io::Read::read"
     // Extract method name (last ::-segment) and trait path (everything before)
@@ -1524,6 +1560,18 @@ fn rvs_resolve_impl_union_M(
     // e.g. "read@std::io::Read"
     let lookup_key = format!("{method}@{trait_path}");
     let impl_keys = impl_index.get(&lookup_key)?;
+
+    // Port trait short-circuit: if any impl method is a Port method,
+    // the trait method resolves to {P} only — no voting.
+    for key in impl_keys {
+        if let Some(behavior) = callgraph.get(key) {
+            if behavior.is_port_method {
+                let mut caps = CapabilitySet::rvs_new();
+                caps.rvs_insert_M(Capability::P);
+                return Some(caps);
+            }
+        }
+    }
 
     // Majority-vote: a capability is propagated if it appears in ≥50% of impls.
     // This avoids rare impls (e.g. RwLock::read having T) polluting the trait.
@@ -1620,7 +1668,9 @@ fn rvs_collect_direct_external_deps(
             }
             if let Some(caps) = inferred.get(callee) {
                 known.entry(callee.clone()).or_insert_with(|| caps.clone());
-            } else if let Some(caps) = rvs_resolve_impl_union_M(callee, impl_index, inferred) {
+            } else if let Some(caps) =
+                rvs_resolve_impl_union_M(callee, impl_index, inferred, callgraph)
+            {
                 known.entry(callee.clone()).or_insert(caps);
             } else {
                 unknown
@@ -1668,6 +1718,7 @@ mod tests {
         assert_eq!(report.total_fn_count, 1);
         assert_eq!(report.pure_fn_count, 1);
         assert_eq!(report.good_fn_count, 1);
+        assert_eq!(report.ok_fn_count, 1);
     }
 
     #[test]
@@ -1698,6 +1749,7 @@ mod tests {
         assert_eq!(report.total_fn_count, 3);
         assert_eq!(report.pure_fn_count, 1);
         assert_eq!(report.good_fn_count, 2);
+        assert_eq!(report.ok_fn_count, 2);
         assert_eq!(report.total_line_count, 180);
     }
 
@@ -1812,6 +1864,7 @@ mod tests {
             has_thread_local_ref: false,
             is_trait_impl: false,
             is_test: false,
+            is_port_method: false,
         }
     }
 

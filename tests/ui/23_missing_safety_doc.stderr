@@ -62,4 +62,21 @@ LL | |     0
 LL | | }
    | |_^
 
-error: aborting due to 7 previous errors
+error: ok fn 'rvs_add' not called by any test
+  --> $DIR/tests/ui/23_missing_safety_doc.rs:3:1
+   |
+LL | pub fn rvs_add() {}
+   | ^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-untested-ok-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_ok_fn)]`
+
+error: ok fn 'rvs_raw_Unsafe' not called by any test
+  --> $DIR/tests/ui/23_missing_safety_doc.rs:5:1
+   |
+LL | / pub unsafe fn rvs_raw_Unsafe() -> u8 {
+LL | |     0
+LL | | }
+   | |_^
+
+error: aborting due to 9 previous errors

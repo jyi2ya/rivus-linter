@@ -9,4 +9,15 @@ LL | | }
    = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
 
-error: aborting due to 1 previous error
+error: ok fn 'rvs_broken' not called by any test
+  --> $DIR/tests/ui/74_fixme_comment.rs:4:1
+   |
+LL | / fn rvs_broken() {
+LL | |     panic!()
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-untested-ok-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_ok_fn)]`
+
+error: aborting due to 2 previous errors

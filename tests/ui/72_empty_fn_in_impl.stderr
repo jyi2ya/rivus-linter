@@ -24,4 +24,13 @@ LL |     fn rvs_empty_method(&self) {}
    = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
 
-error: aborting due to 3 previous errors
+error: ok fn 'rvs_empty_method' not called by any test
+  --> $DIR/tests/ui/72_empty_fn_in_impl.rs:5:5
+   |
+LL |     fn rvs_empty_method(&self) {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-untested-ok-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_ok_fn)]`
+
+error: aborting due to 4 previous errors

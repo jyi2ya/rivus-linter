@@ -33,4 +33,21 @@ LL | |     todo!()
 LL | | }
    | |_^
 
-error: aborting due to 4 previous errors
+error: ok fn 'rvs_add' not called by any test
+  --> $DIR/tests/ui/03_stub_todo.rs:3:1
+   |
+LL | fn rvs_add() {}
+   | ^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-untested-ok-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_ok_fn)]`
+
+error: ok fn 'rvs_stub' not called by any test
+  --> $DIR/tests/ui/03_stub_todo.rs:5:1
+   |
+LL | / fn rvs_stub() {
+LL | |     todo!()
+LL | | }
+   | |_^
+
+error: aborting due to 6 previous errors

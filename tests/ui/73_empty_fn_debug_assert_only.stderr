@@ -9,4 +9,15 @@ LL | | }
    = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
 
-error: aborting due to 1 previous error
+error: ok fn 'rvs_check_M' not called by any test
+  --> $DIR/tests/ui/73_empty_fn_debug_assert_only.rs:3:1
+   |
+LL | / fn rvs_check_M(n: i32) {
+LL | |     debug_assert!(n > 0);
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-untested-ok-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_ok_fn)]`
+
+error: aborting due to 2 previous errors

@@ -29,4 +29,15 @@ LL | | }
    = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
 
-error: aborting due to 3 previous errors
+error: ok fn 'rvs_foo' not called by any test
+  --> $DIR/tests/ui/64_borrowed_param_ref_box.rs:3:1
+   |
+LL | / pub fn rvs_foo(b: &Box<i32>) -> i32 {
+LL | |     **b
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-untested-ok-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_ok_fn)]`
+
+error: aborting due to 4 previous errors

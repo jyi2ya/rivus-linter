@@ -45,4 +45,21 @@ LL | |     rvs_add();
 LL | | }
    | |_^
 
-error: aborting due to 5 previous errors
+error: ok fn 'rvs_add' not called by any test
+  --> $DIR/tests/ui/07_infer_async.rs:3:1
+   |
+LL | fn rvs_add() {}
+   | ^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-untested-ok-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_ok_fn)]`
+
+error: ok fn 'rvs_fetch' not called by any test
+  --> $DIR/tests/ui/07_infer_async.rs:5:1
+   |
+LL | / pub async fn rvs_fetch() {
+LL | |     rvs_add();
+LL | | }
+   | |_^
+
+error: aborting due to 7 previous errors

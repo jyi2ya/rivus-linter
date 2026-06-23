@@ -42,6 +42,15 @@ LL | fn rvs_foo_BAR() {}
    = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
 
+error: ok fn 'rvs_foo_BAR' not called by any test
+  --> $DIR/tests/ui/33_missing_allow.rs:1:1
+   |
+LL | fn rvs_foo_BAR() {}
+   | ^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-untested-ok-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_ok_fn)]`
+
 error: function `rvs_foo_BAR` should have a snake case name
   --> $DIR/tests/ui/33_missing_allow.rs:1:4
    |
@@ -51,4 +60,4 @@ LL | fn rvs_foo_BAR() {}
    = note: `-D non-snake-case` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(non_snake_case)]`
 
-error: aborting due to 6 previous errors
+error: aborting due to 7 previous errors

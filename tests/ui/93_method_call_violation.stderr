@@ -23,4 +23,21 @@ LL | |     rvs_foo_M();
 LL | | }
    | |_^
 
-error: aborting due to 3 previous errors
+error: ok fn 'rvs_foo_M' not called by any test
+  --> $DIR/tests/ui/93_method_call_violation.rs:3:1
+   |
+LL | fn rvs_foo_M() {}
+   | ^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-untested-ok-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_ok_fn)]`
+
+error: ok fn 'rvs_pure' not called by any test
+  --> $DIR/tests/ui/93_method_call_violation.rs:5:1
+   |
+LL | / fn rvs_pure() {
+LL | |     rvs_foo_M();
+LL | | }
+   | |_^
+
+error: aborting due to 5 previous errors

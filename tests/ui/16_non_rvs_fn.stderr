@@ -39,4 +39,13 @@ LL | fn rvs_add() {}
    = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
 
-error: aborting due to 5 previous errors
+error: ok fn 'rvs_add' not called by any test
+  --> $DIR/tests/ui/16_non_rvs_fn.rs:5:1
+   |
+LL | fn rvs_add() {}
+   | ^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-untested-ok-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_ok_fn)]`
+
+error: aborting due to 6 previous errors

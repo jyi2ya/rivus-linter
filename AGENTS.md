@@ -175,11 +175,20 @@ async fn rvs_send_email_ABIS(email: &Validated<Email>, body: &str) -> Result<(),
 | `B` | **Blocking** | 可能阻塞当前线程（等待 I/O、锁、sleep、大量计算） | 非阻塞 |
 | `I` | **IO** | 执行 I/O 操作（网络、文件、数据库） | 纯计算 |
 | `M` | **Mutable** | 修改参数中的可变状态 | 只读 |
+| `P` | **Port** | 端口方法（接口/依赖注入），由 trait 名推断 | 直接实现 |
 | `S` | **Side effect** | 有副作用（修改/读取全局变量、环境变量、随机数等） | 纯函数 |
 | `T` | **ThreadLocal** | 依赖线程局部状态，不可跨线程共享 | 线程安全 / 无状态 |
 | `U` | **Unsafe** | 包含不安全操作（裸指针、FFI、transmute） | 安全代码 |
 
-其中，能力集合是 `{A,B,M}` 的子集的函数为好函数——这包括纯函数（空能力集）以及仅含 A/B/M 的函数，因为它们方便单元测试。如果一个函数需要 ABM 以外的权限（I、S、T、U 中的任何一个），那么它不是好函数。
+#### 函数级别
+
+| 级别 | 能力范围 | 含义 | 测试策略 |
+|------|---------|------|---------|
+| pure | 空集 | 确定性、无副作用 | 直接单元测试，穷举边界条件 |
+| good | `{A,B,M}` 子集 | 无 I/O、无副作用 | 直接单元测试 |
+| ok | `{A,B,M,P}` 子集 | good 的超集；Port 方法可通过 mock 测试 | [mockall](https://docs.rs/mockall) mock 测试 |
+
+Linter 对未测试的 good 函数和未测试的 ok 函数都会发出警告。
 
 ### 常见行为模式示例
 
@@ -199,6 +208,18 @@ async fn rvs_send_email_ABIS(email: &Validated<Email>, body: &str) -> Result<(),
 | `rvs_random_uuid_ST` | S + T | 副作用（非确定性）+ 线程局部：使用 thread-local RNG 生成 UUID |
 | `rvs_get_env_S` | S | 读取环境变量，有副作用 |
 
+#### P（Port）的自动推断
+
+P 不从函数后缀中解析，而是由 trait 名推断。当当前 crate 中定义的 trait 名字以 `Repository` 或 `Client`（此列表可扩展）结尾时，该 trait 被视为 **Port**。Port trait 的所有方法**自动获得且仅获得 P 能力**——不会投票出 I/S/T/B 等。
+
+这意味着：
+- Port trait 的方法**不携带实现的具体能力**（如 I/O），只有 P
+- 调用 Port 方法的函数通过传播获得 P
+- 没有获得 P 的函数不能调用 Port 方法
+- Port 方法可以通过 [mockall](https://docs.rs/mockall) 生成 mock 实现进行测试
+
+推荐使用 `rvs_*_P` 命名约定显式标注 Port 方法（当 trait 名不足以推断时）。
+
 ### 调用规则
 
 **唯一规则：有字母的函数可以调用没有该字母的函数；没有该字母的函数不可调用有该字母的函数。**
@@ -211,6 +232,7 @@ async fn rvs_send_email_ABIS(email: &Validated<Email>, body: &str) -> Result<(),
 | `B` | 可阻塞可调用非阻塞 | 非阻塞不可调用阻塞 | 非阻塞函数（如异步）中阻塞会卡死事件循环 |
 | `I` | 有 I/O 可调用纯计算 | 无 I/O 不可调用有 I/O | 保持计算层的纯粹性 |
 | `M` | 可变可调用只读 | 只读不可调用可变 | 只读函数不应引入副作用 |
+| `P` | 有端口可调用纯函数 | 纯函数不可调用有端口 | 端口方法需要通过依赖注入使用 |
 | `S` | 有副作用可调用纯函数 | 纯函数不可调用有副作用 | 纯函数的承诺不允许被打破 |
 | `T` | 线程局部可调用线程安全 | 线程安全不可调用线程局部 | 线程安全函数引入线程局部状态会破坏安全性 |
 | `U` | unsafe 可调用 safe | safe 不可调用 unsafe | 安全代码不应引入不安全操作 |
@@ -545,7 +567,7 @@ fn test_20260422_create_order_ok() {
 * 提交前必须运行日常开发流程中的全部检查命令，汇总检查结果和变更内容生成一份汇报，询问用户是否确认提交，收到确认后才执行 `git commit` 和 `git push`
 * 函数能力最好按照字母顺序排列
 * 多用泛型少用 dyn
-* 用 `.expect("never: 补充说明")` 标注不会 panic 的 `.expect()` 调用——这只是一种编码惯例，linter 不再检测 P 能力
+* 用 `.expect("never: 补充说明")` 标注不会 panic 的 `.expect()` 调用——这只是一种编码惯例，linter 不再检测 P 能力（P 现在表示 Port）
 * 用结构体显式定义数据类型，不要直接使用 `serde_json::Value` 和 `serde_json::json!`
 * 编程过程中需要创建临时目录时，优先使用 `$TMPDIR`（如果已设置）或 `~/tmp`，而不是 `/tmp`
 * 禁止使用 `#![deny(warnings)]`——应改用具名 lint（如 `#![deny(unused_imports)]`）

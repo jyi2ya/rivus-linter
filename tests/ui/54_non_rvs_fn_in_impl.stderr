@@ -33,4 +33,13 @@ LL |     fn rvs_good_method_M(&mut self) {}
    = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
 
-error: aborting due to 4 previous errors
+error: ok fn 'rvs_good_method_M' not called by any test
+  --> $DIR/tests/ui/54_non_rvs_fn_in_impl.rs:7:5
+   |
+LL |     fn rvs_good_method_M(&mut self) {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-untested-ok-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_ok_fn)]`
+
+error: aborting due to 5 previous errors

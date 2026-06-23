@@ -67,4 +67,21 @@ LL | |     rvs_add();
 LL | | }
    | |_^
 
-error: aborting due to 8 previous errors
+error: ok fn 'rvs_add' not called by any test
+  --> $DIR/tests/ui/24_non_alphabetical_suffix.rs:3:1
+   |
+LL | pub fn rvs_add() {}
+   | ^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-untested-ok-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_ok_fn)]`
+
+error: ok fn 'rvs_foo_MA' not called by any test
+  --> $DIR/tests/ui/24_non_alphabetical_suffix.rs:9:1
+   |
+LL | / pub fn rvs_foo_MA() {
+LL | |     rvs_add();
+LL | | }
+   | |_^
+
+error: aborting due to 10 previous errors
