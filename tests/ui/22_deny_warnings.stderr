@@ -35,4 +35,12 @@ LL | pub fn rvs_add() {}
    |
    = note: `#[deny(rivus::rvs_untested_good_fn)]` implied by `#[deny(warnings)]`
 
-error: aborting due to 4 previous errors
+error: ok fn 'rvs_add' not called by any test
+  --> $DIR/tests/ui/22_deny_warnings.rs:5:1
+   |
+LL | pub fn rvs_add() {}
+   | ^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(rivus::rvs_untested_ok_fn)]` implied by `#[deny(warnings)]`
+
+error: aborting due to 5 previous errors

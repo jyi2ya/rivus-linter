@@ -18,4 +18,15 @@ LL | | }
    = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
 
-error: aborting due to 2 previous errors
+error: ok fn 'rvs_safe_call' not called by any test
+  --> $DIR/tests/ui/80_catch_unwind.rs:3:1
+   |
+LL | / fn rvs_safe_call() {
+LL | |     let _ = std::panic::catch_unwind(|| {});
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-untested-ok-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_ok_fn)]`
+
+error: aborting due to 3 previous errors

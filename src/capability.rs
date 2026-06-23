@@ -1,14 +1,15 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
-/// 能力之七德：异步、阻塞、读写、可变、副作用、线程、不安。
-/// 七德既立，函数之名即为契约，调用之际便有章法。
+/// 能力之八德：异步、阻塞、读写、可变、端口、副作用、线程、不安。
+/// 八德既立，函数之名即为契约，调用之际便有章法。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Capability {
     A,
     B,
     I,
     M,
+    P,
     S,
     T,
     U,
@@ -22,6 +23,7 @@ impl Capability {
             'B' => Some(Self::B),
             'I' => Some(Self::I),
             'M' => Some(Self::M),
+            'P' => Some(Self::P),
             'S' => Some(Self::S),
             'T' => Some(Self::T),
             'U' => Some(Self::U),
@@ -36,6 +38,7 @@ impl Capability {
             Self::B => 'B',
             Self::I => 'I',
             Self::M => 'M',
+            Self::P => 'P',
             Self::S => 'S',
             Self::T => 'T',
             Self::U => 'U',
@@ -49,6 +52,7 @@ impl Capability {
             Self::B => "Blocking",
             Self::I => "IO",
             Self::M => "Mutable",
+            Self::P => "Port",
             Self::S => "SideEffect",
             Self::T => "ThreadLocal",
             Self::U => "Unsafe",
@@ -62,7 +66,7 @@ impl fmt::Display for Capability {
     }
 }
 
-const VALID_SUFFIX_CHARS: &[char] = &['A', 'B', 'I', 'M', 'S', 'T', 'U'];
+const VALID_SUFFIX_CHARS: &[char] = &['A', 'B', 'I', 'M', 'P', 'S', 'T', 'U'];
 
 /// 一组能力，如同一面旗——旗上画的，便是这函数的本事。
 /// 旗上没画的，便是它干不了的。
@@ -94,6 +98,7 @@ impl CapabilitySet {
                 'B' => Capability::B,
                 'I' => Capability::I,
                 'M' => Capability::M,
+                'P' => Capability::P,
                 'S' => Capability::S,
                 'T' => Capability::T,
                 'U' => Capability::U,
@@ -124,8 +129,7 @@ impl CapabilitySet {
     ///
     /// 但 A、M、U 三个签名推断能力不参与调用规则检查——它们只从函数自身的
     /// 签名推断（has_async / has_mut_param / is_unsafe_fn），不通过传播获得。
-    /// 强制检查它们会导致 annotate 与 check 不一致（annotate 不传播这些能力，
-    /// 但 check 会报违规）。
+    /// P（Port）**参与**调用规则——没有 P 的函数不能调用有 P 的函数。
     pub fn rvs_can_call(&self, other: &Self) -> bool {
         other.0.iter().all(|cap| {
             matches!(cap, Capability::A | Capability::M | Capability::U) || self.0.contains(cap)
@@ -134,6 +138,7 @@ impl CapabilitySet {
 
     /// 算一算，调它还差几道功夫。
     /// 同样排除 A、M、U（签名推断能力，不参与调用规则）。
+    /// P 参与调用规则，因此会出现在 missing 列表中。
     pub fn rvs_missing_for(&self, other: &Self) -> BTreeSet<Capability> {
         other
             .0
@@ -153,6 +158,17 @@ impl CapabilitySet {
     pub fn rvs_from_good_caps() -> Self {
         Self(
             [Capability::A, Capability::B, Capability::M]
+                .into_iter()
+                .collect(),
+        )
+    }
+
+    /// OK 函数的及格线：ABMP 四德以内，可以 mock 测试。
+    /// OK 函数是 good 函数的超集——额外允许 P（Port），因为 Port 可以通过
+    /// mockall 生成假实现来测试。
+    pub fn rvs_from_ok_caps() -> Self {
+        Self(
+            [Capability::A, Capability::B, Capability::M, Capability::P]
                 .into_iter()
                 .collect(),
         )
@@ -221,7 +237,7 @@ pub fn rvs_parse_function(name: &str) -> Option<(&str, CapabilitySet)> {
 
 /// 拆解单个片段：去掉 rvs_ 前缀后，萃取能力后缀。
 ///
-/// 后缀必须全是大写字母。若所有字母都是合法能力字母（ABIMSTU），
+/// 后缀必须全是大写字母。若所有字母都是合法能力字母（ABIMPSTU），
 /// 直接萃取。若含未知大写字母（如 E），仍萃取已知部分，
 /// 由调用方负责报告未知字母警告。
 fn rvs_parse_segment(name: &str) -> Option<(&str, CapabilitySet)> {
@@ -279,6 +295,7 @@ mod tests {
         assert_eq!(Capability::rvs_from_char('B'), Some(Capability::B));
         assert_eq!(Capability::rvs_from_char('I'), Some(Capability::I));
         assert_eq!(Capability::rvs_from_char('M'), Some(Capability::M));
+        assert_eq!(Capability::rvs_from_char('P'), Some(Capability::P));
         assert_eq!(Capability::rvs_from_char('S'), Some(Capability::S));
         assert_eq!(Capability::rvs_from_char('T'), Some(Capability::T));
         assert_eq!(Capability::rvs_from_char('U'), Some(Capability::U));
@@ -306,6 +323,7 @@ mod tests {
         assert_eq!(Capability::B.rvs_description(), "Blocking");
         assert_eq!(Capability::I.rvs_description(), "IO");
         assert_eq!(Capability::M.rvs_description(), "Mutable");
+        assert_eq!(Capability::P.rvs_description(), "Port");
         assert_eq!(Capability::S.rvs_description(), "SideEffect");
         assert_eq!(Capability::T.rvs_description(), "ThreadLocal");
         assert_eq!(Capability::U.rvs_description(), "Unsafe");
@@ -406,13 +424,16 @@ mod tests {
     fn test_20260614_can_call_excludes_amu() {
         // A, M, U are signature-only capabilities — they don't participate
         // in the call rule. A function without M can call one with M, etc.
+        // P (Port) DOES participate — a function without P cannot call one with P.
         let caller = CapabilitySet::rvs_from_validated("B");
         let callee_m = CapabilitySet::rvs_from_validated("BM");
         let callee_a = CapabilitySet::rvs_from_validated("BA");
         let callee_u = CapabilitySet::rvs_from_validated("BU");
+        let callee_p = CapabilitySet::rvs_from_validated("BP");
         assert!(caller.rvs_can_call(&callee_m), "missing M should not block");
         assert!(caller.rvs_can_call(&callee_a), "missing A should not block");
         assert!(caller.rvs_can_call(&callee_u), "missing U should not block");
+        assert!(!caller.rvs_can_call(&callee_p), "missing P should block");
     }
 
     #[test]
@@ -453,11 +474,26 @@ mod tests {
         assert!(good.rvs_contains(Capability::A));
         assert!(good.rvs_contains(Capability::B));
         assert!(good.rvs_contains(Capability::M));
+        assert!(!good.rvs_contains(Capability::P));
         assert!(!good.rvs_contains(Capability::I));
         assert!(!good.rvs_contains(Capability::S));
         assert!(!good.rvs_contains(Capability::T));
         assert!(!good.rvs_contains(Capability::U));
         assert_eq!(good.rvs_len(), 3);
+    }
+
+    #[test]
+    fn test_20260623_from_ok_caps() {
+        let ok = CapabilitySet::rvs_from_ok_caps();
+        assert!(ok.rvs_contains(Capability::A));
+        assert!(ok.rvs_contains(Capability::B));
+        assert!(ok.rvs_contains(Capability::M));
+        assert!(ok.rvs_contains(Capability::P));
+        assert!(!ok.rvs_contains(Capability::I));
+        assert!(!ok.rvs_contains(Capability::S));
+        assert!(!ok.rvs_contains(Capability::T));
+        assert!(!ok.rvs_contains(Capability::U));
+        assert_eq!(ok.rvs_len(), 4);
     }
 
     #[test]
