@@ -8,6 +8,7 @@ use rustc_span::def_id::DefId;
 
 /// Bundles the mutable references needed by fn-level checks so they can be
 /// threaded through without leaking RivusLintPass internals.
+#[derive(Debug)]
 pub(crate) struct FnCheckData<'a> {
     pub capsmap: &'a Option<CapsMap>,
     pub good_fns: &'a mut Vec<(String, Span)>,

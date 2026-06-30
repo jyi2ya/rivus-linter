@@ -1,14 +1,19 @@
+#![allow(
+    non_snake_case,
+    reason = "rvs_ functions use uppercase capability suffixes"
+)]
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-fn driver_path() -> PathBuf {
+fn rvs_driver_path_BIS() -> PathBuf {
     let exe = std::env::current_exe().unwrap();
     let dir = exe.parent().and_then(|p| p.parent()).unwrap();
     dir.join("cargo-rivus")
 }
 
-fn collect_rs_files(dir: &Path) -> Vec<PathBuf> {
+fn rvs_collect_rs_files_BIS(dir: &Path) -> Vec<PathBuf> {
     let mut files = Vec::new();
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
@@ -22,7 +27,7 @@ fn collect_rs_files(dir: &Path) -> Vec<PathBuf> {
     files
 }
 
-fn normalize_stderr(raw: &str) -> String {
+fn rvs_normalize_stderr_S(raw: &str) -> String {
     let dir = std::env::current_dir().unwrap();
     let dir_str = dir.to_string_lossy().to_string();
     let mut out = raw.to_string();
@@ -34,8 +39,9 @@ fn normalize_stderr(raw: &str) -> String {
     lines.join("\n").trim_end().to_string()
 }
 
-fn run_one_test(fixture: &Path, stderr_path: &Path, bless: bool) -> Result<(), String> {
-    let driver = driver_path();
+fn rvs_run_one_test_BIS(fixture: &Path, stderr_path: &Path) -> Result<(), String> {
+    let bless = std::env::var("RUSTC_BLESS").is_ok() || std::env::args().any(|a| a == "--bless");
+    let driver = rvs_driver_path_BIS();
     if !driver.exists() {
         return Err(format!("cargo-rivus not found at {:?}", driver));
     }
@@ -90,7 +96,7 @@ fn run_one_test(fixture: &Path, stderr_path: &Path, bless: bool) -> Result<(), S
         .map_err(|e| format!("failed to run rivus-driver: {e}"))?;
 
     let raw_stderr = String::from_utf8_lossy(&output.stderr);
-    let actual = normalize_stderr(&raw_stderr);
+    let actual = rvs_normalize_stderr_S(&raw_stderr);
 
     if check_pass {
         if !actual.is_empty() {
@@ -138,12 +144,12 @@ fn run_one_test(fixture: &Path, stderr_path: &Path, bless: bool) -> Result<(), S
 }
 
 #[test]
-fn ui_tests() {
-    let bless = std::env::var("RUSTC_BLESS").is_ok() || std::env::args().any(|a| a == "--bless");
+fn test_20260630_ui_tests_BIS() {
+    let this_test_name = "test_20260630_ui_tests_BIS";
     let filter = std::env::args()
-        .find(|a| !a.starts_with('-') && a != "ui_tests" && !a.contains("ui_tests"));
+        .find(|a| !a.starts_with('-') && a != this_test_name && !a.contains(this_test_name));
     let ui_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/ui");
-    let fixtures = collect_rs_files(&ui_dir);
+    let fixtures = rvs_collect_rs_files_BIS(&ui_dir);
     assert!(!fixtures.is_empty(), "no .rs fixtures in tests/ui/");
 
     let mut failures = Vec::new();
@@ -155,7 +161,7 @@ fn ui_tests() {
             }
         }
         let stderr_path = fixture.with_extension("stderr");
-        if let Err(e) = run_one_test(fixture, &stderr_path, bless) {
+        if let Err(e) = rvs_run_one_test_BIS(fixture, &stderr_path) {
             failures.push((name, e));
         }
     }

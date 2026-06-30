@@ -40,19 +40,18 @@ pub(crate) fn rvs_check_fn_S<'tcx>(cx: &LateContext<'_>, name: &str, sig: &rustc
         _ => return,
     };
 
-    if type_args.len() >= 1 {
-        let ok_str = rvs_tys(type_args[0]);
-        if ok_str == "()" {
-            cx.emit_span_lint(
-                RVS_VALIDATE_RETURNS_UNIT,
+    if let Some(ok_ty) = type_args.first()
+        && rvs_tys(ok_ty) == "()"
+    {
+        cx.emit_span_lint(
+            RVS_VALIDATE_RETURNS_UNIT,
+            sig.span,
+            Msg::new(
                 sig.span,
-                Msg::new(
-                    sig.span,
-                    format!(
-                        "{name}: validate returning Result<(),E> — use TryFrom returning Result<T,E>"
-                    ),
+                format!(
+                    "{name}: validate returning Result<(),E> — use TryFrom returning Result<T,E>"
                 ),
-            );
-        }
+            ),
+        );
     }
 }

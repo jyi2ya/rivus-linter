@@ -273,7 +273,7 @@ pub fn rvs_extract_raw_suffix(name: &str) -> String {
     String::new()
 }
 
-/// 从原始后缀中萃取未知（非 ABIMSTU）的大写字母，按出现顺序去重。
+/// 从原始后缀中萃取未知（非 ABIMPSTU）的大写字母，按出现顺序去重。
 pub fn rvs_extract_unknown_suffix_letters(raw_suffix: &str) -> Vec<char> {
     let mut seen = BTreeSet::new();
     let mut result = Vec::new();
@@ -494,6 +494,15 @@ mod tests {
         assert!(!ok.rvs_contains(Capability::T));
         assert!(!ok.rvs_contains(Capability::U));
         assert_eq!(ok.rvs_len(), 4);
+    }
+
+    #[test]
+    fn test_20260630_from_str_allow_unknown() {
+        let caps = CapabilitySet::rvs_from_str_allow_unknown("ABEPZ");
+        assert!(caps.rvs_contains(Capability::A));
+        assert!(caps.rvs_contains(Capability::B));
+        assert!(caps.rvs_contains(Capability::P));
+        assert_eq!(caps.rvs_len(), 3);
     }
 
     #[test]

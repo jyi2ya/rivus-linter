@@ -35,16 +35,16 @@ pub(crate) fn rvs_check_fn_MS<'tcx>(
         _ => return,
     };
 
-    if type_args.len() >= 1 {
-        let ok_str = rvs_tys(type_args[0]);
-        if ok_str != "()" {
-            return;
-        }
+    let Some(ok_ty) = type_args.first() else {
+        return;
+    };
+    if rvs_tys(ok_ty) != "()" {
+        return;
     }
 
     let mut error_idents = HashSet::new();
-    if type_args.len() >= 2 {
-        rvs_collect_type_idents_M(type_args[1], &mut error_idents);
+    if let Some(error_ty) = type_args.get(1) {
+        rvs_collect_type_idents_M(error_ty, &mut error_idents);
     }
 
     for input in sig.decl.inputs {

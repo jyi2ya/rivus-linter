@@ -1,5 +1,11 @@
-#![allow(clippy::all)]
-#![allow(internal_features)]
+#![allow(
+    clippy::all,
+    reason = "lint pass glue code mirrors rustc internals and produces noisy style warnings"
+)]
+#![allow(
+    internal_features,
+    reason = "rustc_private integration requires compiler internal features"
+)]
 
 use std::collections::{BTreeMap, HashSet};
 
@@ -250,6 +256,7 @@ pub static RIVUS_LINTS: &[&rustc_lint::Lint] = &[
 
 // ─── Lint pass ───────────────────────────────────────────────────────────
 
+#[derive(Debug)]
 pub struct RivusLintPass {
     capsmap: Option<CapsMap>,
     test_names: BTreeMap<String, Vec<Span>>,
@@ -341,7 +348,10 @@ impl<'tcx> LateLintPass<'tcx> for RivusLintPass {
                         let node = cx.tcx.hir_node_by_def_id(owner.def_id);
                         if let rustc_hir::Node::Item(item) = node {
                             if let rustc_hir::ItemKind::Const(ct, ..) = &item.kind {
-                                self.test_fn_names.insert(ct.name.as_str().to_string());
+                                let test_name = ct.name.as_str();
+                                if test_name.starts_with("test_") {
+                                    self.test_fn_names.insert(test_name.to_string());
+                                }
                             }
                         }
                     }
@@ -360,7 +370,7 @@ impl<'tcx> LateLintPass<'tcx> for RivusLintPass {
         }
         self.done_crate_level = true;
 
-        test_quality::rvs_check_crate_post_MS(
+        test_quality::rvs_check_crate_post_BIMS(
             cx,
             &self.test_names,
             &self.good_fns,
@@ -384,7 +394,7 @@ impl<'tcx> LateLintPass<'tcx> for RivusLintPass {
             should_emit_lints: self.should_emit_lints,
             port_traits: &self.port_traits,
         };
-        rvs_check_item(
+        rvs_check_item_MS(
             cx,
             item,
             &self.test_fn_names,
@@ -409,7 +419,7 @@ impl<'tcx> LateLintPass<'tcx> for RivusLintPass {
             should_emit_lints: self.should_emit_lints,
             port_traits: &self.port_traits,
         };
-        rvs_check_impl_item(
+        rvs_check_impl_item_MS(
             cx,
             impl_item,
             &self.test_fn_names,
@@ -434,7 +444,7 @@ impl<'tcx> LateLintPass<'tcx> for RivusLintPass {
             should_emit_lints: self.should_emit_lints,
             port_traits: &self.port_traits,
         };
-        rvs_check_trait_item(cx, trait_item, &mut data);
+        rvs_check_trait_item_MS(cx, trait_item, &mut data);
     }
 }
 
@@ -442,7 +452,10 @@ impl<'tcx> LateLintPass<'tcx> for RivusLintPass {
 
 /// Dispatches to fn-level checks for free functions, inherent impl methods,
 /// and trait impl methods.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "lint dispatch needs full rustc callback context"
+)]
 fn rvs_run_fn_checks_MS<'tcx>(
     cx: &LateContext<'tcx>,
     name: &str,
@@ -537,8 +550,7 @@ fn rvs_run_fn_checks_MS<'tcx>(
 }
 
 /// Check free-fn / struct / enum / use / impl items.
-#[allow(clippy::too_many_arguments)]
-fn rvs_check_item<'tcx>(
+fn rvs_check_item_MS<'tcx>(
     cx: &LateContext<'tcx>,
     item: &'tcx rustc_hir::Item<'tcx>,
     test_fn_names: &HashSet<String>,
@@ -574,11 +586,11 @@ fn rvs_check_item<'tcx>(
                     false,
                     data,
                 );
-                test_names
-                    .entry(name.to_string())
-                    .or_default()
-                    .push(item.span);
                 if is_test {
+                    test_names
+                        .entry(name.to_string())
+                        .or_default()
+                        .push(item.span);
                     utils::rvs_collect_test_call_names_M(cx.tcx, body, test_call_names);
                 }
                 let vis = cx.tcx.visibility(item.owner_id.def_id);
@@ -634,8 +646,7 @@ fn rvs_check_item<'tcx>(
 }
 
 /// Check inherent impl method.
-#[allow(clippy::too_many_arguments)]
-fn rvs_check_impl_item<'tcx>(
+fn rvs_check_impl_item_MS<'tcx>(
     cx: &LateContext<'tcx>,
     impl_item: &'tcx rustc_hir::ImplItem<'tcx>,
     test_fn_names: &HashSet<String>,
@@ -733,7 +744,7 @@ fn rvs_check_impl_item<'tcx>(
 }
 
 /// Check trait method (provided or required).
-fn rvs_check_trait_item<'tcx>(
+fn rvs_check_trait_item_MS<'tcx>(
     cx: &LateContext<'tcx>,
     trait_item: &'tcx rustc_hir::TraitItem<'tcx>,
     data: &mut FnCheckData<'_>,

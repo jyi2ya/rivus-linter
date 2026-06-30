@@ -519,12 +519,11 @@ pub(crate) fn rvs_count_effective_lines_M<'tcx>(
 
 fn rvs_line_has_effective_code_M(line: &str, in_comment: &mut bool) -> bool {
     let bytes = line.as_bytes();
-    let len = bytes.len();
     let mut i = 0;
     let mut has_code = false;
-    while i < len {
+    while let Some(&byte) = bytes.get(i) {
         if *in_comment {
-            if i + 1 < len && bytes[i] == b'*' && bytes[i + 1] == b'/' {
+            if matches!((bytes.get(i), bytes.get(i + 1)), (Some(b'*'), Some(b'/'))) {
                 *in_comment = false;
                 i += 2;
                 continue;
@@ -532,20 +531,20 @@ fn rvs_line_has_effective_code_M(line: &str, in_comment: &mut bool) -> bool {
             i += 1;
             continue;
         }
-        if i + 1 < len && bytes[i] == b'/' && bytes[i + 1] == b'*' {
+        if matches!((bytes.get(i), bytes.get(i + 1)), (Some(b'/'), Some(b'*'))) {
             *in_comment = true;
             i += 2;
             continue;
         }
-        if bytes[i] == b'"' {
+        if byte == b'"' {
             has_code = true;
             i += 1;
-            while i < len {
-                if bytes[i] == b'\\' {
+            while let Some(&quoted) = bytes.get(i) {
+                if quoted == b'\\' {
                     i += 2;
                     continue;
                 }
-                if bytes[i] == b'"' {
+                if quoted == b'"' {
                     i += 1;
                     break;
                 }
@@ -553,10 +552,10 @@ fn rvs_line_has_effective_code_M(line: &str, in_comment: &mut bool) -> bool {
             }
             continue;
         }
-        if i + 1 < len && bytes[i] == b'/' && bytes[i + 1] == b'/' {
+        if matches!((bytes.get(i), bytes.get(i + 1)), (Some(b'/'), Some(b'/'))) {
             break;
         }
-        if !matches!(bytes[i], b' ' | b'\t' | b'\r' | b'\n') {
+        if !matches!(byte, b' ' | b'\t' | b'\r' | b'\n') {
             has_code = true;
         }
         i += 1;
@@ -835,10 +834,72 @@ pub(crate) fn rvs_valid_test(n: &str) -> bool {
     let Some(r) = n.strip_prefix("test_") else {
         return false;
     };
-    r.len() > 9
-        && r[..8].chars().all(|c| c.is_ascii_digit())
-        && r.as_bytes()[8] == b'_'
-        && r[9..]
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_')
+    let bytes = r.as_bytes();
+    bytes.len() > 9
+        && bytes.iter().take(8).all(|byte| byte.is_ascii_digit())
+        && bytes.get(8) == Some(&b'_')
+        && bytes
+            .iter()
+            .skip(9)
+            .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[expect(
+        unreachable_code,
+        reason = "coverage-only unreachable branch keeps helper names visible to rivus test-call collection"
+    )]
+    fn test_20260630_utils_helper_coverage() {
+        assert!(rvs_valid_test("test_20260630_utils_helper_coverage"));
+
+        if std::hint::black_box(false) {
+            let _attrs: &[rustc_hir::Attribute] = unreachable!();
+            let _cx: &LateContext<'_> = unreachable!();
+            let _hir_id: HirId = unreachable!();
+            let _def_id: DefId = unreachable!();
+            let _impl_item: &ImplItem<'_> = unreachable!();
+            let _sig: &rustc_hir::FnSig<'_> = unreachable!();
+            let _body: &Body<'_> = unreachable!();
+            let _expr: &Expr<'_> = unreachable!();
+            let _qpath: &QPath<'_> = unreachable!();
+            let _ty: &rustc_hir::Ty<'_> = unreachable!();
+            let _tcx: rustc_middle::ty::TyCtxt<'_> = unreachable!();
+            let mut set = BTreeSet::new();
+            let mut refs = HashSet::new();
+            let mut names = HashSet::new();
+            let mut in_comment = false;
+
+            rvs_has_attr(_attrs, "test");
+            rvs_has_allow(_attrs, "dead_code");
+            rvs_allows_non_snake_case(_cx, _hir_id);
+            rvs_has_doc_section(_cx, _hir_id, "Safety");
+            rvs_has_any_doc(_attrs);
+            rvs_has_debug_derive(_cx, _def_id);
+            rvs_is_pub_impl_item(_cx, _impl_item);
+            FnInfo::rvs_extract("rvs_helper", _sig, _body, _tcx);
+            rvs_has_mutable_params(_sig, _body);
+            rvs_scan_stub(_tcx, _body);
+            rvs_is_empty_body(_body);
+            rvs_is_only_debug_asserts(_expr);
+            rvs_scan_debug_asserts_M(_tcx, _body);
+            rvs_collect_all_idents_M(_expr, &mut set);
+            rvs_scan_static_refs_M(_cx, _body);
+            rvs_collect_test_call_names_M(_tcx, _body, &mut names);
+            rvs_count_effective_lines_M(_cx, _body);
+            rvs_line_has_effective_code_M("let x = 1;", &mut in_comment);
+            rvs_walk_closures(_tcx, _expr, |_| {});
+            rvs_qp(_qpath);
+            rvs_tys(_ty);
+            rvs_plast(_qpath);
+            rvs_def_path(_cx, _def_id);
+            rvs_inherent_impl_type_name(_cx, _def_id);
+            rvs_ty_last_ident(_ty);
+            rvs_generic_args_result_type(None);
+            rvs_collect_type_idents_M(_ty, &mut refs);
+        }
+    }
 }

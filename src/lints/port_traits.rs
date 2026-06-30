@@ -30,3 +30,15 @@ pub(crate) fn rvs_collect_port_traits_S(
     }
     port_traits
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_20260630_is_port_name() {
+        assert!(rvs_is_port_name("UserRepository"));
+        assert!(rvs_is_port_name("GithubClient"));
+        assert!(!rvs_is_port_name("Formatter"));
+    }
+}

@@ -10,8 +10,11 @@ use super::{
 };
 
 /// `check_crate_post` — cross-cutting test quality checks and output writing.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn rvs_check_crate_post_MS<'tcx>(
+#[expect(
+    clippy::too_many_arguments,
+    reason = "crate-post checks consume all cross-function test-quality aggregates"
+)]
+pub(crate) fn rvs_check_crate_post_BIMS<'tcx>(
     cx: &LateContext<'tcx>,
     test_names: &BTreeMap<String, Vec<rustc_span::Span>>,
     good_fns: &[(String, rustc_span::Span)],
@@ -23,11 +26,11 @@ pub(crate) fn rvs_check_crate_post_MS<'tcx>(
     collect_callgraph: bool,
 ) {
     rvs_check_duplicate_tests_S(cx, test_names);
-    rvs_check_missing_test_output_S(cx, test_names);
+    rvs_check_missing_test_output_BIS(cx, test_names);
     rvs_check_untested_good_fns_S(cx, good_fns, test_call_names);
     rvs_check_untested_ok_fns_S(cx, ok_fns, test_call_names);
-    rvs_write_report_S(cx, fn_report, emit_report);
-    rvs_write_callgraph_S(cx, callgraph, collect_callgraph);
+    rvs_write_report_BIS(cx, fn_report, emit_report);
+    rvs_write_callgraph_BIS(cx, callgraph, collect_callgraph);
 }
 
 fn rvs_check_duplicate_tests_S<'tcx>(
@@ -47,7 +50,7 @@ fn rvs_check_duplicate_tests_S<'tcx>(
     }
 }
 
-fn rvs_check_missing_test_output_S<'tcx>(
+fn rvs_check_missing_test_output_BIS<'tcx>(
     cx: &LateContext<'tcx>,
     test_names: &BTreeMap<String, Vec<rustc_span::Span>>,
 ) {
@@ -107,7 +110,7 @@ fn rvs_check_untested_ok_fns_S<'tcx>(
     }
 }
 
-fn rvs_write_report_S<'tcx>(
+fn rvs_write_report_BIS<'tcx>(
     cx: &LateContext<'tcx>,
     fn_report: &[FnReportEntry],
     emit_report: bool,
@@ -124,19 +127,19 @@ fn rvs_write_report_S<'tcx>(
                     .to_string();
                 let report_path = Path::new(&report_dir).join(format!("{crate_name}.json"));
                 if let Some(parent) = report_path.parent() {
-                    let _ = std::fs::create_dir_all(parent);
+                    drop(std::fs::create_dir_all(parent));
                 }
                 if let Ok(mut f) = std::fs::File::create(&report_path) {
                     use std::io::Write;
-                    let _ = f.write_all(json.as_bytes());
-                    let _ = f.sync_all();
+                    drop(f.write_all(json.as_bytes()));
+                    drop(f.sync_all());
                 }
             }
         }
     }
 }
 
-fn rvs_write_callgraph_S<'tcx>(
+fn rvs_write_callgraph_BIS<'tcx>(
     cx: &LateContext<'tcx>,
     callgraph: &BTreeMap<String, FnBehavior>,
     collect_callgraph: bool,
@@ -153,12 +156,12 @@ fn rvs_write_callgraph_S<'tcx>(
                     .to_string();
                 let cg_path = Path::new(&cg_dir).join(format!("{crate_name}.json"));
                 if let Some(parent) = cg_path.parent() {
-                    let _ = std::fs::create_dir_all(parent);
+                    drop(std::fs::create_dir_all(parent));
                 }
                 if let Ok(mut f) = std::fs::File::create(&cg_path) {
                     use std::io::Write;
-                    let _ = f.write_all(json.as_bytes());
-                    let _ = f.sync_all();
+                    drop(f.write_all(json.as_bytes()));
+                    drop(f.sync_all());
                 }
             }
         }

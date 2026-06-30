@@ -151,7 +151,7 @@ impl CapsMap {
             let name = path
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
+                .unwrap_or_else(String::new);
             if exclude.contains(&name.as_str()) {
                 continue;
             }
@@ -188,16 +188,16 @@ impl CapsMap {
 
 /// 按 LAYER_ORDER 对文件路径排序。
 /// 在 LAYER_ORDER 中的文件按层级顺序排，不在的按字母序排在后面。
-fn rvs_sort_by_layer_M(files: &mut Vec<std::path::PathBuf>) {
+fn rvs_sort_by_layer_M(files: &mut [std::path::PathBuf]) {
     files.sort_by(|a, b| {
         let a_name = a
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
+            .unwrap_or_else(String::new);
         let b_name = b
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
+            .unwrap_or_else(String::new);
         let a_layer = LAYER_ORDER.iter().position(|&n| n == a_name);
         let b_layer = LAYER_ORDER.iter().position(|&n| n == b_name);
         match (a_layer, b_layer) {
@@ -285,9 +285,9 @@ mod tests {
 
     #[test]
     fn test_20260425_capsmap_parse_all_caps() {
-        let cm = CapsMap::rvs_parse("danger=ABIMSTU").unwrap();
+        let cm = CapsMap::rvs_parse("danger=ABIMPSTU").unwrap();
         let caps = cm.rvs_lookup("danger").unwrap();
-        assert_eq!(caps.rvs_len(), 7);
+        assert_eq!(caps.rvs_len(), 8);
     }
 
     #[test]
@@ -349,5 +349,30 @@ mod tests {
     fn test_20260615_load_nonexistent() {
         let cm = CapsMap::rvs_load_BIS(std::path::Path::new("/nonexistent/path")).unwrap();
         assert!(cm.rvs_lookup("anything").is_none());
+    }
+
+    #[test]
+    fn test_20260630_extend_from_and_sort_by_layer() {
+        let mut base = CapsMap::rvs_parse("alpha=B\n").unwrap();
+        let extra = CapsMap::rvs_parse("beta=I\n").unwrap();
+        base.rvs_extend_from_M(extra);
+        assert!(
+            base.rvs_lookup("alpha")
+                .unwrap()
+                .rvs_contains(Capability::B)
+        );
+        assert!(base.rvs_lookup("beta").unwrap().rvs_contains(Capability::I));
+
+        let mut files = vec![
+            std::path::PathBuf::from("ext"),
+            std::path::PathBuf::from("seed"),
+            std::path::PathBuf::from("std"),
+        ];
+        rvs_sort_by_layer_M(&mut files);
+        let ordered: Vec<String> = files
+            .iter()
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(ordered, vec!["std", "seed", "ext"]);
     }
 }

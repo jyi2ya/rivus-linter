@@ -1,4 +1,8 @@
 # seed
+#
+# 手工维护的最小推断基线：infer-std 只会读取 seed+suppress，
+# 因此凡是“为了把 std/core/alloc 成功推出来”所需的底层条目，
+# 即使最终也会出现在生成后的 caps/std 中，仍然应保留在这里。
 alloc::alloc::__rust_alloc=
 alloc::alloc::__rust_alloc_error_handler=
 alloc::alloc::__rust_alloc_zeroed=
@@ -1113,10 +1117,7 @@ libc::unix::linux_like::linux::sendfile64=BI
 libc::unix::linux_like::linux::sigaltstack=S
 libc::unix::linux_like::linux::splice=BI
 libc::unix::linux_like::linux::syscall=B
-libc::unix::linux_like::linux_l4re_shared::CMSG_NXTHDR=
-libc::unix::linux_like::linux_l4re_shared::CPU_COUNT=
 libc::unix::linux_like::linux_l4re_shared::dl_iterate_phdr=S
-libc::unix::linux_like::linux_l4re_shared::makedev=U
 libc::unix::linux_like::linux_l4re_shared::mprotect=U
 libc::unix::linux_like::linux_l4re_shared::preadv=BI
 libc::unix::linux_like::linux_l4re_shared::pwritev=BI
@@ -1262,31 +1263,3 @@ core::num::imp::libm::cbrt=
 core::num::imp::libm::cbrtf=
 core::num::imp::libm::fdim=
 core::num::imp::libm::fdimf=
-# ─── Remaining unknown callees (no impls in callgraph) ──
-core::marker::FnPtr::addr=
-hashbrown::map::HashMap::get_disjoint_mut=
-hashbrown::map::HashMap::get_disjoint_unchecked_mut=
-hashbrown::rustc_entry::Drain::rustc_iter=
-hashbrown::rustc_entry::HashMap::rustc_entry=
-hashbrown::rustc_entry::IntoIter::rustc_iter=
-hashbrown::rustc_entry::IterMut::rustc_iter=
-hashbrown::rustc_entry::RustcOccupiedEntry::get=
-hashbrown::rustc_entry::RustcOccupiedEntry::get_mut=
-hashbrown::rustc_entry::RustcOccupiedEntry::insert=
-hashbrown::rustc_entry::RustcOccupiedEntry::into_mut=
-hashbrown::rustc_entry::RustcOccupiedEntry::key=
-hashbrown::rustc_entry::RustcOccupiedEntry::remove=
-hashbrown::rustc_entry::RustcOccupiedEntry::remove_entry=
-hashbrown::rustc_entry::RustcVacantEntry::insert=
-hashbrown::rustc_entry::RustcVacantEntry::insert_entry=
-hashbrown::rustc_entry::RustcVacantEntry::into_key=
-hashbrown::rustc_entry::RustcVacantEntry::key=
-# ─── Third-party trait defs called by std (no std impls) ──
-addr2line::lookup::LookupContinuation::resume=
-object::read::elf::compression::CompressionHeader::ch_size=
-object::read::elf::compression::CompressionHeader::ch_type=
-object::read::elf::section::SectionHeader::sh_flags=
-object::read::elf::symbol::Sym::st_name=
-object::read::elf::symbol::Sym::st_shndx=
-object::read::elf::symbol::Sym::st_size=
-object::read::elf::symbol::Sym::st_value=

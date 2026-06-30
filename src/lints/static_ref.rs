@@ -2,7 +2,7 @@ use rustc_hir::{self, Body};
 use rustc_lint::{LateContext, LintContext};
 
 use super::msg::Msg;
-use super::utils::*;
+use super::utils::rvs_scan_static_refs_M;
 use super::{RVS_MISSING_SIDE_EFFECT, RVS_MISSING_THREAD_LOCAL, RVS_STATIC_REF};
 use crate::capability::{Capability, CapabilitySet};
 

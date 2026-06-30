@@ -3,7 +3,7 @@ use rustc_lint::{LateContext, LintContext};
 use rustc_span::Span;
 
 use super::msg::Msg;
-use super::utils::*;
+use super::utils::{rvs_def_path, rvs_qp, rvs_walk_closures};
 use super::{RVS_CALL_VIOLATION, RVS_UNKNOWN_CALLEE};
 use crate::capability::CapabilitySet;
 use crate::capsmap::CapsMap;

@@ -30,7 +30,7 @@ pub(crate) fn rvs_check_item_S<'tcx>(
     if matches!(use_kind, UseKind::Glob) {
         if ps.last().map(|s| *s) == Some("prelude") {
             // prelude ok
-        } else if ps.len() == 1 && ps[0] == "super" {
+        } else if ps.as_slice() == ["super"] {
             // super ok
         } else {
             let full = format!("{}::*", ps.join("::"));
