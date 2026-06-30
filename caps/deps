@@ -1,25 +1,76 @@
-# ─── External library: clap ──────────────────────
-# Cli::parse reads global process args, has side effects (S)
-clap::Parser::parse=S
-Cli::parse=S
-
-# ─── External library: serde_json ────────────────
-# serde_json::from_str is a pure parser (no I/O, no side effects)
-serde_json::from_str=
+clap_builder::builder::action::ArgAction::takes_values=
+clap_builder::builder::arg::Arg::action=
+clap_builder::builder::arg::Arg::default_value=
+clap_builder::builder::arg::Arg::help=
+clap_builder::builder::arg::Arg::long=
+clap_builder::builder::arg::Arg::long_help=
+clap_builder::builder::arg::Arg::new=
+clap_builder::builder::arg::Arg::num_args=
+clap_builder::builder::arg::Arg::required=
+clap_builder::builder::arg::Arg::short=
+clap_builder::builder::arg::Arg::trailing_var_arg=
+clap_builder::builder::arg::Arg::value_name=
+clap_builder::builder::arg::Arg::value_parser=
+clap_builder::builder::arg_group::ArgGroup::args=
+clap_builder::builder::arg_group::ArgGroup::multiple=
+clap_builder::builder::arg_group::ArgGroup::new=
+clap_builder::builder::command::Command::about=
+clap_builder::builder::command::Command::arg=
+clap_builder::builder::command::Command::arg_required_else_help=
+clap_builder::builder::command::Command::group=
+clap_builder::builder::command::Command::long_about=
+clap_builder::builder::command::Command::new=
+clap_builder::builder::command::Command::subcommand=
+clap_builder::builder::command::Command::subcommand_required=
+clap_builder::builder::value_parser::_infer_ValueParser_for::new=
+clap_builder::builder::value_parser::impl_prelude::_impls_ValueParserFactory::value_parser=
+clap_builder::derive::Args::augment_args=
+clap_builder::derive::Args::augment_args_for_update=
+clap_builder::derive::FromArgMatches::from_arg_matches_mut=M # Mutable
+clap_builder::derive::FromArgMatches::update_from_arg_matches_mut=M # Mutable
+clap_builder::derive::Parser::parse_from=BS # Blocking SideEffect
+clap_builder::derive::Subcommand::augment_subcommands=
+clap_builder::error::Error::raw=
+clap_builder::parser::matches::arg_matches::ArgMatches::contains_id=
+clap_builder::parser::matches::arg_matches::ArgMatches::remove_many=M # Mutable
+clap_builder::parser::matches::arg_matches::ArgMatches::remove_one=M # Mutable
+clap_builder::parser::matches::arg_matches::ArgMatches::remove_subcommand=M # Mutable
+clap_builder::parser::matches::arg_matches::ArgMatches::subcommand_name=
+indexmap::map::IndexMap::values=
+ra_ap_ide::Analysis::file_structure=BS # Blocking SideEffect
+ra_ap_ide::Analysis::rename=BIS # Blocking IO SideEffect
+ra_ap_ide::AnalysisHost::analysis=
+ra_ap_ide::AnalysisHost::with_database=
+ra_ap_ide_db::text_edit::TextEdit::iter=
+ra_ap_load_cargo::load_workspace_at=BIS # Blocking IO SideEffect
+ra_ap_vfs::Vfs::file_path=
+ra_ap_vfs::Vfs::iter=
+ra_ap_vfs::vfs_path::VfsPath::as_path=
+serde::private::de::missing_field=
+serde_core::de::Deserializer::deserialize_identifier=
+serde_core::de::Deserializer::deserialize_struct=
+serde_core::de::Error::duplicate_field=
+serde_core::de::Error::invalid_length=
+serde_core::de::MapAccess::next_key=M # Mutable
+serde_core::de::MapAccess::next_value=M # Mutable
+serde_core::de::SeqAccess::next_element=M # Mutable
+serde_core::ser::SerializeStruct::end=
+serde_core::ser::SerializeStruct::serialize_field=M # Mutable
+serde_core::ser::Serializer::serialize_struct=
 serde_json::de::from_str=
-
-# ─── External library: indexmap ──────────────────
-indexmap::map::impl::values=
-
-# ─── Local types (path-based calls) ──────────────
-CapabilityParseError::InvalidLetter=
-DenyWarningsWarning=
-StubMacroInfo=
-
-# ─── Local helpers (path-based calls) ────────────
-# Msg::new is a pure constructor
-Msg::new=
-cargo_rivus::lints::impl::new=
-# go and wblk are pure traversal helpers inside rvs_walk_closures
-cargo_rivus::lints::rvs_walk_closures::go=
-cargo_rivus::lints::rvs_walk_closures::wblk=
+serde_json::ser::to_string=
+text_size::range::TextRange::contains_range=
+text_size::range::TextRange::end=
+text_size::range::TextRange::start=
+thiserror::aserror::AsDynError::as_dyn_error=
+thiserror::display::AsDisplay::as_display=
+toml_edit::item::Item::as_str=
+toml_edit::item::Item::as_table_mut=M # Mutable
+toml_edit::item::Item::get=
+toml_edit::item::value=
+toml_edit::table::Entry::or_insert=
+toml_edit::table::Table::contains_key=
+toml_edit::table::Table::entry=M # Mutable
+toml_edit::table::Table::get=
+toml_edit::table::Table::insert=M # Mutable
+toml_edit::table::Table::new=
