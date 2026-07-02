@@ -224,32 +224,24 @@ pub(crate) fn rvs_collect_callgraph_BIMS(
     rvs_merge_callgraph_dir_BIS(&cg_dir)
 }
 
-fn rvs_load_or_collect_callgraph_BIMS(path: &Path) -> BTreeMap<String, FnBehavior> {
+fn rvs_load_or_collect_callgraph_BIMS(path: &Path) -> Result<BTreeMap<String, FnBehavior>, String> {
     let cg_dir = path.join("target").join("rivus-callgraph");
     let cg_std_dir = path.join("target").join("rivus-callgraph-std");
 
     if cg_dir.is_dir() || cg_std_dir.is_dir() {
         let mut merged = BTreeMap::new();
-        if cg_dir.is_dir()
-            && let Ok(cg) = rvs_merge_callgraph_dir_BIS(&cg_dir)
-        {
+        if cg_dir.is_dir() {
+            let cg = rvs_merge_callgraph_dir_BIS(&cg_dir)?;
             merged.extend(cg);
         }
-        if cg_std_dir.is_dir()
-            && let Ok(cg) = rvs_merge_callgraph_dir_BIS(&cg_std_dir)
-        {
+        if cg_std_dir.is_dir() {
+            let cg = rvs_merge_callgraph_dir_BIS(&cg_std_dir)?;
             merged.extend(cg);
         }
-        merged
+        Ok(merged)
     } else {
         eprintln!("(no cached callgraph found, collecting fresh...)");
-        match rvs_collect_callgraph_BIMS(path, false, true, vec![]) {
-            Ok(callgraph) => callgraph,
-            Err(err) => {
-                eprintln!("warning: {err}");
-                BTreeMap::new()
-            }
-        }
+        rvs_collect_callgraph_BIMS(path, false, true, vec![])
     }
 }
 
@@ -261,7 +253,7 @@ fn rvs_load_or_collect_callgraph_BIMS(path: &Path) -> BTreeMap<String, FnBehavio
 pub(crate) fn rvs_load_callgraph_and_caps_BIMS(
     path: &Path,
 ) -> Result<(BTreeMap<String, FnBehavior>, capsmap::CapsMap), String> {
-    let callgraph = rvs_load_or_collect_callgraph_BIMS(path);
+    let callgraph = rvs_load_or_collect_callgraph_BIMS(path)?;
     let caps_dir = path.join("caps");
     let caps = if caps_dir.is_dir() {
         CapsMap::rvs_load_dir_excluding_BIS(&caps_dir, &["deps"]).unwrap_or_else(|e| {
@@ -293,20 +285,6 @@ pub(crate) fn rvs_write_capsmap_result_BIS(
     Ok(())
 }
 
-pub(crate) fn rvs_detect_crate_name_BIS(path: &Path) -> Result<String, String> {
-    let cargo_toml = path.join("Cargo.toml");
-    let content = std::fs::read_to_string(&cargo_toml)
-        .map_err(|e| format!("cannot read {}: {e}", cargo_toml.display()))?;
-    let doc: toml_edit::DocumentMut = content
-        .parse()
-        .map_err(|e| format!("invalid TOML in {}: {e}", cargo_toml.display()))?;
-    doc.get("package")
-        .and_then(|package| package.get("name"))
-        .and_then(|name| name.as_str())
-        .map(|name| name.replace('-', "_"))
-        .ok_or_else(|| format!("{}: missing [package].name", cargo_toml.display()))
-}
-
 pub(crate) fn rvs_collect_local_crate_prefixes(toml: &str) -> Result<BTreeSet<String>, String> {
     let doc: toml_edit::DocumentMut = toml.parse().map_err(|e| format!("invalid TOML: {e}"))?;
 
@@ -333,7 +311,10 @@ pub(crate) fn rvs_collect_local_crate_prefixes(toml: &str) -> Result<BTreeSet<St
         }
     }
     if prefixes.is_empty() {
-        return Err("Cargo.toml: missing package/lib/bin name".into());
+        return Err(
+            "Cargo.toml: missing local crate target ([package].name, [lib].name, or [[bin]].name)"
+                .into(),
+        );
     }
     Ok(prefixes)
 }
@@ -343,6 +324,11 @@ pub(crate) fn rvs_detect_local_crate_prefixes_BIS(path: &Path) -> Result<BTreeSe
     let content = std::fs::read_to_string(&cargo_toml)
         .map_err(|e| format!("cannot read {}: {e}", cargo_toml.display()))?;
     rvs_collect_local_crate_prefixes(&content).map_err(|e| format!("{}: {e}", cargo_toml.display()))
+}
+
+pub(crate) fn rvs_load_local_crate_prefixes_BIS(path: &Path) -> Result<BTreeSet<String>, String> {
+    rvs_ensure_cargo_project_BIS(path)?;
+    rvs_detect_local_crate_prefixes_BIS(path)
 }
 
 pub(crate) fn rvs_clean_dir_BIS(path: &Path) {
@@ -435,6 +421,19 @@ mod tests {
         );
         assert!(prefixes.contains("rivus_linter"));
         assert!(prefixes.contains("cargo_rivus"));
+    }
+
+    #[test]
+    fn test_20260702_collect_local_crate_prefixes_rejects_workspace_root() {
+        let input = "[workspace]\nmembers = []\nresolver = \"2\"\n";
+        let result = rvs_collect_local_crate_prefixes(input);
+        let output = format!("{result:?}");
+        rvs_snapshot_BIS(
+            "test_20260702_collect_local_crate_prefixes_rejects_workspace_root",
+            &output,
+        );
+        assert!(result.is_err());
+        assert!(output.contains("missing local crate target"));
     }
 
     #[test]

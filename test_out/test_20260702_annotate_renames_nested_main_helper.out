@@ -1,0 +1,3 @@
+mod cli { pub fn rvs_main() {} }
+
+fn main() { cli::rvs_main(); }

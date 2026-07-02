@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 
 use crate::inference::{
@@ -6,47 +6,48 @@ use crate::inference::{
 };
 use crate::rename;
 use crate::workspace::{
-    rvs_detect_local_crate_prefixes_BIS, rvs_ensure_cargo_project_BIS,
-    rvs_load_callgraph_and_caps_BIMS,
+    rvs_ensure_cargo_project_BIS, rvs_load_callgraph_and_caps_BIMS,
+    rvs_load_local_crate_prefixes_BIS,
 };
 
 /// # Panics
 ///
 /// Panics if the current executable path, current directory, or cargo cannot be resolved.
 pub(crate) fn rvs_run_annotate_BIMPS(path: &Path) -> Result<(), String> {
-    rvs_ensure_cargo_project_BIS(path)?;
-
+    let local_crate_names = rvs_load_local_crate_prefixes_BIS(path)?;
     let (callgraph, seed) = rvs_load_callgraph_and_caps_BIMS(path)?;
     let inferred = rvs_infer_caps_M(&callgraph, &seed);
-    let local_prefixes: Vec<String> = rvs_detect_local_crate_prefixes_BIS(path)?
+    let local_prefixes: Vec<String> = local_crate_names
         .into_iter()
         .map(|name| format!("{name}::"))
         .collect();
+    let root_main_paths: BTreeSet<String> = local_prefixes
+        .iter()
+        .map(|prefix| format!("{prefix}main"))
+        .collect();
 
-    let mut renames: Vec<(String, String)> = Vec::new();
-    let mut skip_names: HashSet<String> = HashSet::new();
+    let mut rename_map: HashMap<String, String> = HashMap::new();
     for (full_path, caps) in &inferred {
-        if !local_prefixes
+        let Some(relative_path) = local_prefixes
             .iter()
-            .any(|prefix| full_path.starts_with(prefix))
-        {
+            .find_map(|prefix| full_path.strip_prefix(prefix))
+        else {
             continue;
-        }
-        let short_name = full_path.rsplit("::").next().unwrap_or(full_path);
+        };
+        let short_name = relative_path.rsplit("::").next().unwrap_or(relative_path);
         if short_name.starts_with("rvs_") {
             continue;
         }
         if short_name.starts_with(|c: char| c.is_ascii_uppercase()) {
             continue;
         }
-        if short_name == "main" {
+        if root_main_paths.contains(full_path) {
             continue;
         }
         if callgraph.get(full_path).is_some_and(|b| b.is_test) {
             continue;
         }
         if callgraph.get(full_path).is_some_and(|b| b.is_trait_impl) {
-            skip_names.insert(short_name.to_string());
             continue;
         }
         let caps_str = rvs_caps_to_string(caps);
@@ -55,19 +56,14 @@ pub(crate) fn rvs_run_annotate_BIMPS(path: &Path) -> Result<(), String> {
         } else {
             format!("rvs_{short_name}_{caps_str}")
         };
-        renames.push((short_name.to_string(), new_name));
+        rename_map.insert(relative_path.to_string(), new_name);
     }
 
-    renames.retain(|(name, _)| !skip_names.contains(name));
-    renames.sort();
-    renames.dedup();
-
-    if renames.is_empty() {
+    if rename_map.is_empty() {
         println!("No functions to annotate.");
         return Ok(());
     }
 
-    let rename_map: HashMap<String, String> = renames.into_iter().collect();
     let files_changed = rename::rvs_apply_ra_renames_BIS(path, &rename_map)?;
 
     println!(
@@ -260,6 +256,150 @@ path = "src/main.rs"
         assert!(result.is_ok(), "annotate should succeed: {result:?}");
         assert!(source.contains("fn rvs_parse()"));
         assert!(source.contains("rvs_parse();"));
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260702_annotate_renames_nested_main_helper() {
+        let dir = rvs_make_temp_dir_BIS("annotate-nested-main");
+        let cargo_toml =
+            "[package]\nname = \"annotate-main-demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n";
+        std::fs::write(dir.join("Cargo.toml"), cargo_toml).unwrap();
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(
+            dir.join("src/main.rs"),
+            "mod cli { pub fn main() {} }\n\nfn main() { cli::main(); }\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.join("target/rivus-callgraph")).unwrap();
+        std::fs::write(
+            dir.join("target/rivus-callgraph/callgraph.json"),
+            r#"{
+  "annotate_main_demo::main": {
+    "calls": ["annotate_main_demo::cli::main"],
+    "has_async": false,
+    "is_unsafe_fn": false,
+    "has_mut_param": false,
+    "has_static_ref": false,
+    "has_static_mut_ref": false,
+    "has_thread_local_ref": false,
+    "is_trait_impl": false,
+    "is_test": false
+  },
+  "annotate_main_demo::cli::main": {
+    "calls": [],
+    "has_async": false,
+    "is_unsafe_fn": false,
+    "has_mut_param": false,
+    "has_static_ref": false,
+    "has_static_mut_ref": false,
+    "has_thread_local_ref": false,
+    "is_trait_impl": false,
+    "is_test": false
+  }
+}
+"#,
+        )
+        .unwrap();
+
+        let result = rvs_run_annotate_BIMPS(&dir);
+        let source = std::fs::read_to_string(dir.join("src/main.rs")).unwrap();
+        rvs_snapshot_BIS("test_20260702_annotate_renames_nested_main_helper", &source);
+
+        assert!(result.is_ok(), "annotate should succeed: {result:?}");
+        assert!(source.contains("pub fn rvs_main()"));
+        assert!(source.contains("cli::rvs_main();"));
+        assert!(source.contains("fn main() {"));
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260702_annotate_renames_conflicting_duplicate_names() {
+        let dir = rvs_make_temp_dir_BIS("annotate-duplicate-name");
+        let cargo_toml = "[package]\nname = \"annotate-duplicate-demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n";
+        std::fs::write(dir.join("Cargo.toml"), cargo_toml).unwrap();
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(
+            dir.join("src/lib.rs"),
+            "pub mod a { pub fn parse() {} }\npub mod b { pub fn parse(_x: &mut u8) {} }\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.join("target/rivus-callgraph")).unwrap();
+        std::fs::write(
+            dir.join("target/rivus-callgraph/callgraph.json"),
+            r#"{
+  "annotate_duplicate_demo::a::parse": {
+    "calls": [],
+    "has_async": false,
+    "is_unsafe_fn": false,
+    "has_mut_param": false,
+    "has_static_ref": false,
+    "has_static_mut_ref": false,
+    "has_thread_local_ref": false,
+    "is_trait_impl": false,
+    "is_test": false
+  },
+  "annotate_duplicate_demo::b::parse": {
+    "calls": [],
+    "has_async": false,
+    "is_unsafe_fn": false,
+    "has_mut_param": true,
+    "has_static_ref": false,
+    "has_static_mut_ref": false,
+    "has_thread_local_ref": false,
+    "is_trait_impl": false,
+    "is_test": false
+  }
+}
+"#,
+        )
+        .unwrap();
+
+        let result = rvs_run_annotate_BIMPS(&dir);
+        let source = std::fs::read_to_string(dir.join("src/lib.rs")).unwrap();
+        rvs_snapshot_BIS(
+            "test_20260702_annotate_renames_conflicting_duplicate_names",
+            &source,
+        );
+
+        assert!(
+            result.is_ok(),
+            "annotate should rename duplicate names by relative path: {result:?}"
+        );
+        assert!(source.contains("pub fn rvs_parse() {}"));
+        assert!(source.contains("pub fn rvs_parse_M(_x: &mut u8) {}"));
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260702_annotate_surfaces_callgraph_collection_error() {
+        let dir = rvs_make_temp_dir_BIS("annotate-callgraph-error");
+        let cargo_toml = "[package]\nname = \"annotate-callgraph-demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n";
+        std::fs::write(dir.join("Cargo.toml"), cargo_toml).unwrap();
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/lib.rs"), "pub fn parse() {}\n").unwrap();
+        std::fs::create_dir_all(dir.join("target/rivus-callgraph")).unwrap();
+        std::fs::write(
+            dir.join("target/rivus-callgraph/callgraph.json"),
+            "{ not valid json }\n",
+        )
+        .unwrap();
+
+        let result = rvs_run_annotate_BIMPS(&dir);
+        let output = format!("{result:?}");
+        rvs_snapshot_BIS(
+            "test_20260702_annotate_surfaces_callgraph_collection_error",
+            &output,
+        );
+
+        assert!(
+            result.is_err(),
+            "annotate should return the callgraph load failure"
+        );
+        assert!(output.contains("invalid callgraph JSON"));
 
         std::fs::remove_dir_all(dir).unwrap();
     }

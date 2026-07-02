@@ -20,6 +20,7 @@ use ra_ap_project_model::{CargoConfig, RustLibSource};
 #[derive(Debug)]
 struct FunctionNode {
     name: String,
+    relative_path: String,
     position: FilePosition,
     is_rvs_prefixed: bool,
     is_in_trait_impl: bool,
@@ -141,9 +142,11 @@ fn rvs_find_functions_BIMS(
             let is_in_trait_impl = trait_impl_ranges
                 .iter()
                 .any(|r| r.contains_range(node.navigation_range));
+            let relative_path = rvs_relative_function_path(&nodes, node);
 
             functions.push(FunctionNode {
                 name,
+                relative_path,
                 position: FilePosition {
                     file_id,
                     offset: node.navigation_range.start(),
@@ -158,6 +161,7 @@ fn rvs_find_functions_BIMS(
 }
 
 /// Performs semantic renames using rust-analyzer for each entry in `rename_map`.
+/// Keys are local relative paths like `parse`, `cli::main`, or `Type::method`.
 /// Returns the number of files changed.
 fn rvs_apply_renames_BIS(
     analysis: &Analysis,
@@ -175,7 +179,7 @@ fn rvs_apply_renames_BIS(
     };
 
     for func in functions {
-        let Some(new_name) = rename_map.get(func.name.as_str()) else {
+        let Some(new_name) = rename_map.get(func.relative_path.as_str()) else {
             continue;
         };
 
@@ -236,7 +240,7 @@ pub fn rvs_strip_BIS(path: &Path) -> Result<(), String> {
     // 2. Find all functions
     let functions = rvs_find_functions_BIMS(&analysis, &vfs, &_local_files, &canonical_path);
 
-    // 3. Build rename_map from rvs_-prefixed functions
+    // 3. Build rename_map from rvs_-prefixed functions keyed by local relative path.
     let mut rename_map: HashMap<String, String> = HashMap::new();
     for func in &functions {
         if !func.is_rvs_prefixed {
@@ -245,7 +249,7 @@ pub fn rvs_strip_BIS(path: &Path) -> Result<(), String> {
         if let Some(new_name) = rvs_compute_strip_name(&func.name)
             && new_name != func.name
         {
-            rename_map.insert(func.name.clone(), new_name);
+            rename_map.insert(func.relative_path.clone(), new_name);
         }
     }
 
@@ -271,7 +275,7 @@ pub fn rvs_strip_BIS(path: &Path) -> Result<(), String> {
 }
 
 /// Applies rust-analyzer semantic renames for non-`rvs_`-prefixed, non-trait-impl
-/// functions using the provided rename map.
+/// functions using the provided rename map keyed by local relative path.
 ///
 /// Returns the number of files changed.
 pub fn rvs_apply_ra_renames_BIS(
@@ -324,6 +328,30 @@ fn rvs_collect_edits_M(
     }
 }
 
+fn rvs_relative_function_path(
+    nodes: &[ra_ap_ide::StructureNode],
+    node: &ra_ap_ide::StructureNode,
+) -> String {
+    let mut segments = vec![node.label.clone()];
+    let mut parent = node.parent;
+    while let Some(index) = parent {
+        let current = nodes
+            .get(index)
+            .expect("never: structure node parent index should point into the same file outline");
+        match current.kind {
+            StructureNodeKind::SymbolKind(SymbolKind::Module)
+            | StructureNodeKind::SymbolKind(SymbolKind::Trait)
+            | StructureNodeKind::SymbolKind(SymbolKind::Impl) => {
+                segments.push(current.label.clone());
+            }
+            _ => {}
+        }
+        parent = current.parent;
+    }
+    segments.reverse();
+    segments.join("::")
+}
+
 /// Computes the new name for a strip operation.
 ///
 /// Given a function name like `rvs_write_db_ABI`, returns `write_db`.
@@ -358,6 +386,12 @@ fn rvs_invalidate_callgraph_cache_BIS(project_path: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ra_ap_ide::{StructureNode, TextRange, TextSize};
+
+    fn rvs_snapshot_BIS(name: &str, content: &str) {
+        std::fs::create_dir_all("test_out").unwrap();
+        std::fs::write(format!("test_out/{name}.out"), content).unwrap();
+    }
 
     #[test]
     fn test_20260610_compute_strip_name_with_suffix() {
@@ -424,6 +458,37 @@ mod tests {
         let root = Path::new("/home/user/project");
         let file = Path::new("/home/user/.cargo/registry/src/some-crate/src/lib.rs");
         assert!(!rvs_is_local_file(file, root));
+    }
+
+    #[test]
+    fn test_20260702_relative_function_path_nested_module() {
+        let empty_range = TextRange::empty(TextSize::from(0));
+        let nodes = vec![
+            StructureNode {
+                parent: None,
+                label: "cli".into(),
+                navigation_range: empty_range,
+                node_range: empty_range,
+                kind: StructureNodeKind::SymbolKind(SymbolKind::Module),
+                detail: None,
+                deprecated: false,
+            },
+            StructureNode {
+                parent: Some(0),
+                label: "main".into(),
+                navigation_range: empty_range,
+                node_range: empty_range,
+                kind: StructureNodeKind::SymbolKind(SymbolKind::Function),
+                detail: None,
+                deprecated: false,
+            },
+        ];
+        let relative_path = rvs_relative_function_path(&nodes, &nodes[1]);
+        rvs_snapshot_BIS(
+            "test_20260702_relative_function_path_nested_module",
+            &relative_path,
+        );
+        assert_eq!(relative_path, "cli::main");
     }
 
     #[test]

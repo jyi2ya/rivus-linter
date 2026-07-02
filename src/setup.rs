@@ -80,11 +80,14 @@ pub fn rvs_inject_clippy_lints_M(cargo_toml: &str) -> (String, usize) {
 }
 
 pub(crate) fn rvs_run_setup_BIMS(path: &Path) -> Result<(), String> {
-    crate::workspace::rvs_ensure_cargo_project_BIS(path)?;
+    crate::workspace::rvs_load_local_crate_prefixes_BIS(path)?;
 
     let cargo_toml_path = path.join("Cargo.toml");
     let content = std::fs::read_to_string(&cargo_toml_path)
         .map_err(|e| format!("cannot read '{}': {e}", cargo_toml_path.display()))?;
+    content
+        .parse::<DocumentMut>()
+        .map_err(|e| format!("invalid TOML in '{}': {e}", cargo_toml_path.display()))?;
 
     let agents_md = path.join("AGENTS.md");
     std::fs::write(&agents_md, crate::RIVUS_MD)
@@ -205,6 +208,28 @@ mod tests {
         assert!(
             !agents_md.exists(),
             "setup should not write AGENTS.md on failure"
+        );
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260702_setup_rejects_invalid_cargo_toml_without_writing_agents() {
+        let dir = rvs_make_temp_dir_BIS("setup-invalid-cargo-toml");
+        std::fs::write(dir.join("Cargo.toml"), "[package\nname = \"broken\"\n").unwrap();
+        let agents_md = dir.join("AGENTS.md");
+
+        let result = rvs_run_setup_BIMS(&dir);
+        let output = format!("result={result:?}\nexists={}\n", agents_md.exists());
+        rvs_snapshot_BIS(
+            "test_20260702_setup_rejects_invalid_cargo_toml_without_writing_agents",
+            &output,
+        );
+
+        assert!(result.is_err(), "setup should fail for invalid Cargo.toml");
+        assert!(
+            !agents_md.exists(),
+            "setup should not write AGENTS.md when Cargo.toml is invalid"
         );
 
         std::fs::remove_dir_all(dir).unwrap();

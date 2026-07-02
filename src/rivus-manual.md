@@ -99,7 +99,7 @@ Total: 42 functions, 890 lines
 
 ## `cargo rivus infer-capsmap [OPTIONS] [PATH]`
 
-收集调用图并从种子标注自底向上推断 capsmap。对每个 `rvs_` 函数，聚合其所有被调用方的能力，得到推断结果。`PATH` 必须是一个可成功执行 `cargo check` 的 Cargo 项目。
+收集调用图并从种子标注自底向上推断 capsmap。对每个 `rvs_` 函数，聚合其所有被调用方的能力，得到推断结果。`PATH` 必须是一个可成功执行 `cargo check` 的本地 crate 项目；仅含 `[workspace]` 的虚拟根目录不受支持。
 
 推断分两步：首先对不在种子中的函数，直接从行为特征推断能力（`async fn` → A、`unsafe fn` → U、`&mut` 参数 → M、`static` 引用 → S、`static mut` 引用 → S+U、`thread_local!` 引用 → S+T）；然后通过固定点迭代，将所有被调用方的能力沿调用图向上传播。若同一函数同时被识别为普通 `static` 引用和 `thread_local!` 引用，结果会合并为 `S+T`（幂等）。种子中的条目作为推断的起点（下界），传播可能在其基础上累加更多能力。
 
@@ -121,7 +121,7 @@ cargo rivus infer-capsmap -m caps/           # 指定种子目录
 
 ## `cargo rivus infer-std [OPTIONS] [PATH]`
 
-通过 `-Zbuild-std` 编译 std/core/alloc，推断标准库函数的能力标注。需要 nightly Rust；命令实际会调用 `cargo +nightly check`，如果本机没有可用的 nightly toolchain 会直接失败。`PATH` 必须是一个有效的 Cargo 项目。
+通过 `-Zbuild-std` 编译 std/core/alloc，推断标准库函数的能力标注。需要 nightly Rust；命令实际会调用 `cargo +nightly check`，如果本机没有可用的 nightly toolchain 会直接失败。`PATH` 必须是一个有效的本地 crate 项目；仅含 `[workspace]` 的虚拟根目录不受支持。
 
 注意：该命令只会从 `PATH/caps` 加载 `seed` 和 `suppress` 文件（不加载 `std`/`deps`/`ext`，因为那些是上一次生成的结果，会干扰重新生成），并在其基础上推断标准库条目。
 
@@ -137,14 +137,13 @@ cargo rivus infer-std -o caps/std        # 写入 <PATH>/target/rivus-std-capsma
 
 ## `cargo rivus setup <path>`
 
-将 `rivus.md` 复制为目标项目的 `AGENTS.md`，并在 `Cargo.toml` 中注入 clippy lint 规则。`<path>` 应当是一个包含 `Cargo.toml` 的现有目录。
+将 `rivus.md` 复制为目标项目的 `AGENTS.md`，并在 `Cargo.toml` 中注入 clippy lint 规则。`<path>` 应当是一个包含 `Cargo.toml` 且至少定义了一个本地 crate target 的现有目录。
 
 注意：命令会先确认目标目录包含可读取的 `Cargo.toml`，然后再覆盖写入 `AGENTS.md` 并修改 `Cargo.toml`。
 
 - 如果目标项目已有部分 clippy lint，只注入不存在的条目
 - 已存在的 lint 值不会被覆盖
 - `AGENTS.md` 每次覆盖写入（确保与最新 `rivus.md` 同步）
-- 如果项目已有 `caps/seed`，向其中注入 spawn 条目。如果 `caps/seed` 不存在，spawn 条目不会被注入
 
 注入的 clippy lint 分为以下几类：
 - **防 panic**：`string_slice`、`indexing_slicing`、`unwrap_used`、`panic`、`todo` 等
@@ -182,7 +181,7 @@ cargo rivus strip /path/to  # 指定目录
 
 ## `cargo rivus annotate [PATH]`
 
-对项目中所有函数进行能力推断，然后添加 `rvs_` 前缀和能力后缀。使用 rust-analyzer 的语义分析引擎进行重命名。
+对项目中所有函数进行能力推断，然后添加 `rvs_` 前缀和能力后缀。使用 rust-analyzer 的语义分析引擎进行重命名。`PATH` 必须指向本地 crate 项目；仅含 `[workspace]` 的虚拟根目录不受支持。
 
 ```bash
 cargo rivus annotate           # 当前目录

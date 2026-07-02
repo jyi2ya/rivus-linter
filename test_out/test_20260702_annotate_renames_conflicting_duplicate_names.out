@@ -1,0 +1,2 @@
+pub mod a { pub fn rvs_parse() {} }
+pub mod b { pub fn rvs_parse_M(_x: &mut u8) {} }

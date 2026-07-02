@@ -9,8 +9,8 @@ use crate::inference::{
     rvs_infer_signature_caps,
 };
 use crate::workspace::{
-    rvs_collect_callgraph_BIMS, rvs_detect_crate_name_BIS, rvs_detect_local_crate_prefixes_BIS,
-    rvs_ensure_project_dir_BS, rvs_resolve_capsmap_path, rvs_write_capsmap_result_BIS,
+    rvs_collect_callgraph_BIMS, rvs_ensure_cargo_project_BIS, rvs_load_local_crate_prefixes_BIS,
+    rvs_resolve_capsmap_path, rvs_write_capsmap_result_BIS,
 };
 
 /// # Panics
@@ -21,7 +21,7 @@ pub(crate) fn rvs_run_infer_capsmap_BIMPS(
     seed_capsmap: &Path,
     output: &Option<PathBuf>,
 ) -> Result<(), String> {
-    rvs_ensure_project_dir_BS(path)?;
+    let local_crate_prefixes = rvs_load_local_crate_prefixes_BIS(path)?;
 
     let abs_seed = rvs_resolve_capsmap_path(path, seed_capsmap);
     if !abs_seed.is_dir() {
@@ -50,7 +50,6 @@ pub(crate) fn rvs_run_infer_capsmap_BIMPS(
     std::fs::write(&cache_path, &all_result)
         .map_err(|e| format!("cannot write {}: {e}", cache_path.display()))?;
 
-    let local_crate_prefixes = rvs_detect_local_crate_prefixes_BIS(path)?;
     let impl_index = rvs_build_impl_index(&callgraph);
     let (direct_external_calls, unknown_callees) = rvs_collect_direct_external_deps(
         &callgraph,
@@ -89,11 +88,12 @@ pub(crate) fn rvs_run_infer_capsmap_BIMPS(
 ///
 /// Panics if the current executable path, current directory, or cargo cannot be resolved.
 pub(crate) fn rvs_run_infer_std_BIMPS(path: &Path, output: &Option<PathBuf>) -> Result<(), String> {
-    rvs_ensure_project_dir_BS(path)?;
-    let cargo_toml = path.join("Cargo.toml");
-    if !cargo_toml.exists() {
-        return Err(format!("'{}' is not a Cargo project", path.display()));
-    }
+    rvs_ensure_cargo_project_BIS(path)?;
+    let local_crate_prefixes = rvs_load_local_crate_prefixes_BIS(path)?;
+    let local_prefixes: Vec<String> = local_crate_prefixes
+        .into_iter()
+        .map(|name| format!("{name}::"))
+        .collect();
 
     let callgraph = rvs_collect_callgraph_BIMS(path, true, false, vec![])?;
     let caps_dir = path.join("caps");
@@ -141,12 +141,10 @@ pub(crate) fn rvs_run_infer_std_BIMPS(path: &Path, output: &Option<PathBuf>) -> 
     let post_aliases = rvs_generate_trait_aliases_MP(&std_inferred, &impl_index, &callgraph);
     inferred.extend(post_aliases);
 
-    let crate_name = rvs_detect_crate_name_BIS(path)?;
-    let crate_prefix = format!("{crate_name}::");
     let std_only: BTreeMap<String, crate::capability::CapabilitySet> = inferred
         .iter()
         .filter(|(name, _)| {
-            !name.starts_with(&crate_prefix)
+            !local_prefixes.iter().any(|prefix| name.starts_with(prefix))
                 && std_crates.iter().any(|prefix| name.starts_with(prefix))
         })
         .map(|(k, v)| (k.clone(), v.clone()))
@@ -183,4 +181,69 @@ pub(crate) fn rvs_run_infer_std_BIMPS(path: &Path, output: &Option<PathBuf>) -> 
     let result = rvs_format_capsmap(&std_only);
     let default_path = path.join("target").join("rivus-std-capsmap.txt");
     rvs_write_capsmap_result_BIS(&result, &default_path, output, "std capsmap")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rvs_snapshot_BIS(name: &str, content: &str) {
+        std::fs::create_dir_all("test_out").unwrap();
+        std::fs::write(format!("test_out/{name}.out"), content).unwrap();
+    }
+
+    fn rvs_make_temp_dir_BIS(tag: &str) -> std::path::PathBuf {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("never: system clock should be after unix epoch for test temp dir")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("rivus-{tag}-{}-{unique}", std::process::id()));
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn test_20260702_infer_capsmap_rejects_workspace_root() {
+        let dir = rvs_make_temp_dir_BIS("infer-capsmap-workspace-root");
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[workspace]\nmembers = []\nresolver = \"2\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.join("caps")).unwrap();
+
+        let result = rvs_run_infer_capsmap_BIMPS(&dir, Path::new("caps"), &None);
+        let output = format!("{result:?}");
+        rvs_snapshot_BIS(
+            "test_20260702_infer_capsmap_rejects_workspace_root",
+            &output,
+        );
+
+        assert!(result.is_err());
+        assert!(output.contains("missing local crate target"));
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260702_infer_std_rejects_workspace_root() {
+        let dir = rvs_make_temp_dir_BIS("infer-std-workspace-root");
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[workspace]\nmembers = []\nresolver = \"2\"\n",
+        )
+        .unwrap();
+
+        let result = rvs_run_infer_std_BIMPS(&dir, &None);
+        let output = format!("{result:?}");
+        rvs_snapshot_BIS("test_20260702_infer_std_rejects_workspace_root", &output);
+
+        assert!(result.is_err());
+        assert!(output.contains("missing local crate target"));
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }
