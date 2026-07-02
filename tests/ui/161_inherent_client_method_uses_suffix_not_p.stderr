@@ -1,0 +1,9 @@
+error: {} → {B, I} missing B(Blocking), I(IO)
+  --> $DIR/tests/ui/161_inherent_client_method_uses_suffix_not_p.rs:18:5
+   |
+LL |     client.rvs_fetch_BI();
+   |     ^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(rivus::rvs_call_violation)]` on by default
+
+error: aborting due to 1 previous error

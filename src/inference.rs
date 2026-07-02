@@ -46,7 +46,8 @@ pub(crate) fn rvs_format_unknown_callees(
     msg
 }
 
-/// Generate trait-method aliases (e.g. `std::io::Read::read`) from impl-method keys.
+/// Generate trait-method aliases (e.g. `std::io::Read::read`) from impl-method
+/// keys using majority-vote capability aggregation across impls.
 pub(crate) fn rvs_generate_trait_aliases_MP(
     inferred: &BTreeMap<String, CapabilitySet>,
     impl_index: &HashMap<String, Vec<String>>,
@@ -64,7 +65,7 @@ pub(crate) fn rvs_generate_trait_aliases_MP(
                 let alias = format!("{trait_path}::{method_name}");
                 if seen.insert(alias.clone())
                     && let Some(voted) =
-                        rvs_resolve_impl_union_M(&alias, impl_index, inferred, callgraph)
+                        rvs_resolve_impl_majority_caps_M(&alias, impl_index, inferred, callgraph)
                 {
                     aliases.insert(alias, voted);
                 }
@@ -126,7 +127,7 @@ pub(crate) fn rvs_infer_caps_M(
 
                 let callee_caps = callee_caps.or_else(|| {
                     if !callee.contains('@') {
-                        rvs_resolve_impl_union_M(callee, &impl_index, &inferred, callgraph)
+                        rvs_resolve_impl_majority_caps_M(callee, &impl_index, &inferred, callgraph)
                     } else {
                         None
                     }
@@ -152,8 +153,9 @@ pub(crate) fn rvs_infer_caps_M(
     inferred
 }
 
-/// Resolve a trait method callee by taking the union of all impl methods.
-pub(crate) fn rvs_resolve_impl_union_M(
+/// Resolve a trait method callee by taking a majority vote across all impl
+/// methods for each propagated capability.
+pub(crate) fn rvs_resolve_impl_majority_caps_M(
     callee: &str,
     impl_index: &HashMap<String, Vec<String>>,
     inferred: &BTreeMap<String, CapabilitySet>,
@@ -191,13 +193,13 @@ pub(crate) fn rvs_resolve_impl_union_M(
     }
 
     let threshold = total.div_ceil(2);
-    let mut union = CapabilitySet::rvs_new();
+    let mut majority_caps = CapabilitySet::rvs_new();
     for (cap, count) in &cap_counts {
         if *count >= threshold {
-            union.rvs_insert_M(*cap);
+            majority_caps.rvs_insert_M(*cap);
         }
     }
-    Some(union)
+    Some(majority_caps)
 }
 
 pub(crate) fn rvs_format_capsmap(caps: &BTreeMap<String, CapabilitySet>) -> String {
@@ -254,7 +256,7 @@ pub(crate) fn rvs_collect_direct_external_deps(
             if let Some(caps) = inferred.get(callee) {
                 known.entry(callee.clone()).or_insert_with(|| caps.clone());
             } else if let Some(caps) =
-                rvs_resolve_impl_union_M(callee, impl_index, inferred, callgraph)
+                rvs_resolve_impl_majority_caps_M(callee, impl_index, inferred, callgraph)
             {
                 known.entry(callee.clone()).or_insert(caps);
             } else {
@@ -615,10 +617,10 @@ mod tests {
         );
     }
 
-    // ─── rvs_resolve_impl_union_M ────────────────────────────────────────
+    // ─── rvs_resolve_impl_majority_caps_M ────────────────────────────────
 
     #[test]
-    fn test_20260613_impl_union_majority_vote() {
+    fn test_20260613_impl_majority_vote_filters_minority_caps() {
         let mut callgraph: BTreeMap<String, FnBehavior> = BTreeMap::new();
 
         let mut caller = rvs_make_behavior();
@@ -641,6 +643,10 @@ mod tests {
         let seed = capsmap::CapsMap::rvs_parse("libc::unix::read=BI").unwrap();
 
         let result = rvs_infer_caps_M(&callgraph, &seed);
+        rvs_snapshot_BIS(
+            "test_20260613_impl_majority_vote_filters_minority_caps",
+            &format!("{result:?}"),
+        );
 
         let caller_caps = result.get("my_crate::rvs_copy").expect("caller exists");
         assert!(
@@ -682,7 +688,7 @@ mod tests {
     }
 
     #[test]
-    fn test_20260613_impl_union_no_cross_trait() {
+    fn test_20260613_impl_majority_vote_no_cross_trait() {
         let mut callgraph: BTreeMap<String, FnBehavior> = BTreeMap::new();
 
         let mut caller = rvs_make_behavior();
@@ -702,6 +708,10 @@ mod tests {
 
         let seed = capsmap::CapsMap::rvs_parse("libc::unix::read=BI").unwrap();
         let result = rvs_infer_caps_M(&callgraph, &seed);
+        rvs_snapshot_BIS(
+            "test_20260613_impl_majority_vote_no_cross_trait",
+            &format!("{result:?}"),
+        );
 
         let caller_caps = result
             .get("my_crate::rvs_read_data")
@@ -949,8 +959,12 @@ mod tests {
             Some(&CapabilitySet::rvs_from_validated("BI"))
         );
 
-        let union =
-            rvs_resolve_impl_union_M("std::io::Read::read", &impl_index, &inferred, &callgraph);
-        assert_eq!(union, Some(CapabilitySet::rvs_from_validated("BI")));
+        let majority = rvs_resolve_impl_majority_caps_M(
+            "std::io::Read::read",
+            &impl_index,
+            &inferred,
+            &callgraph,
+        );
+        assert_eq!(majority, Some(CapabilitySet::rvs_from_validated("BI")));
     }
 }

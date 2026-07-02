@@ -406,6 +406,15 @@ pub(crate) fn rvs_ensure_project_dir_BS(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+pub(crate) fn rvs_ensure_cargo_project_BIS(path: &Path) -> Result<(), String> {
+    rvs_ensure_project_dir_BS(path)?;
+    let cargo_toml = path.join("Cargo.toml");
+    if !cargo_toml.is_file() {
+        return Err(format!("'{}' is not a Cargo project", path.display()));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -426,6 +435,32 @@ mod tests {
         );
         assert!(prefixes.contains("rivus_linter"));
         assert!(prefixes.contains("cargo_rivus"));
+    }
+
+    #[test]
+    fn test_20260702_ensure_cargo_project_requires_cargo_toml() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("never: system clock should be after unix epoch for test temp dir")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "rivus-workspace-cargo-check-{}-{unique}",
+            std::process::id()
+        ));
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let result = rvs_ensure_cargo_project_BIS(&dir);
+        let output = format!("{result:?}");
+        rvs_snapshot_BIS(
+            "test_20260702_ensure_cargo_project_requires_cargo_toml",
+            &output,
+        );
+        assert!(result.is_err());
+
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

@@ -5,7 +5,8 @@ use std::path::Path;
 use crate::artifacts;
 use crate::capability::{Capability, CapabilityPolicy, CapabilitySet};
 use crate::workspace::{
-    CargoCheckConfig, rvs_clean_dir_BIS, rvs_ensure_project_dir_BS, rvs_run_cargo_check_impl_BIMS,
+    CargoCheckConfig, rvs_clean_dir_BIS, rvs_ensure_cargo_project_BIS,
+    rvs_run_cargo_check_impl_BIMS,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -187,7 +188,7 @@ fn rvs_read_report_entries_BIS(report_dir: &Path) -> Result<Vec<FnEntry>, String
 ///
 /// Panics if the current executable path, current directory, or cargo cannot be resolved.
 pub(crate) fn rvs_run_report_BIMPS(path: &Path) -> Result<(), String> {
-    rvs_ensure_project_dir_BS(path)?;
+    rvs_ensure_cargo_project_BIS(path)?;
 
     let report_dir = path.join("target").join("rivus-report");
     let abs_report_dir = std::env::current_dir()
@@ -196,7 +197,7 @@ pub(crate) fn rvs_run_report_BIMPS(path: &Path) -> Result<(), String> {
     rvs_clean_dir_BIS(&report_dir);
     rvs_clean_dir_BIS(&path.join("target").join("rivus-report-build"));
 
-    if let Err(e) = rvs_run_cargo_check_impl_BIMS(&CargoCheckConfig {
+    let cargo_check = rvs_run_cargo_check_impl_BIMS(&CargoCheckConfig {
         project_path: path,
         wrap_all_crates: false,
         with_tests: true,
@@ -211,10 +212,14 @@ pub(crate) fn rvs_run_report_BIMPS(path: &Path) -> Result<(), String> {
         ],
         extra_args: vec![],
         target_subdir: Some("rivus-report-build"),
-    }) {
+    });
+    if let Err(e) = cargo_check {
         // Report mode should still produce output even if lint violations
         // (deny-level errors) cause cargo check to fail. The report JSON
         // is written by the lint pass before compilation aborts.
+        if !report_dir.is_dir() {
+            return Err(e);
+        }
         eprintln!("warning: {e}");
     }
 
@@ -230,6 +235,19 @@ mod tests {
     fn rvs_snapshot_BIS(name: &str, content: &str) {
         std::fs::create_dir_all("test_out").unwrap();
         std::fs::write(format!("test_out/{name}.out"), content).unwrap();
+    }
+
+    fn rvs_make_temp_dir_BIS(tag: &str) -> std::path::PathBuf {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("never: system clock should be after unix epoch for test temp dir")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("rivus-{tag}-{}-{unique}", std::process::id()));
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
     }
 
     #[test]
@@ -351,5 +369,17 @@ mod tests {
         let entries = artifacts::rvs_parse_report_json_S(json).unwrap();
         assert_eq!(entries.len(), 1);
         assert!(entries[0].is_test);
+    }
+
+    #[test]
+    fn test_20260702_report_rejects_non_cargo_dir() {
+        let dir = rvs_make_temp_dir_BIS("report-non-cargo");
+        let result = rvs_run_report_BIMPS(&dir);
+        rvs_snapshot_BIS(
+            "test_20260702_report_rejects_non_cargo_dir",
+            &format!("{result:?}"),
+        );
+        assert!(result.is_err(), "report should fail for non-cargo dir");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

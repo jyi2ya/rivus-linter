@@ -51,17 +51,6 @@ pub(crate) fn rvs_is_port_method_def_id(
     }
 }
 
-pub(crate) fn rvs_is_port_method_path(def_path: &str) -> bool {
-    let trait_path = if let Some((_, trait_path)) = def_path.rsplit_once('@') {
-        trait_path
-    } else if let Some((owner_path, _method)) = def_path.rsplit_once("::") {
-        owner_path
-    } else {
-        return false;
-    };
-    trait_path.rsplit("::").next().is_some_and(rvs_is_port_name)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -75,15 +64,6 @@ mod tests {
         assert!(rvs_is_port_name("UserRepository"));
         assert!(rvs_is_port_name("GithubClient"));
         assert!(!rvs_is_port_name("Formatter"));
-        assert!(rvs_is_port_method_path(
-            "crate_name::UserRepository::rvs_find"
-        ));
-        assert!(rvs_is_port_method_path(
-            "crate_name::RepoImpl::rvs_find@crate_name::UserRepository"
-        ));
-        assert!(!rvs_is_port_method_path(
-            "crate_name::Formatter::rvs_format"
-        ));
 
         if std::hint::black_box(false) {
             let _cx: &LateContext<'_> = unreachable!();

@@ -2,28 +2,34 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use crate::inference::{
-    rvs_build_impl_index, rvs_caps_to_string, rvs_infer_caps_M, rvs_resolve_impl_union_M,
+    rvs_build_impl_index, rvs_caps_to_string, rvs_infer_caps_M, rvs_resolve_impl_majority_caps_M,
 };
 use crate::rename;
 use crate::workspace::{
-    rvs_detect_crate_name_BIS, rvs_ensure_project_dir_BS, rvs_load_callgraph_and_caps_BIMS,
+    rvs_detect_local_crate_prefixes_BIS, rvs_ensure_cargo_project_BIS,
+    rvs_load_callgraph_and_caps_BIMS,
 };
 
 /// # Panics
 ///
 /// Panics if the current executable path, current directory, or cargo cannot be resolved.
 pub(crate) fn rvs_run_annotate_BIMPS(path: &Path) -> Result<(), String> {
-    rvs_ensure_project_dir_BS(path)?;
+    rvs_ensure_cargo_project_BIS(path)?;
 
     let (callgraph, seed) = rvs_load_callgraph_and_caps_BIMS(path)?;
     let inferred = rvs_infer_caps_M(&callgraph, &seed);
-
-    let workspace_name = rvs_detect_crate_name_BIS(path)?;
+    let local_prefixes: Vec<String> = rvs_detect_local_crate_prefixes_BIS(path)?
+        .into_iter()
+        .map(|name| format!("{name}::"))
+        .collect();
 
     let mut renames: Vec<(String, String)> = Vec::new();
     let mut skip_names: HashSet<String> = HashSet::new();
     for (full_path, caps) in &inferred {
-        if !full_path.starts_with(&format!("{workspace_name}::")) {
+        if !local_prefixes
+            .iter()
+            .any(|prefix| full_path.starts_with(prefix))
+        {
             continue;
         }
         let short_name = full_path.rsplit("::").next().unwrap_or(full_path);
@@ -33,7 +39,7 @@ pub(crate) fn rvs_run_annotate_BIMPS(path: &Path) -> Result<(), String> {
         if short_name.starts_with(|c: char| c.is_ascii_uppercase()) {
             continue;
         }
-        if full_path == &format!("{workspace_name}::main") {
+        if short_name == "main" {
             continue;
         }
         if callgraph.get(full_path).is_some_and(|b| b.is_test) {
@@ -76,7 +82,7 @@ pub(crate) fn rvs_run_annotate_BIMPS(path: &Path) -> Result<(), String> {
 ///
 /// Panics if the current executable path, current directory, or cargo cannot be resolved.
 pub(crate) fn rvs_run_why_BIMPS(function: &str, path: &Path) -> Result<(), String> {
-    rvs_ensure_project_dir_BS(path)?;
+    rvs_ensure_cargo_project_BIS(path)?;
 
     let (callgraph, seed) = rvs_load_callgraph_and_caps_BIMS(path)?;
     let inferred = rvs_infer_caps_M(&callgraph, &seed);
@@ -144,7 +150,7 @@ pub(crate) fn rvs_run_why_BIMPS(function: &str, path: &Path) -> Result<(), Strin
                 .or_else(|| seed.rvs_lookup(callee).cloned())
                 .or_else(|| {
                     if !callee.contains('@') {
-                        rvs_resolve_impl_union_M(callee, &impl_index, &inferred, &callgraph)
+                        rvs_resolve_impl_majority_caps_M(callee, &impl_index, &inferred, &callgraph)
                     } else {
                         None
                     }
@@ -173,4 +179,88 @@ pub(crate) fn rvs_run_why_BIMPS(function: &str, path: &Path) -> Result<(), Strin
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rvs_snapshot_BIS(name: &str, content: &str) {
+        std::fs::create_dir_all("test_out").unwrap();
+        std::fs::write(format!("test_out/{name}.out"), content).unwrap();
+    }
+
+    fn rvs_make_temp_dir_BIS(tag: &str) -> std::path::PathBuf {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("never: system clock should be after unix epoch for test temp dir")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("rivus-{tag}-{}-{unique}", std::process::id()));
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn test_20260702_annotate_uses_bin_crate_prefix() {
+        let dir = rvs_make_temp_dir_BIS("annotate-bin-prefix");
+        let cargo_toml = r#"[package]
+name = "annotate-prefix-demo"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "cargo-rivus"
+path = "src/main.rs"
+"#;
+        std::fs::write(dir.join("Cargo.toml"), cargo_toml).unwrap();
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(
+            dir.join("src/main.rs"),
+            "fn main() { parse(); }\n\nfn parse() {}\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.join("target/rivus-callgraph")).unwrap();
+        std::fs::write(
+            dir.join("target/rivus-callgraph/callgraph.json"),
+            r#"{
+  "cargo_rivus::main": {
+    "calls": ["cargo_rivus::parse"],
+    "has_async": false,
+    "is_unsafe_fn": false,
+    "has_mut_param": false,
+    "has_static_ref": false,
+    "has_static_mut_ref": false,
+    "has_thread_local_ref": false,
+    "is_trait_impl": false,
+    "is_test": false
+  },
+  "cargo_rivus::parse": {
+    "calls": [],
+    "has_async": false,
+    "is_unsafe_fn": false,
+    "has_mut_param": false,
+    "has_static_ref": false,
+    "has_static_mut_ref": false,
+    "has_thread_local_ref": false,
+    "is_trait_impl": false,
+    "is_test": false
+  }
+}
+"#,
+        )
+        .unwrap();
+
+        let result = rvs_run_annotate_BIMPS(&dir);
+        let source = std::fs::read_to_string(dir.join("src/main.rs")).unwrap();
+        rvs_snapshot_BIS("test_20260702_annotate_uses_bin_crate_prefix", &source);
+
+        assert!(result.is_ok(), "annotate should succeed: {result:?}");
+        assert!(source.contains("fn rvs_parse()"));
+        assert!(source.contains("rvs_parse();"));
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }

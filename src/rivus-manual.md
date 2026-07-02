@@ -99,9 +99,11 @@ Total: 42 functions, 890 lines
 
 ## `cargo rivus infer-capsmap [OPTIONS] [PATH]`
 
-收集调用图并从种子标注自底向上推断 capsmap。对每个 `rvs_` 函数，聚合其所有被调用方的能力，得到保守上界。`PATH` 必须是一个可成功执行 `cargo check` 的 Cargo 项目。
+收集调用图并从种子标注自底向上推断 capsmap。对每个 `rvs_` 函数，聚合其所有被调用方的能力，得到推断结果。`PATH` 必须是一个可成功执行 `cargo check` 的 Cargo 项目。
 
 推断分两步：首先对不在种子中的函数，直接从行为特征推断能力（`async fn` → A、`unsafe fn` → U、`&mut` 参数 → M、`static` 引用 → S、`static mut` 引用 → S+U、`thread_local!` 引用 → S+T）；然后通过固定点迭代，将所有被调用方的能力沿调用图向上传播。若同一函数同时被识别为普通 `static` 引用和 `thread_local!` 引用，结果会合并为 `S+T`（幂等）。种子中的条目作为推断的起点（下界），传播可能在其基础上累加更多能力。
+
+对于 trait 方法别名（如 `std::io::Read::read`），工具不会对所有 impl 做集合并，而是按能力逐项做 majority vote：某个可传播能力只有在至少一半 impl 都带有它时，才会出现在该 trait 方法别名上。少数 impl 独有的能力不会被抬升到别名层。这一规则同样会影响 `annotate` 和 `why` 的显示结果。
 
 ```bash
 cargo rivus infer-capsmap                    # 写入 <PATH>/target/rivus-inferred-capsmap.txt 和 <PATH>/target/rivus-deps-capsmap.txt，并输出 deps capsmap 到 stdout
@@ -137,7 +139,7 @@ cargo rivus infer-std -o caps/std        # 写入 <PATH>/target/rivus-std-capsma
 
 将 `rivus.md` 复制为目标项目的 `AGENTS.md`，并在 `Cargo.toml` 中注入 clippy lint 规则。`<path>` 应当是一个包含 `Cargo.toml` 的现有目录。
 
-注意：命令会先覆盖写入 `AGENTS.md`，再读取和修改 `Cargo.toml`。
+注意：命令会先确认目标目录包含可读取的 `Cargo.toml`，然后再覆盖写入 `AGENTS.md` 并修改 `Cargo.toml`。
 
 - 如果目标项目已有部分 clippy lint，只注入不存在的条目
 - 已存在的 lint 值不会被覆盖
@@ -189,6 +191,7 @@ cargo rivus annotate /path/to  # 指定目录
 
 注意：
 - 需要项目能成功 `cargo check`
+- trait 方法别名（如 `Trait::method`）的能力由各 impl 按 majority vote 聚合，少数 impl 独有的能力不会体现在别名层
 - annotate 后 `#[serde(default = "...")]` 等字符串字面量中的函数引用不会自动更新，需要手动修复
 - annotate 会删除 `target/rivus-callgraph` 和 `target/rivus-callgraph-std` 缓存（函数名已变，旧缓存失效）
 

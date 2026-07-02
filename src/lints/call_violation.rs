@@ -70,9 +70,7 @@ pub(crate) fn rvs_check_target_S<'tcx>(
     capsmap: &Option<CapsMap>,
     port_traits: &HashSet<rustc_span::def_id::DefId>,
 ) {
-    if port_traits::rvs_is_port_method_def_id(cx, def_id, port_traits)
-        || port_traits::rvs_is_port_method_path(def_path)
-    {
+    if port_traits::rvs_is_port_method_def_id(cx, def_id, port_traits) {
         let mut cc = CapabilitySet::rvs_new();
         cc.rvs_insert_M(Capability::P);
         rvs_emit_call_violation_if_needed_S(cx, span, def_path, src_path, caps, &cc);

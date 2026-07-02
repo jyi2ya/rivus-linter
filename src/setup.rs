@@ -80,16 +80,16 @@ pub fn rvs_inject_clippy_lints_M(cargo_toml: &str) -> (String, usize) {
 }
 
 pub(crate) fn rvs_run_setup_BIMS(path: &Path) -> Result<(), String> {
-    crate::workspace::rvs_ensure_project_dir_BS(path)?;
+    crate::workspace::rvs_ensure_cargo_project_BIS(path)?;
+
+    let cargo_toml_path = path.join("Cargo.toml");
+    let content = std::fs::read_to_string(&cargo_toml_path)
+        .map_err(|e| format!("cannot read '{}': {e}", cargo_toml_path.display()))?;
 
     let agents_md = path.join("AGENTS.md");
     std::fs::write(&agents_md, crate::RIVUS_MD)
         .map_err(|e| format!("cannot write '{}': {e}", agents_md.display()))?;
     println!("Written {}", agents_md.display());
-
-    let cargo_toml_path = path.join("Cargo.toml");
-    let content = std::fs::read_to_string(&cargo_toml_path)
-        .map_err(|e| format!("cannot read '{}': {e}", cargo_toml_path.display()))?;
 
     let (new_content, count) = rvs_inject_clippy_lints_M(&content);
     if count > 0 {
@@ -116,6 +116,19 @@ mod tests {
     fn rvs_snapshot_BIS(name: &str, content: &str) {
         std::fs::create_dir_all("test_out").unwrap();
         std::fs::write(format!("test_out/{name}.out"), content).unwrap();
+    }
+
+    fn rvs_make_temp_dir_BIS(tag: &str) -> std::path::PathBuf {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("never: system clock should be after unix epoch for test temp dir")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("rivus-{tag}-{}-{unique}", std::process::id()));
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
     }
 
     #[test]
@@ -175,5 +188,25 @@ mod tests {
         let (result, count) = rvs_inject_clippy_lints_M(input);
         assert!(result.contains("string_slice = \"deny\""));
         assert_eq!(count, CLIPPY_LINTS.len() - 1);
+    }
+
+    #[test]
+    fn test_20260702_setup_rejects_non_cargo_dir_without_writing_agents() {
+        let dir = rvs_make_temp_dir_BIS("setup-non-cargo");
+        let agents_md = dir.join("AGENTS.md");
+        let result = rvs_run_setup_BIMS(&dir);
+        let output = format!("result={result:?}\nexists={}\n", agents_md.exists());
+        rvs_snapshot_BIS(
+            "test_20260702_setup_rejects_non_cargo_dir_without_writing_agents",
+            &output,
+        );
+
+        assert!(result.is_err(), "setup should fail for non-cargo dir");
+        assert!(
+            !agents_md.exists(),
+            "setup should not write AGENTS.md on failure"
+        );
+
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }
