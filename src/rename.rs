@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use crate::capability::rvs_parse_function;
 use ra_ap_ide::{
     Analysis, AnalysisHost, FilePosition, FileStructureConfig, Indel, RenameConfig, SourceChange,
     StructureNodeKind,
@@ -329,21 +330,8 @@ fn rvs_collect_edits_M(
 /// Given `rvs_add`, returns `add`.
 /// Returns `None` if the name doesn't start with `rvs_`.
 fn rvs_compute_strip_name(name: &str) -> Option<String> {
-    let rest = name.strip_prefix("rvs_")?;
-
-    // Check if there's a capability suffix after the last underscore
-    if let Some(pos) = rest.rfind('_') {
-        let potential_suffix = rest.get(pos + 1..).unwrap_or("");
-        if !potential_suffix.is_empty() && potential_suffix.chars().all(|c| c.is_ascii_uppercase())
-        {
-            // Has a suffix — return just the base part
-            let base = rest.get(..pos).unwrap_or("");
-            return Some(base.to_string());
-        }
-    }
-
-    // No suffix — just return the part after rvs_
-    Some(rest.to_string())
+    let (base, _) = rvs_parse_function(name)?;
+    Some(base.to_string())
 }
 
 /// Checks whether `file_path` is a local file (under `workspace_root`),

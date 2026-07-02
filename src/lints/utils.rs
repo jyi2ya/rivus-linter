@@ -2,12 +2,14 @@ use std::collections::{BTreeSet, HashSet};
 
 use rustc_hir::{
     self, Block, Body, Expr, ExprKind, GenericArg, HirId, ImplItem, ImplItemImplKind, Mutability,
-    QPath, Safety, TyKind, attrs::AttributeKind, def::Res, def_id::DefId,
+    QPath, TyKind, attrs::AttributeKind, def::Res, def_id::DefId,
 };
 use rustc_lint::LateContext;
 use rustc_span::{Span, Symbol};
 
-use crate::capability::{Capability, CapabilitySet, rvs_extract_raw_suffix, rvs_parse_function};
+use crate::capability::{
+    Capability, CapabilityFacts, CapabilitySet, rvs_extract_raw_suffix, rvs_parse_function,
+};
 
 // ─── Constants ───────────────────────────────────────────────────────────
 
@@ -148,9 +150,7 @@ pub(crate) fn rvs_is_pub_impl_item(cx: &LateContext<'_>, impl_item: &ImplItem<'_
 pub(crate) struct FnInfo {
     pub caps: CapabilitySet,
     pub raw_suffix: String,
-    pub is_async: bool,
-    pub is_unsafe_fn: bool,
-    pub has_mut_param: bool,
+    pub facts: CapabilityFacts,
 }
 
 impl FnInfo {
@@ -164,12 +164,11 @@ impl FnInfo {
         Some(Self {
             caps,
             raw_suffix: rvs_extract_raw_suffix(name),
-            is_async: sig.header.asyncness.is_async(),
-            is_unsafe_fn: matches!(
-                sig.header.safety,
-                rustc_hir::HeaderSafety::Normal(Safety::Unsafe)
+            facts: CapabilityFacts::rvs_from_signature(
+                sig,
+                rvs_has_mutable_params(sig, body),
+                false,
             ),
-            has_mut_param: rvs_has_mutable_params(sig, body),
         })
     }
 }

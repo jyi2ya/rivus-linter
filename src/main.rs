@@ -37,7 +37,7 @@ mod lints;
 mod rename;
 mod setup;
 
-use capability::{Capability, CapabilitySet};
+use capability::{Capability, CapabilityFacts, CapabilityPolicy, CapabilitySet};
 use setup::rvs_inject_clippy_lints_M;
 
 const RIVUS_MD: &str = include_str!("../rivus.md");
@@ -135,7 +135,7 @@ struct Cli {
 enum Commands {
     /// Check capability compliance via rustc plugin (cargo check)
     Check {
-        /// Path to capsmap file or directory
+        /// Path to caps directory
         #[arg(short = 'm', long = "capsmap")]
         capsmap: Option<PathBuf>,
         /// Extra cargo check args
@@ -159,7 +159,7 @@ enum Commands {
         /// Path to project directory (must contain Cargo.toml)
         #[arg(default_value = ".")]
         path: PathBuf,
-        /// Path to seed capsmap file or directory
+        /// Path to seed caps directory
         #[arg(short = 'm', long = "capsmap", default_value = "caps")]
         capsmap: PathBuf,
         /// Output path for inferred capsmap (default: stdout)
@@ -285,28 +285,34 @@ fn main() -> ExitCode {
 /// partial snapshot from infer-capsmap, not a complete caps source.
 fn rvs_resolve_capsmap_BIMS(
     cmd: &mut Command,
-    user_capsmap: Option<&Path>,
+    user_capsmap: &[&Path],
     project_path: &Path,
     self_path: &Path,
-) {
+) -> Result<(), String> {
     // 1. User-provided capsmap (explicit -m flag)
-    if let Some(p) = user_capsmap.filter(|p| p.exists()) {
+    if let Some(p) = user_capsmap.first().copied() {
         let abs = if p.is_absolute() {
             p.to_path_buf()
         } else {
             std::env::current_dir()
-                .expect("current dir invalid")
+                .map_err(|e| format!("current dir invalid: {e}"))?
                 .join(p)
         };
+        if !abs.is_dir() {
+            return Err(format!(
+                "capsmap path must be a directory: {}",
+                abs.display()
+            ));
+        }
         cmd.env("RIVUS_CAPSMAP", abs);
-        return;
+        return Ok(());
     }
 
     // 2. Project caps/ directory
     let project_caps = project_path.join("caps");
     if project_caps.is_dir() {
         cmd.env("RIVUS_CAPSMAP", project_caps);
-        return;
+        return Ok(());
     }
 
     // 3. Built-in caps/ directory (next to the linter binary)
@@ -319,6 +325,7 @@ fn rvs_resolve_capsmap_BIMS(
     if let Some(dir) = built_in_caps.filter(|p| p.is_dir()) {
         cmd.env("RIVUS_CAPSMAP", dir);
     }
+    Ok(())
 }
 
 /// Configuration for running `cargo check` with the rivus lint pass.
@@ -377,12 +384,8 @@ fn rvs_run_cargo_check_impl_BIMS(config: &CargoCheckConfig) -> Result<(), String
         .iter()
         .any(|(k, _)| *k == "RIVUS_CALLGRAPH");
     if !has_callgraph_env {
-        rvs_resolve_capsmap_BIMS(
-            &mut cmd,
-            config.user_capsmap,
-            config.project_path,
-            &self_path,
-        );
+        let user_capsmap: Vec<&Path> = config.user_capsmap.into_iter().collect();
+        rvs_resolve_capsmap_BIMS(&mut cmd, &user_capsmap, config.project_path, &self_path)?;
     }
 
     cmd.arg("check");
@@ -546,18 +549,12 @@ struct JsonReportEntry {
 #[derive(Debug, Deserialize)]
 struct JsonFnBehavior {
     calls: BTreeSet<String>,
-    has_async: bool,
-    is_unsafe_fn: bool,
-    has_mut_param: bool,
-    has_static_ref: bool,
-    has_static_mut_ref: bool,
-    has_thread_local_ref: bool,
+    #[serde(flatten)]
+    facts: CapabilityFacts,
     #[serde(default)]
     is_trait_impl: bool,
     #[serde(default)]
     is_test: bool,
-    #[serde(default)]
-    is_port_method: bool,
 }
 
 fn rvs_build_report(entries: &[FnEntry]) -> Report {
@@ -570,9 +567,6 @@ fn rvs_build_report(entries: &[FnEntry]) -> Report {
     let mut ok_line_count = 0usize;
     let mut total_fn_count = 0usize;
     let mut total_line_count = 0usize;
-    let good_allowed = CapabilitySet::rvs_from_good_caps();
-    let ok_allowed = CapabilitySet::rvs_from_ok_caps();
-
     for func in entries {
         if func.is_test || func.allows_dead_code {
             continue;
@@ -591,12 +585,12 @@ fn rvs_build_report(entries: &[FnEntry]) -> Report {
             }
         }
 
-        if func.capabilities.rvs_is_subset_of(&good_allowed) {
+        if CapabilityPolicy::rvs_is_good(&func.capabilities) {
             good_fn_count += 1;
             good_line_count += func.line_count;
         }
 
-        if func.capabilities.rvs_is_subset_of(&ok_allowed) {
+        if CapabilityPolicy::rvs_is_ok(&func.capabilities) {
             ok_fn_count += 1;
             ok_line_count += func.line_count;
         }
@@ -1097,6 +1091,12 @@ fn rvs_run_infer_capsmap_BIMPS(
     rvs_ensure_project_dir_BS(path)?;
 
     let abs_seed = rvs_resolve_capsmap_path(path, seed_capsmap);
+    if !abs_seed.is_dir() {
+        return Err(format!(
+            "capsmap path must be a directory: {}",
+            abs_seed.display()
+        ));
+    }
 
     let callgraph = rvs_collect_callgraph_BIMS(
         path,
@@ -1341,29 +1341,23 @@ fn rvs_parse_callgraph_S(json: &str) -> Result<BTreeMap<String, ParsedFnBehavior
 #[derive(Debug, Default)]
 struct ParsedFnBehavior {
     calls: BTreeSet<String>,
-    has_async: bool,
-    is_unsafe_fn: bool,
-    has_mut_param: bool,
-    has_static_ref: bool,
-    has_static_mut_ref: bool,
-    has_thread_local_ref: bool,
+    facts: CapabilityFacts,
     is_trait_impl: bool,
     is_test: bool,
-    is_port_method: bool,
 }
 
 impl ParsedFnBehavior {
     fn rvs_merge_M(&mut self, other: &Self) {
         self.calls.extend(other.calls.iter().cloned());
-        self.has_async |= other.has_async;
-        self.is_unsafe_fn |= other.is_unsafe_fn;
-        self.has_mut_param |= other.has_mut_param;
-        self.has_static_ref |= other.has_static_ref;
-        self.has_static_mut_ref |= other.has_static_mut_ref;
-        self.has_thread_local_ref |= other.has_thread_local_ref;
+        self.facts.has_async |= other.facts.has_async;
+        self.facts.is_unsafe_fn |= other.facts.is_unsafe_fn;
+        self.facts.has_mut_param |= other.facts.has_mut_param;
+        self.facts.has_static_ref |= other.facts.has_static_ref;
+        self.facts.has_static_mut_ref |= other.facts.has_static_mut_ref;
+        self.facts.has_thread_local_ref |= other.facts.has_thread_local_ref;
+        self.facts.is_port_method |= other.facts.is_port_method;
         self.is_trait_impl |= other.is_trait_impl;
         self.is_test |= other.is_test;
-        self.is_port_method |= other.is_port_method;
     }
 }
 
@@ -1371,15 +1365,9 @@ impl From<JsonFnBehavior> for ParsedFnBehavior {
     fn from(j: JsonFnBehavior) -> Self {
         Self {
             calls: j.calls,
-            has_async: j.has_async,
-            is_unsafe_fn: j.is_unsafe_fn,
-            has_mut_param: j.has_mut_param,
-            has_static_ref: j.has_static_ref,
-            has_static_mut_ref: j.has_static_mut_ref,
-            has_thread_local_ref: j.has_thread_local_ref,
+            facts: j.facts,
             is_trait_impl: j.is_trait_impl,
             is_test: j.is_test,
-            is_port_method: j.is_port_method,
         }
     }
 }
@@ -1413,35 +1401,7 @@ fn rvs_build_impl_index(
 /// Infer capabilities from behavioral flags alone (no propagation).
 /// Used by both `rvs_infer_caps_M` and `rvs_run_infer_std_BIMPS`.
 fn rvs_infer_signature_caps(behavior: &ParsedFnBehavior) -> CapabilitySet {
-    // Port trait methods get ONLY P — no other caps, no signature inference.
-    // The whole point of a Port is that callers see a clean interface,
-    // not the I/O capabilities of the real implementation behind it.
-    if behavior.is_port_method {
-        let mut caps = CapabilitySet::rvs_new();
-        caps.rvs_insert_M(Capability::P);
-        return caps;
-    }
-    let mut caps = CapabilitySet::rvs_new();
-    if behavior.has_async {
-        caps.rvs_insert_M(Capability::A);
-    }
-    if behavior.is_unsafe_fn {
-        caps.rvs_insert_M(Capability::U);
-    }
-    if behavior.has_mut_param {
-        caps.rvs_insert_M(Capability::M);
-    }
-    if behavior.has_static_mut_ref {
-        caps.rvs_insert_M(Capability::S);
-        caps.rvs_insert_M(Capability::U);
-    } else if behavior.has_static_ref {
-        caps.rvs_insert_M(Capability::S);
-    }
-    if behavior.has_thread_local_ref {
-        caps.rvs_insert_M(Capability::S);
-        caps.rvs_insert_M(Capability::T);
-    }
-    caps
+    CapabilityPolicy::rvs_signature_caps(behavior.facts)
 }
 
 /// Format an error message for unknown callees (functions with no capability data).
@@ -1546,7 +1506,7 @@ fn rvs_infer_caps_M(
                 continue;
             }
             // Port trait methods are frozen at {P} — no propagation changes them.
-            if behavior.is_port_method {
+            if behavior.facts.is_port_method {
                 continue;
             }
             let mut combined = inferred
@@ -1571,10 +1531,8 @@ fn rvs_infer_caps_M(
                 });
                 if let Some(cc) = callee_caps {
                     for cap in cc.rvs_iter() {
-                        // A, M, U are never propagated (signature-only capabilities).
-                        // They are inferred from the function's own signature, not
-                        // from what it calls.
-                        if matches!(cap, Capability::A | Capability::M | Capability::U) {
+                        // Signature-only capabilities are inferred from the function itself.
+                        if !CapabilityPolicy::rvs_is_propagated_cap(cap) {
                             continue;
                         }
                         if !combined.rvs_contains(cap) {
@@ -1601,8 +1559,8 @@ fn rvs_infer_caps_M(
 /// `std::fs::impl::read@Read`, `std::io::cursor::impl::read@Read`, etc.
 ///
 /// Port trait methods (is_port_method) always resolve to {P} — no voting.
-/// For non-Port traits: A and U are never propagated (signature-only).
-/// All other caps (B, I, M, S, T) are eligible for ≥50% majority vote.
+/// For non-Port traits: signature-only capabilities are never propagated.
+/// All other caps are eligible for ≥50% majority vote.
 fn rvs_resolve_impl_union_M(
     callee: &str,
     impl_index: &HashMap<String, Vec<String>>,
@@ -1622,7 +1580,7 @@ fn rvs_resolve_impl_union_M(
     // the trait method resolves to {P} only — no voting.
     for key in impl_keys {
         if let Some(behavior) = callgraph.get(key)
-            && behavior.is_port_method
+            && behavior.facts.is_port_method
         {
             let mut caps = CapabilitySet::rvs_new();
             caps.rvs_insert_M(Capability::P);
@@ -1632,16 +1590,13 @@ fn rvs_resolve_impl_union_M(
 
     // Majority-vote: a capability is propagated if it appears in ≥50% of impls.
     // This avoids rare impls (e.g. RwLock::read having T) polluting the trait.
-    // A and U are never propagated (detected from function signature only).
-    // S and T are eligible for majority vote — if most impls have them,
-    // they should propagate. The vote naturally filters rare caps.
     let mut cap_counts: HashMap<Capability, usize> = HashMap::new();
     let mut total = 0usize;
     for key in impl_keys {
         if let Some(caps) = inferred.get(key) {
             total += 1;
             for cap in caps.rvs_iter() {
-                if !matches!(cap, Capability::A | Capability::U) {
+                if CapabilityPolicy::rvs_is_propagated_cap(cap) {
                     *cap_counts.entry(cap).or_default() += 1;
                 }
             }
@@ -1986,15 +1941,9 @@ mod tests {
     fn rvs_make_behavior() -> ParsedFnBehavior {
         ParsedFnBehavior {
             calls: BTreeSet::new(),
-            has_async: false,
-            is_unsafe_fn: false,
-            has_mut_param: false,
-            has_static_ref: false,
-            has_static_mut_ref: false,
-            has_thread_local_ref: false,
+            facts: CapabilityFacts::default(),
             is_trait_impl: false,
             is_test: false,
-            is_port_method: false,
         }
     }
 
@@ -2088,7 +2037,7 @@ mod tests {
     fn test_20260609_infer_caps_single_static_ref() {
         let mut callgraph: BTreeMap<String, ParsedFnBehavior> = BTreeMap::new();
         let mut behavior = rvs_make_behavior();
-        behavior.has_static_ref = true;
+        behavior.facts.has_static_ref = true;
         callgraph.insert("my_crate::rvs_get_env_S".into(), behavior);
         let seed = capsmap::CapsMap::rvs_new();
         let result = rvs_infer_caps_M(&callgraph, &seed);
@@ -2243,8 +2192,8 @@ mod tests {
         // However, if the function is in the callgraph with has_async=true, it gets A.
         let mut callgraph: BTreeMap<String, ParsedFnBehavior> = BTreeMap::new();
         let mut behavior = rvs_make_behavior();
-        behavior.has_async = true;
-        behavior.has_mut_param = true;
+        behavior.facts.has_async = true;
+        behavior.facts.has_mut_param = true;
         callgraph.insert("my_crate::rvs_write_db_ABM".into(), behavior);
 
         let seed = capsmap::CapsMap::rvs_new();
@@ -2288,7 +2237,7 @@ mod tests {
 
         // Caller: has M from has_mut_param
         let mut caller_behavior = rvs_make_behavior();
-        caller_behavior.has_mut_param = true;
+        caller_behavior.facts.has_mut_param = true;
         caller_behavior
             .calls
             .insert("std::sys::process::unix::unix::impl::spawn".into());
@@ -2296,7 +2245,7 @@ mod tests {
 
         // Callee: calls a seed function with BIS + a node in a cycle
         let mut callee_behavior = rvs_make_behavior();
-        callee_behavior.has_mut_param = true;
+        callee_behavior.facts.has_mut_param = true;
         callee_behavior
             .calls
             .insert("std::sys::pal::unix::kernel_copy::rvs_write".into());
@@ -2388,16 +2337,16 @@ mod tests {
         callgraph.insert("my_crate::rvs_copy".into(), caller);
 
         let mut file_read = rvs_make_behavior();
-        file_read.has_mut_param = true;
+        file_read.facts.has_mut_param = true;
         file_read.calls.insert("libc::unix::read".into());
         callgraph.insert("std::fs::read@std::io::Read".into(), file_read);
 
         let mut cursor_read = rvs_make_behavior();
-        cursor_read.has_mut_param = true;
+        cursor_read.facts.has_mut_param = true;
         callgraph.insert("std::io::cursor::read@std::io::Read".into(), cursor_read);
 
         let mut slice_read = rvs_make_behavior();
-        slice_read.has_mut_param = true;
+        slice_read.facts.has_mut_param = true;
         callgraph.insert("std::io::impls::read@std::io::Read".into(), slice_read);
 
         let seed = capsmap::CapsMap::rvs_parse("libc::unix::read=BI").unwrap();
@@ -2428,13 +2377,13 @@ mod tests {
 
         // caller has no &mut params of its own
         let mut caller = rvs_make_behavior();
-        caller.has_async = true;
+        caller.facts.has_async = true;
         caller.calls.insert("my_crate::sort_inplace".into());
         callgraph.insert("my_crate::handle".into(), caller);
 
         // callee has &mut param → gets M from signature
         let mut callee = rvs_make_behavior();
-        callee.has_mut_param = true;
+        callee.facts.has_mut_param = true;
         callgraph.insert("my_crate::sort_inplace".into(), callee);
 
         let seed = capsmap::CapsMap::rvs_new();
@@ -2469,7 +2418,7 @@ mod tests {
 
         // RwLock impl: completely unrelated
         let mut rwlock_read = rvs_make_behavior();
-        rwlock_read.has_mut_param = true;
+        rwlock_read.facts.has_mut_param = true;
         callgraph.insert(
             "std::sync::rwlock::read@std::sync::RwLock".into(),
             rwlock_read,
@@ -2731,14 +2680,14 @@ mod tests {
         let mut merged = rvs_make_behavior();
         let mut other = rvs_make_behavior();
         other.calls.insert("std::io::Read::read".into());
-        other.has_async = true;
+        other.facts.has_async = true;
         merged.rvs_merge_M(&other);
         assert!(merged.calls.contains("std::io::Read::read"));
-        assert!(merged.has_async);
+        assert!(merged.facts.has_async);
 
         let mut callgraph = BTreeMap::new();
         let mut impl_behavior = rvs_make_behavior();
-        impl_behavior.has_mut_param = true;
+        impl_behavior.facts.has_mut_param = true;
         let inferred_caps = rvs_infer_signature_caps(&impl_behavior);
         callgraph.insert("std::fs::read@std::io::Read".into(), impl_behavior);
 

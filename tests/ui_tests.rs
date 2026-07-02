@@ -32,7 +32,7 @@ fn rvs_normalize_stderr_S(raw: &str) -> String {
     let dir_str = dir.to_string_lossy().to_string();
     let mut out = raw.to_string();
     out = out.replace(&dir_str, "$DIR");
-    for cap in ['A', 'B', 'I', 'M', 'S', 'T', 'U'] {
+    for cap in ['A', 'B', 'I', 'M', 'P', 'S', 'T', 'U'] {
         out = out.replace(&format!("rivus::rvs_{cap}"), &format!("rivus::rvs_{cap}"));
     }
     let lines: Vec<&str> = out.lines().filter(|l| !l.contains("generated")).collect();
@@ -147,6 +147,7 @@ fn rvs_run_one_test_BIS(fixture: &Path, stderr_path: &Path) -> Result<(), String
 fn test_20260630_ui_tests_BIS() {
     let this_test_name = "test_20260630_ui_tests_BIS";
     let filter = std::env::args()
+        .skip(1)
         .find(|a| !a.starts_with('-') && a != this_test_name && !a.contains(this_test_name));
     let ui_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/ui");
     let fixtures = rvs_collect_rs_files_BIS(&ui_dir);

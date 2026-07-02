@@ -474,18 +474,22 @@ fn rvs_run_fn_checks_MS<'tcx>(
     if let Some(mut info) = utils::FnInfo::rvs_extract(name, sig, body, cx.tcx) {
         // Port trait methods get P capability automatically.
         if is_port_method {
-            info.caps.rvs_insert_M(crate::capability::Capability::P);
+            info.caps = crate::capability::CapabilityPolicy::rvs_port_method_caps();
         }
 
         let is_stub = stub_macro::rvs_check_fn_MS(cx, body, span);
         empty_fn::rvs_check_fn_MS(cx, body, span, has_body, is_stub);
         missing_allow::rvs_check_fn_S(cx, hir_id, span, &info.raw_suffix);
         dead_code::rvs_check_fn_S(cx, attrs, span);
-        signature_caps::rvs_check_fn_S(cx, span, &info);
+        if !is_port_method {
+            signature_caps::rvs_check_fn_S(cx, span, &info);
+        }
         suffix_order::rvs_check_fn_S(cx, span, &info.raw_suffix);
 
         // Body-level checks
-        call_violation::rvs_check_fn_MS(cx, body, &info.caps, data.capsmap);
+        if !is_port_method {
+            call_violation::rvs_check_fn_MS(cx, body, &info.caps, data.capsmap, data.port_traits);
+        }
 
         // Spawn, reflection, catch_unwind, error swallow detection
         spawn::rvs_check_fn_MS(cx, body, is_test);
@@ -494,7 +498,9 @@ fn rvs_run_fn_checks_MS<'tcx>(
         error_swallow::rvs_check_fn_MS(cx, body);
 
         if has_body && !is_stub {
-            static_ref::rvs_check_fn_MS(cx, body, &info.caps);
+            if !is_port_method {
+                static_ref::rvs_check_fn_MS(cx, body, &info.caps);
+            }
             debug_assert::rvs_check_fn_MS(cx, body);
             borrowed_param::rvs_check_fn_params_S(cx, sig);
             consumed_arg::rvs_check_fn_MS(cx, sig, name);
@@ -502,8 +508,7 @@ fn rvs_run_fn_checks_MS<'tcx>(
         }
 
         // Collect good fns for later untested-good-fn check
-        let good = crate::capability::CapabilitySet::rvs_from_good_caps();
-        if info.caps.rvs_is_subset_of(&good)
+        if crate::capability::CapabilityPolicy::rvs_is_good(&info.caps)
             && !is_test
             && !utils::rvs_has_allow(attrs, "dead_code")
             && !utils::rvs_has_allow(attrs, "unused")
@@ -512,8 +517,7 @@ fn rvs_run_fn_checks_MS<'tcx>(
         }
 
         // Collect ok fns (ABMP subset, mock-testable) for untested-ok-fn check.
-        let ok = crate::capability::CapabilitySet::rvs_from_ok_caps();
-        if info.caps.rvs_is_subset_of(&ok)
+        if crate::capability::CapabilityPolicy::rvs_is_ok(&info.caps)
             && !is_test
             && !utils::rvs_has_allow(attrs, "dead_code")
             && !utils::rvs_has_allow(attrs, "unused")

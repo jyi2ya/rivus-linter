@@ -4,7 +4,7 @@ use rustc_lint::{LateContext, LintContext};
 use super::msg::Msg;
 use super::utils::rvs_scan_static_refs_M;
 use super::{RVS_MISSING_SIDE_EFFECT, RVS_MISSING_THREAD_LOCAL, RVS_STATIC_REF};
-use crate::capability::{Capability, CapabilitySet};
+use crate::capability::{Capability, CapabilityPolicy, CapabilitySet};
 
 /// Check static/thread_local references in function body for missing capabilities.
 pub(crate) fn rvs_check_fn_MS<'tcx>(
@@ -14,9 +14,8 @@ pub(crate) fn rvs_check_fn_MS<'tcx>(
 ) {
     let refs = rvs_scan_static_refs_M(cx, body);
     for (span, required, is_thread_local) in refs {
-        if !caps.rvs_can_call(&required) {
-            let missing: Vec<_> = caps
-                .rvs_missing_for(&required)
+        if !CapabilityPolicy::rvs_can_call(caps, &required) {
+            let missing: Vec<_> = CapabilityPolicy::rvs_missing_for(caps, &required)
                 .iter()
                 .map(|c| format!("{c}"))
                 .collect();

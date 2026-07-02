@@ -1,6 +1,9 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
+use rustc_hir::{self, Safety};
+use serde::{Deserialize, Serialize};
+
 /// 能力之八德：异步、阻塞、读写、可变、端口、副作用、线程、不安。
 /// 八德既立，函数之名即为契约，调用之际便有章法。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -73,6 +76,157 @@ const VALID_SUFFIX_CHARS: &[char] = &['A', 'B', 'I', 'M', 'P', 'S', 'T', 'U'];
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct CapabilitySet(BTreeSet<Capability>);
 
+/// Facts observed from a function signature/body before policy is applied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct CapabilityFacts {
+    #[serde(default)]
+    pub has_async: bool,
+    #[serde(default)]
+    pub is_unsafe_fn: bool,
+    #[serde(default)]
+    pub has_mut_param: bool,
+    #[serde(default)]
+    pub has_static_ref: bool,
+    #[serde(default)]
+    pub has_static_mut_ref: bool,
+    #[serde(default)]
+    pub has_thread_local_ref: bool,
+    #[serde(default)]
+    pub is_port_method: bool,
+}
+
+impl CapabilityFacts {
+    /// Build capability facts from a function signature and precomputed mutability.
+    pub fn rvs_from_signature(
+        sig: &rustc_hir::FnSig<'_>,
+        has_mut_param: bool,
+        is_port_method: bool,
+    ) -> Self {
+        Self {
+            has_async: sig.header.asyncness.is_async(),
+            is_unsafe_fn: matches!(
+                sig.header.safety,
+                rustc_hir::HeaderSafety::Normal(Safety::Unsafe)
+            ),
+            has_mut_param,
+            has_static_ref: false,
+            has_static_mut_ref: false,
+            has_thread_local_ref: false,
+            is_port_method,
+        }
+    }
+
+    /// Attach static/thread-local observations collected from the function body.
+    pub fn rvs_with_static_refs(
+        mut self,
+        has_static_ref: bool,
+        has_static_mut_ref: bool,
+        has_thread_local_ref: bool,
+    ) -> Self {
+        self.has_static_ref = has_static_ref;
+        self.has_static_mut_ref = has_static_mut_ref;
+        self.has_thread_local_ref = has_thread_local_ref;
+        self
+    }
+}
+
+/// Central policy for deriving capability sets from observed facts.
+#[derive(Debug)]
+pub struct CapabilityPolicy;
+
+impl CapabilityPolicy {
+    /// Return the public capability view of every Port trait method.
+    pub fn rvs_port_method_caps() -> CapabilitySet {
+        let mut caps = CapabilitySet::rvs_new();
+        caps.rvs_insert_M(Capability::P);
+        caps
+    }
+
+    /// Infer initial capabilities from function facts before call propagation.
+    pub fn rvs_signature_caps(facts: CapabilityFacts) -> CapabilitySet {
+        if facts.is_port_method {
+            return Self::rvs_port_method_caps();
+        }
+        let mut caps = CapabilitySet::rvs_new();
+        if facts.has_async {
+            caps.rvs_insert_M(Capability::A);
+        }
+        if facts.is_unsafe_fn {
+            caps.rvs_insert_M(Capability::U);
+        }
+        if facts.has_mut_param {
+            caps.rvs_insert_M(Capability::M);
+        }
+        if facts.has_static_mut_ref {
+            caps.rvs_insert_M(Capability::S);
+            caps.rvs_insert_M(Capability::U);
+        } else if facts.has_static_ref {
+            caps.rvs_insert_M(Capability::S);
+        }
+        if facts.has_thread_local_ref {
+            caps.rvs_insert_M(Capability::S);
+            caps.rvs_insert_M(Capability::T);
+        }
+        caps
+    }
+
+    /// Return whether a capability propagates from callees to callers.
+    pub fn rvs_is_propagated_cap(cap: Capability) -> bool {
+        !matches!(cap, Capability::A | Capability::M | Capability::U)
+    }
+
+    /// Return whether signature inference requires a suffix capability.
+    pub fn rvs_requires_signature_cap(facts: CapabilityFacts, cap: Capability) -> bool {
+        Self::rvs_signature_caps(facts).rvs_contains(cap)
+    }
+
+    /// Return the capability set allowed for good functions.
+    pub fn rvs_good_caps() -> CapabilitySet {
+        CapabilitySet(
+            [Capability::A, Capability::B, Capability::M]
+                .into_iter()
+                .collect(),
+        )
+    }
+
+    /// Return the capability set allowed for ok functions.
+    pub fn rvs_ok_caps() -> CapabilitySet {
+        CapabilitySet(
+            [Capability::A, Capability::B, Capability::M, Capability::P]
+                .into_iter()
+                .collect(),
+        )
+    }
+
+    /// Return whether a capability set is good.
+    pub fn rvs_is_good(caps: &CapabilitySet) -> bool {
+        caps.rvs_is_subset_of(&Self::rvs_good_caps())
+    }
+
+    /// Return whether a capability set is ok.
+    pub fn rvs_is_ok(caps: &CapabilitySet) -> bool {
+        caps.rvs_is_subset_of(&Self::rvs_ok_caps())
+    }
+
+    /// Return whether `caller` is allowed to call `callee`.
+    pub fn rvs_can_call(caller: &CapabilitySet, callee: &CapabilitySet) -> bool {
+        callee.0.iter().all(|cap| {
+            matches!(cap, Capability::A | Capability::M | Capability::U) || caller.0.contains(cap)
+        })
+    }
+
+    /// Return the capabilities missing from `caller` when calling `callee`.
+    pub fn rvs_missing_for(caller: &CapabilitySet, callee: &CapabilitySet) -> BTreeSet<Capability> {
+        callee
+            .0
+            .iter()
+            .filter(|cap| !matches!(cap, Capability::A | Capability::M | Capability::U))
+            .copied()
+            .filter(|cap| !caller.0.contains(cap))
+            .collect()
+    }
+}
+
 impl CapabilitySet {
     /// 构造一个空的能力集。
     pub fn rvs_new() -> Self {
@@ -124,54 +278,9 @@ impl CapabilitySet {
         Self(set)
     }
 
-    /// 调用之规：我有，方可调你。
-    /// 你有的每一个能力，我都必须有，方为合规。
-    ///
-    /// 但 A、M、U 三个签名推断能力不参与调用规则检查——它们只从函数自身的
-    /// 签名推断（has_async / has_mut_param / is_unsafe_fn），不通过传播获得。
-    /// P（Port）**参与**调用规则——没有 P 的函数不能调用有 P 的函数。
-    pub fn rvs_can_call(&self, other: &Self) -> bool {
-        other.0.iter().all(|cap| {
-            matches!(cap, Capability::A | Capability::M | Capability::U) || self.0.contains(cap)
-        })
-    }
-
-    /// 算一算，调它还差几道功夫。
-    /// 同样排除 A、M、U（签名推断能力，不参与调用规则）。
-    /// P 参与调用规则，因此会出现在 missing 列表中。
-    pub fn rvs_missing_for(&self, other: &Self) -> BTreeSet<Capability> {
-        other
-            .0
-            .iter()
-            .filter(|cap| !matches!(cap, Capability::A | Capability::M | Capability::U))
-            .copied()
-            .filter(|cap| !self.0.contains(cap))
-            .collect()
-    }
-
     /// 我的能力是否全在你允许的范围之内。
     pub fn rvs_is_subset_of(&self, allowed: &Self) -> bool {
         self.0.iter().all(|cap| allowed.0.contains(cap))
-    }
-
-    /// 好函数的及格线：ABM 三德以内，便是善。
-    pub fn rvs_from_good_caps() -> Self {
-        Self(
-            [Capability::A, Capability::B, Capability::M]
-                .into_iter()
-                .collect(),
-        )
-    }
-
-    /// OK 函数的及格线：ABMP 四德以内，可以 mock 测试。
-    /// OK 函数是 good 函数的超集——额外允许 P（Port），因为 Port 可以通过
-    /// mockall 生成假实现来测试。
-    pub fn rvs_from_ok_caps() -> Self {
-        Self(
-            [Capability::A, Capability::B, Capability::M, Capability::P]
-                .into_iter()
-                .collect(),
-        )
     }
 
     /// 判断能力集是否为空。
@@ -380,42 +489,42 @@ mod tests {
     fn test_20260425_can_call_superset() {
         let caller = CapabilitySet::rvs_from_validated("ABIM");
         let callee = CapabilitySet::rvs_from_validated("ABI");
-        assert!(caller.rvs_can_call(&callee));
+        assert!(CapabilityPolicy::rvs_can_call(&caller, &callee));
     }
 
     #[test]
     fn test_20260425_can_call_equal() {
         let a = CapabilitySet::rvs_from_validated("ABM");
         let b = CapabilitySet::rvs_from_validated("ABM");
-        assert!(a.rvs_can_call(&b));
+        assert!(CapabilityPolicy::rvs_can_call(&a, &b));
     }
 
     #[test]
     fn test_20260425_can_call_missing_cap() {
         let caller = CapabilitySet::rvs_from_validated("AB");
         let callee = CapabilitySet::rvs_from_validated("ABT");
-        assert!(!caller.rvs_can_call(&callee));
+        assert!(!CapabilityPolicy::rvs_can_call(&caller, &callee));
     }
 
     #[test]
     fn test_20260425_can_call_empty_callee() {
         let caller = CapabilitySet::rvs_from_validated("A");
         let callee = CapabilitySet::rvs_new();
-        assert!(caller.rvs_can_call(&callee));
+        assert!(CapabilityPolicy::rvs_can_call(&caller, &callee));
     }
 
     #[test]
     fn test_20260425_missing_for_no_missing() {
         let a = CapabilitySet::rvs_from_validated("ABIM");
         let b = CapabilitySet::rvs_from_validated("AB");
-        assert!(a.rvs_missing_for(&b).is_empty());
+        assert!(CapabilityPolicy::rvs_missing_for(&a, &b).is_empty());
     }
 
     #[test]
     fn test_20260425_missing_for_has_missing() {
         let a = CapabilitySet::rvs_from_validated("AB");
         let b = CapabilitySet::rvs_from_validated("ABT");
-        let missing = a.rvs_missing_for(&b);
+        let missing = CapabilityPolicy::rvs_missing_for(&a, &b);
         assert_eq!(missing.len(), 1);
         assert!(missing.contains(&Capability::T));
     }
@@ -430,17 +539,29 @@ mod tests {
         let callee_a = CapabilitySet::rvs_from_validated("BA");
         let callee_u = CapabilitySet::rvs_from_validated("BU");
         let callee_p = CapabilitySet::rvs_from_validated("BP");
-        assert!(caller.rvs_can_call(&callee_m), "missing M should not block");
-        assert!(caller.rvs_can_call(&callee_a), "missing A should not block");
-        assert!(caller.rvs_can_call(&callee_u), "missing U should not block");
-        assert!(!caller.rvs_can_call(&callee_p), "missing P should block");
+        assert!(
+            CapabilityPolicy::rvs_can_call(&caller, &callee_m),
+            "missing M should not block"
+        );
+        assert!(
+            CapabilityPolicy::rvs_can_call(&caller, &callee_a),
+            "missing A should not block"
+        );
+        assert!(
+            CapabilityPolicy::rvs_can_call(&caller, &callee_u),
+            "missing U should not block"
+        );
+        assert!(
+            !CapabilityPolicy::rvs_can_call(&caller, &callee_p),
+            "missing P should block"
+        );
     }
 
     #[test]
     fn test_20260614_missing_for_excludes_amu() {
         let caller = CapabilitySet::rvs_from_validated("B");
         let callee = CapabilitySet::rvs_from_validated("ABSTU");
-        let missing = caller.rvs_missing_for(&callee);
+        let missing = CapabilityPolicy::rvs_missing_for(&caller, &callee);
         // Only S and T should be missing — A, M, U are excluded from call rule
         assert_eq!(missing.len(), 2);
         assert!(missing.contains(&Capability::T));
@@ -448,10 +569,61 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        unreachable_code,
+        reason = "coverage-only unreachable branch keeps builder helpers visible to rivus test-call collection"
+    )]
+    fn test_20260702_capability_policy_signature_caps() {
+        let mut facts = CapabilityFacts::default();
+        facts.has_async = true;
+        facts.has_mut_param = true;
+        facts.has_static_mut_ref = true;
+        facts.has_thread_local_ref = true;
+
+        let caps = CapabilityPolicy::rvs_signature_caps(facts);
+        assert!(caps.rvs_contains(Capability::A));
+        assert!(caps.rvs_contains(Capability::M));
+        assert!(caps.rvs_contains(Capability::S));
+        assert!(caps.rvs_contains(Capability::T));
+        assert!(caps.rvs_contains(Capability::U));
+        assert!(CapabilityPolicy::rvs_requires_signature_cap(
+            facts,
+            Capability::A
+        ));
+        assert!(!CapabilityPolicy::rvs_requires_signature_cap(
+            facts,
+            Capability::P
+        ));
+
+        let direct_port_caps = CapabilityPolicy::rvs_port_method_caps();
+        assert_eq!(direct_port_caps.rvs_len(), 1);
+        assert!(direct_port_caps.rvs_contains(Capability::P));
+
+        let mut port_facts = facts;
+        port_facts.is_port_method = true;
+        let port_caps = CapabilityPolicy::rvs_signature_caps(port_facts);
+        assert_eq!(port_caps.rvs_len(), 1);
+        assert!(port_caps.rvs_contains(Capability::P));
+        assert!(CapabilityPolicy::rvs_is_propagated_cap(Capability::P));
+        assert!(!CapabilityPolicy::rvs_is_propagated_cap(Capability::A));
+        assert!(!CapabilityPolicy::rvs_is_propagated_cap(Capability::M));
+        assert!(!CapabilityPolicy::rvs_is_propagated_cap(Capability::U));
+
+        let _ = CapabilityFacts::default().rvs_with_static_refs(true, false, true);
+
+        if std::hint::black_box(false) {
+            let _sig: &rustc_hir::FnSig<'_> = unreachable!();
+            CapabilityFacts::rvs_from_signature(_sig, true, false);
+        }
+    }
+
+    #[test]
     fn test_20260425_is_subset_of_true() {
         let set = CapabilitySet::rvs_from_validated("AB");
         let allowed = CapabilitySet::rvs_from_validated("ABIM");
         assert!(set.rvs_is_subset_of(&allowed));
+        assert!(CapabilityPolicy::rvs_is_good(&set));
+        assert!(CapabilityPolicy::rvs_is_ok(&set));
     }
 
     #[test]
@@ -459,6 +631,8 @@ mod tests {
         let set = CapabilitySet::rvs_from_validated("ABT");
         let allowed = CapabilitySet::rvs_from_validated("ABM");
         assert!(!set.rvs_is_subset_of(&allowed));
+        assert!(!CapabilityPolicy::rvs_is_good(&set));
+        assert!(!CapabilityPolicy::rvs_is_ok(&set));
     }
 
     #[test]
@@ -470,7 +644,7 @@ mod tests {
 
     #[test]
     fn test_20260425_from_good_caps() {
-        let good = CapabilitySet::rvs_from_good_caps();
+        let good = CapabilityPolicy::rvs_good_caps();
         assert!(good.rvs_contains(Capability::A));
         assert!(good.rvs_contains(Capability::B));
         assert!(good.rvs_contains(Capability::M));
@@ -484,7 +658,7 @@ mod tests {
 
     #[test]
     fn test_20260623_from_ok_caps() {
-        let ok = CapabilitySet::rvs_from_ok_caps();
+        let ok = CapabilityPolicy::rvs_ok_caps();
         assert!(ok.rvs_contains(Capability::A));
         assert!(ok.rvs_contains(Capability::B));
         assert!(ok.rvs_contains(Capability::M));

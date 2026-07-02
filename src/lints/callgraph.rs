@@ -6,6 +6,7 @@ use rustc_hir::{Body, ExprKind, HirId, Mutability, def::DefKind};
 use rustc_lint::LateContext;
 
 use super::utils::{rvs_def_path, rvs_has_attr, rvs_has_mutable_params, rvs_walk_closures};
+use crate::capability::CapabilityFacts;
 
 #[derive(Debug, Serialize)]
 pub(crate) struct FnReportEntry {
@@ -19,16 +20,10 @@ pub(crate) struct FnReportEntry {
 #[derive(Debug, Serialize, Clone)]
 pub struct FnBehavior {
     pub calls: BTreeSet<String>,
-    pub has_async: bool,
-    pub is_unsafe_fn: bool,
-    pub has_mut_param: bool,
-    pub has_static_ref: bool,
-    pub has_static_mut_ref: bool,
-    pub has_thread_local_ref: bool,
+    #[serde(flatten)]
+    pub facts: CapabilityFacts,
     pub is_trait_impl: bool,
     pub is_test: bool,
-    #[serde(default)]
-    pub is_port_method: bool,
 }
 
 #[expect(
@@ -105,24 +100,15 @@ pub(crate) fn rvs_collect_callgraph_for_item_M<'tcx>(
         _ => {}
     });
 
-    let has_async = sig.header.asyncness.is_async();
-    let is_unsafe_fn = matches!(
-        sig.header.safety,
-        rustc_hir::HeaderSafety::Normal(rustc_hir::Safety::Unsafe)
-    );
-    let has_mut_param = rvs_has_mutable_params(sig, body);
+    let facts =
+        CapabilityFacts::rvs_from_signature(sig, rvs_has_mutable_params(sig, body), is_port_method)
+            .rvs_with_static_refs(has_static_ref, has_static_mut_ref, has_thread_local_ref);
 
     let entry = callgraph.entry(caller_path).or_insert_with(|| FnBehavior {
         calls: BTreeSet::new(),
-        has_async,
-        is_unsafe_fn,
-        has_mut_param,
-        has_static_ref,
-        has_static_mut_ref,
-        has_thread_local_ref,
+        facts,
         is_trait_impl,
         is_test,
-        is_port_method,
     });
     for callee in calls {
         entry.calls.insert(callee);
@@ -143,35 +129,28 @@ pub(crate) fn rvs_collect_callgraph_for_signature_M(
     let def_id = local_def_id.to_def_id();
     let caller_path = rvs_def_path(cx, def_id);
 
-    let has_async = sig.header.asyncness.is_async();
-    let is_unsafe_fn = matches!(
-        sig.header.safety,
-        rustc_hir::HeaderSafety::Normal(rustc_hir::Safety::Unsafe)
-    );
-    let has_mut_param = sig.decl.inputs.iter().any(|t| {
-        matches!(
-            t.kind,
-            rustc_hir::TyKind::Ref(
-                _,
-                rustc_hir::MutTy {
-                    mutbl: Mutability::Mut,
-                    ..
-                }
+    let facts = CapabilityFacts::rvs_from_signature(
+        sig,
+        sig.decl.inputs.iter().any(|t| {
+            matches!(
+                t.kind,
+                rustc_hir::TyKind::Ref(
+                    _,
+                    rustc_hir::MutTy {
+                        mutbl: Mutability::Mut,
+                        ..
+                    }
+                )
             )
-        )
-    });
+        }),
+        is_port_method,
+    );
 
     callgraph.entry(caller_path).or_insert_with(|| FnBehavior {
         calls: BTreeSet::new(),
-        has_async,
-        is_unsafe_fn,
-        has_mut_param,
-        has_static_ref: false,
-        has_static_mut_ref: false,
-        has_thread_local_ref: false,
+        facts,
         is_trait_impl,
         is_test: false,
-        is_port_method,
     });
 }
 

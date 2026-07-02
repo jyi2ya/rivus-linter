@@ -169,17 +169,10 @@ impl CapsMap {
         Ok(result)
     }
 
-    /// 统一加载入口：目录用 rvs_load_dir_BIS，文件用 rvs_parse。
+    /// 统一加载入口：只接受 caps 目录。
     pub fn rvs_load_BIS(path: &Path) -> Result<Self, CapsMapError> {
         if path.is_dir() {
             Self::rvs_load_dir_BIS(path)
-        } else if path.is_file() {
-            Self::rvs_parse(
-                &std::fs::read_to_string(path).map_err(|e| CapsMapError::FileRead {
-                    path: path.display().to_string(),
-                    error: e.to_string(),
-                })?,
-            )
         } else {
             Ok(Self::rvs_new())
         }
@@ -341,7 +334,7 @@ mod tests {
         let path = std::env::temp_dir().join("test_20260615_load_single_file.txt");
         std::fs::write(&path, "func=BI\n").unwrap();
         let cm = CapsMap::rvs_load_BIS(&path).unwrap();
-        assert!(cm.rvs_lookup("func").is_some());
+        assert!(cm.rvs_lookup("func").is_none());
         std::fs::remove_file(&path).unwrap();
     }
 
