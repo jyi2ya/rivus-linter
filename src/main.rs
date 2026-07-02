@@ -1096,13 +1096,7 @@ fn rvs_run_infer_capsmap_BIMPS(
 ) -> Result<(), String> {
     rvs_ensure_project_dir_BS(path)?;
 
-    let abs_seed = if seed_capsmap.is_absolute() {
-        seed_capsmap.to_path_buf()
-    } else {
-        std::env::current_dir()
-            .map_err(|e| format!("current dir invalid: {e}"))?
-            .join(seed_capsmap)
-    };
+    let abs_seed = rvs_resolve_capsmap_path(path, seed_capsmap);
 
     let callgraph = rvs_collect_callgraph_BIMS(
         path,
@@ -1112,7 +1106,7 @@ fn rvs_run_infer_capsmap_BIMPS(
     )?;
 
     // Load caps for inference, excluding deps (that's what we're regenerating).
-    let seed = CapsMap::rvs_load_dir_excluding_BIS(seed_capsmap, &["deps"]).unwrap_or_else(|e| {
+    let seed = CapsMap::rvs_load_dir_excluding_BIS(&abs_seed, &["deps"]).unwrap_or_else(|e| {
         eprintln!("warning: caps: {e}");
         CapsMap::rvs_new()
     });
@@ -1157,6 +1151,14 @@ fn rvs_run_infer_capsmap_BIMPS(
         }
     }
     Ok(())
+}
+
+fn rvs_resolve_capsmap_path(project_dir: &Path, capsmap_path: &Path) -> PathBuf {
+    if capsmap_path.is_absolute() {
+        capsmap_path.to_path_buf()
+    } else {
+        project_dir.join(capsmap_path)
+    }
 }
 
 fn rvs_merge_callgraph_dir_BIS(
@@ -1954,6 +1956,28 @@ mod tests {
         );
         assert!(known.contains_key("serde_json::de::from_str"));
         assert!(unknown.is_empty());
+    }
+
+    #[test]
+    fn test_20260702_resolve_capsmap_path_relative_to_project() {
+        let project_dir = Path::new("/workspace/project");
+        let relative = Path::new("caps");
+        let absolute = Path::new("/shared/caps");
+
+        let resolved_relative = rvs_resolve_capsmap_path(project_dir, relative);
+        let resolved_absolute = rvs_resolve_capsmap_path(project_dir, absolute);
+        let output = format!(
+            "relative={}\nabsolute={}",
+            resolved_relative.display(),
+            resolved_absolute.display()
+        );
+        rvs_snapshot_BIS(
+            "test_20260702_resolve_capsmap_path_relative_to_project",
+            &output,
+        );
+
+        assert_eq!(resolved_relative, PathBuf::from("/workspace/project/caps"));
+        assert_eq!(resolved_absolute, PathBuf::from("/shared/caps"));
     }
 
     // ─── rvs_infer_caps_M ────────────────────────────────────────────────

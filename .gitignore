@@ -1,4 +1,6 @@
 /target
+rust_out
+rust_out.d
 *.rlib
 *.rmeta
 mir_dump/
