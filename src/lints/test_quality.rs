@@ -3,11 +3,11 @@ use std::path::Path;
 
 use rustc_lint::{LateContext, LintContext};
 
-use super::callgraph::{FnBehavior, FnReportEntry};
 use super::msg::Msg;
 use super::{
     RVS_DUPLICATE_TEST, RVS_MISSING_TEST_OUTPUT, RVS_UNTESTED_GOOD_FN, RVS_UNTESTED_OK_FN,
 };
+use crate::artifacts::{FnBehavior, FnReportEntry};
 
 /// `check_crate_post` — cross-cutting test quality checks and output writing.
 #[expect(

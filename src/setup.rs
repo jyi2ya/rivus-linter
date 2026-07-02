@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use toml_edit::{DocumentMut, Item, Table};
 
 pub const CLIPPY_LINTS: &[(&str, &str)] = &[
@@ -77,9 +79,44 @@ pub fn rvs_inject_clippy_lints_M(cargo_toml: &str) -> (String, usize) {
     (doc.to_string(), count)
 }
 
+pub(crate) fn rvs_run_setup_BIMS(path: &Path) -> Result<(), String> {
+    crate::workspace::rvs_ensure_project_dir_BS(path)?;
+
+    let agents_md = path.join("AGENTS.md");
+    std::fs::write(&agents_md, crate::RIVUS_MD)
+        .map_err(|e| format!("cannot write '{}': {e}", agents_md.display()))?;
+    println!("Written {}", agents_md.display());
+
+    let cargo_toml_path = path.join("Cargo.toml");
+    let content = std::fs::read_to_string(&cargo_toml_path)
+        .map_err(|e| format!("cannot read '{}': {e}", cargo_toml_path.display()))?;
+
+    let (new_content, count) = rvs_inject_clippy_lints_M(&content);
+    if count > 0 {
+        std::fs::write(&cargo_toml_path, &new_content)
+            .map_err(|e| format!("cannot write '{}': {e}", cargo_toml_path.display()))?;
+        println!(
+            "Injected {count} clippy lint(s) into {}",
+            cargo_toml_path.display()
+        );
+    } else {
+        println!(
+            "All clippy lints already present in {}",
+            cargo_toml_path.display()
+        );
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn rvs_snapshot_BIS(name: &str, content: &str) {
+        std::fs::create_dir_all("test_out").unwrap();
+        std::fs::write(format!("test_out/{name}.out"), content).unwrap();
+    }
 
     #[test]
     fn test_20260501_inject_into_empty_cargo_toml() {
@@ -108,5 +145,35 @@ mod tests {
         debug_assert!(result.contains("string_slice = \"deny\""));
         debug_assert!(result.contains("unwrap_used = \"warn\""));
         debug_assert_eq!(count, CLIPPY_LINTS.len() - 2);
+    }
+
+    #[test]
+    fn test_20260607_setup_inject_clippy_empty() {
+        let input = "[package]\nname = \"test\"\n\n[dependencies]\n";
+        let (result, count) = rvs_inject_clippy_lints_M(input);
+        rvs_snapshot_BIS(
+            "test_20260607_setup_inject_clippy_empty",
+            &format!("count: {count}\n{result}"),
+        );
+        assert_eq!(count, CLIPPY_LINTS.len());
+        assert!(result.contains("[lints.clippy]"));
+    }
+
+    #[test]
+    fn test_20260607_setup_inject_clippy_idempotent() {
+        let input = "[package]\nname = \"test\"\n\n[dependencies]\n";
+        let (first, c1) = rvs_inject_clippy_lints_M(input);
+        let (second, c2) = rvs_inject_clippy_lints_M(&first);
+        assert!(c1 > 0);
+        assert_eq!(c2, 0);
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn test_20260607_setup_inject_clippy_preserves() {
+        let input = "[package]\nname = \"test\"\n\n[lints.clippy]\nstring_slice = \"deny\"\n\n[dependencies]\n";
+        let (result, count) = rvs_inject_clippy_lints_M(input);
+        assert!(result.contains("string_slice = \"deny\""));
+        assert_eq!(count, CLIPPY_LINTS.len() - 1);
     }
 }

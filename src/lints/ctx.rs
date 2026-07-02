@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashSet};
 
 use rustc_span::Span;
 
-use super::callgraph::{FnBehavior, FnReportEntry};
+use crate::artifacts::{FnBehavior, FnReportEntry};
 use crate::capsmap::CapsMap;
 use rustc_span::def_id::DefId;
 

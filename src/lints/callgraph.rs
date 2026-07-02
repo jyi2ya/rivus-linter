@@ -1,4 +1,3 @@
-use serde::Serialize;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
@@ -6,25 +5,8 @@ use rustc_hir::{Body, ExprKind, HirId, Mutability, def::DefKind};
 use rustc_lint::LateContext;
 
 use super::utils::{rvs_def_path, rvs_has_attr, rvs_has_mutable_params, rvs_walk_closures};
+use crate::artifacts::FnBehavior;
 use crate::capability::CapabilityFacts;
-
-#[derive(Debug, Serialize)]
-pub(crate) struct FnReportEntry {
-    pub name: String,
-    pub caps: String,
-    pub lines: usize,
-    pub is_test: bool,
-    pub allows_dead_code: bool,
-}
-
-#[derive(Debug, Serialize, Clone)]
-pub struct FnBehavior {
-    pub calls: BTreeSet<String>,
-    #[serde(flatten)]
-    pub facts: CapabilityFacts,
-    pub is_trait_impl: bool,
-    pub is_test: bool,
-}
 
 #[expect(
     clippy::too_many_arguments,

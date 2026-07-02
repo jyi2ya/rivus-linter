@@ -48,9 +48,9 @@ mod todo_comment;
 mod utils;
 mod validate;
 
-pub use callgraph::FnBehavior;
+pub use crate::artifacts::FnBehavior;
 
-use callgraph::FnReportEntry;
+use crate::artifacts::FnReportEntry;
 use ctx::FnCheckData;
 
 // ─── Lint declarations ───────────────────────────────────────────────────
