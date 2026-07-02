@@ -5,6 +5,7 @@ use std::process::Command;
 
 use crate::artifacts::{self, FnBehavior};
 use crate::capsmap::{self, CapsMap};
+use crate::symbols::{CrateName, DefPath};
 
 /// Resolve the capsmap path for the lint pass.
 ///
@@ -188,7 +189,7 @@ pub(crate) fn rvs_collect_callgraph_BIMS(
     build_std: bool,
     with_tests: bool,
     extra_env: Vec<(&str, String)>,
-) -> Result<BTreeMap<String, FnBehavior>, String> {
+) -> Result<BTreeMap<DefPath, FnBehavior>, String> {
     let suffix = if build_std { "-std" } else { "" };
     let cg_subdir = format!("rivus-callgraph{suffix}");
     let build_subdir = format!("rivus-build{suffix}");
@@ -224,7 +225,9 @@ pub(crate) fn rvs_collect_callgraph_BIMS(
     rvs_merge_callgraph_dir_BIS(&cg_dir)
 }
 
-fn rvs_load_or_collect_callgraph_BIMS(path: &Path) -> Result<BTreeMap<String, FnBehavior>, String> {
+fn rvs_load_or_collect_callgraph_BIMS(
+    path: &Path,
+) -> Result<BTreeMap<DefPath, FnBehavior>, String> {
     let cg_dir = path.join("target").join("rivus-callgraph");
     let cg_std_dir = path.join("target").join("rivus-callgraph-std");
 
@@ -252,7 +255,7 @@ fn rvs_load_or_collect_callgraph_BIMS(path: &Path) -> Result<BTreeMap<String, Fn
 /// from `caps/` (excluding `deps`) via `CapsMap::rvs_load_dir_excluding_BIS`.
 pub(crate) fn rvs_load_callgraph_and_caps_BIMS(
     path: &Path,
-) -> Result<(BTreeMap<String, FnBehavior>, capsmap::CapsMap), String> {
+) -> Result<(BTreeMap<DefPath, FnBehavior>, capsmap::CapsMap), String> {
     let callgraph = rvs_load_or_collect_callgraph_BIMS(path)?;
     let caps_dir = path.join("caps");
     let caps = if caps_dir.is_dir() {
@@ -285,7 +288,7 @@ pub(crate) fn rvs_write_capsmap_result_BIS(
     Ok(())
 }
 
-pub(crate) fn rvs_collect_local_crate_prefixes(toml: &str) -> Result<BTreeSet<String>, String> {
+pub(crate) fn rvs_collect_local_crate_prefixes(toml: &str) -> Result<BTreeSet<CrateName>, String> {
     let doc: toml_edit::DocumentMut = toml.parse().map_err(|e| format!("invalid TOML: {e}"))?;
 
     let mut prefixes = BTreeSet::new();
@@ -294,19 +297,19 @@ pub(crate) fn rvs_collect_local_crate_prefixes(toml: &str) -> Result<BTreeSet<St
         .and_then(|package| package.get("name"))
         .and_then(|name| name.as_str())
     {
-        prefixes.insert(package_name.replace('-', "_"));
+        prefixes.insert(CrateName::rvs_from_manifest_name(package_name));
     }
     if let Some(lib_name) = doc
         .get("lib")
         .and_then(|lib| lib.get("name"))
         .and_then(|name| name.as_str())
     {
-        prefixes.insert(lib_name.replace('-', "_"));
+        prefixes.insert(CrateName::rvs_from_manifest_name(lib_name));
     }
     if let Some(bins) = doc.get("bin").and_then(toml_edit::Item::as_array_of_tables) {
         for bin in bins {
             if let Some(name) = bin.get("name").and_then(|name| name.as_str()) {
-                prefixes.insert(name.replace('-', "_"));
+                prefixes.insert(CrateName::rvs_from_manifest_name(name));
             }
         }
     }
@@ -319,14 +322,18 @@ pub(crate) fn rvs_collect_local_crate_prefixes(toml: &str) -> Result<BTreeSet<St
     Ok(prefixes)
 }
 
-pub(crate) fn rvs_detect_local_crate_prefixes_BIS(path: &Path) -> Result<BTreeSet<String>, String> {
+pub(crate) fn rvs_detect_local_crate_prefixes_BIS(
+    path: &Path,
+) -> Result<BTreeSet<CrateName>, String> {
     let cargo_toml = path.join("Cargo.toml");
     let content = std::fs::read_to_string(&cargo_toml)
         .map_err(|e| format!("cannot read {}: {e}", cargo_toml.display()))?;
     rvs_collect_local_crate_prefixes(&content).map_err(|e| format!("{}: {e}", cargo_toml.display()))
 }
 
-pub(crate) fn rvs_load_local_crate_prefixes_BIS(path: &Path) -> Result<BTreeSet<String>, String> {
+pub(crate) fn rvs_load_local_crate_prefixes_BIS(
+    path: &Path,
+) -> Result<BTreeSet<CrateName>, String> {
     rvs_ensure_cargo_project_BIS(path)?;
     rvs_detect_local_crate_prefixes_BIS(path)
 }
@@ -345,8 +352,8 @@ pub(crate) fn rvs_resolve_capsmap_path(project_dir: &Path, capsmap_path: &Path) 
     }
 }
 
-fn rvs_merge_callgraph_dir_BIS(cg_dir: &Path) -> Result<BTreeMap<String, FnBehavior>, String> {
-    let mut merged: BTreeMap<String, FnBehavior> = BTreeMap::new();
+fn rvs_merge_callgraph_dir_BIS(cg_dir: &Path) -> Result<BTreeMap<DefPath, FnBehavior>, String> {
+    let mut merged: BTreeMap<DefPath, FnBehavior> = BTreeMap::new();
     let cg_entries =
         std::fs::read_dir(cg_dir).map_err(|e| format!("cannot read {}: {e}", cg_dir.display()))?;
     for entry in cg_entries {
@@ -414,7 +421,11 @@ mod tests {
     fn test_20260630_collect_local_crate_prefixes_bin_name() {
         let input = "[package]\nname = \"rivus-linter\"\n\n[[bin]]\nname = \"cargo-rivus\"\npath = \"src/main.rs\"\n";
         let prefixes = rvs_collect_local_crate_prefixes(input).expect("prefixes should parse");
-        let output = prefixes.iter().cloned().collect::<Vec<_>>().join("\n");
+        let output = prefixes
+            .iter()
+            .map(CrateName::rvs_as_str)
+            .collect::<Vec<_>>()
+            .join("\n");
         rvs_snapshot_BIS(
             "test_20260630_collect_local_crate_prefixes_bin_name",
             &output,

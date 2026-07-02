@@ -2,19 +2,20 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::capability::{CapabilityParseError, CapabilitySet};
+use crate::symbols::CapsMapKey;
 
 /// 能力之鉴：非 rvs 函数的品行录。
 /// 外人虽无 rvs 前缀，登记在册，亦知其能。
 #[derive(Debug, Clone, Default)]
 pub struct CapsMap {
-    entries: BTreeMap<String, CapabilitySet>,
+    entries: BTreeMap<CapsMapKey, CapabilitySet>,
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum CapsMapError {
     #[error("line {line}: invalid capability string '{caps}' for '{key}'")]
     InvalidCaps {
-        key: String,
+        key: CapsMapKey,
         caps: String,
         line: usize,
         #[source]
@@ -54,7 +55,7 @@ impl CapsMap {
             let (key, value) = trimmed
                 .split_once('=')
                 .ok_or(CapsMapError::MissingSeparator { line: line_num })?;
-            let key = key.trim().to_string();
+            let key = CapsMapKey::rvs_new(key.trim().to_string());
             let value = value.split('#').next().unwrap_or("").trim();
             let caps =
                 CapabilitySet::rvs_from_str(value).map_err(|e| CapsMapError::InvalidCaps {

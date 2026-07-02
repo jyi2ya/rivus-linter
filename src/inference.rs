@@ -3,19 +3,20 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use crate::artifacts::FnBehavior;
 use crate::capability::{Capability, CapabilityPolicy, CapabilitySet};
 use crate::capsmap;
+use crate::symbols::{CrateName, DefPath};
 
 /// Build a "method@trait_path" → set-of-keys index from callgraph keys.
 pub(crate) fn rvs_build_impl_index(
-    callgraph: &BTreeMap<String, FnBehavior>,
-) -> HashMap<String, Vec<String>> {
-    let mut idx: HashMap<String, Vec<String>> = HashMap::new();
+    callgraph: &BTreeMap<DefPath, FnBehavior>,
+) -> HashMap<String, Vec<DefPath>> {
+    let mut idx: HashMap<String, Vec<DefPath>> = HashMap::new();
     for key in callgraph.keys() {
-        if let Some(at_pos) = key.find('@') {
-            let (method, suffix_with_sep) = key.split_at(at_pos);
+        if let Some(at_pos) = key.rvs_as_str().find('@') {
+            let (method, suffix_with_sep) = key.rvs_as_str().split_at(at_pos);
             let Some(suffix) = suffix_with_sep.strip_prefix('@') else {
                 continue;
             };
-            let method_name = method.rsplit("::").next().unwrap_or(method);
+            let method_name = DefPath::from(method).rvs_fn_name();
             let lookup = format!("{method_name}@{suffix}");
             idx.entry(lookup).or_default().push(key.clone());
         }
@@ -30,7 +31,7 @@ pub(crate) fn rvs_infer_signature_caps(behavior: &FnBehavior) -> CapabilitySet {
 
 /// Format an error message for unknown callees.
 pub(crate) fn rvs_format_unknown_callees(
-    unknown: &BTreeMap<String, BTreeSet<String>>,
+    unknown: &BTreeMap<DefPath, BTreeSet<DefPath>>,
     header: &str,
 ) -> String {
     let mut msg = String::from(header);
@@ -49,20 +50,20 @@ pub(crate) fn rvs_format_unknown_callees(
 /// Generate trait-method aliases (e.g. `std::io::Read::read`) from impl-method
 /// keys using majority-vote capability aggregation across impls.
 pub(crate) fn rvs_generate_trait_aliases_MP(
-    inferred: &BTreeMap<String, CapabilitySet>,
-    impl_index: &HashMap<String, Vec<String>>,
-    callgraph: &BTreeMap<String, FnBehavior>,
-) -> BTreeMap<String, CapabilitySet> {
+    inferred: &BTreeMap<DefPath, CapabilitySet>,
+    impl_index: &HashMap<String, Vec<DefPath>>,
+    callgraph: &BTreeMap<DefPath, FnBehavior>,
+) -> BTreeMap<DefPath, CapabilitySet> {
     let mut aliases = BTreeMap::new();
     let mut seen = HashSet::new();
     for key in inferred.keys() {
-        if let Some(at_pos) = key.find('@') {
-            let (method_full, trait_path_with_sep) = key.split_at(at_pos);
+        if let Some(at_pos) = key.rvs_as_str().find('@') {
+            let (method_full, trait_path_with_sep) = key.rvs_as_str().split_at(at_pos);
             let Some(trait_path) = trait_path_with_sep.strip_prefix('@') else {
                 continue;
             };
             if let Some(method_name) = method_full.rsplit("::").next() {
-                let alias = format!("{trait_path}::{method_name}");
+                let alias = DefPath::rvs_new(format!("{trait_path}::{method_name}"));
                 if seen.insert(alias.clone())
                     && let Some(voted) =
                         rvs_resolve_impl_majority_caps_M(&alias, impl_index, inferred, callgraph)
@@ -81,13 +82,13 @@ pub(crate) fn rvs_caps_to_string(caps: &CapabilitySet) -> String {
 }
 
 pub(crate) fn rvs_infer_caps_M(
-    callgraph: &BTreeMap<String, FnBehavior>,
+    callgraph: &BTreeMap<DefPath, FnBehavior>,
     seed: &capsmap::CapsMap,
-) -> BTreeMap<String, CapabilitySet> {
-    let mut inferred: BTreeMap<String, CapabilitySet> = BTreeMap::new();
+) -> BTreeMap<DefPath, CapabilitySet> {
+    let mut inferred: BTreeMap<DefPath, CapabilitySet> = BTreeMap::new();
 
     for (func, behavior) in callgraph {
-        if let Some(caps) = seed.rvs_lookup(func) {
+        if let Some(caps) = seed.rvs_lookup(func.rvs_as_str()) {
             inferred.insert(func.clone(), caps.clone());
         } else {
             inferred.insert(func.clone(), rvs_infer_signature_caps(behavior));
@@ -96,7 +97,7 @@ pub(crate) fn rvs_infer_caps_M(
     for behavior in callgraph.values() {
         for callee in &behavior.calls {
             if !inferred.contains_key(callee)
-                && let Some(caps) = seed.rvs_lookup(callee)
+                && let Some(caps) = seed.rvs_lookup(callee.rvs_as_str())
             {
                 inferred.insert(callee.clone(), caps.clone());
             }
@@ -109,7 +110,7 @@ pub(crate) fn rvs_infer_caps_M(
     for _iteration in 0..max_iterations {
         let mut changed = false;
         for (func, behavior) in callgraph {
-            if seed.rvs_lookup(func).is_some() {
+            if seed.rvs_lookup(func.rvs_as_str()).is_some() {
                 continue;
             }
             if behavior.facts.is_port_method {
@@ -122,11 +123,11 @@ pub(crate) fn rvs_infer_caps_M(
             for callee in &behavior.calls {
                 let callee_caps = inferred
                     .get(callee)
-                    .or_else(|| seed.rvs_lookup(callee))
+                    .or_else(|| seed.rvs_lookup(callee.rvs_as_str()))
                     .cloned();
 
                 let callee_caps = callee_caps.or_else(|| {
-                    if !callee.contains('@') {
+                    if !callee.rvs_as_str().contains('@') {
                         rvs_resolve_impl_majority_caps_M(callee, &impl_index, &inferred, callgraph)
                     } else {
                         None
@@ -156,12 +157,12 @@ pub(crate) fn rvs_infer_caps_M(
 /// Resolve a trait method callee by taking a majority vote across all impl
 /// methods for each propagated capability.
 pub(crate) fn rvs_resolve_impl_majority_caps_M(
-    callee: &str,
-    impl_index: &HashMap<String, Vec<String>>,
-    inferred: &BTreeMap<String, CapabilitySet>,
-    callgraph: &BTreeMap<String, FnBehavior>,
+    callee: &DefPath,
+    impl_index: &HashMap<String, Vec<DefPath>>,
+    inferred: &BTreeMap<DefPath, CapabilitySet>,
+    callgraph: &BTreeMap<DefPath, FnBehavior>,
 ) -> Option<CapabilitySet> {
-    let (trait_path, method) = callee.rsplit_once("::")?;
+    let (trait_path, method) = callee.rvs_as_str().rsplit_once("::")?;
     let lookup_key = format!("{method}@{trait_path}");
     let impl_keys = impl_index.get(&lookup_key)?;
 
@@ -202,20 +203,23 @@ pub(crate) fn rvs_resolve_impl_majority_caps_M(
     Some(majority_caps)
 }
 
-pub(crate) fn rvs_format_capsmap(caps: &BTreeMap<String, CapabilitySet>) -> String {
+pub(crate) fn rvs_format_capsmap<K>(caps: &BTreeMap<K, CapabilitySet>) -> String
+where
+    K: AsRef<str> + Ord,
+{
     let mut lines: Vec<String> = caps
         .iter()
         .map(|(name, cs)| {
             let caps_str = rvs_caps_to_string(cs);
             if caps_str.is_empty() {
-                format!("{name}=")
+                format!("{}=", name.as_ref())
             } else {
                 let desc: String = cs
                     .rvs_iter()
                     .map(|c| c.rvs_description())
                     .collect::<Vec<_>>()
                     .join(" ");
-                format!("{name}={caps_str} # {desc}")
+                format!("{}={caps_str} # {desc}", name.as_ref())
             }
         })
         .collect();
@@ -224,33 +228,36 @@ pub(crate) fn rvs_format_capsmap(caps: &BTreeMap<String, CapabilitySet>) -> Stri
 }
 
 pub(crate) fn rvs_collect_direct_external_deps(
-    callgraph: &BTreeMap<String, FnBehavior>,
-    local_crate_prefixes: &BTreeSet<String>,
+    callgraph: &BTreeMap<DefPath, FnBehavior>,
+    local_crate_prefixes: &BTreeSet<CrateName>,
     seed: &capsmap::CapsMap,
-    inferred: &BTreeMap<String, CapabilitySet>,
-    impl_index: &HashMap<String, Vec<String>>,
+    inferred: &BTreeMap<DefPath, CapabilitySet>,
+    impl_index: &HashMap<String, Vec<DefPath>>,
 ) -> (
-    BTreeMap<String, CapabilitySet>,
-    BTreeMap<String, BTreeSet<String>>,
+    BTreeMap<DefPath, CapabilitySet>,
+    BTreeMap<DefPath, BTreeSet<DefPath>>,
 ) {
-    let local_prefixes: Vec<String> = local_crate_prefixes
+    let local_prefixes: Vec<_> = local_crate_prefixes
         .iter()
-        .map(|name| format!("{name}::"))
+        .map(CrateName::rvs_prefix)
         .collect();
-    let mut known: BTreeMap<String, CapabilitySet> = BTreeMap::new();
-    let mut unknown: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut known: BTreeMap<DefPath, CapabilitySet> = BTreeMap::new();
+    let mut unknown: BTreeMap<DefPath, BTreeSet<DefPath>> = BTreeMap::new();
     for (func, behavior) in callgraph {
-        if !local_prefixes.iter().any(|prefix| func.starts_with(prefix)) {
+        if !local_prefixes
+            .iter()
+            .any(|prefix| func.rvs_starts_with(prefix))
+        {
             continue;
         }
         for callee in &behavior.calls {
             if local_prefixes
                 .iter()
-                .any(|prefix| callee.starts_with(prefix))
+                .any(|prefix| callee.rvs_starts_with(prefix))
             {
                 continue;
             }
-            if seed.rvs_lookup(callee).is_some() {
+            if seed.rvs_lookup(callee.rvs_as_str()).is_some() {
                 continue;
             }
             if let Some(caps) = inferred.get(callee) {
@@ -294,7 +301,7 @@ mod tests {
 
     #[test]
     fn test_20260609_infer_caps_empty_callgraph() {
-        let callgraph: BTreeMap<String, FnBehavior> = BTreeMap::new();
+        let callgraph: BTreeMap<DefPath, FnBehavior> = BTreeMap::new();
         let seed = capsmap::CapsMap::rvs_new();
         let result = rvs_infer_caps_M(&callgraph, &seed);
         rvs_snapshot_BIS(
@@ -306,7 +313,7 @@ mod tests {
 
     #[test]
     fn test_20260613_seed_freeze_prevents_propagation() {
-        let mut callgraph: BTreeMap<String, FnBehavior> = BTreeMap::new();
+        let mut callgraph: BTreeMap<DefPath, FnBehavior> = BTreeMap::new();
 
         let mut cap_overflow = rvs_make_behavior();
         cap_overflow.calls.insert("core::panicking::panic".into());
@@ -343,7 +350,7 @@ mod tests {
 
     #[test]
     fn test_20260609_infer_caps_single_pure() {
-        let mut callgraph: BTreeMap<String, FnBehavior> = BTreeMap::new();
+        let mut callgraph: BTreeMap<DefPath, FnBehavior> = BTreeMap::new();
         callgraph.insert("my_crate::rvs_add".into(), rvs_make_behavior());
         let seed = capsmap::CapsMap::rvs_new();
         let result = rvs_infer_caps_M(&callgraph, &seed);
@@ -358,7 +365,7 @@ mod tests {
 
     #[test]
     fn test_20260609_infer_caps_single_panic() {
-        let mut callgraph: BTreeMap<String, FnBehavior> = BTreeMap::new();
+        let mut callgraph: BTreeMap<DefPath, FnBehavior> = BTreeMap::new();
         let behavior = rvs_make_behavior();
         callgraph.insert("my_crate::rvs_divide".into(), behavior);
         let seed = capsmap::CapsMap::rvs_new();
@@ -374,7 +381,7 @@ mod tests {
 
     #[test]
     fn test_20260609_infer_caps_single_static_ref() {
-        let mut callgraph: BTreeMap<String, FnBehavior> = BTreeMap::new();
+        let mut callgraph: BTreeMap<DefPath, FnBehavior> = BTreeMap::new();
         let mut behavior = rvs_make_behavior();
         behavior.facts.has_static_ref = true;
         callgraph.insert("my_crate::rvs_get_env_S".into(), behavior);
@@ -391,7 +398,7 @@ mod tests {
 
     #[test]
     fn test_20260609_infer_caps_single_unsafe_block() {
-        let mut callgraph: BTreeMap<String, FnBehavior> = BTreeMap::new();
+        let mut callgraph: BTreeMap<DefPath, FnBehavior> = BTreeMap::new();
         let behavior = rvs_make_behavior();
         callgraph.insert("my_crate::rvs_ffi_call".into(), behavior);
         let seed = capsmap::CapsMap::rvs_new();
@@ -403,7 +410,7 @@ mod tests {
 
     #[test]
     fn test_20260609_infer_caps_propagation_caller_gets_io() {
-        let mut callgraph: BTreeMap<String, FnBehavior> = BTreeMap::new();
+        let mut callgraph: BTreeMap<DefPath, FnBehavior> = BTreeMap::new();
         let mut caller_behavior = rvs_make_behavior();
         caller_behavior
             .calls
@@ -430,7 +437,7 @@ mod tests {
 
     #[test]
     fn test_20260609_infer_caps_propagation_chain() {
-        let mut callgraph: BTreeMap<String, FnBehavior> = BTreeMap::new();
+        let mut callgraph: BTreeMap<DefPath, FnBehavior> = BTreeMap::new();
         let mut a_behavior = rvs_make_behavior();
         a_behavior.calls.insert("my_crate::B".into());
         callgraph.insert("my_crate::A".into(), a_behavior);
@@ -455,7 +462,7 @@ mod tests {
 
     #[test]
     fn test_20260609_infer_caps_cycle_self_recursive() {
-        let mut callgraph: BTreeMap<String, FnBehavior> = BTreeMap::new();
+        let mut callgraph: BTreeMap<DefPath, FnBehavior> = BTreeMap::new();
         let mut behavior = rvs_make_behavior();
         behavior.calls.insert("my_crate::rvs_loop".into());
         callgraph.insert("my_crate::rvs_loop".into(), behavior);
@@ -474,7 +481,7 @@ mod tests {
 
     #[test]
     fn test_20260609_infer_caps_cycle_mutual_recursion() {
-        let mut callgraph: BTreeMap<String, FnBehavior> = BTreeMap::new();
+        let mut callgraph: BTreeMap<DefPath, FnBehavior> = BTreeMap::new();
         let mut a_behavior = rvs_make_behavior();
         a_behavior.calls.insert("my_crate::B".into());
         callgraph.insert("my_crate::A".into(), a_behavior);
@@ -494,7 +501,7 @@ mod tests {
 
     #[test]
     fn test_20260609_infer_caps_seed_override() {
-        let mut callgraph: BTreeMap<String, FnBehavior> = BTreeMap::new();
+        let mut callgraph: BTreeMap<DefPath, FnBehavior> = BTreeMap::new();
         let behavior = rvs_make_behavior();
         callgraph.insert("my_crate::rvs_read_BI".into(), behavior);
 
@@ -517,7 +524,7 @@ mod tests {
 
     #[test]
     fn test_20260609_infer_caps_rvs_suffix_from_name() {
-        let mut callgraph: BTreeMap<String, FnBehavior> = BTreeMap::new();
+        let mut callgraph: BTreeMap<DefPath, FnBehavior> = BTreeMap::new();
         let mut behavior = rvs_make_behavior();
         behavior.facts.has_async = true;
         behavior.facts.has_mut_param = true;
@@ -538,7 +545,7 @@ mod tests {
 
     #[test]
     fn test_20260613_infer_caps_propagation_from_bimps_callee() {
-        let mut callgraph: BTreeMap<String, FnBehavior> = BTreeMap::new();
+        let mut callgraph: BTreeMap<DefPath, FnBehavior> = BTreeMap::new();
 
         let mut caller_behavior = rvs_make_behavior();
         caller_behavior.facts.has_mut_param = true;
@@ -621,7 +628,7 @@ mod tests {
 
     #[test]
     fn test_20260613_impl_majority_vote_filters_minority_caps() {
-        let mut callgraph: BTreeMap<String, FnBehavior> = BTreeMap::new();
+        let mut callgraph: BTreeMap<DefPath, FnBehavior> = BTreeMap::new();
 
         let mut caller = rvs_make_behavior();
         caller.calls.insert("std::io::Read::read".into());
@@ -665,7 +672,7 @@ mod tests {
 
     #[test]
     fn test_20260614_m_not_propagated_from_direct_call() {
-        let mut callgraph: BTreeMap<String, FnBehavior> = BTreeMap::new();
+        let mut callgraph: BTreeMap<DefPath, FnBehavior> = BTreeMap::new();
 
         let mut caller = rvs_make_behavior();
         caller.facts.has_async = true;
@@ -689,7 +696,7 @@ mod tests {
 
     #[test]
     fn test_20260613_impl_majority_vote_no_cross_trait() {
-        let mut callgraph: BTreeMap<String, FnBehavior> = BTreeMap::new();
+        let mut callgraph: BTreeMap<DefPath, FnBehavior> = BTreeMap::new();
 
         let mut caller = rvs_make_behavior();
         caller.calls.insert("std::io::Read::read".into());
@@ -773,18 +780,18 @@ mod tests {
 
     #[test]
     fn test_20260630_collect_direct_external_deps_uses_bin_prefix() {
-        let mut callgraph: BTreeMap<String, FnBehavior> = BTreeMap::new();
+        let mut callgraph: BTreeMap<DefPath, FnBehavior> = BTreeMap::new();
         let mut local = rvs_make_behavior();
-        local.calls.insert("serde_json::de::from_str".to_string());
-        callgraph.insert("cargo_rivus::rvs_parse".to_string(), local);
+        local.calls.insert("serde_json::de::from_str".into());
+        callgraph.insert("cargo_rivus::rvs_parse".into(), local);
 
         let seed = capsmap::CapsMap::rvs_new();
-        let mut inferred = BTreeMap::new();
-        inferred.insert(
-            "serde_json::de::from_str".to_string(),
-            CapabilitySet::rvs_new(),
-        );
-        let prefixes = BTreeSet::from(["rivus_linter".to_string(), "cargo_rivus".to_string()]);
+        let mut inferred: BTreeMap<DefPath, CapabilitySet> = BTreeMap::new();
+        inferred.insert("serde_json::de::from_str".into(), CapabilitySet::rvs_new());
+        let prefixes = BTreeSet::from([
+            CrateName::from("rivus_linter"),
+            CrateName::from("cargo_rivus"),
+        ]);
 
         let (known, unknown) = rvs_collect_direct_external_deps(
             &callgraph,
@@ -804,7 +811,7 @@ mod tests {
 
     #[test]
     fn test_20260611_unknown_callee_reported_as_error() {
-        let mut callgraph: BTreeMap<String, FnBehavior> = BTreeMap::new();
+        let mut callgraph: BTreeMap<DefPath, FnBehavior> = BTreeMap::new();
         let mut behavior = rvs_make_behavior();
         behavior
             .calls
@@ -812,8 +819,8 @@ mod tests {
         callgraph.insert("my_crate::caller".into(), behavior);
 
         let seed = capsmap::CapsMap::rvs_new();
-        let inferred: BTreeMap<String, CapabilitySet> = BTreeMap::new();
-        let local_prefixes = BTreeSet::from(["my_crate".to_string()]);
+        let inferred: BTreeMap<DefPath, CapabilitySet> = BTreeMap::new();
+        let local_prefixes = BTreeSet::from([CrateName::from("my_crate")]);
 
         let (known, unknown) = rvs_collect_direct_external_deps(
             &callgraph,
@@ -834,7 +841,7 @@ mod tests {
 
     #[test]
     fn test_20260611_inferred_callee_is_known() {
-        let mut callgraph: BTreeMap<String, FnBehavior> = BTreeMap::new();
+        let mut callgraph: BTreeMap<DefPath, FnBehavior> = BTreeMap::new();
         let mut behavior = rvs_make_behavior();
         behavior
             .calls
@@ -842,12 +849,12 @@ mod tests {
         callgraph.insert("my_crate::caller".into(), behavior);
 
         let seed = capsmap::CapsMap::rvs_new();
-        let mut inferred: BTreeMap<String, CapabilitySet> = BTreeMap::new();
+        let mut inferred: BTreeMap<DefPath, CapabilitySet> = BTreeMap::new();
         inferred.insert(
             "some_external_crate::known_fn".into(),
             CapabilitySet::rvs_from_validated("BI"),
         );
-        let local_prefixes = BTreeSet::from(["my_crate".to_string()]);
+        let local_prefixes = BTreeSet::from([CrateName::from("my_crate")]);
 
         let (known, unknown) = rvs_collect_direct_external_deps(
             &callgraph,
@@ -867,14 +874,14 @@ mod tests {
 
     #[test]
     fn test_20260611_seed_callee_is_skipped() {
-        let mut callgraph: BTreeMap<String, FnBehavior> = BTreeMap::new();
+        let mut callgraph: BTreeMap<DefPath, FnBehavior> = BTreeMap::new();
         let mut behavior = rvs_make_behavior();
         behavior.calls.insert("std::fs::write".into());
         callgraph.insert("my_crate::caller".into(), behavior);
 
         let seed = capsmap::CapsMap::rvs_parse("std::fs::write=BI").unwrap();
-        let inferred: BTreeMap<String, CapabilitySet> = BTreeMap::new();
-        let local_prefixes = BTreeSet::from(["my_crate".to_string()]);
+        let inferred: BTreeMap<DefPath, CapabilitySet> = BTreeMap::new();
+        let local_prefixes = BTreeSet::from([CrateName::from("my_crate")]);
 
         let (known, unknown) = rvs_collect_direct_external_deps(
             &callgraph,
@@ -890,15 +897,15 @@ mod tests {
 
     #[test]
     fn test_20260613_inherent_impl_no_collision() {
-        let mut callgraph: BTreeMap<String, FnBehavior> = BTreeMap::new();
+        let mut callgraph: BTreeMap<DefPath, FnBehavior> = BTreeMap::new();
         let mut behavior = rvs_make_behavior();
         behavior.calls.insert("std::time::SystemTime::now".into());
         callgraph.insert("my_crate::rvs_get_time".into(), behavior);
 
         let seed = capsmap::CapsMap::rvs_parse("std::time::SystemTime::now=S").unwrap();
 
-        let inferred: BTreeMap<String, CapabilitySet> = BTreeMap::new();
-        let local_prefixes = BTreeSet::from(["my_crate".to_string()]);
+        let inferred: BTreeMap<DefPath, CapabilitySet> = BTreeMap::new();
+        let local_prefixes = BTreeSet::from([CrateName::from("my_crate")]);
 
         let (known, unknown) = rvs_collect_direct_external_deps(
             &callgraph,
@@ -940,8 +947,8 @@ mod tests {
 
         let mut unknown = BTreeMap::new();
         unknown.insert(
-            "missing::fn".to_string(),
-            BTreeSet::from(["caller::fn".to_string()]),
+            DefPath::from("missing::fn"),
+            BTreeSet::from([DefPath::from("caller::fn")]),
         );
         let formatted = rvs_format_unknown_callees(&unknown, "header\n");
         assert!(formatted.contains("missing::fn"));
@@ -950,7 +957,7 @@ mod tests {
         assert_eq!(caps_str, "BI");
 
         let inferred = BTreeMap::from([(
-            "std::fs::read@std::io::Read".to_string(),
+            DefPath::from("std::fs::read@std::io::Read"),
             CapabilitySet::rvs_from_validated("BI"),
         )]);
         let aliases = rvs_generate_trait_aliases_MP(&inferred, &impl_index, &callgraph);
@@ -960,7 +967,7 @@ mod tests {
         );
 
         let majority = rvs_resolve_impl_majority_caps_M(
-            "std::io::Read::read",
+            &DefPath::from("std::io::Read::read"),
             &impl_index,
             &inferred,
             &callgraph,

@@ -8,6 +8,7 @@ use super::{
     RVS_DUPLICATE_TEST, RVS_MISSING_TEST_OUTPUT, RVS_UNTESTED_GOOD_FN, RVS_UNTESTED_OK_FN,
 };
 use crate::artifacts::{FnBehavior, FnReportEntry};
+use crate::symbols::{CrateName, DefPath};
 
 /// `check_crate_post` — cross-cutting test quality checks and output writing.
 #[expect(
@@ -21,7 +22,7 @@ pub(crate) fn rvs_check_crate_post_BIMS<'tcx>(
     ok_fns: &[(String, rustc_span::Span)],
     test_call_names: &HashSet<String>,
     fn_report: &[FnReportEntry],
-    callgraph: &BTreeMap<String, FnBehavior>,
+    callgraph: &BTreeMap<DefPath, FnBehavior>,
     emit_report: bool,
     collect_callgraph: bool,
 ) {
@@ -120,11 +121,9 @@ fn rvs_write_report_BIS<'tcx>(
             if let Ok(json) = serde_json::to_string(fn_report) {
                 let report_dir = std::env::var("RIVUS_REPORT_DIR")
                     .unwrap_or_else(|_| "target/rivus-report".into());
-                let crate_name = cx
-                    .tcx
-                    .crate_name(rustc_span::def_id::LOCAL_CRATE)
-                    .as_str()
-                    .to_string();
+                let crate_name = CrateName::rvs_from_manifest_name(
+                    cx.tcx.crate_name(rustc_span::def_id::LOCAL_CRATE).as_str(),
+                );
                 let report_path = Path::new(&report_dir).join(format!("{crate_name}.json"));
                 if let Some(parent) = report_path.parent() {
                     drop(std::fs::create_dir_all(parent));
@@ -141,7 +140,7 @@ fn rvs_write_report_BIS<'tcx>(
 
 fn rvs_write_callgraph_BIS<'tcx>(
     cx: &LateContext<'tcx>,
-    callgraph: &BTreeMap<String, FnBehavior>,
+    callgraph: &BTreeMap<DefPath, FnBehavior>,
     collect_callgraph: bool,
 ) {
     if collect_callgraph {
@@ -149,11 +148,9 @@ fn rvs_write_callgraph_BIS<'tcx>(
             if let Ok(json) = serde_json::to_string(callgraph) {
                 let cg_dir = std::env::var("RIVUS_CALLGRAPH_DIR")
                     .unwrap_or_else(|_| "target/rivus-callgraph".into());
-                let crate_name = cx
-                    .tcx
-                    .crate_name(rustc_span::def_id::LOCAL_CRATE)
-                    .as_str()
-                    .to_string();
+                let crate_name = CrateName::rvs_from_manifest_name(
+                    cx.tcx.crate_name(rustc_span::def_id::LOCAL_CRATE).as_str(),
+                );
                 let cg_path = Path::new(&cg_dir).join(format!("{crate_name}.json"));
                 if let Some(parent) = cg_path.parent() {
                     drop(std::fs::create_dir_all(parent));

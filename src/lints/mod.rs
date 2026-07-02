@@ -14,6 +14,7 @@ use rustc_session::declare_tool_lint;
 use rustc_span::Span;
 
 use crate::capsmap::CapsMap;
+use crate::symbols::{DefPath, FnName};
 
 mod banned_import;
 mod borrowed_param;
@@ -264,7 +265,7 @@ pub struct RivusLintPass {
     ok_fns: Vec<(String, Span)>,
     test_call_names: HashSet<String>,
     fn_report: Vec<FnReportEntry>,
-    callgraph: BTreeMap<String, FnBehavior>,
+    callgraph: BTreeMap<DefPath, FnBehavior>,
     done_crate_level: bool,
     collect_callgraph: bool,
     emit_report: bool,
@@ -535,7 +536,7 @@ fn rvs_run_fn_checks_MS<'tcx>(
         };
         let caps_str: String = info.caps.rvs_iter().map(|c| c.rvs_as_char()).collect();
         data.fn_report.push(FnReportEntry {
-            name: name.to_string(),
+            name: FnName::rvs_new(name.to_string()),
             caps: caps_str,
             lines: effective_lines,
             is_test,

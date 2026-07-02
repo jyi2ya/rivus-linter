@@ -1,2 +1,2 @@
-known={"serde_json::de::from_str": CapabilitySet({})}
+known={DefPath("serde_json::de::from_str"): CapabilitySet({})}
 unknown={}

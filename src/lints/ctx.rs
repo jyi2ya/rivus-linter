@@ -4,6 +4,7 @@ use rustc_span::Span;
 
 use crate::artifacts::{FnBehavior, FnReportEntry};
 use crate::capsmap::CapsMap;
+use crate::symbols::DefPath;
 use rustc_span::def_id::DefId;
 
 /// Bundles the mutable references needed by fn-level checks so they can be
@@ -14,7 +15,7 @@ pub(crate) struct FnCheckData<'a> {
     pub good_fns: &'a mut Vec<(String, Span)>,
     pub ok_fns: &'a mut Vec<(String, Span)>,
     pub fn_report: &'a mut Vec<FnReportEntry>,
-    pub callgraph: &'a mut BTreeMap<String, FnBehavior>,
+    pub callgraph: &'a mut BTreeMap<DefPath, FnBehavior>,
     pub collect_callgraph: bool,
     pub should_emit_lints: bool,
     pub port_traits: &'a HashSet<DefId>,

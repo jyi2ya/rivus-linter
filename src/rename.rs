@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::capability::rvs_parse_function;
+use crate::symbols::{FnName, RelativeFnPath};
 use ra_ap_ide::{
     Analysis, AnalysisHost, FilePosition, FileStructureConfig, Indel, RenameConfig, SourceChange,
     StructureNodeKind,
@@ -19,8 +20,8 @@ use ra_ap_project_model::{CargoConfig, RustLibSource};
 /// Represents a function/method found via rust-analyzer's file structure.
 #[derive(Debug)]
 struct FunctionNode {
-    name: String,
-    relative_path: String,
+    name: FnName,
+    relative_path: RelativeFnPath,
     position: FilePosition,
     is_rvs_prefixed: bool,
     is_in_trait_impl: bool,
@@ -133,12 +134,12 @@ fn rvs_find_functions_BIMS(
             if nav_end > source.len() {
                 continue;
             }
-            let name = source.get(nav_start..nav_end).unwrap_or("").to_string();
-            if name.is_empty() {
+            let name = FnName::rvs_new(source.get(nav_start..nav_end).unwrap_or("").to_string());
+            if name.rvs_as_str().is_empty() {
                 continue;
             }
 
-            let is_rvs_prefixed = name.starts_with("rvs_");
+            let is_rvs_prefixed = name.rvs_as_str().starts_with("rvs_");
             let is_in_trait_impl = trait_impl_ranges
                 .iter()
                 .any(|r| r.contains_range(node.navigation_range));
@@ -167,7 +168,7 @@ fn rvs_apply_renames_BIS(
     analysis: &Analysis,
     vfs: &ra_ap_vfs::Vfs,
     functions: &[FunctionNode],
-    rename_map: &HashMap<String, String>,
+    rename_map: &HashMap<RelativeFnPath, FnName>,
 ) -> Result<usize, String> {
     let mut file_edits: HashMap<PathBuf, Vec<Indel>> = HashMap::new();
 
@@ -179,11 +180,11 @@ fn rvs_apply_renames_BIS(
     };
 
     for func in functions {
-        let Some(new_name) = rename_map.get(func.relative_path.as_str()) else {
+        let Some(new_name) = rename_map.get(&func.relative_path) else {
             continue;
         };
 
-        match analysis.rename(func.position, new_name.as_str(), &rename_config) {
+        match analysis.rename(func.position, new_name.rvs_as_str(), &rename_config) {
             Ok(Ok(source_change)) => {
                 rvs_collect_edits_M(&source_change, vfs, &mut file_edits);
             }
@@ -241,15 +242,15 @@ pub fn rvs_strip_BIS(path: &Path) -> Result<(), String> {
     let functions = rvs_find_functions_BIMS(&analysis, &vfs, &_local_files, &canonical_path);
 
     // 3. Build rename_map from rvs_-prefixed functions keyed by local relative path.
-    let mut rename_map: HashMap<String, String> = HashMap::new();
+    let mut rename_map: HashMap<RelativeFnPath, FnName> = HashMap::new();
     for func in &functions {
         if !func.is_rvs_prefixed {
             continue;
         }
-        if let Some(new_name) = rvs_compute_strip_name(&func.name)
-            && new_name != func.name
+        if let Some(new_name) = rvs_compute_strip_name(func.name.rvs_as_str())
+            && new_name != func.name.rvs_as_str()
         {
-            rename_map.insert(func.relative_path.clone(), new_name);
+            rename_map.insert(func.relative_path.clone(), FnName::rvs_new(new_name));
         }
     }
 
@@ -280,7 +281,7 @@ pub fn rvs_strip_BIS(path: &Path) -> Result<(), String> {
 /// Returns the number of files changed.
 pub fn rvs_apply_ra_renames_BIS(
     path: &Path,
-    rename_map: &HashMap<String, String>,
+    rename_map: &HashMap<RelativeFnPath, FnName>,
 ) -> Result<usize, String> {
     let canonical_path = path
         .canonicalize()
@@ -331,7 +332,7 @@ fn rvs_collect_edits_M(
 fn rvs_relative_function_path(
     nodes: &[ra_ap_ide::StructureNode],
     node: &ra_ap_ide::StructureNode,
-) -> String {
+) -> RelativeFnPath {
     let mut segments = vec![node.label.clone()];
     let mut parent = node.parent;
     while let Some(index) = parent {
@@ -349,7 +350,7 @@ fn rvs_relative_function_path(
         parent = current.parent;
     }
     segments.reverse();
-    segments.join("::")
+    RelativeFnPath::rvs_new(segments.join("::"))
 }
 
 /// Computes the new name for a strip operation.
@@ -486,9 +487,9 @@ mod tests {
         let relative_path = rvs_relative_function_path(&nodes, &nodes[1]);
         rvs_snapshot_BIS(
             "test_20260702_relative_function_path_nested_module",
-            &relative_path,
+            relative_path.rvs_as_str(),
         );
-        assert_eq!(relative_path, "cli::main");
+        assert_eq!(relative_path, RelativeFnPath::from("cli::main"));
     }
 
     #[test]

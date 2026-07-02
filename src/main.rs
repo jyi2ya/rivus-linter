@@ -36,6 +36,7 @@ mod lints;
 mod rename;
 mod report_commands;
 mod setup;
+mod symbols;
 mod workspace;
 
 const RIVUS_MD: &str = include_str!("../rivus.md");

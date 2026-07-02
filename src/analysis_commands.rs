@@ -5,6 +5,7 @@ use crate::inference::{
     rvs_build_impl_index, rvs_caps_to_string, rvs_infer_caps_M, rvs_resolve_impl_majority_caps_M,
 };
 use crate::rename;
+use crate::symbols::{DefPath, FnName, RelativeFnPath};
 use crate::workspace::{
     rvs_ensure_cargo_project_BIS, rvs_load_callgraph_and_caps_BIMS,
     rvs_load_local_crate_prefixes_BIS,
@@ -17,28 +18,31 @@ pub(crate) fn rvs_run_annotate_BIMPS(path: &Path) -> Result<(), String> {
     let local_crate_names = rvs_load_local_crate_prefixes_BIS(path)?;
     let (callgraph, seed) = rvs_load_callgraph_and_caps_BIMS(path)?;
     let inferred = rvs_infer_caps_M(&callgraph, &seed);
-    let local_prefixes: Vec<String> = local_crate_names
+    let local_prefixes: Vec<_> = local_crate_names
         .into_iter()
-        .map(|name| format!("{name}::"))
+        .map(|name| name.rvs_prefix())
         .collect();
-    let root_main_paths: BTreeSet<String> = local_prefixes
+    let root_main_paths: BTreeSet<DefPath> = local_prefixes
         .iter()
-        .map(|prefix| format!("{prefix}main"))
+        .map(|prefix| prefix.rvs_join_name(&FnName::rvs_new("main")))
         .collect();
 
-    let mut rename_map: HashMap<String, String> = HashMap::new();
+    let mut rename_map: HashMap<RelativeFnPath, FnName> = HashMap::new();
     for (full_path, caps) in &inferred {
         let Some(relative_path) = local_prefixes
             .iter()
-            .find_map(|prefix| full_path.strip_prefix(prefix))
+            .find_map(|prefix| full_path.rvs_strip_prefix(prefix))
         else {
             continue;
         };
-        let short_name = relative_path.rsplit("::").next().unwrap_or(relative_path);
-        if short_name.starts_with("rvs_") {
+        let short_name = relative_path.rvs_fn_name();
+        if short_name.rvs_as_str().starts_with("rvs_") {
             continue;
         }
-        if short_name.starts_with(|c: char| c.is_ascii_uppercase()) {
+        if short_name
+            .rvs_as_str()
+            .starts_with(|c: char| c.is_ascii_uppercase())
+        {
             continue;
         }
         if root_main_paths.contains(full_path) {
@@ -52,11 +56,11 @@ pub(crate) fn rvs_run_annotate_BIMPS(path: &Path) -> Result<(), String> {
         }
         let caps_str = rvs_caps_to_string(caps);
         let new_name = if caps_str.is_empty() {
-            format!("rvs_{short_name}")
+            FnName::rvs_new(format!("rvs_{short_name}"))
         } else {
-            format!("rvs_{short_name}_{caps_str}")
+            FnName::rvs_new(format!("rvs_{short_name}_{caps_str}"))
         };
-        rename_map.insert(relative_path.to_string(), new_name);
+        rename_map.insert(relative_path, new_name);
     }
 
     if rename_map.is_empty() {
@@ -85,9 +89,9 @@ pub(crate) fn rvs_run_why_BIMPS(function: &str, path: &Path) -> Result<(), Strin
     let impl_index = rvs_build_impl_index(&callgraph);
 
     let Some(behavior) = callgraph.get(function) else {
-        let candidates: Vec<&String> = callgraph
+        let candidates: Vec<&DefPath> = callgraph
             .keys()
-            .filter(|k| k.contains(function))
+            .filter(|k| k.rvs_contains(function))
             .take(10)
             .collect();
         if candidates.is_empty() {
@@ -136,16 +140,16 @@ pub(crate) fn rvs_run_why_BIMPS(function: &str, path: &Path) -> Result<(), Strin
         return Ok(());
     }
 
-    let mut callees: Vec<(&String, Option<crate::capability::CapabilitySet>)> = behavior
+    let mut callees: Vec<(&DefPath, Option<crate::capability::CapabilitySet>)> = behavior
         .calls
         .iter()
         .map(|callee| {
             let caps = inferred
                 .get(callee)
                 .cloned()
-                .or_else(|| seed.rvs_lookup(callee).cloned())
+                .or_else(|| seed.rvs_lookup(callee.rvs_as_str()).cloned())
                 .or_else(|| {
-                    if !callee.contains('@') {
+                    if !callee.rvs_as_str().contains('@') {
                         rvs_resolve_impl_majority_caps_M(callee, &impl_index, &inferred, &callgraph)
                     } else {
                         None

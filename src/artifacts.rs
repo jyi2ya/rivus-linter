@@ -4,10 +4,11 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 
 use crate::capability::CapabilityFacts;
+use crate::symbols::{DefPath, FnName};
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct FnBehavior {
-    pub calls: BTreeSet<String>,
+    pub calls: BTreeSet<DefPath>,
     #[serde(flatten)]
     pub facts: CapabilityFacts,
     #[serde(default)]
@@ -34,7 +35,7 @@ impl FnBehavior {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FnReportEntry {
-    pub name: String,
+    pub name: FnName,
     pub caps: String,
     pub lines: usize,
     pub is_test: bool,
@@ -42,7 +43,7 @@ pub struct FnReportEntry {
 }
 
 /// Parse serialized callgraph JSON into shared callgraph records.
-pub fn rvs_parse_callgraph_json_S(json: &str) -> Result<BTreeMap<String, FnBehavior>, String> {
+pub fn rvs_parse_callgraph_json_S(json: &str) -> Result<BTreeMap<DefPath, FnBehavior>, String> {
     serde_json::from_str(json).map_err(|e| format!("invalid callgraph JSON: {e}"))
 }
 

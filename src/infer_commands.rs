@@ -8,6 +8,7 @@ use crate::inference::{
     rvs_format_unknown_callees, rvs_generate_trait_aliases_MP, rvs_infer_caps_M,
     rvs_infer_signature_caps,
 };
+use crate::symbols::{CapsMapKey, DefPath};
 use crate::workspace::{
     rvs_collect_callgraph_BIMS, rvs_ensure_cargo_project_BIS, rvs_load_local_crate_prefixes_BIS,
     rvs_resolve_capsmap_path, rvs_write_capsmap_result_BIS,
@@ -90,9 +91,9 @@ pub(crate) fn rvs_run_infer_capsmap_BIMPS(
 pub(crate) fn rvs_run_infer_std_BIMPS(path: &Path, output: &Option<PathBuf>) -> Result<(), String> {
     rvs_ensure_cargo_project_BIS(path)?;
     let local_crate_prefixes = rvs_load_local_crate_prefixes_BIS(path)?;
-    let local_prefixes: Vec<String> = local_crate_prefixes
+    let local_prefixes: Vec<_> = local_crate_prefixes
         .into_iter()
-        .map(|name| format!("{name}::"))
+        .map(|name| name.rvs_prefix())
         .collect();
 
     let callgraph = rvs_collect_callgraph_BIMS(path, true, false, vec![])?;
@@ -105,10 +106,10 @@ pub(crate) fn rvs_run_infer_std_BIMPS(path: &Path, output: &Option<PathBuf>) -> 
 
     let std_crates: &[&str] = &["std::", "core::", "alloc::", "compiler_builtins::"];
     let pre_index = rvs_build_impl_index(&callgraph);
-    let pre_inferred: BTreeMap<String, crate::capability::CapabilitySet> = {
+    let pre_inferred: BTreeMap<DefPath, crate::capability::CapabilitySet> = {
         let mut m = BTreeMap::new();
         for (func, behavior) in &callgraph {
-            if let Some(caps) = seed.rvs_lookup(func) {
+            if let Some(caps) = seed.rvs_lookup(func.rvs_as_str()) {
                 m.insert(func.clone(), caps.clone());
             } else {
                 m.insert(func.clone(), rvs_infer_signature_caps(behavior));
@@ -116,16 +117,16 @@ pub(crate) fn rvs_run_infer_std_BIMPS(path: &Path, output: &Option<PathBuf>) -> 
         }
         m
     };
-    let std_pre_inferred: BTreeMap<String, crate::capability::CapabilitySet> = pre_inferred
+    let std_pre_inferred: BTreeMap<DefPath, crate::capability::CapabilitySet> = pre_inferred
         .iter()
-        .filter(|(k, _)| std_crates.iter().any(|p| k.starts_with(p)))
+        .filter(|(k, _)| std_crates.iter().any(|p| k.rvs_as_str().starts_with(p)))
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
     let mut alias_seed = seed.clone();
     let pre_aliases = rvs_generate_trait_aliases_MP(&std_pre_inferred, &pre_index, &callgraph);
     for (k, v) in &pre_aliases {
         let caps_str = rvs_caps_to_string(v);
-        let line = format!("{k}={caps_str}");
+        let line = format!("{}={caps_str}", CapsMapKey::from(k.clone()));
         if let Ok(tmp) = capsmap::CapsMap::rvs_parse(&line) {
             alias_seed.rvs_extend_from_M(tmp);
         }
@@ -133,32 +134,36 @@ pub(crate) fn rvs_run_infer_std_BIMPS(path: &Path, output: &Option<PathBuf>) -> 
 
     let mut inferred = rvs_infer_caps_M(&callgraph, &alias_seed);
     let impl_index = rvs_build_impl_index(&callgraph);
-    let std_inferred: BTreeMap<String, crate::capability::CapabilitySet> = inferred
+    let std_inferred: BTreeMap<DefPath, crate::capability::CapabilitySet> = inferred
         .iter()
-        .filter(|(k, _)| std_crates.iter().any(|p| k.starts_with(p)))
+        .filter(|(k, _)| std_crates.iter().any(|p| k.rvs_as_str().starts_with(p)))
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
     let post_aliases = rvs_generate_trait_aliases_MP(&std_inferred, &impl_index, &callgraph);
     inferred.extend(post_aliases);
 
-    let std_only: BTreeMap<String, crate::capability::CapabilitySet> = inferred
+    let std_only: BTreeMap<DefPath, crate::capability::CapabilitySet> = inferred
         .iter()
         .filter(|(name, _)| {
-            !local_prefixes.iter().any(|prefix| name.starts_with(prefix))
-                && std_crates.iter().any(|prefix| name.starts_with(prefix))
+            !local_prefixes
+                .iter()
+                .any(|prefix| name.rvs_starts_with(prefix))
+                && std_crates
+                    .iter()
+                    .any(|prefix| name.rvs_as_str().starts_with(prefix))
         })
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
 
-    let mut unknown: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut unknown: BTreeMap<DefPath, BTreeSet<DefPath>> = BTreeMap::new();
     for (func, behavior) in &callgraph {
-        let is_std = std_crates.iter().any(|p| func.starts_with(p));
+        let is_std = std_crates.iter().any(|p| func.rvs_as_str().starts_with(p));
         if !is_std {
             continue;
         }
         for callee in &behavior.calls {
             if inferred.contains_key(callee)
-                || seed.rvs_lookup(callee).is_some()
+                || seed.rvs_lookup(callee.rvs_as_str()).is_some()
                 || callgraph.contains_key(callee)
             {
                 continue;

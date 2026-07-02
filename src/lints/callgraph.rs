@@ -7,13 +7,14 @@ use rustc_lint::LateContext;
 use super::utils::{rvs_def_path, rvs_has_attr, rvs_has_mutable_params, rvs_walk_closures};
 use crate::artifacts::FnBehavior;
 use crate::capability::CapabilityFacts;
+use crate::symbols::DefPath;
 
 #[expect(
     clippy::too_many_arguments,
     reason = "callgraph collection needs full fn metadata to avoid extra wrapper structs"
 )]
 pub(crate) fn rvs_collect_callgraph_for_item_M<'tcx>(
-    callgraph: &mut BTreeMap<String, FnBehavior>,
+    callgraph: &mut BTreeMap<DefPath, FnBehavior>,
     cx: &LateContext<'tcx>,
     hir_id: HirId,
     sig: &rustc_hir::FnSig<'tcx>,
@@ -24,9 +25,9 @@ pub(crate) fn rvs_collect_callgraph_for_item_M<'tcx>(
 ) {
     let local_def_id = hir_id.owner.def_id;
     let def_id = local_def_id.to_def_id();
-    let caller_path = rvs_def_path(cx, def_id);
+    let caller_path = DefPath::rvs_new(rvs_def_path(cx, def_id));
 
-    let mut calls: BTreeSet<String> = BTreeSet::new();
+    let mut calls: BTreeSet<DefPath> = BTreeSet::new();
     let mut has_static_ref = false;
     let mut has_static_mut_ref = false;
     let mut has_thread_local_ref = false;
@@ -58,7 +59,7 @@ pub(crate) fn rvs_collect_callgraph_for_item_M<'tcx>(
             if let ExprKind::Path(ref q) = func.kind {
                 if let rustc_hir::def::Res::Def(k, did) = cx.qpath_res(q, func.hir_id) {
                     if matches!(k, DefKind::Fn | DefKind::AssocFn | DefKind::Variant) {
-                        calls.insert(rvs_def_path(cx, did));
+                        calls.insert(DefPath::rvs_new(rvs_def_path(cx, did)));
                     }
                 }
             }
@@ -67,14 +68,14 @@ pub(crate) fn rvs_collect_callgraph_for_item_M<'tcx>(
             let owner = e.hir_id.owner.def_id;
             let tck = cx.tcx.typeck(owner);
             if let Some(did) = tck.type_dependent_def_id(e.hir_id) {
-                calls.insert(rvs_def_path(cx, did));
+                calls.insert(DefPath::rvs_new(rvs_def_path(cx, did)));
             }
         }
         ExprKind::AddrOf(_, _, inner) => {
             if let ExprKind::Path(ref q) = inner.kind {
                 if let rustc_hir::def::Res::Def(k, did) = cx.qpath_res(q, inner.hir_id) {
                     if matches!(k, DefKind::Fn | DefKind::AssocFn) {
-                        calls.insert(rvs_def_path(cx, did));
+                        calls.insert(DefPath::rvs_new(rvs_def_path(cx, did)));
                     }
                 }
             }
@@ -100,7 +101,7 @@ pub(crate) fn rvs_collect_callgraph_for_item_M<'tcx>(
 /// Collect callgraph entry from a signature alone (no body — e.g. trait method
 /// declarations without default implementation).
 pub(crate) fn rvs_collect_callgraph_for_signature_M(
-    callgraph: &mut BTreeMap<String, FnBehavior>,
+    callgraph: &mut BTreeMap<DefPath, FnBehavior>,
     cx: &LateContext<'_>,
     hir_id: HirId,
     sig: &rustc_hir::FnSig<'_>,
@@ -109,7 +110,7 @@ pub(crate) fn rvs_collect_callgraph_for_signature_M(
 ) {
     let local_def_id = hir_id.owner.def_id;
     let def_id = local_def_id.to_def_id();
-    let caller_path = rvs_def_path(cx, def_id);
+    let caller_path = DefPath::rvs_new(rvs_def_path(cx, def_id));
 
     let facts = CapabilityFacts::rvs_from_signature(
         sig,
@@ -147,7 +148,7 @@ mod tests {
     )]
     fn test_20260630_callgraph_helper_coverage() {
         if std::hint::black_box(false) {
-            let _callgraph: &mut BTreeMap<String, FnBehavior> = unreachable!();
+            let _callgraph: &mut BTreeMap<DefPath, FnBehavior> = unreachable!();
             let _cx: &LateContext<'_> = unreachable!();
             let _hir_id: HirId = unreachable!();
             let _sig: &rustc_hir::FnSig<'_> = unreachable!();

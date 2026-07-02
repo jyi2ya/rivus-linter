@@ -1,1 +1,1 @@
-{"libc::unix::read": CapabilitySet({B, I}), "my_crate::rvs_copy": CapabilitySet({}), "std::fs::read@std::io::Read": CapabilitySet({B, I, M}), "std::io::cursor::read@std::io::Read": CapabilitySet({M}), "std::io::impls::read@std::io::Read": CapabilitySet({M})}
+{DefPath("libc::unix::read"): CapabilitySet({B, I}), DefPath("my_crate::rvs_copy"): CapabilitySet({}), DefPath("std::fs::read@std::io::Read"): CapabilitySet({B, I, M}), DefPath("std::io::cursor::read@std::io::Read"): CapabilitySet({M}), DefPath("std::io::impls::read@std::io::Read"): CapabilitySet({M})}
