@@ -66,7 +66,7 @@ cargo rivus check -- --features foo  # 传递额外 cargo check 参数
 
 ## `cargo rivus report [PATH]`
 
-对 `path` 指定的 Cargo 项目运行 `cargo check`，统计编译过程中发现的所有 `rvs_` 函数的能力分布，输出各能力标记的函数数量和行数占比。好函数（能力集合是 `{A,B,M}` 的子集，包括纯函数）应该越多越好。
+对 `path` 指定的 Cargo 项目运行 `cargo check`，统计编译过程中发现的所有 `rvs_` 函数的能力分布，输出各能力标记的函数数量和行数占比。`good`（能力集合是 `{A,B,M}` 的子集，包括纯函数）和 `ok`（能力集合是 `{A,B,M,P}` 的子集）应尽量占比高。
 
 `PATH` 最好直接指向目标 Cargo 项目的根目录；如果它不是包含 `Cargo.toml` 的项目根目录，命令会失败。
 
@@ -91,6 +91,7 @@ Capability Report
 Total: 42 functions, 890 lines
 ------------------------------------------------------------
   (good)          30 fns    650 lines  73.0% |██████████████████████░░░░░░░░|
+  (ok)            30 fns    650 lines  73.0% |██████████████████████░░░░░░░░|
   (pure)          12 fns    200 lines  22.5% |██████████░░░░░░░░░░░░░░░░░░░░|
   M(Mutable)      10 fns    300 lines  33.7% |█████████████░░░░░░░░░░░░░░░░░|
 ```
@@ -101,7 +102,7 @@ Total: 42 functions, 890 lines
 
 收集调用图并从种子标注自底向上推断 capsmap。对每个 `rvs_` 函数，聚合其所有被调用方的能力，得到保守上界。`PATH` 必须是一个可成功执行 `cargo check` 的 Cargo 项目。
 
-推断分两步：首先对不在种子中的函数，直接从行为特征推断能力（`async fn` → A、`unsafe` → U、`&mut` 参数 → M、`static` 引用 → S、`static mut` 引用 → S+U、`thread_local!` 引用 → S+T）；然后通过固定点迭代，将所有被调用方的能力沿调用图向上传播。若同一函数同时被识别为普通 `static` 引用和 `thread_local!` 引用，结果会合并为 `S+T`（幂等）。种子中的条目作为推断的起点（下界），传播可能在其基础上累加更多能力。
+推断分两步：首先对不在种子中的函数，直接从行为特征推断能力（`async fn` → A、`unsafe fn` → U、`&mut` 参数 → M、`static` 引用 → S、`static mut` 引用 → S+U、`thread_local!` 引用 → S+T）；然后通过固定点迭代，将所有被调用方的能力沿调用图向上传播。若同一函数同时被识别为普通 `static` 引用和 `thread_local!` 引用，结果会合并为 `S+T`（幂等）。种子中的条目作为推断的起点（下界），传播可能在其基础上累加更多能力。
 
 ```bash
 cargo rivus infer-capsmap                    # 写入 <PATH>/target/rivus-inferred-capsmap.txt 并输出到 stdout
@@ -113,7 +114,7 @@ cargo rivus infer-capsmap -m caps/           # 指定种子目录
 - `-m, --capsmap <PATH>` — 种子 capsmap 文件或目录（默认：`caps`）
 - `-o, --output <PATH>` — 额外输出路径。始终尝试写入 `<PATH>/target/rivus-inferred-capsmap.txt`；无 `-o` 时额外输出到 stdout。若默认输出路径写入失败，命令会直接报错退出；指定 `-o` 时额外写入该路径而不再输出到 stdout
 
-注意：相对路径按当前工作目录解析，而不是按 `PATH` 指向的项目目录解析。
+注意：相对 `--capsmap` 路径按 `PATH` 指向的项目目录解析。
 
 ---
 
@@ -273,7 +274,8 @@ std::process::exit=S           # 副作用：终止进程
 | `DerefPolymorphismWarning` | 实现了 `Deref`——可能用 Deref 模拟继承，应改用组合 |
 | `ReflectionUsageWarning` | 使用了 `std::any::Any`/`type_name`/`type_id`——应改用 trait 分发 |
 | `TodoCommentWarning` | 代码中包含 `// TODO` 或 `// FIXME` 注释（含 `/* */` 块注释，仅检测以 `//` 或 `/*` 开头的行） |
-| `UntestedGoodFnWarning` | 好函数（能力 ≤ ABM）未被任何测试调用 |
+| `UntestedGoodFnWarning` | good 函数（能力 ≤ ABM）未被任何测试调用 |
+| `UntestedOkFnWarning` | ok 函数（能力 ≤ ABMP）未被任何测试调用 |
 | `ErrorSwallowWarning` | 调用 `.ok()` 或 `.unwrap_or_default()` 静默吞掉错误 |
 | `CatchUnwindWarning` | 使用 `catch_unwind`——应修 panic 源头而非捕获 |
 | `CatchAllErrorVariantWarning` | 错误枚举含 `Unknown`/`Other`/`UnknownError`/`OtherError` 兜底变体 |
@@ -288,13 +290,13 @@ std::process::exit=S           # 副作用：终止进程
 | InferenceKind | 含义 |
 |---------------|------|
 | `MissingAsync` | 函数声明为 `async fn` 但后缀缺少 `A` |
-| `MissingUnsafe` | 函数含 `unsafe` 块或声明为 `unsafe fn` 但后缀缺少 `U` |
+| `MissingUnsafe` | 函数声明为 `unsafe fn` 但后缀缺少 `U` |
 | `MissingMutable` | 函数有 `&mut` 参数（含 `&mut self`）但后缀缺少 `M` |
 | `MissingSideEffect` | 函数读取了 `static` 变量但后缀缺少 `S` |
 | `MissingThreadLocal` | 函数读取了 `thread_local!` 变量但后缀缺少 `T`（同时需要 `S`，参见 `StaticRef`） |
 | `NonAlphabeticalSuffix` | 能力后缀字母未按字母序排列 |
 | `DuplicateSuffixLetter` | 能力后缀中有重复字母 |
-| `UnknownSuffixLetter` | 能力后缀包含不在 `ABIMSTU` 中的字母——已知字母仍正常提取，未知字母仅报告提示 |
+| `UnknownSuffixLetter` | 能力后缀包含不在 `ABIMPSTU` 中的字母——已知字母仍正常提取，未知字母仅报告提示 |
 
 ---
 

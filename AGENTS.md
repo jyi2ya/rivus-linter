@@ -157,7 +157,7 @@ async fn rvs_send_email_ABIS(email: &Validated<Email>, body: &str) -> Result<(),
 
 你的所有函数名必须以 `rvs_` 开头！实现外部 traits 除外。
 
-后缀提取规则：去除 `rvs_` 前缀后，取最后一个 `_` 之后的部分；仅当该部分全部为大写 ASCII 字母时才识别为能力后缀，否则视为无后缀的纯函数。已知字母（`ABIMSTU`）正常提取，未知字母触发 `UnknownSuffixLetter` 警告。
+后缀提取规则：去除 `rvs_` 前缀后，取最后一个 `_` 之后的部分；仅当该部分全部为大写 ASCII 字母时才识别为能力后缀，否则视为无后缀的纯函数。已知字母（`ABIMPSTU`）正常提取，未知字母触发 `UnknownSuffixLetter` 警告。
 
 推荐在 crate 根（`lib.rs` 或 `main.rs`）加一行全局标注即可：
 
@@ -354,7 +354,7 @@ docs/theory/
 
 ### 增加好函数率的架构手法
 
-以下手法通过分离关注点，将高能力（I/S/T/U）代码限制在薄薄一层适配器中，把大量业务逻辑拉入纯函数。
+以下手法通过分离关注点，将高能力（I/S/T/U/P）代码限制在薄薄一层适配器中，把大量业务逻辑拉入纯函数。
 
 #### 六边形架构（Ports & Adapters）
 
@@ -371,7 +371,7 @@ docs/theory/
 ┌──────────────▼──────────────────────┐
 │              Domain                  │
 │  Entities / Use Cases / Events       │
-│  （纯函数 / 好函数，能力 ≤ ABM）      │
+│  （纯函数 / 好函数≤ABM / ok≤ABMP）   │
 └─────────────────────────────────────┘
 ```
 
