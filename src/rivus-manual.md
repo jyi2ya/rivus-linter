@@ -49,14 +49,13 @@
 ```bash
 cargo rivus check                    # 按回退链自动查找 capsmap
 cargo rivus check -m caps/           # 指定 caps 目录
-cargo rivus check -m my-capsmap.txt  # 指定单个 caps 文件
 cargo rivus check -- --features foo  # 传递额外 cargo check 参数
 ```
 
 选项：
-- `-m, --capsmap <PATH>` — capsmap 文件或目录路径。不指定时按以下优先级查找：（1）`target/rivus-inferred-capsmap.txt`；（2）项目 `caps/` 目录；（3）随工具分发的内置 `caps/` 目录。找到的路径通过 `RIVUS_CAPSMAP` 环境变量传递给 lint 驱动层。
+- `-m, --capsmap <PATH>` — capsmap 目录路径。不指定时按以下优先级查找：（1）项目 `caps/` 目录；（2）随工具分发的内置 `caps/` 目录。找到的路径通过 `RIVUS_CAPSMAP` 环境变量传递给 lint 驱动层。
 
-注意：capsmap 的查找和加载完全由 CLI 层（`rvs_resolve_capsmap_BIS`）控制。lint 驱动层只读 `RIVUS_CAPSMAP` 环境变量，不做任何额外的回退查找。caps 目录使用统一的层级加载器（`CapsMap::rvs_load_dir_BIS`），按 `std → deps → seed → suppress → ext → 其余字母序` 的固定顺序合并。
+注意：capsmap 的查找和加载完全由 CLI 层（`rvs_resolve_capsmap_BIS`）控制。lint 驱动层只读 `RIVUS_CAPSMAP` 环境变量，不做任何额外的回退查找。capsmap 只支持目录形式；caps 目录使用统一的层级加载器（`CapsMap::rvs_load_dir_BIS`），按 `std → deps → seed → suppress → ext → 其余字母序` 的固定顺序合并。
 
 注意：`check` 默认编译 `--tests`（含测试代码），因此 `#[test]` 函数也会被分析。`infer-capsmap` 和 `infer-std` 不编译测试代码。
 
@@ -105,14 +104,14 @@ Total: 42 functions, 890 lines
 推断分两步：首先对不在种子中的函数，直接从行为特征推断能力（`async fn` → A、`unsafe fn` → U、`&mut` 参数 → M、`static` 引用 → S、`static mut` 引用 → S+U、`thread_local!` 引用 → S+T）；然后通过固定点迭代，将所有被调用方的能力沿调用图向上传播。若同一函数同时被识别为普通 `static` 引用和 `thread_local!` 引用，结果会合并为 `S+T`（幂等）。种子中的条目作为推断的起点（下界），传播可能在其基础上累加更多能力。
 
 ```bash
-cargo rivus infer-capsmap                    # 写入 <PATH>/target/rivus-inferred-capsmap.txt 并输出到 stdout
-cargo rivus infer-capsmap -o inferred.txt    # 写入 <PATH>/target/rivus-inferred-capsmap.txt 和指定文件
+cargo rivus infer-capsmap                    # 写入 <PATH>/target/rivus-inferred-capsmap.txt 和 <PATH>/target/rivus-deps-capsmap.txt，并输出 deps capsmap 到 stdout
+cargo rivus infer-capsmap -o caps/deps       # 写入完整推断缓存，并把 direct external deps 写到指定文件
 cargo rivus infer-capsmap -m caps/           # 指定种子目录
 ```
 
 选项：
-- `-m, --capsmap <PATH>` — 种子 capsmap 文件或目录（默认：`caps`）
-- `-o, --output <PATH>` — 额外输出路径。始终尝试写入 `<PATH>/target/rivus-inferred-capsmap.txt`；无 `-o` 时额外输出到 stdout。若默认输出路径写入失败，命令会直接报错退出；指定 `-o` 时额外写入该路径而不再输出到 stdout
+- `-m, --capsmap <PATH>` — 种子 capsmap 目录（默认：`caps`）
+- `-o, --output <PATH>` — direct external deps capsmap 输出路径。命令始终尝试写入完整推断缓存 `<PATH>/target/rivus-inferred-capsmap.txt`；无 `-o` 时额外写入 `<PATH>/target/rivus-deps-capsmap.txt` 并输出 deps capsmap 到 stdout。若默认输出路径写入失败，命令会直接报错退出；指定 `-o` 时写入该路径而不再输出到 stdout
 
 注意：相对 `--capsmap` 路径按 `PATH` 指向的项目目录解析。
 
@@ -197,7 +196,7 @@ cargo rivus annotate /path/to  # 指定目录
 
 ## capsmap
 
-为非 `rvs_` 函数声明能力。支持两种形式：
+为非 `rvs_` 函数声明能力。只支持目录形式：
 
 **目录形式**（推荐）：项目根目录下的 `caps/` 目录，包含多个 caps 文件：
 
@@ -230,6 +229,7 @@ std::process::exit=S           # 副作用：终止进程
 - linter 对 capsmap 中的键做精确匹配（全限定路径完全一致）。不支持后缀匹配——caps 文件中的键必须使用 rustc 给出的 def_path
 - 如果 linter 报告某函数"既非 rvs_-prefixed nor in capsmap"，你需要补全 capsmap。方法优先级：检查源码 > 编写测试验证行为 > 合理猜测
 - caps 文件中的条目使用 rustc-driver 解析出的全限定路径（如 `core::result::impl::expect=`），而非源码中的短名
+- capsmap 只支持目录形式，不支持单文件 capsmap
 
 ---
 

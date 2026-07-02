@@ -210,7 +210,7 @@ Linter 对未测试的 good 函数和未测试的 ok 函数都会发出警告。
 
 #### P（Port）的自动推断
 
-P 不从函数后缀中解析，而是由 trait 名推断。当当前 crate 中定义的 trait 名字以 `Repository` 或 `Client`（此列表可扩展）结尾时，该 trait 被视为 **Port**。Port trait 的所有方法**自动获得且仅获得 P 能力**——不会投票出 I/S/T/B 等。
+Port 方法的 P 不从函数后缀中解析，而是由 trait 名推断。当当前 crate 中定义的 trait 名字以 `Repository` 或 `Client`（此列表可扩展）结尾时，该 trait 被视为 **Port**。Port trait 的所有方法**自动获得且仅获得 P 能力**——不会投票出 I/S/T/B 等。调用 Port 方法的普通函数若需要显式标注能力，仍通过 `_P` 后缀声明自己依赖端口。
 
 这意味着：
 - Port trait 的方法**不携带实现的具体能力**（如 I/O），只有 P
@@ -258,7 +258,7 @@ rvs_sort_inplace_M 可调用  rvs_add               ✅ (有 M 可调无 M)
 
 ### capsmap
 
-为非 `rvs_` 函数声明能力。支持两种形式：
+为非 `rvs_` 函数声明能力。只支持目录形式：
 
 **目录形式**（推荐）：项目根目录下的 `caps/` 目录，包含多个 caps 文件：
 
@@ -291,6 +291,7 @@ std::process::exit=S           # 副作用：终止进程
 - linter 对 capsmap 中的键做精确匹配（全限定路径完全一致）。不支持后缀匹配——caps 文件中的键必须使用 rustc 给出的 def_path
 - 如果 linter 报告某函数"既非 rvs_-prefixed nor in capsmap"，你需要补全 capsmap。方法优先级：检查源码 > 编写测试验证行为 > 合理猜测
 - caps 文件中的条目使用 rustc-driver 解析出的全限定路径（如 `core::result::impl::expect=`），而非源码中的短名
+- capsmap 只支持目录形式，不支持单文件 capsmap
 
 ### 日常开发流程
 
