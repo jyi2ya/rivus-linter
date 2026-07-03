@@ -73,6 +73,7 @@ fn rvs_run_one_test_BIS(fixture: &Path, stderr_path: &Path) -> Result<(), String
     let mut cmd = Command::new(&driver);
     cmd.env("RIVUS_ENABLED", "1")
         .env("RIVUS_CAPSMAP", &caps_dir)
+        .env("RIVUS_UI_TESTING", "1")
         .arg("rustc")
         .arg("--edition=2024")
         .arg("--emit=metadata")

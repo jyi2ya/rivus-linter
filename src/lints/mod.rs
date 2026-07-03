@@ -775,7 +775,7 @@ fn rvs_check_trait_item_MS<'tcx>(
                     body,
                     true,
                     false,
-                    true,
+                    false,
                     is_port_trait,
                     data,
                 );
@@ -794,6 +794,23 @@ fn rvs_check_trait_item_MS<'tcx>(
             }
         }
         TraitItemKind::Fn(sig, TraitFn::Required(_)) => {
+            if data.should_emit_lints {
+                let name = trait_item.ident.name.as_str();
+                if let Some(info) = utils::FnInfo::rvs_extract_signature(name, sig) {
+                    missing_allow::rvs_check_fn_S(
+                        cx,
+                        trait_item.hir_id(),
+                        trait_item.span,
+                        &info.raw_suffix,
+                    );
+                    suffix_order::rvs_check_fn_S(cx, trait_item.span, &info.raw_suffix);
+                    if !is_port_trait {
+                        signature_caps::rvs_check_fn_S(cx, trait_item.span, &info);
+                    }
+                } else {
+                    non_rvs_fn::rvs_check_fn_S(cx, name, trait_item.span);
+                }
+            }
             // Required methods (no body) — collect signature info for callgraph.
             if data.collect_callgraph {
                 callgraph::rvs_collect_callgraph_for_signature_M(

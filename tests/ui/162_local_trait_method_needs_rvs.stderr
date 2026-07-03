@@ -1,0 +1,10 @@
+error: 'find_by_id' missing rvs_ prefix
+  --> $DIR/tests/ui/162_local_trait_method_needs_rvs.rs:6:5
+   |
+LL |     fn find_by_id(&self, id: u64);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-non-rvs-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_non_rvs_fn)]`
+
+error: aborting due to 1 previous error

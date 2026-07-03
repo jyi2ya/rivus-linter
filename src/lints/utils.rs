@@ -154,26 +154,31 @@ pub(crate) struct FnInfo {
 }
 
 impl FnInfo {
+    pub(crate) fn rvs_extract_signature(name: &str, sig: &rustc_hir::FnSig<'_>) -> Option<Self> {
+        let (_, caps) = rvs_parse_function(name)?;
+        Some(Self {
+            caps,
+            raw_suffix: rvs_extract_raw_suffix(name),
+            facts: CapabilityFacts::rvs_from_signature(sig, rvs_has_mutable_params(sig), false),
+        })
+    }
+
     pub(crate) fn rvs_extract<'tcx>(
         name: &str,
         sig: &rustc_hir::FnSig<'_>,
-        body: &Body<'tcx>,
+        _body: &Body<'tcx>,
         _tcx: rustc_middle::ty::TyCtxt<'tcx>,
     ) -> Option<Self> {
         let (_, caps) = rvs_parse_function(name)?;
         Some(Self {
             caps,
             raw_suffix: rvs_extract_raw_suffix(name),
-            facts: CapabilityFacts::rvs_from_signature(
-                sig,
-                rvs_has_mutable_params(sig, body),
-                false,
-            ),
+            facts: CapabilityFacts::rvs_from_signature(sig, rvs_has_mutable_params(sig), false),
         })
     }
 }
 
-pub(crate) fn rvs_has_mutable_params(sig: &rustc_hir::FnSig<'_>, _body: &Body<'_>) -> bool {
+pub(crate) fn rvs_has_mutable_params(sig: &rustc_hir::FnSig<'_>) -> bool {
     sig.decl.inputs.iter().any(|t| {
         matches!(
             t.kind,
@@ -879,8 +884,9 @@ mod tests {
             rvs_has_any_doc(_attrs);
             rvs_has_debug_derive(_cx, _def_id);
             rvs_is_pub_impl_item(_cx, _impl_item);
+            FnInfo::rvs_extract_signature("rvs_helper", _sig);
             FnInfo::rvs_extract("rvs_helper", _sig, _body, _tcx);
-            rvs_has_mutable_params(_sig, _body);
+            rvs_has_mutable_params(_sig);
             rvs_scan_stub(_tcx, _body);
             rvs_is_empty_body(_body);
             rvs_is_only_debug_asserts(_expr);

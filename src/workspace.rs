@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -75,15 +76,41 @@ pub(crate) struct CargoCheckConfig<'a> {
     pub(crate) target_subdir: Option<&'a str>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CargoCheckError {
+    Message(String),
+    ExitCode(i32),
+}
+
+impl CargoCheckError {
+    pub(crate) fn rvs_exit_code(&self) -> i32 {
+        match self {
+            Self::Message(_) => 1,
+            Self::ExitCode(code) => *code,
+        }
+    }
+}
+
+impl fmt::Display for CargoCheckError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Message(message) => f.write_str(message),
+            Self::ExitCode(code) => write!(f, "cargo check failed (exit code {code})"),
+        }
+    }
+}
+
 /// Runs `cargo check` with the rivus lint pass configured according to `config`.
 /// Returns `Ok(())` on success, `Err(message)` on failure.
 ///
 /// # Panics
 ///
 /// Panics if the current executable path is invalid or cargo cannot be spawned.
-pub(crate) fn rvs_run_cargo_check_impl_BIMS(config: &CargoCheckConfig) -> Result<(), String> {
-    let self_path =
-        env::current_exe().map_err(|e| format!("current executable path invalid: {e}"))?;
+pub(crate) fn rvs_run_cargo_check_impl_BIMS(
+    config: &CargoCheckConfig,
+) -> Result<(), CargoCheckError> {
+    let self_path = env::current_exe()
+        .map_err(|e| CargoCheckError::Message(format!("current executable path invalid: {e}")))?;
     let cargo = env::var("CARGO").unwrap_or_else(|_| "cargo".into());
     let mut cmd = Command::new(&cargo);
 
@@ -109,7 +136,8 @@ pub(crate) fn rvs_run_cargo_check_impl_BIMS(config: &CargoCheckConfig) -> Result
         .any(|(key, _)| *key == "RIVUS_CALLGRAPH");
     if !has_callgraph_env {
         let user_capsmap: Vec<&Path> = config.user_capsmap.into_iter().collect();
-        rvs_resolve_capsmap_BIMS(&mut cmd, &user_capsmap, config.project_path, &self_path)?;
+        rvs_resolve_capsmap_BIMS(&mut cmd, &user_capsmap, config.project_path, &self_path)
+            .map_err(CargoCheckError::Message)?;
     }
 
     cmd.arg("check");
@@ -130,14 +158,11 @@ pub(crate) fn rvs_run_cargo_check_impl_BIMS(config: &CargoCheckConfig) -> Result
 
     let exit_status = cmd
         .spawn()
-        .map_err(|e| format!("could not run cargo: {e}"))?
+        .map_err(|e| CargoCheckError::Message(format!("could not run cargo: {e}")))?
         .wait()
-        .map_err(|e| format!("failed to wait for cargo: {e}"))?;
+        .map_err(|e| CargoCheckError::Message(format!("failed to wait for cargo: {e}")))?;
     if !exit_status.success() {
-        return Err(format!(
-            "cargo check failed (exit code {:?})",
-            exit_status.code()
-        ));
+        return Err(CargoCheckError::ExitCode(exit_status.code().unwrap_or(1)));
     }
     Ok(())
 }
@@ -164,7 +189,7 @@ pub(crate) fn rvs_run_cargo_check_BIMS(
         Ok(()) => Ok(()),
         Err(e) => {
             eprintln!("{e}");
-            Err(1)
+            Err(e.rvs_exit_code())
         }
     }
 }
@@ -220,7 +245,8 @@ pub(crate) fn rvs_collect_callgraph_BIMS(
         extra_env: env_vars,
         extra_args: vec![],
         target_subdir: Some(&build_subdir),
-    })?;
+    })
+    .map_err(|e| e.to_string())?;
 
     rvs_merge_callgraph_dir_BIS(&cg_dir)
 }
@@ -259,7 +285,7 @@ pub(crate) fn rvs_load_callgraph_and_caps_BIMS(
     let callgraph = rvs_load_or_collect_callgraph_BIMS(path)?;
     let caps_dir = path.join("caps");
     let caps = if caps_dir.is_dir() {
-        CapsMap::rvs_load_dir_excluding_BIS(&caps_dir, &["deps"]).unwrap_or_else(|e| {
+        CapsMap::rvs_load_dir_BIS(&caps_dir).unwrap_or_else(|e| {
             eprintln!("warning: caps/: {e}");
             CapsMap::rvs_new()
         })
@@ -493,5 +519,70 @@ mod tests {
 
         assert_eq!(resolved_relative, PathBuf::from("/workspace/project/caps"));
         assert_eq!(resolved_absolute, PathBuf::from("/shared/caps"));
+    }
+
+    #[test]
+    fn test_20260703_load_callgraph_and_caps_includes_deps() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("never: system clock should be after unix epoch for test temp dir")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "rivus-workspace-load-callgraph-{}-{unique}",
+            std::process::id()
+        ));
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+        std::fs::create_dir_all(dir.join("target/rivus-callgraph")).unwrap();
+        std::fs::create_dir_all(dir.join("caps")).unwrap();
+        std::fs::write(
+            dir.join("target/rivus-callgraph/callgraph.json"),
+            r#"{
+  "demo::rvs_run": {
+    "calls": ["std::thread::spawn"],
+    "has_async": false,
+    "is_unsafe_fn": false,
+    "has_mut_param": false,
+    "has_static_ref": false,
+    "has_static_mut_ref": false,
+    "has_thread_local_ref": false,
+    "is_trait_impl": false,
+    "is_test": false
+  }
+}
+"#,
+        )
+        .unwrap();
+        std::fs::write(dir.join("caps/deps"), "std::thread::spawn=B\n").unwrap();
+
+        let (callgraph, caps) = rvs_load_callgraph_and_caps_BIMS(&dir).unwrap();
+        let output = format!(
+            "calls={}\nhas_deps={}\n",
+            callgraph.len(),
+            caps.rvs_lookup("std::thread::spawn").is_some()
+        );
+        rvs_snapshot_BIS(
+            "test_20260703_load_callgraph_and_caps_includes_deps",
+            &output,
+        );
+
+        assert_eq!(callgraph.len(), 1);
+        assert!(caps.rvs_lookup("std::thread::spawn").is_some());
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260703_cargo_check_error_exit_code() {
+        let output = format!(
+            "message={}\nexit={}\n",
+            CargoCheckError::Message("oops".into()).rvs_exit_code(),
+            CargoCheckError::ExitCode(101).rvs_exit_code()
+        );
+        rvs_snapshot_BIS("test_20260703_cargo_check_error_exit_code", &output);
+
+        assert_eq!(CargoCheckError::Message("oops".into()).rvs_exit_code(), 1);
+        assert_eq!(CargoCheckError::ExitCode(101).rvs_exit_code(), 101);
     }
 }

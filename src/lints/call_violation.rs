@@ -10,6 +10,13 @@ use crate::capability::{Capability, CapabilityPolicy, CapabilitySet};
 use crate::capsmap::CapsMap;
 use std::collections::HashSet;
 
+fn rvs_lookup_caps_exact<'a>(
+    capsmap: &'a Option<CapsMap>,
+    def_path: &str,
+) -> Option<&'a CapabilitySet> {
+    capsmap.as_ref().and_then(|cm| cm.rvs_lookup(def_path))
+}
+
 /// Walk the function body checking all call targets for capability violations
 /// and unknown callees.
 pub(crate) fn rvs_check_fn_MS<'tcx>(
@@ -82,10 +89,7 @@ pub(crate) fn rvs_check_target_S<'tcx>(
         rvs_emit_named_call_violation_if_needed_S(cx, span, caps, &cc);
         return;
     }
-    let lookup = capsmap.as_ref().and_then(|cm| {
-        cm.rvs_lookup(def_path)
-            .or_else(|| src_path.and_then(|s| cm.rvs_lookup(s)))
-    });
+    let lookup = rvs_lookup_caps_exact(capsmap, def_path);
     if let Some(cc) = lookup.cloned() {
         rvs_emit_call_violation_if_needed_S(cx, span, def_path, src_path, caps, &cc);
         return;
@@ -139,6 +143,31 @@ fn rvs_emit_call_violation_if_needed_S<'tcx>(
             ),
         ),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rvs_snapshot_BIS(name: &str, content: &str) {
+        std::fs::create_dir_all("test_out").unwrap();
+        std::fs::write(format!("test_out/{name}.out"), content).unwrap();
+    }
+
+    #[test]
+    fn test_20260703_lookup_caps_requires_exact_def_path() {
+        let capsmap = Some(CapsMap::rvs_parse("read=BI\nstd::fs::read_to_string=BI\n").unwrap());
+
+        let exact = rvs_lookup_caps_exact(&capsmap, "std::fs::read_to_string").is_some();
+        let short = rvs_lookup_caps_exact(&capsmap, "std::fs::read").is_some();
+        rvs_snapshot_BIS(
+            "test_20260703_lookup_caps_requires_exact_def_path",
+            &format!("exact={exact}\nshort={short}\n"),
+        );
+
+        assert!(exact);
+        assert!(!short);
+    }
 }
 
 fn rvs_emit_named_call_violation_if_needed_S<'tcx>(

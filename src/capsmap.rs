@@ -27,6 +27,8 @@ pub enum CapsMapError {
     DirRead(String),
     #[error("cannot read {path}: {error}")]
     FileRead { path: String, error: String },
+    #[error("capsmap path must be a directory: {path}")]
+    PathMustBeDirectory { path: String },
 }
 
 /// 固定层级顺序。后加载的覆盖先加载的。
@@ -175,7 +177,9 @@ impl CapsMap {
         if path.is_dir() {
             Self::rvs_load_dir_BIS(path)
         } else {
-            Ok(Self::rvs_new())
+            Err(CapsMapError::PathMustBeDirectory {
+                path: path.display().to_string(),
+            })
         }
     }
 }
@@ -334,15 +338,15 @@ mod tests {
     fn test_20260615_load_single_file() {
         let path = std::env::temp_dir().join("test_20260615_load_single_file.txt");
         std::fs::write(&path, "func=BI\n").unwrap();
-        let cm = CapsMap::rvs_load_BIS(&path).unwrap();
-        assert!(cm.rvs_lookup("func").is_none());
+        let result = CapsMap::rvs_load_BIS(&path);
+        assert!(result.is_err());
         std::fs::remove_file(&path).unwrap();
     }
 
     #[test]
     fn test_20260615_load_nonexistent() {
-        let cm = CapsMap::rvs_load_BIS(std::path::Path::new("/nonexistent/path")).unwrap();
-        assert!(cm.rvs_lookup("anything").is_none());
+        let result = CapsMap::rvs_load_BIS(std::path::Path::new("/nonexistent/path"));
+        assert!(result.is_err());
     }
 
     #[test]

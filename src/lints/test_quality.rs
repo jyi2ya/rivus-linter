@@ -55,20 +55,26 @@ fn rvs_check_missing_test_output_BIS<'tcx>(
     cx: &LateContext<'tcx>,
     test_names: &BTreeMap<String, Vec<rustc_span::Span>>,
 ) {
-    if Path::new("test_out").is_dir() {
-        for (name, spans) in test_names {
-            let out_file = format!("test_out/{name}.out");
-            if !Path::new(&out_file).exists() {
-                if let Some(sp) = spans.first() {
-                    cx.emit_span_lint(
-                        RVS_MISSING_TEST_OUTPUT,
-                        *sp,
-                        Msg::new(*sp, format!("test '{name}' missing {out_file}")),
-                    );
-                }
+    if std::env::var("RIVUS_UI_TESTING").is_ok() {
+        return;
+    }
+    let out_dir = Path::new("test_out");
+    for (name, spans) in test_names {
+        let out_file = format!("test_out/{name}.out");
+        if !rvs_has_test_output_BIS(name, out_dir) {
+            if let Some(sp) = spans.first() {
+                cx.emit_span_lint(
+                    RVS_MISSING_TEST_OUTPUT,
+                    *sp,
+                    Msg::new(*sp, format!("test '{name}' missing {out_file}")),
+                );
             }
         }
     }
+}
+
+fn rvs_has_test_output_BIS(name: &str, out_dir: &Path) -> bool {
+    out_dir.join(format!("{name}.out")).exists()
 }
 
 fn rvs_check_untested_good_fns_S<'tcx>(
@@ -162,5 +168,59 @@ fn rvs_write_callgraph_BIS<'tcx>(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rvs_snapshot_BIS(name: &str, content: &str) {
+        std::fs::create_dir_all("test_out").unwrap();
+        std::fs::write(format!("test_out/{name}.out"), content).unwrap();
+    }
+
+    #[test]
+    fn test_20260703_has_test_output_false_when_dir_missing() {
+        let missing_dir = Path::new("/definitely/not/present/rivus-test-out");
+        let exists = rvs_has_test_output_BIS(
+            "test_20260703_has_test_output_false_when_dir_missing",
+            missing_dir,
+        );
+        rvs_snapshot_BIS(
+            "test_20260703_has_test_output_false_when_dir_missing",
+            &format!("exists={exists}\n"),
+        );
+        assert!(!exists);
+    }
+
+    #[test]
+    fn test_20260703_has_test_output_true_for_existing_snapshot() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("never: system clock should be after unix epoch for test temp dir")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "rivus-test-quality-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("test_20260703_has_test_output_true_for_existing_snapshot.out"),
+            "ok\n",
+        )
+        .unwrap();
+
+        let exists = rvs_has_test_output_BIS(
+            "test_20260703_has_test_output_true_for_existing_snapshot",
+            &dir,
+        );
+        rvs_snapshot_BIS(
+            "test_20260703_has_test_output_true_for_existing_snapshot",
+            &format!("exists={exists}\n"),
+        );
+        assert!(exists);
+
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

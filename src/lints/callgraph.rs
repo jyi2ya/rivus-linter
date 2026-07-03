@@ -84,7 +84,7 @@ pub(crate) fn rvs_collect_callgraph_for_item_M<'tcx>(
     });
 
     let facts =
-        CapabilityFacts::rvs_from_signature(sig, rvs_has_mutable_params(sig, body), is_port_method)
+        CapabilityFacts::rvs_from_signature(sig, rvs_has_mutable_params(sig), is_port_method)
             .rvs_with_static_refs(has_static_ref, has_static_mut_ref, has_thread_local_ref);
 
     let entry = callgraph.entry(caller_path).or_insert_with(|| FnBehavior {

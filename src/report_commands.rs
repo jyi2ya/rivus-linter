@@ -218,7 +218,7 @@ pub(crate) fn rvs_run_report_BIMPS(path: &Path) -> Result<(), String> {
         // (deny-level errors) cause cargo check to fail. The report JSON
         // is written by the lint pass before compilation aborts.
         if !report_dir.is_dir() {
-            return Err(e);
+            return Err(e.to_string());
         }
         eprintln!("warning: {e}");
     }
