@@ -10,11 +10,13 @@ use crate::inference::{
 use crate::rename;
 use crate::symbols::{CrateName, DefPath, FnName};
 
+use crate::cargo_targets::{
+    rvs_detect_local_crate_prefixes_for_cargo_check_BIS, rvs_function_matches_local_prefix,
+};
 #[cfg(test)]
 use crate::symbols::RelativeFnPath;
 use crate::workspace::{
-    rvs_collect_callgraph_and_caps_BIMS, rvs_detect_local_crate_prefixes_for_cargo_check_BIS,
-    rvs_ensure_cargo_project_BIS, rvs_function_matches_local_prefix,
+    rvs_collect_callgraph_and_caps_BIMS, rvs_ensure_cargo_project_BIS,
     rvs_load_callgraph_and_caps_for_function_BIMS, rvs_load_local_crate_prefixes_BIS,
 };
 

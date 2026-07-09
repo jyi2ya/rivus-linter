@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use crate::capsmap;
 use crate::capsmap::CapsMap;
+use crate::cargo_targets::rvs_detect_local_crate_prefixes_for_cargo_check_BIS;
 use crate::inference::{
     rvs_build_graph_impl_index, rvs_caps_to_string, rvs_collect_graph_direct_external_deps,
     rvs_format_capsmap, rvs_format_unknown_callees, rvs_generate_graph_trait_aliases_MP,
@@ -10,8 +11,7 @@ use crate::inference::{
 };
 use crate::symbols::{CapsMapKey, DefPath, DefPathPrefix};
 use crate::workspace::{
-    rvs_collect_callgraph_BIMS, rvs_detect_local_crate_prefixes_for_cargo_check_BIS,
-    rvs_ensure_cargo_project_BIS, rvs_preflight_capsmap_file_BIS,
+    rvs_collect_callgraph_BIMS, rvs_ensure_cargo_project_BIS, rvs_preflight_capsmap_file_BIS,
     rvs_validate_optional_capsmap_dir_BIS, rvs_write_capsmap_result_BIS,
 };
 

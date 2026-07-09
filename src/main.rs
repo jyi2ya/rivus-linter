@@ -30,6 +30,7 @@ mod analysis_commands;
 mod artifacts;
 mod capability;
 mod capsmap;
+mod cargo_targets;
 mod fs_guard;
 mod infer_commands;
 mod inference;

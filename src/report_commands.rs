@@ -5,6 +5,7 @@ use std::path::Path;
 
 use crate::artifacts::FnGraph;
 use crate::capability::{Capability, CapabilityPolicy, CapabilitySet};
+use crate::cargo_targets::rvs_function_matches_local_prefix;
 use crate::inference::{
     FnContractDiff, FnContractMismatch, FnContractMismatchKind,
     rvs_collect_contract_mismatch_items, rvs_collect_enforced_contract_diffs,
@@ -13,7 +14,7 @@ use crate::inference::{
 use crate::symbols::CrateName;
 use crate::workspace::{
     rvs_collect_callgraph_and_caps_BIMS, rvs_ensure_cargo_project_BIS,
-    rvs_function_matches_local_prefix, rvs_load_local_crate_prefixes_BIS,
+    rvs_load_local_crate_prefixes_BIS,
 };
 
 #[derive(Debug, Clone, Default)]
