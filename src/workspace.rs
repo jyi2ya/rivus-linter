@@ -970,66 +970,46 @@ mod tests {
     }
 
     #[test]
-    fn test_20260707_collect_local_crate_prefixes_rejects_empty_target_names() {
-        let package = rvs_collect_local_crate_prefixes("[package]\nname = \"\"\n");
-        let bin = rvs_collect_local_crate_prefixes("[[bin]]\nname = \"\"\n");
-        let mut prefixes = BTreeSet::new();
-        let helper = rvs_insert_manifest_crate_name_M(&mut prefixes, "demo", "");
-        let output = format!(
-            "package={package:?}\nbin={bin:?}\nhelper={helper:?}\nlen={}\n",
-            prefixes.len()
-        );
+    fn test_20260709_collect_local_crate_prefixes_rejects_invalid_target_names_table() {
+        let cases = [
+            (
+                "empty",
+                "[package]\nname = \"\"\n",
+                "[[bin]]\nname = \"\"\n",
+                "",
+            ),
+            (
+                "whitespace",
+                "[package]\nname = \"bad name\"\n",
+                "[lib]\nname = \" bad\"\n",
+                "bad\tname",
+            ),
+            (
+                "pathy",
+                "[package]\nname = \"bad/name\"\n",
+                "[lib]\nname = \"bad\\\\name\"\n",
+                "bad\0name",
+            ),
+        ];
+        let mut output = String::new();
+        for (name, first_input, second_input, helper_name) in cases {
+            let first = rvs_collect_local_crate_prefixes(first_input);
+            let second = rvs_collect_local_crate_prefixes(second_input);
+            let mut prefixes = BTreeSet::new();
+            let helper = rvs_insert_manifest_crate_name_M(&mut prefixes, "demo", helper_name);
+            output.push_str(&format!(
+                "{name}: first={first:?} second={second:?} helper={helper:?} len={}\n",
+                prefixes.len()
+            ));
+            assert!(first.is_err(), "{name}");
+            assert!(second.is_err(), "{name}");
+            assert!(helper.is_err(), "{name}");
+            assert!(prefixes.is_empty(), "{name}");
+        }
         rvs_snapshot_BIS(
-            "test_20260707_collect_local_crate_prefixes_rejects_empty_target_names",
+            "test_20260709_collect_local_crate_prefixes_rejects_invalid_target_names_table",
             &output,
         );
-
-        assert!(package.is_err());
-        assert!(bin.is_err());
-        assert!(helper.is_err());
-        assert!(prefixes.is_empty());
-    }
-
-    #[test]
-    fn test_20260707_collect_local_crate_prefixes_rejects_whitespace_target_names() {
-        let package = rvs_collect_local_crate_prefixes("[package]\nname = \"bad name\"\n");
-        let lib = rvs_collect_local_crate_prefixes("[lib]\nname = \" bad\"\n");
-        let mut prefixes = BTreeSet::new();
-        let helper = rvs_insert_manifest_crate_name_M(&mut prefixes, "demo", "bad\tname");
-        let output = format!(
-            "package={package:?}\nlib={lib:?}\nhelper={helper:?}\nlen={}\n",
-            prefixes.len()
-        );
-        rvs_snapshot_BIS(
-            "test_20260707_collect_local_crate_prefixes_rejects_whitespace_target_names",
-            &output,
-        );
-
-        assert!(package.is_err());
-        assert!(lib.is_err());
-        assert!(helper.is_err());
-        assert!(prefixes.is_empty());
-    }
-
-    #[test]
-    fn test_20260707_collect_local_crate_prefixes_rejects_pathy_target_names() {
-        let package = rvs_collect_local_crate_prefixes("[package]\nname = \"bad/name\"\n");
-        let lib = rvs_collect_local_crate_prefixes("[lib]\nname = \"bad\\\\name\"\n");
-        let mut prefixes = BTreeSet::new();
-        let helper = rvs_insert_manifest_crate_name_M(&mut prefixes, "demo", "bad\0name");
-        let output = format!(
-            "package={package:?}\nlib={lib:?}\nhelper={helper:?}\nlen={}\n",
-            prefixes.len()
-        );
-        rvs_snapshot_BIS(
-            "test_20260707_collect_local_crate_prefixes_rejects_pathy_target_names",
-            &output,
-        );
-
-        assert!(package.is_err());
-        assert!(lib.is_err());
-        assert!(helper.is_err());
-        assert!(prefixes.is_empty());
     }
 
     #[test]

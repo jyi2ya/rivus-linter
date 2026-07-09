@@ -1,4 +1,0 @@
-package=Err("[package].name must not be empty")
-bin=Err("[[bin]].name must not be empty")
-helper=Err("demo must not be empty")
-len=0
