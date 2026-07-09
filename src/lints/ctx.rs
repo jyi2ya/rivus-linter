@@ -17,5 +17,6 @@ pub(crate) struct FnCheckData<'a> {
     pub callgraph: &'a mut FnGraph,
     pub collect_callgraph: bool,
     pub should_emit_lints: bool,
+    pub should_emit_caps_lints: bool,
     pub port_traits: &'a HashSet<DefId>,
 }

@@ -277,6 +277,7 @@ pub struct RivusLintPass {
     collect_callgraph: bool,
     emit_report: bool,
     should_emit_lints: bool,
+    should_emit_caps_lints: bool,
     test_fn_names: HashSet<String>,
     /// DefIds of Port traits (names ending in Repository/Client) in this crate.
     port_traits: HashSet<rustc_span::def_id::DefId>,
@@ -286,6 +287,7 @@ impl RivusLintPass {
     /// Create a lint pass configured from the current process environment.
     pub fn rvs_new_BS() -> Self {
         let collect_callgraph = rvs_env_flag_enabled_BS("RIVUS_CALLGRAPH");
+        let offline_caps_check = rvs_env_flag_enabled_BS("RIVUS_OFFLINE_CAPS");
         Self {
             capsmap: None,
             test_names: BTreeMap::new(),
@@ -298,6 +300,7 @@ impl RivusLintPass {
             collect_callgraph,
             emit_report: rvs_env_flag_enabled_BS("RIVUS_REPORT"),
             should_emit_lints: !collect_callgraph,
+            should_emit_caps_lints: !collect_callgraph && !offline_caps_check,
             test_fn_names: HashSet::new(),
             port_traits: HashSet::new(),
         }
@@ -413,6 +416,7 @@ impl<'tcx> LateLintPass<'tcx> for RivusLintPass {
             callgraph: &mut self.callgraph,
             collect_callgraph: self.collect_callgraph,
             should_emit_lints: self.should_emit_lints,
+            should_emit_caps_lints: self.should_emit_caps_lints,
             port_traits: &self.port_traits,
         };
         rvs_check_item_MS(
@@ -438,6 +442,7 @@ impl<'tcx> LateLintPass<'tcx> for RivusLintPass {
             callgraph: &mut self.callgraph,
             collect_callgraph: self.collect_callgraph,
             should_emit_lints: self.should_emit_lints,
+            should_emit_caps_lints: self.should_emit_caps_lints,
             port_traits: &self.port_traits,
         };
         rvs_check_impl_item_MS(
@@ -463,6 +468,7 @@ impl<'tcx> LateLintPass<'tcx> for RivusLintPass {
             callgraph: &mut self.callgraph,
             collect_callgraph: self.collect_callgraph,
             should_emit_lints: self.should_emit_lints,
+            should_emit_caps_lints: self.should_emit_caps_lints,
             port_traits: &self.port_traits,
         };
         rvs_check_trait_item_MS(cx, trait_item, &mut data);
@@ -524,24 +530,28 @@ fn rvs_run_fn_checks_MS<'tcx>(
 
         let is_stub = stub_macro::rvs_check_fn_MS(cx, body, span);
         empty_fn::rvs_check_fn_MS(cx, body, span, has_body, is_stub);
-        missing_allow::rvs_check_fn_S(cx, hir_id, span, &info.raw_suffix);
+        if data.should_emit_caps_lints {
+            missing_allow::rvs_check_fn_S(cx, hir_id, span, &info.raw_suffix);
+        }
         dead_code::rvs_check_fn_S(cx, attrs, span);
-        if !is_port_method {
+        if data.should_emit_caps_lints && !is_port_method {
             signature_caps::rvs_check_contract_mismatches_S(cx, span, &signature_mismatches);
         }
-        suffix_order::rvs_check_fn_S(cx, span, &info.raw_suffix);
-        contract_mismatch::rvs_check_contract_diff_S(
-            cx,
-            span,
-            &signature_diff,
-            is_test,
-            is_trait_impl_method,
-        );
+        if data.should_emit_caps_lints {
+            suffix_order::rvs_check_fn_S(cx, span, &info.raw_suffix);
+            contract_mismatch::rvs_check_contract_diff_S(
+                cx,
+                span,
+                &signature_diff,
+                is_test,
+                is_trait_impl_method,
+            );
+        }
 
         let should_check_port_default_body = is_port_method && has_body && !is_trait_impl_method;
 
         // Body-level checks
-        if !is_port_method || should_check_port_default_body {
+        if data.should_emit_caps_lints && (!is_port_method || should_check_port_default_body) {
             call_violation::rvs_check_fn_MS(cx, body, &info.caps, data.capsmap, data.port_traits);
         }
 
@@ -552,7 +562,7 @@ fn rvs_run_fn_checks_MS<'tcx>(
         error_swallow::rvs_check_fn_MS(cx, body);
 
         if has_body && !is_stub {
-            if !is_port_method || should_check_port_default_body {
+            if data.should_emit_caps_lints && (!is_port_method || should_check_port_default_body) {
                 static_ref::rvs_check_fn_MS(cx, body, &info.caps);
             }
             debug_assert::rvs_check_fn_MS(cx, body);
@@ -563,6 +573,7 @@ fn rvs_run_fn_checks_MS<'tcx>(
 
         // Collect good fns for later untested-good-fn check
         if crate::capability::CapabilityPolicy::rvs_is_good(&info.caps)
+            && data.should_emit_caps_lints
             && !is_test
             && !utils::rvs_has_allow(attrs, "dead_code")
             && !utils::rvs_has_allow(attrs, "unused")
@@ -572,6 +583,7 @@ fn rvs_run_fn_checks_MS<'tcx>(
 
         // Collect ok fns (ABMP subset, mock-testable) for untested-ok-fn check.
         if crate::capability::CapabilityPolicy::rvs_is_ok(&info.caps)
+            && data.should_emit_caps_lints
             && !is_test
             && !is_trait_impl_method
             && !utils::rvs_has_allow(attrs, "dead_code")
@@ -601,16 +613,18 @@ fn rvs_run_fn_checks_MS<'tcx>(
             let is_stub = stub_macro::rvs_check_fn_MS(cx, body, span);
             empty_fn::rvs_check_fn_MS(cx, body, span, has_body, is_stub);
             dead_code::rvs_check_fn_S(cx, attrs, span);
-            contract_mismatch::rvs_check_contract_diff_S(
-                cx,
-                span,
-                &signature_diff,
-                is_test,
-                is_trait_impl_method,
-            );
+            if data.should_emit_caps_lints {
+                contract_mismatch::rvs_check_contract_diff_S(
+                    cx,
+                    span,
+                    &signature_diff,
+                    is_test,
+                    is_trait_impl_method,
+                );
+            }
             let port_caps = crate::capability::CapabilityPolicy::rvs_port_method_caps();
             let should_check_port_default_body = has_body && !is_trait_impl_method;
-            if should_check_port_default_body {
+            if data.should_emit_caps_lints && should_check_port_default_body {
                 call_violation::rvs_check_fn_MS(
                     cx,
                     body,
@@ -624,7 +638,7 @@ fn rvs_run_fn_checks_MS<'tcx>(
             catch_unwind::rvs_check_fn_MS(cx, body);
             error_swallow::rvs_check_fn_MS(cx, body);
             if has_body && !is_stub {
-                if should_check_port_default_body {
+                if data.should_emit_caps_lints && should_check_port_default_body {
                     static_ref::rvs_check_fn_MS(cx, body, &port_caps);
                 }
                 debug_assert::rvs_check_fn_MS(cx, body);
@@ -633,6 +647,7 @@ fn rvs_run_fn_checks_MS<'tcx>(
                 validate::rvs_check_fn_S(cx, name, sig);
             }
             if crate::capability::CapabilityPolicy::rvs_is_ok(&port_caps)
+                && data.should_emit_caps_lints
                 && !is_test
                 && !is_trait_impl_method
                 && name.starts_with("rvs_")
@@ -656,14 +671,16 @@ fn rvs_run_fn_checks_MS<'tcx>(
                 allows_dead_code,
             });
         } else {
-            non_rvs_fn::rvs_check_contract_mismatches_S(
-                cx,
-                name,
-                &signature_mismatches,
-                span,
-                is_test,
-                is_trait_impl_method,
-            );
+            if data.should_emit_caps_lints {
+                non_rvs_fn::rvs_check_contract_mismatches_S(
+                    cx,
+                    name,
+                    &signature_mismatches,
+                    span,
+                    is_test,
+                    is_trait_impl_method,
+                );
+            }
         }
     }
     test_name_format::rvs_check_fn_S(cx, name, span, is_test);
@@ -924,37 +941,41 @@ fn rvs_check_trait_item_MS<'tcx>(
                     std::slice::from_ref(&diff),
                 );
                 if let Some(info) = utils::FnInfo::rvs_extract_signature(name, sig) {
-                    missing_allow::rvs_check_fn_S(
-                        cx,
-                        trait_item.hir_id(),
-                        trait_item.span,
-                        &info.raw_suffix,
-                    );
-                    suffix_order::rvs_check_fn_S(cx, trait_item.span, &info.raw_suffix);
-                    contract_mismatch::rvs_check_contract_diff_S(
-                        cx,
-                        trait_item.span,
-                        &diff,
-                        false,
-                        false,
-                    );
-                    if diff.rvs_missing_rvs_prefix() {
-                        non_rvs_fn::rvs_check_contract_mismatches_S(
+                    if data.should_emit_caps_lints {
+                        missing_allow::rvs_check_fn_S(
                             cx,
-                            name,
-                            &mismatches,
+                            trait_item.hir_id(),
                             trait_item.span,
+                            &info.raw_suffix,
+                        );
+                        suffix_order::rvs_check_fn_S(cx, trait_item.span, &info.raw_suffix);
+                        contract_mismatch::rvs_check_contract_diff_S(
+                            cx,
+                            trait_item.span,
+                            &diff,
                             false,
                             false,
                         );
-                    } else if !is_port_trait {
+                    }
+                    if diff.rvs_missing_rvs_prefix() {
+                        if data.should_emit_caps_lints {
+                            non_rvs_fn::rvs_check_contract_mismatches_S(
+                                cx,
+                                name,
+                                &mismatches,
+                                trait_item.span,
+                                false,
+                                false,
+                            );
+                        }
+                    } else if data.should_emit_caps_lints && !is_port_trait {
                         signature_caps::rvs_check_contract_mismatches_S(
                             cx,
                             trait_item.span,
                             &mismatches,
                         );
                     }
-                } else if is_port_trait {
+                } else if data.should_emit_caps_lints && is_port_trait {
                     contract_mismatch::rvs_check_contract_diff_S(
                         cx,
                         trait_item.span,
@@ -962,7 +983,7 @@ fn rvs_check_trait_item_MS<'tcx>(
                         false,
                         false,
                     );
-                } else {
+                } else if data.should_emit_caps_lints {
                     non_rvs_fn::rvs_check_fn_S(cx, name, trait_item.span);
                 }
             }

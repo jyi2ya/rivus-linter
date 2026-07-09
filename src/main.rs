@@ -33,6 +33,7 @@ mod capsmap;
 mod infer_commands;
 mod inference;
 mod lints;
+mod offline_caps;
 mod rename;
 mod report_commands;
 mod setup;

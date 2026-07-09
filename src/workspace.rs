@@ -151,6 +151,7 @@ fn rvs_prepare_cargo_check_command_BIMS(
         "RIVUS_REPORT",
         "RIVUS_REPORT_DIR",
         "RIVUS_CAPSMAP",
+        "RIVUS_OFFLINE_CAPS",
         "RIVUS_ENABLED",
         "RUSTC",
         "RUSTC_WRAPPER",
@@ -270,15 +271,53 @@ pub(crate) fn rvs_run_cargo_check_BIMS(extra_args: &[String]) -> Result<(), i32>
         wrap_all_crates: false,
         with_tests: true,
         build_std: false,
-        extra_env: vec![],
-        extra_args: extra_args_ref,
+        extra_env: vec![("RIVUS_OFFLINE_CAPS", "1".into())],
+        extra_args: extra_args_ref.clone(),
         target_subdir: None,
     }) {
-        Ok(()) => Ok(()),
+        Ok(()) => {}
         Err(e) => {
             eprintln!("{e}");
-            Err(e.rvs_exit_code())
+            return Err(e.rvs_exit_code());
         }
+    }
+
+    let mut callgraph = match rvs_collect_callgraph_with_args_BIMS(
+        project_path,
+        false,
+        true,
+        vec![],
+        extra_args_ref,
+    ) {
+        Ok(callgraph) => callgraph,
+        Err(e) => {
+            eprintln!("offline caps check unavailable: {e}");
+            return Err(1);
+        }
+    };
+    let caps = match rvs_load_project_caps_BIS(project_path) {
+        Ok(caps) => caps,
+        Err(e) => {
+            eprintln!("offline caps check cannot load caps/: {e}");
+            return Err(1);
+        }
+    };
+    let local_crate_names = match rvs_load_local_crate_prefixes_BIS(project_path) {
+        Ok(names) => names,
+        Err(e) => {
+            eprintln!("offline caps check cannot detect local crates: {e}");
+            return Err(1);
+        }
+    };
+    let report =
+        crate::offline_caps::rvs_check_offline_caps_M(&mut callgraph, &caps, &local_crate_names);
+    if !report.rvs_is_empty() {
+        print!("{report}");
+    }
+    if report.rvs_has_errors() {
+        Err(1)
+    } else {
+        Ok(())
     }
 }
 
@@ -376,6 +415,16 @@ pub(crate) fn rvs_collect_callgraph_BIMS(
     with_tests: bool,
     extra_env: Vec<(&str, OsString)>,
 ) -> Result<FnGraph, String> {
+    rvs_collect_callgraph_with_args_BIMS(path, build_std, with_tests, extra_env, vec![])
+}
+
+pub(crate) fn rvs_collect_callgraph_with_args_BIMS(
+    path: &Path,
+    build_std: bool,
+    with_tests: bool,
+    extra_env: Vec<(&str, OsString)>,
+    extra_args: Vec<&str>,
+) -> Result<FnGraph, String> {
     let suffix = if build_std { "-std" } else { "" };
     let cg_subdir = format!("rivus-callgraph{suffix}");
     let build_subdir = format!("rivus-build{suffix}");
@@ -396,7 +445,7 @@ pub(crate) fn rvs_collect_callgraph_BIMS(
         with_tests,
         build_std,
         extra_env: env_vars,
-        extra_args: vec![],
+        extra_args,
         target_subdir: Some(&build_subdir),
     })
     .map_err(|e| e.to_string())?;
