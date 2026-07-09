@@ -1232,88 +1232,64 @@ name = "throughput-bench"
         std::fs::remove_dir_all(dir).unwrap();
     }
 
-    #[test]
-    fn test_20260707_collect_auto_target_prefixes_rejects_whitespace_rs_stem() {
-        let dir = rvs_make_workspace_temp_dir_BIS("auto-target-whitespace-rs-stem");
-        std::fs::write(
-            dir.join("Cargo.toml"),
-            "[package]\nname = \"whitespace-rs-stem-demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
-        )
-        .unwrap();
-        std::fs::create_dir_all(dir.join("tests")).unwrap();
-        std::fs::write(dir.join("tests/bad name.rs"), "fn main() {}\n").unwrap();
-        let mut prefixes = BTreeSet::new();
-
-        let result = rvs_collect_auto_target_prefixes_BIMS(&dir, &mut prefixes);
-        let output = format!("result={result:?}\nlen={}\n", prefixes.len())
-            .replace(&dir.to_string_lossy().into_owned(), "$TMP");
-        rvs_snapshot_BIS(
-            "test_20260707_collect_auto_target_prefixes_rejects_whitespace_rs_stem",
-            &output,
-        );
-
-        assert!(result.is_err());
-        assert!(prefixes.is_empty());
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
     #[cfg(unix)]
     #[test]
-    fn test_20260707_collect_auto_target_prefixes_rejects_non_utf8_rs_stem() {
+    fn test_20260709_collect_auto_target_prefixes_reject_invalid_names_table() {
         use std::os::unix::ffi::OsStringExt as _;
 
-        let dir = rvs_make_workspace_temp_dir_BIS("auto-target-non-utf8-rs-stem");
-        std::fs::write(
-            dir.join("Cargo.toml"),
-            "[package]\nname = \"non-utf8-rs-stem-demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
-        )
-        .unwrap();
-        std::fs::create_dir_all(dir.join("tests")).unwrap();
-        let file_name =
-            std::ffi::OsString::from_vec(vec![b'b', b'a', b'd', 0xff, b'.', b'r', b's']);
-        std::fs::write(dir.join("tests").join(file_name), "fn main() {}\n").unwrap();
-        let mut prefixes = BTreeSet::new();
-
-        let result = rvs_collect_auto_target_prefixes_BIMS(&dir, &mut prefixes);
-        let output = format!("is_err={}\nlen={}\n", result.is_err(), prefixes.len());
+        let cases = [
+            ("whitespace_rs_stem", "bad name.rs", None),
+            (
+                "non_utf8_rs_stem",
+                "",
+                Some(std::ffi::OsString::from_vec(vec![
+                    b'b', b'a', b'd', 0xff, b'.', b'r', b's',
+                ])),
+            ),
+            (
+                "non_utf8_dir_name",
+                "",
+                Some(std::ffi::OsString::from_vec(vec![b'b', b'a', b'd', 0xff])),
+            ),
+        ];
+        let mut output = String::new();
+        for (name, file_name, os_name) in cases {
+            let dir = rvs_make_workspace_temp_dir_BIS(&format!("auto-target-{name}"));
+            std::fs::write(
+                dir.join("Cargo.toml"),
+                "[package]\nname = \"invalid-target-demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+            )
+            .unwrap();
+            std::fs::create_dir_all(dir.join("tests")).unwrap();
+            match (name, os_name) {
+                ("whitespace_rs_stem", _) => {
+                    std::fs::write(dir.join("tests").join(file_name), "fn main() {}\n").unwrap();
+                }
+                ("non_utf8_rs_stem", Some(file_name)) => {
+                    std::fs::write(dir.join("tests").join(file_name), "fn main() {}\n").unwrap();
+                }
+                ("non_utf8_dir_name", Some(dir_name)) => {
+                    let target_dir = dir.join("tests").join(dir_name);
+                    std::fs::create_dir_all(&target_dir).unwrap();
+                    std::fs::write(target_dir.join("main.rs"), "fn main() {}\n").unwrap();
+                }
+                _ => unreachable!("case setup should be exhaustive"),
+            }
+            let mut prefixes = BTreeSet::new();
+            let result = rvs_collect_auto_target_prefixes_BIMS(&dir, &mut prefixes);
+            output.push_str(&format!(
+                "{name}: is_err={} len={}\n",
+                result.is_err(),
+                prefixes.len()
+            ));
+            assert!(result.is_err(), "{name}");
+            assert!(prefixes.is_empty(), "{name}");
+            std::fs::remove_dir_all(dir).unwrap();
+        }
         rvs_snapshot_BIS(
-            "test_20260707_collect_auto_target_prefixes_rejects_non_utf8_rs_stem",
+            "test_20260709_collect_auto_target_prefixes_reject_invalid_names_table",
             &output,
         );
-
-        assert!(result.is_err());
-        assert!(prefixes.is_empty());
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn test_20260707_collect_auto_target_prefixes_rejects_non_utf8_dir_name() {
-        use std::os::unix::ffi::OsStringExt as _;
-
-        let dir = rvs_make_workspace_temp_dir_BIS("auto-target-non-utf8-dir-name");
-        std::fs::write(
-            dir.join("Cargo.toml"),
-            "[package]\nname = \"non-utf8-dir-name-demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
-        )
-        .unwrap();
-        std::fs::create_dir_all(dir.join("tests")).unwrap();
-        let dir_name = std::ffi::OsString::from_vec(vec![b'b', b'a', b'd', 0xff]);
-        let target_dir = dir.join("tests").join(dir_name);
-        std::fs::create_dir_all(&target_dir).unwrap();
-        std::fs::write(target_dir.join("main.rs"), "fn main() {}\n").unwrap();
-        let mut prefixes = BTreeSet::new();
-
-        let result = rvs_collect_auto_target_prefixes_BIMS(&dir, &mut prefixes);
-        let output = format!("is_err={}\nlen={}\n", result.is_err(), prefixes.len());
-        rvs_snapshot_BIS(
-            "test_20260707_collect_auto_target_prefixes_rejects_non_utf8_dir_name",
-            &output,
-        );
-
-        assert!(result.is_err());
-        assert!(prefixes.is_empty());
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
