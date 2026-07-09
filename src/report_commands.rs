@@ -279,91 +279,85 @@ mod tests {
     use crate::test_support::{rvs_make_temp_dir_BIS, rvs_snapshot_BIS};
 
     #[test]
-    fn test_20260607_report_empty() {
-        let entries = vec![];
-        let report = rvs_build_report(&entries).unwrap();
-        let output = report.to_string();
-        rvs_snapshot_BIS("test_20260607_report_empty", &output);
-        assert_eq!(report.total_fn_count, 0);
-        assert_eq!(report.total_line_count, 0);
-    }
-
-    #[test]
-    fn test_20260607_report_pure_only() {
-        let entries = vec![FnEntry {
-            capabilities: CapabilitySet::rvs_new(),
-            line_count: 10,
-            is_test: false,
-            allows_dead_code: false,
-        }];
-        let report = rvs_build_report(&entries).unwrap();
-        let output = report.to_string();
-        rvs_snapshot_BIS("test_20260607_report_pure_only", &output);
-        assert_eq!(report.total_fn_count, 1);
-        assert_eq!(report.pure_fn_count, 1);
-        assert_eq!(report.good_fn_count, 1);
-        assert_eq!(report.ok_fn_count, 1);
-    }
-
-    #[test]
-    fn test_20260607_report_mixed() {
-        let entries = vec![
-            FnEntry {
-                capabilities: CapabilitySet::rvs_new(),
-                line_count: 100,
-                is_test: false,
-                allows_dead_code: false,
-            },
-            FnEntry {
-                capabilities: CapabilitySet::rvs_from_validated("BI"),
-                line_count: 50,
-                is_test: false,
-                allows_dead_code: false,
-            },
-            FnEntry {
-                capabilities: CapabilitySet::rvs_from_validated("M"),
-                line_count: 30,
-                is_test: false,
-                allows_dead_code: false,
-            },
+    fn test_20260709_build_report_table() {
+        let cases = [
+            ("empty", vec![], (0usize, 0usize, 0usize, 0usize, 0usize)),
+            (
+                "pure_only",
+                vec![FnEntry {
+                    capabilities: CapabilitySet::rvs_new(),
+                    line_count: 10,
+                    is_test: false,
+                    allows_dead_code: false,
+                }],
+                (1, 1, 1, 1, 10),
+            ),
+            (
+                "mixed",
+                vec![
+                    FnEntry {
+                        capabilities: CapabilitySet::rvs_new(),
+                        line_count: 100,
+                        is_test: false,
+                        allows_dead_code: false,
+                    },
+                    FnEntry {
+                        capabilities: CapabilitySet::rvs_from_validated("BI"),
+                        line_count: 50,
+                        is_test: false,
+                        allows_dead_code: false,
+                    },
+                    FnEntry {
+                        capabilities: CapabilitySet::rvs_from_validated("M"),
+                        line_count: 30,
+                        is_test: false,
+                        allows_dead_code: false,
+                    },
+                ],
+                (3, 1, 2, 2, 180),
+            ),
+            (
+                "skips_test_and_dead_code",
+                vec![
+                    FnEntry {
+                        capabilities: CapabilitySet::rvs_new(),
+                        line_count: 10,
+                        is_test: false,
+                        allows_dead_code: false,
+                    },
+                    FnEntry {
+                        capabilities: CapabilitySet::rvs_new(),
+                        line_count: 20,
+                        is_test: true,
+                        allows_dead_code: false,
+                    },
+                    FnEntry {
+                        capabilities: CapabilitySet::rvs_new(),
+                        line_count: 30,
+                        is_test: false,
+                        allows_dead_code: true,
+                    },
+                ],
+                (1, 1, 1, 1, 10),
+            ),
         ];
-        let report = rvs_build_report(&entries).unwrap();
-        let output = report.to_string();
-        rvs_snapshot_BIS("test_20260607_report_mixed", &output);
-        assert_eq!(report.total_fn_count, 3);
-        assert_eq!(report.pure_fn_count, 1);
-        assert_eq!(report.good_fn_count, 2);
-        assert_eq!(report.ok_fn_count, 2);
-        assert_eq!(report.total_line_count, 180);
-    }
-
-    #[test]
-    fn test_20260607_report_skips_test_and_dead_code() {
-        let entries = vec![
-            FnEntry {
-                capabilities: CapabilitySet::rvs_new(),
-                line_count: 10,
-                is_test: false,
-                allows_dead_code: false,
-            },
-            FnEntry {
-                capabilities: CapabilitySet::rvs_new(),
-                line_count: 20,
-                is_test: true,
-                allows_dead_code: false,
-            },
-            FnEntry {
-                capabilities: CapabilitySet::rvs_new(),
-                line_count: 30,
-                is_test: false,
-                allows_dead_code: true,
-            },
-        ];
-        let report = rvs_build_report(&entries).unwrap();
-        let output = report.to_string();
-        rvs_snapshot_BIS("test_20260607_report_skips_test_and_dead_code", &output);
-        assert_eq!(report.total_fn_count, 1);
-        assert_eq!(report.total_line_count, 10);
+        let mut output = String::new();
+        for (name, entries, expected) in cases {
+            let report = rvs_build_report(&entries).unwrap();
+            output.push_str(&format!("{name}: {}\n", report.to_string().trim_end()));
+            assert_eq!(
+                (
+                    report.total_fn_count,
+                    report.pure_fn_count,
+                    report.good_fn_count,
+                    report.ok_fn_count,
+                    report.total_line_count,
+                ),
+                expected,
+                "{name}"
+            );
+        }
+        rvs_snapshot_BIS("test_20260709_build_report_table", &output);
     }
 
     #[test]
@@ -515,22 +509,6 @@ mod tests {
     }
 
     #[test]
-    fn test_20260707_build_report_rejects_zero_line_count() {
-        let result = rvs_build_report(&[FnEntry {
-            capabilities: CapabilitySet::rvs_new(),
-            line_count: 0,
-            is_test: false,
-            allows_dead_code: false,
-        }]);
-        rvs_snapshot_BIS(
-            "test_20260707_build_report_rejects_zero_line_count",
-            &format!("{result:?}\n"),
-        );
-
-        assert!(result.is_err());
-    }
-
-    #[test]
     fn test_20260709_report_entries_skip_non_port_trait_impl_methods() {
         let mut graph = FnGraph::rvs_new();
         graph.rvs_insert_M(
@@ -589,8 +567,14 @@ mod tests {
     }
 
     #[test]
-    fn test_20260706_build_report_rejects_line_count_overflow() {
-        let entries = vec![
+    fn test_20260709_report_error_table() {
+        let build_zero = rvs_build_report(&[FnEntry {
+            capabilities: CapabilitySet::rvs_new(),
+            line_count: 0,
+            is_test: false,
+            allows_dead_code: false,
+        }]);
+        let build_overflow = rvs_build_report(&[
             FnEntry {
                 capabilities: CapabilitySet::rvs_new(),
                 line_count: usize::MAX,
@@ -603,28 +587,18 @@ mod tests {
                 is_test: false,
                 allows_dead_code: false,
             },
-        ];
-
-        let result = rvs_build_report(&entries);
-        rvs_snapshot_BIS(
-            "test_20260706_build_report_rejects_line_count_overflow",
-            &format!("{result:?}\n"),
+        ]);
+        let sum_ok = rvs_checked_report_sum(2, 3, "demo");
+        let sum_overflow = rvs_checked_report_sum(usize::MAX, 1, "demo");
+        let output = format!(
+            "build_zero={build_zero:?}\nbuild_overflow={build_overflow:?}\nsum_ok={sum_ok:?}\nsum_overflow={sum_overflow:?}\n"
         );
+        rvs_snapshot_BIS("test_20260709_report_error_table", &output);
 
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_20260706_checked_report_sum_handles_ok_and_overflow() {
-        let ok = rvs_checked_report_sum(2, 3, "demo");
-        let overflow = rvs_checked_report_sum(usize::MAX, 1, "demo");
-        rvs_snapshot_BIS(
-            "test_20260706_checked_report_sum_handles_ok_and_overflow",
-            &format!("ok={ok:?}\noverflow={overflow:?}\n"),
-        );
-
-        assert_eq!(ok, Ok(5));
-        assert!(overflow.is_err());
+        assert!(build_zero.is_err());
+        assert!(build_overflow.is_err());
+        assert_eq!(sum_ok, Ok(5));
+        assert!(sum_overflow.is_err());
     }
 
     #[test]

@@ -1,0 +1,4 @@
+build_zero=Err("report entry line count must be positive")
+build_overflow=Err("total report line count overflow while building capability report")
+sum_ok=Ok(5)
+sum_overflow=Err("demo overflow while building capability report")
