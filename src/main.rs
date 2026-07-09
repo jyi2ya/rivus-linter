@@ -28,6 +28,7 @@ use rustc_session::EarlyDiagCtxt;
 use rustc_session::config::ErrorOutputType;
 mod analysis_commands;
 mod artifacts;
+mod callgraph_cache;
 mod capability;
 mod capsmap;
 mod cargo_targets;
