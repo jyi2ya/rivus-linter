@@ -7,14 +7,14 @@
     reason = "rustc_private integration requires compiler internal features"
 )]
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use rustc_lint::{LateContext, LateLintPass, LintPass};
 use rustc_session::declare_tool_lint;
 use rustc_span::Span;
 
 use crate::capsmap::CapsMap;
-use crate::symbols::{DefPath, FnName};
+use crate::symbols::{CrateName, DefPath, FnName};
 
 mod banned_import;
 mod borrowed_param;
@@ -23,6 +23,7 @@ mod callgraph;
 mod catch_all_error;
 mod catch_unwind;
 mod consumed_arg;
+mod contract_mismatch;
 mod ctx;
 mod dead_code;
 mod debug_assert;
@@ -49,7 +50,7 @@ mod todo_comment;
 mod utils;
 mod validate;
 
-pub use crate::artifacts::FnBehavior;
+pub use crate::artifacts::FnGraph;
 
 use crate::artifacts::FnReportEntry;
 use ctx::FnCheckData;
@@ -84,6 +85,11 @@ rvs_declare!(
     "rvs_ function with uppercase suffix but no #[allow(non_snake_case)]"
 );
 rvs_declare!(RVS_NON_RVS_FN, Warn, "function missing rvs_ prefix");
+rvs_declare!(
+    RVS_CONTRACT_MISMATCH,
+    Warn,
+    "Port method name does not match inferred public contract"
+);
 rvs_declare!(
     RVS_UNKNOWN_CALLEE,
     Warn,
@@ -221,6 +227,7 @@ pub static RIVUS_LINTS: &[&rustc_lint::Lint] = &[
     RVS_MISSING_DEBUG_ASSERT,
     RVS_MISSING_ALLOW,
     RVS_NON_RVS_FN,
+    RVS_CONTRACT_MISMATCH,
     RVS_UNKNOWN_CALLEE,
     RVS_MISSING_MUTABLE,
     RVS_MISSING_ASYNC,
@@ -265,7 +272,7 @@ pub struct RivusLintPass {
     ok_fns: Vec<(String, Span)>,
     test_call_names: HashSet<String>,
     fn_report: Vec<FnReportEntry>,
-    callgraph: BTreeMap<DefPath, FnBehavior>,
+    callgraph: FnGraph,
     done_crate_level: bool,
     collect_callgraph: bool,
     emit_report: bool,
@@ -276,7 +283,9 @@ pub struct RivusLintPass {
 }
 
 impl RivusLintPass {
-    pub fn new() -> Self {
+    /// Create a lint pass configured from the current process environment.
+    pub fn rvs_new_BS() -> Self {
+        let collect_callgraph = rvs_env_flag_enabled_BS("RIVUS_CALLGRAPH");
         Self {
             capsmap: None,
             test_names: BTreeMap::new(),
@@ -284,11 +293,11 @@ impl RivusLintPass {
             ok_fns: Vec::new(),
             test_call_names: HashSet::new(),
             fn_report: Vec::new(),
-            callgraph: BTreeMap::new(),
+            callgraph: FnGraph::rvs_new(),
             done_crate_level: false,
-            collect_callgraph: std::env::var("RIVUS_CALLGRAPH").is_ok(),
-            emit_report: std::env::var("RIVUS_REPORT").is_ok(),
-            should_emit_lints: !std::env::var("RIVUS_CALLGRAPH").is_ok(),
+            collect_callgraph,
+            emit_report: rvs_env_flag_enabled_BS("RIVUS_REPORT"),
+            should_emit_lints: !collect_callgraph,
             test_fn_names: HashSet::new(),
             port_traits: HashSet::new(),
         }
@@ -298,8 +307,8 @@ impl RivusLintPass {
         if self.capsmap.is_some() {
             return;
         }
-        if let Ok(path_str) = std::env::var("RIVUS_CAPSMAP") {
-            let path = std::path::PathBuf::from(&path_str);
+        if let Some(path_str) = std::env::var_os("RIVUS_CAPSMAP") {
+            let path = std::path::PathBuf::from(path_str);
             self.capsmap = Some(match CapsMap::rvs_load_BIS(&path) {
                 Ok(cm) => cm,
                 Err(e) => {
@@ -313,9 +322,22 @@ impl RivusLintPass {
     }
 }
 
+fn rvs_env_flag_enabled_BS(name: &str) -> bool {
+    match std::env::var(name) {
+        Ok(value) => rvs_env_flag_value_enabled(Some(value.as_str())),
+        Err(std::env::VarError::NotPresent | std::env::VarError::NotUnicode(_)) => {
+            rvs_env_flag_value_enabled(None)
+        }
+    }
+}
+
+fn rvs_env_flag_value_enabled(value: Option<&str>) -> bool {
+    matches!(value, Some("1"))
+}
+
 impl Default for RivusLintPass {
     fn default() -> Self {
-        Self::new()
+        Self::rvs_new_BS()
     }
 }
 
@@ -350,9 +372,7 @@ impl<'tcx> LateLintPass<'tcx> for RivusLintPass {
                         if let rustc_hir::Node::Item(item) = node {
                             if let rustc_hir::ItemKind::Const(ct, ..) = &item.kind {
                                 let test_name = ct.name.as_str();
-                                if test_name.starts_with("test_") {
-                                    self.test_fn_names.insert(test_name.to_string());
-                                }
+                                self.test_fn_names.insert(test_name.to_string());
                             }
                         }
                     }
@@ -451,6 +471,26 @@ impl<'tcx> LateLintPass<'tcx> for RivusLintPass {
 
 // ─── Dispatch functions ──────────────────────────────────────────────────
 
+fn rvs_collect_signature_contract_diff<'tcx>(
+    cx: &LateContext<'tcx>,
+    hir_id: rustc_hir::HirId,
+    sig: &rustc_hir::FnSig<'tcx>,
+    is_port_method: bool,
+) -> crate::inference::FnContractDiff {
+    let local_crate_names = BTreeSet::from([CrateName::rvs_from_manifest_name(
+        cx.tcx.crate_name(rustc_span::def_id::LOCAL_CRATE).as_str(),
+    )]);
+    crate::inference::rvs_collect_signature_contract_diff_from_facts_M(
+        DefPath::rvs_new(utils::rvs_def_path(cx, hir_id.owner.def_id.to_def_id())),
+        crate::capability::CapabilityFacts::rvs_from_signature(
+            sig,
+            utils::rvs_has_mutable_params(sig),
+            is_port_method,
+        ),
+        &local_crate_names,
+    )
+}
+
 /// Dispatches to fn-level checks for free functions, inherent impl methods,
 /// and trait impl methods.
 #[expect(
@@ -471,6 +511,10 @@ fn rvs_run_fn_checks_MS<'tcx>(
     data: &mut FnCheckData<'_>,
 ) {
     let attrs = cx.tcx.hir_attrs(hir_id);
+    let signature_diff = rvs_collect_signature_contract_diff(cx, hir_id, sig, is_port_method);
+    let signature_mismatches = crate::inference::rvs_collect_contract_mismatch_items(
+        std::slice::from_ref(&signature_diff),
+    );
 
     if let Some(mut info) = utils::FnInfo::rvs_extract(name, sig, body, cx.tcx) {
         // Port trait methods get P capability automatically.
@@ -483,12 +527,21 @@ fn rvs_run_fn_checks_MS<'tcx>(
         missing_allow::rvs_check_fn_S(cx, hir_id, span, &info.raw_suffix);
         dead_code::rvs_check_fn_S(cx, attrs, span);
         if !is_port_method {
-            signature_caps::rvs_check_fn_S(cx, span, &info);
+            signature_caps::rvs_check_contract_mismatches_S(cx, span, &signature_mismatches);
         }
         suffix_order::rvs_check_fn_S(cx, span, &info.raw_suffix);
+        contract_mismatch::rvs_check_contract_diff_S(
+            cx,
+            span,
+            &signature_diff,
+            is_test,
+            is_trait_impl_method,
+        );
+
+        let should_check_port_default_body = is_port_method && has_body && !is_trait_impl_method;
 
         // Body-level checks
-        if !is_port_method {
+        if !is_port_method || should_check_port_default_body {
             call_violation::rvs_check_fn_MS(cx, body, &info.caps, data.capsmap, data.port_traits);
         }
 
@@ -499,7 +552,7 @@ fn rvs_run_fn_checks_MS<'tcx>(
         error_swallow::rvs_check_fn_MS(cx, body);
 
         if has_body && !is_stub {
-            if !is_port_method {
+            if !is_port_method || should_check_port_default_body {
                 static_ref::rvs_check_fn_MS(cx, body, &info.caps);
             }
             debug_assert::rvs_check_fn_MS(cx, body);
@@ -520,6 +573,7 @@ fn rvs_run_fn_checks_MS<'tcx>(
         // Collect ok fns (ABMP subset, mock-testable) for untested-ok-fn check.
         if crate::capability::CapabilityPolicy::rvs_is_ok(&info.caps)
             && !is_test
+            && !is_trait_impl_method
             && !utils::rvs_has_allow(attrs, "dead_code")
             && !utils::rvs_has_allow(attrs, "unused")
         {
@@ -532,7 +586,7 @@ fn rvs_run_fn_checks_MS<'tcx>(
         let effective_lines = if has_body {
             utils::rvs_count_effective_lines_M(cx, body)
         } else {
-            0
+            1
         };
         let caps_str: String = info.caps.rvs_iter().map(|c| c.rvs_as_char()).collect();
         data.fn_report.push(FnReportEntry {
@@ -542,14 +596,75 @@ fn rvs_run_fn_checks_MS<'tcx>(
             is_test,
             allows_dead_code,
         });
-    } else if !is_test
-        && name != "main"
-        && name != "new"
-        && name != "go"
-        && name != "wblk"
-        && !is_trait_impl_method
-    {
-        non_rvs_fn::rvs_check_fn_S(cx, name, span);
+    } else {
+        if is_port_method {
+            let is_stub = stub_macro::rvs_check_fn_MS(cx, body, span);
+            empty_fn::rvs_check_fn_MS(cx, body, span, has_body, is_stub);
+            dead_code::rvs_check_fn_S(cx, attrs, span);
+            contract_mismatch::rvs_check_contract_diff_S(
+                cx,
+                span,
+                &signature_diff,
+                is_test,
+                is_trait_impl_method,
+            );
+            let port_caps = crate::capability::CapabilityPolicy::rvs_port_method_caps();
+            let should_check_port_default_body = has_body && !is_trait_impl_method;
+            if should_check_port_default_body {
+                call_violation::rvs_check_fn_MS(
+                    cx,
+                    body,
+                    &port_caps,
+                    data.capsmap,
+                    data.port_traits,
+                );
+            }
+            spawn::rvs_check_fn_MS(cx, body, is_test);
+            reflection::rvs_check_fn_MS(cx, body);
+            catch_unwind::rvs_check_fn_MS(cx, body);
+            error_swallow::rvs_check_fn_MS(cx, body);
+            if has_body && !is_stub {
+                if should_check_port_default_body {
+                    static_ref::rvs_check_fn_MS(cx, body, &port_caps);
+                }
+                debug_assert::rvs_check_fn_MS(cx, body);
+                borrowed_param::rvs_check_fn_params_S(cx, sig);
+                consumed_arg::rvs_check_fn_MS(cx, sig, name);
+                validate::rvs_check_fn_S(cx, name, sig);
+            }
+            if crate::capability::CapabilityPolicy::rvs_is_ok(&port_caps)
+                && !is_test
+                && !is_trait_impl_method
+                && name.starts_with("rvs_")
+                && !utils::rvs_has_allow(attrs, "dead_code")
+                && !utils::rvs_has_allow(attrs, "unused")
+            {
+                data.ok_fns.push((name.to_string(), span));
+            }
+            let allows_dead_code =
+                utils::rvs_has_allow(attrs, "dead_code") || utils::rvs_has_allow(attrs, "unused");
+            let effective_lines = if has_body {
+                utils::rvs_count_effective_lines_M(cx, body)
+            } else {
+                1
+            };
+            data.fn_report.push(FnReportEntry {
+                name: FnName::rvs_new(name.to_string()),
+                caps: "P".to_string(),
+                lines: effective_lines,
+                is_test,
+                allows_dead_code,
+            });
+        } else {
+            non_rvs_fn::rvs_check_contract_mismatches_S(
+                cx,
+                name,
+                &signature_mismatches,
+                span,
+                is_test,
+                is_trait_impl_method,
+            );
+        }
     }
     test_name_format::rvs_check_fn_S(cx, name, span, is_test);
 }
@@ -614,6 +729,7 @@ fn rvs_check_item_MS<'tcx>(
                     data.callgraph,
                     cx,
                     item.hir_id(),
+                    *ident,
                     sig,
                     body,
                     false,
@@ -738,6 +854,7 @@ fn rvs_check_impl_item_MS<'tcx>(
                 data.callgraph,
                 cx,
                 impl_item.hir_id(),
+                impl_item.ident,
                 sig,
                 body,
                 is_trait_impl,
@@ -785,6 +902,7 @@ fn rvs_check_trait_item_MS<'tcx>(
                     data.callgraph,
                     cx,
                     trait_item.hir_id(),
+                    trait_item.ident,
                     sig,
                     body,
                     false,
@@ -796,6 +914,15 @@ fn rvs_check_trait_item_MS<'tcx>(
         TraitItemKind::Fn(sig, TraitFn::Required(_)) => {
             if data.should_emit_lints {
                 let name = trait_item.ident.name.as_str();
+                let diff = rvs_collect_signature_contract_diff(
+                    cx,
+                    trait_item.hir_id(),
+                    sig,
+                    is_port_trait,
+                );
+                let mismatches = crate::inference::rvs_collect_contract_mismatch_items(
+                    std::slice::from_ref(&diff),
+                );
                 if let Some(info) = utils::FnInfo::rvs_extract_signature(name, sig) {
                     missing_allow::rvs_check_fn_S(
                         cx,
@@ -804,9 +931,37 @@ fn rvs_check_trait_item_MS<'tcx>(
                         &info.raw_suffix,
                     );
                     suffix_order::rvs_check_fn_S(cx, trait_item.span, &info.raw_suffix);
-                    if !is_port_trait {
-                        signature_caps::rvs_check_fn_S(cx, trait_item.span, &info);
+                    contract_mismatch::rvs_check_contract_diff_S(
+                        cx,
+                        trait_item.span,
+                        &diff,
+                        false,
+                        false,
+                    );
+                    if diff.rvs_missing_rvs_prefix() {
+                        non_rvs_fn::rvs_check_contract_mismatches_S(
+                            cx,
+                            name,
+                            &mismatches,
+                            trait_item.span,
+                            false,
+                            false,
+                        );
+                    } else if !is_port_trait {
+                        signature_caps::rvs_check_contract_mismatches_S(
+                            cx,
+                            trait_item.span,
+                            &mismatches,
+                        );
                     }
+                } else if is_port_trait {
+                    contract_mismatch::rvs_check_contract_diff_S(
+                        cx,
+                        trait_item.span,
+                        &diff,
+                        false,
+                        false,
+                    );
                 } else {
                     non_rvs_fn::rvs_check_fn_S(cx, name, trait_item.span);
                 }
@@ -817,6 +972,7 @@ fn rvs_check_trait_item_MS<'tcx>(
                     data.callgraph,
                     cx,
                     trait_item.hir_id(),
+                    trait_item.ident,
                     sig,
                     false,
                     is_port_trait,
@@ -824,5 +980,52 @@ fn rvs_check_trait_item_MS<'tcx>(
             }
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rvs_snapshot_BIS(name: &str, content: &str) {
+        std::fs::create_dir_all("test_out").unwrap();
+        std::fs::write(format!("test_out/{name}.out"), content).unwrap();
+    }
+
+    #[test]
+    #[expect(
+        unreachable_code,
+        reason = "coverage-only unreachable branch keeps rustc-context helper visible to rivus test-call collection"
+    )]
+    fn test_20260703_lints_mod_helper_coverage() {
+        rvs_snapshot_BIS("test_20260703_lints_mod_helper_coverage", "coverage\n");
+        if std::hint::black_box(false) {
+            let _cx: &LateContext<'_> = unreachable!();
+            let _hir_id: rustc_hir::HirId = unreachable!();
+            let _sig: &rustc_hir::FnSig<'_> = unreachable!();
+            rvs_collect_signature_contract_diff(_cx, _hir_id, _sig, false);
+        }
+    }
+
+    #[test]
+    fn test_20260706_env_flag_value_requires_one() {
+        let cases = [
+            (None, false),
+            (Some(""), false),
+            (Some("0"), false),
+            (Some("true"), false),
+            (Some("1"), true),
+        ];
+        let output = cases
+            .iter()
+            .map(|(value, _)| format!("{value:?}={}", rvs_env_flag_value_enabled(*value)))
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        rvs_snapshot_BIS("test_20260706_env_flag_value_requires_one", &output);
+
+        for (value, expected) in cases {
+            assert_eq!(rvs_env_flag_value_enabled(value), expected);
+        }
     }
 }

@@ -1,0 +1,5 @@
+spaced=true
+quoted=true
+mixed_quote=true
+escaped=true
+harmless_quoted=true

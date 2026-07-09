@@ -87,7 +87,7 @@ test_out/
 
 > *"To err is human; to forgive, divine."*
 
-每个可能失败的函数定义完整的错误类型枚举，调用者必须处理每种错误。采用 Rust 的 `Result<T, E>` 模式。用 thiserror，禁止使用 `anyhow`、`eyre`、`color_eyre`。
+每个可能失败的函数定义完整的错误类型枚举，调用者必须处理每种错误。采用 Rust 的 `Result<T, E>` 模式。用 snafu，禁止使用 `thiserror`、`anyhow`、`eyre`、`color_eyre`。
 
 **Result/Option 由类型系统强制处理**——编译器保证调用方必须 `match` 或 `?`，因此不需要额外的能力标记。
 
@@ -96,20 +96,23 @@ test_out/
 - 每个模块/领域定义自己的错误枚举
 - 错误变体应当穷举所有可能的失败模式，不留 `Unknown` 或 `Other` 之类的兜底（除非是 FFI 边界）
 - 错误类型携带足够的上下文信息用于诊断
-- 上层模块可以将下层错误 `#[from]` 包装，形成错误链
+- 上层模块转换下层错误时必须显式添加当前层上下文；禁止用 `#[from]` 风格无上下文转发
+- 错误变体按调用者可采取的动作或当前层操作命名，不按依赖来源命名（如 `Db`/`Io`/`Serde`）
 
 ### 示例
 
 ```rust
-#[derive(Debug, thiserror::Error)]
+use snafu::Snafu;
+
+#[derive(Debug, Snafu)]
 enum UserRepoError {
-    #[error("user {id} not found")]
+    #[snafu(display("user {id} not found"))]
     NotFound { id: UserId },
-    #[error("duplicate email: {email}")]
+    #[snafu(display("duplicate email: {email}"))]
     DuplicateEmail { email: String },
-    #[error("database connection failed")]
-    ConnectionFailed(#[from] DbError),
-    #[error("user {id} is suspended, reason: {reason}")]
+    #[snafu(display("failed to load user {id} from repository"))]
+    LoadUser { id: UserId, source: DbError },
+    #[snafu(display("user {id} is suspended, reason: {reason}"))]
     Suspended { id: UserId, reason: String },
 }
 ```

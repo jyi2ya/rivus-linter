@@ -12,7 +12,7 @@ pub(crate) fn rvs_check_fn_S(cx: &LateContext<'_>, attrs: &[rustc_hir::Attribute
         cx.emit_span_lint(
             RVS_DEAD_CODE,
             span,
-            Msg::new(span, "rvs_ function marked #[allow(dead_code/unused)]"),
+            Msg::rvs_new(span, "rvs_ function marked #[allow(dead_code/unused)]"),
         );
     }
 }

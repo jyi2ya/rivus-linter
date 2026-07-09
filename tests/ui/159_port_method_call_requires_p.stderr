@@ -1,8 +1,8 @@
-error: {} → rvs_find_by_id_ABI (159_port_method_call_requires_p::UserRepository::rvs_find_by_id_ABI) ({P}) missing P(Port)
+error: {} → rvs_find_by_id_P (159_port_method_call_requires_p::UserRepository::rvs_find_by_id_P) ({P}) missing P(Port)
   --> $DIR/tests/ui/159_port_method_call_requires_p.rs:27:9
    |
-LL |         self.repo.rvs_find_by_id_ABI(1);
-   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+LL |         self.repo.rvs_find_by_id_P(1);
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
    = note: `#[deny(rivus::rvs_call_violation)]` on by default
 

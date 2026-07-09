@@ -19,7 +19,10 @@ pub(crate) fn rvs_check_crate_S(cx: &rustc_lint::LateContext<'_>) {
                             cx.emit_span_lint(
                                 RVS_DENY_WARNINGS,
                                 a.span(),
-                                Msg::new(a.span(), "#![deny(warnings)] — use named lints instead"),
+                                Msg::rvs_new(
+                                    a.span(),
+                                    "#![deny(warnings)] — use named lints instead",
+                                ),
                             );
                         }
                     }

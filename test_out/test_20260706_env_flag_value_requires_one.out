@@ -1,0 +1,5 @@
+None=false
+Some("")=false
+Some("0")=false
+Some("true")=false
+Some("1")=true

@@ -1,0 +1,2 @@
+rustc
+--cap-lints=warn

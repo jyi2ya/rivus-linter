@@ -1,0 +1,4 @@
+invalid:../seed
+invalid:nested/seed
+invalid:.
+invalid:$ABS

@@ -1,0 +1,7 @@
+lib:
+pub fn rvs_parse() -> i32 { 1 }
+
+main:
+fn rvs_parse() -> i32 { 2 }
+
+fn main() { let _ = rvs_parse(); }

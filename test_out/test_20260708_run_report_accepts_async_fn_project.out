@@ -1,0 +1,3 @@
+result=Ok(())
+report_entries=Ok([FnEntry { capabilities: CapabilitySet({A, S}), line_count: 2, is_test: false, allows_dead_code: false }])
+async_lines=Some(2)

@@ -1,0 +1,6 @@
+build_rustc=true
+wrapper=true
+rivus_env=true
+rustc_env=true
+path_config=true
+harmless=true

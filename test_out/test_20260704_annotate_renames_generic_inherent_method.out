@@ -1,0 +1,2 @@
+pub struct User<T>(T);
+impl<T> User<T> { pub fn rvs_new(value: T) -> Self { Self(value) } }

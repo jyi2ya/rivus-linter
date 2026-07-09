@@ -1,0 +1,2 @@
+result=Err("artifact json must not be empty")
+dir_exists=false

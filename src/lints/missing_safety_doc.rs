@@ -20,7 +20,7 @@ pub(crate) fn rvs_check_fn_S(
         cx.emit_span_lint(
             RVS_MISSING_SAFETY_DOC,
             span,
-            Msg::new(span, "unsafe fn missing /// # Safety"),
+            Msg::rvs_new(span, "unsafe fn missing /// # Safety"),
         );
     }
 }

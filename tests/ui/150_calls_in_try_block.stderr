@@ -1,4 +1,4 @@
-error: {} → {A, B, I} missing B(Blocking), I(IO)
+error: {} → rvs_inner_ABI (150_calls_in_try_block::rvs_inner_ABI) ({A, B, I}) missing B(Blocking), I(IO)
   --> $DIR/tests/ui/150_calls_in_try_block.rs:11:9
    |
 LL |         rvs_inner_ABI();

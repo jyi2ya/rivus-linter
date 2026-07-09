@@ -1,0 +1,12 @@
+error: 'fetch' should be named 'rvs_fetch_P'
+  --> $DIR/tests/ui/168_contract_mismatch_provided_port_missing_rvs.rs:5:5
+   |
+LL | /     fn fetch(&self) -> i32 {
+LL | |         1
+LL | |     }
+   | |_____^
+   |
+   = note: `-D rivus::rvs-contract-mismatch` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_contract_mismatch)]`
+
+error: aborting due to 1 previous error

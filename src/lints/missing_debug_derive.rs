@@ -12,7 +12,7 @@ pub(crate) fn rvs_check_struct_or_enum_S<'tcx>(cx: &LateContext<'tcx>, item: &'t
         cx.emit_span_lint(
             RVS_MISSING_DEBUG_DERIVE,
             item.span,
-            Msg::new(
+            Msg::rvs_new(
                 item.span,
                 format!("type '{}' missing #[derive(Debug)]", name),
             ),

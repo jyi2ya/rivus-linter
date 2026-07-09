@@ -1,0 +1,3 @@
+result=Err("AGENTS.md must be a regular file: $TMP/AGENTS.md")
+restored=true
+agents_is_dir=true

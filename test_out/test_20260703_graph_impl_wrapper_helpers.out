@@ -1,0 +1,2 @@
+resolved=CapabilitySet({B, I})
+aliases={DefPath("std::io::Read::read"): CapabilitySet({B, I})}

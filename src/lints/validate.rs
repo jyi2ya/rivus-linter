@@ -46,7 +46,7 @@ pub(crate) fn rvs_check_fn_S<'tcx>(cx: &LateContext<'_>, name: &str, sig: &rustc
         cx.emit_span_lint(
             RVS_VALIDATE_RETURNS_UNIT,
             sig.span,
-            Msg::new(
+            Msg::rvs_new(
                 sig.span,
                 format!(
                     "{name}: validate returning Result<(),E> — use TryFrom returning Result<T,E>"

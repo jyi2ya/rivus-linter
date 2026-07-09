@@ -4,7 +4,7 @@ use rustc_lint::{LateContext, LintContext};
 use super::msg::Msg;
 use super::{RVS_BANNED_IMPORT, RVS_WILDCARD_IMPORT};
 
-/// Check `use` items for banned crates (anyhow/eyre/color_eyre) and
+/// Check `use` items for banned crates (anyhow/eyre/color_eyre/thiserror) and
 /// wildcard imports (`use xxx::*`).
 pub(crate) fn rvs_check_item_S<'tcx>(
     cx: &LateContext<'tcx>,
@@ -14,11 +14,11 @@ pub(crate) fn rvs_check_item_S<'tcx>(
 ) {
     for seg in path.segments {
         let n = seg.ident.name.as_str();
-        if n == "anyhow" || n == "eyre" || n == "color_eyre" {
+        if n == "anyhow" || n == "eyre" || n == "color_eyre" || n == "thiserror" {
             cx.emit_span_lint(
                 RVS_BANNED_IMPORT,
                 item.span,
-                Msg::new(item.span, format!("banned import: {n}")),
+                Msg::rvs_new(item.span, format!("banned import: {n}")),
             );
         }
     }
@@ -37,7 +37,7 @@ pub(crate) fn rvs_check_item_S<'tcx>(
             cx.emit_span_lint(
                 RVS_WILDCARD_IMPORT,
                 item.span,
-                Msg::new(item.span, format!("wildcard import: {full}")),
+                Msg::rvs_new(item.span, format!("wildcard import: {full}")),
             );
         }
     }

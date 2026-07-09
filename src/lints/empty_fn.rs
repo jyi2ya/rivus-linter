@@ -22,7 +22,7 @@ pub(crate) fn rvs_check_fn_MS<'tcx>(
             } else {
                 "empty function body"
             };
-            cx.emit_span_lint(RVS_EMPTY_FN, span, Msg::new(span, msg));
+            cx.emit_span_lint(RVS_EMPTY_FN, span, Msg::rvs_new(span, msg));
         }
     }
 }

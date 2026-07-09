@@ -1,0 +1,2 @@
+result=Err("rust-analyzer produced edit outside project root: $TMP/b/src/lib.rs")
+b_after=pub fn run() -> i32 { a::rvs_parse() }

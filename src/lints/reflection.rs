@@ -22,7 +22,7 @@ pub(crate) fn rvs_check_fn_MS<'tcx>(cx: &LateContext<'tcx>, body: &Body<'tcx>) {
                             cx.emit_span_lint(
                                 RVS_REFLECTION_USAGE,
                                 e.span,
-                                Msg::new(e.span, "reflection — use trait dispatch instead"),
+                                Msg::rvs_new(e.span, "reflection — use trait dispatch instead"),
                             );
                         }
                     }
@@ -32,7 +32,7 @@ pub(crate) fn rvs_check_fn_MS<'tcx>(cx: &LateContext<'tcx>, body: &Body<'tcx>) {
                         cx.emit_span_lint(
                             RVS_REFLECTION_USAGE,
                             e.span,
-                            Msg::new(e.span, "reflection — use trait dispatch instead"),
+                            Msg::rvs_new(e.span, "reflection — use trait dispatch instead"),
                         );
                     }
                 }
@@ -47,7 +47,7 @@ pub(crate) fn rvs_check_fn_MS<'tcx>(cx: &LateContext<'tcx>, body: &Body<'tcx>) {
                     cx.emit_span_lint(
                         RVS_REFLECTION_USAGE,
                         e.span,
-                        Msg::new(e.span, "reflection — use trait dispatch instead"),
+                        Msg::rvs_new(e.span, "reflection — use trait dispatch instead"),
                     );
                 }
             }

@@ -1,0 +1,2 @@
+result=Err("cannot inject clippy lints into '$TMP/Cargo.toml': [lints.clippy] must be a table")
+exists=false

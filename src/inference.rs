@@ -1,9 +1,179 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-use crate::artifacts::FnBehavior;
+use crate::artifacts::{FnBehavior, FnGraph, FnNode};
 use crate::capability::{Capability, CapabilityPolicy, CapabilitySet};
+use crate::capability::{rvs_extract_raw_suffix, rvs_parse_function};
 use crate::capsmap;
-use crate::symbols::{CrateName, DefPath};
+use crate::symbols::{CrateName, DefPath, FnName};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FnContractDiff {
+    pub(crate) def_path: DefPath,
+    pub(crate) actual_name: FnName,
+    pub(crate) expected_name: Option<FnName>,
+    pub(crate) declared_public_caps: Option<CapabilitySet>,
+    pub(crate) expected_public_caps: Option<CapabilitySet>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct FnContractMismatch {
+    pub(crate) def_path: DefPath,
+    pub(crate) actual_name: FnName,
+    pub(crate) kind: FnContractMismatchKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CallContractMismatchKind {
+    UnknownCallee,
+    MissingCapabilities,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CallContractMismatch {
+    pub(crate) callee_display: String,
+    pub(crate) kind: CallContractMismatchKind,
+    pub(crate) callee_caps: Option<CapabilitySet>,
+    pub(crate) missing_caps: BTreeSet<Capability>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum FnContractMismatchKind {
+    MissingRvsPrefix,
+    NameMismatch,
+    MissingAsync,
+    MissingBlocking,
+    MissingIo,
+    MissingMutable,
+    MissingPort,
+    MissingSideEffect,
+    MissingThreadLocal,
+    MissingUnsafe,
+}
+
+impl FnContractMismatchKind {
+    pub(crate) fn rvs_as_str(self) -> &'static str {
+        match self {
+            Self::MissingRvsPrefix => "missing_rvs_prefix",
+            Self::NameMismatch => "name_mismatch",
+            Self::MissingAsync => "missing_async",
+            Self::MissingBlocking => "missing_blocking",
+            Self::MissingIo => "missing_io",
+            Self::MissingMutable => "missing_mutable",
+            Self::MissingPort => "missing_port",
+            Self::MissingSideEffect => "missing_side_effect",
+            Self::MissingThreadLocal => "missing_thread_local",
+            Self::MissingUnsafe => "missing_unsafe",
+        }
+    }
+}
+
+impl FnContractDiff {
+    pub(crate) fn rvs_has_name_mismatch(&self) -> bool {
+        self.expected_name
+            .as_ref()
+            .is_some_and(|expected| expected != &self.actual_name)
+    }
+
+    pub(crate) fn rvs_missing_rvs_prefix(&self) -> bool {
+        self.expected_name.is_some() && !self.actual_name.rvs_as_str().starts_with("rvs_")
+    }
+
+    pub(crate) fn rvs_mismatch_kinds(&self) -> Vec<FnContractMismatchKind> {
+        let mut mismatches = Vec::new();
+        if self.rvs_missing_rvs_prefix() {
+            mismatches.push(FnContractMismatchKind::MissingRvsPrefix);
+        } else if self.rvs_has_name_mismatch() {
+            mismatches.push(FnContractMismatchKind::NameMismatch);
+        }
+        if let Some(expected_caps) = self.expected_public_caps.as_ref() {
+            let declared_has = |cap| {
+                self.declared_public_caps
+                    .as_ref()
+                    .is_some_and(|caps| caps.rvs_contains(cap))
+            };
+            if expected_caps.rvs_contains(Capability::A) && !declared_has(Capability::A) {
+                mismatches.push(FnContractMismatchKind::MissingAsync);
+            }
+            if expected_caps.rvs_contains(Capability::B) && !declared_has(Capability::B) {
+                mismatches.push(FnContractMismatchKind::MissingBlocking);
+            }
+            if expected_caps.rvs_contains(Capability::I) && !declared_has(Capability::I) {
+                mismatches.push(FnContractMismatchKind::MissingIo);
+            }
+            if expected_caps.rvs_contains(Capability::M) && !declared_has(Capability::M) {
+                mismatches.push(FnContractMismatchKind::MissingMutable);
+            }
+            if expected_caps.rvs_contains(Capability::P) && !declared_has(Capability::P) {
+                mismatches.push(FnContractMismatchKind::MissingPort);
+            }
+            if expected_caps.rvs_contains(Capability::S) && !declared_has(Capability::S) {
+                mismatches.push(FnContractMismatchKind::MissingSideEffect);
+            }
+            if expected_caps.rvs_contains(Capability::T) && !declared_has(Capability::T) {
+                mismatches.push(FnContractMismatchKind::MissingThreadLocal);
+            }
+            if expected_caps.rvs_contains(Capability::U) && !declared_has(Capability::U) {
+                mismatches.push(FnContractMismatchKind::MissingUnsafe);
+            }
+        }
+        mismatches
+    }
+}
+
+pub(crate) fn rvs_make_callee_display(def_path: &str, src_path: Option<&str>) -> String {
+    if let Some(sp) = src_path {
+        if sp != def_path {
+            format!("{sp} ({def_path})")
+        } else {
+            def_path.to_string()
+        }
+    } else {
+        def_path.to_string()
+    }
+}
+
+pub(crate) fn rvs_collect_call_contract_mismatch(
+    def_path: &str,
+    src_path: Option<&str>,
+    caps: &CapabilitySet,
+    callee_caps: Option<&CapabilitySet>,
+) -> Option<CallContractMismatch> {
+    let callee_display = rvs_make_callee_display(def_path, src_path);
+    let Some(callee_caps) = callee_caps else {
+        return Some(CallContractMismatch {
+            callee_display,
+            kind: CallContractMismatchKind::UnknownCallee,
+            callee_caps: None,
+            missing_caps: BTreeSet::new(),
+        });
+    };
+    if callee_caps.rvs_is_empty() || CapabilityPolicy::rvs_can_call(caps, callee_caps) {
+        return None;
+    }
+    Some(CallContractMismatch {
+        callee_display,
+        kind: CallContractMismatchKind::MissingCapabilities,
+        callee_caps: Some(callee_caps.clone()),
+        missing_caps: CapabilityPolicy::rvs_missing_for(caps, callee_caps),
+    })
+}
+
+pub(crate) fn rvs_collect_named_call_contract_mismatch(
+    def_path: &str,
+    src_path: Option<&str>,
+    caps: &CapabilitySet,
+    callee_caps: &CapabilitySet,
+) -> Option<CallContractMismatch> {
+    if callee_caps.rvs_is_empty() || CapabilityPolicy::rvs_can_call(caps, callee_caps) {
+        return None;
+    }
+    Some(CallContractMismatch {
+        callee_display: rvs_make_callee_display(def_path, src_path),
+        kind: CallContractMismatchKind::MissingCapabilities,
+        callee_caps: Some(callee_caps.clone()),
+        missing_caps: CapabilityPolicy::rvs_missing_for(caps, callee_caps),
+    })
+}
 
 /// Build a "method@trait_path" → set-of-keys index from callgraph keys.
 pub(crate) fn rvs_build_impl_index(
@@ -11,6 +181,22 @@ pub(crate) fn rvs_build_impl_index(
 ) -> HashMap<String, Vec<DefPath>> {
     let mut idx: HashMap<String, Vec<DefPath>> = HashMap::new();
     for key in callgraph.keys() {
+        if let Some(at_pos) = key.rvs_as_str().find('@') {
+            let (method, suffix_with_sep) = key.rvs_as_str().split_at(at_pos);
+            let Some(suffix) = suffix_with_sep.strip_prefix('@') else {
+                continue;
+            };
+            let method_name = DefPath::from(method).rvs_fn_name();
+            let lookup = format!("{method_name}@{suffix}");
+            idx.entry(lookup).or_default().push(key.clone());
+        }
+    }
+    idx
+}
+
+pub(crate) fn rvs_build_graph_impl_index(graph: &FnGraph) -> HashMap<String, Vec<DefPath>> {
+    let mut idx: HashMap<String, Vec<DefPath>> = HashMap::new();
+    for key in graph.rvs_keys() {
         if let Some(at_pos) = key.rvs_as_str().find('@') {
             let (method, suffix_with_sep) = key.rvs_as_str().split_at(at_pos);
             let Some(suffix) = suffix_with_sep.strip_prefix('@') else {
@@ -48,7 +234,7 @@ pub(crate) fn rvs_format_unknown_callees(
 }
 
 /// Generate trait-method aliases (e.g. `std::io::Read::read`) from impl-method
-/// keys using majority-vote capability aggregation across impls.
+/// keys using at-least-half capability aggregation across impls.
 pub(crate) fn rvs_generate_trait_aliases_MP(
     inferred: &BTreeMap<DefPath, CapabilitySet>,
     impl_index: &HashMap<String, Vec<DefPath>>,
@@ -76,6 +262,14 @@ pub(crate) fn rvs_generate_trait_aliases_MP(
     aliases
 }
 
+pub(crate) fn rvs_generate_graph_trait_aliases_MP(
+    inferred: &BTreeMap<DefPath, CapabilitySet>,
+    impl_index: &HashMap<String, Vec<DefPath>>,
+    graph: &FnGraph,
+) -> BTreeMap<DefPath, CapabilitySet> {
+    rvs_generate_trait_aliases_MP(inferred, impl_index, &graph.nodes)
+}
+
 /// Convert a `CapabilitySet` to its uppercase letter string.
 pub(crate) fn rvs_caps_to_string(caps: &CapabilitySet) -> String {
     caps.rvs_iter().map(|c| c.rvs_as_char()).collect()
@@ -88,7 +282,9 @@ pub(crate) fn rvs_infer_caps_M(
     let mut inferred: BTreeMap<DefPath, CapabilitySet> = BTreeMap::new();
 
     for (func, behavior) in callgraph {
-        if let Some(caps) = seed.rvs_lookup(func.rvs_as_str()) {
+        if behavior.facts.is_port_method {
+            inferred.insert(func.clone(), CapabilityPolicy::rvs_port_method_caps());
+        } else if let Some(caps) = seed.rvs_lookup(func.rvs_as_str()) {
             inferred.insert(func.clone(), caps.clone());
         } else {
             inferred.insert(func.clone(), rvs_infer_signature_caps(behavior));
@@ -100,14 +296,17 @@ pub(crate) fn rvs_infer_caps_M(
                 && let Some(caps) = seed.rvs_lookup(callee.rvs_as_str())
             {
                 inferred.insert(callee.clone(), caps.clone());
+            } else if !inferred.contains_key(callee)
+                && let Some(caps) = rvs_declared_caps_from_def_path(callee)
+            {
+                inferred.insert(callee.clone(), caps);
             }
         }
     }
 
     let impl_index = rvs_build_impl_index(callgraph);
 
-    let max_iterations = 16;
-    for _iteration in 0..max_iterations {
+    loop {
         let mut changed = false;
         for (func, behavior) in callgraph {
             if seed.rvs_lookup(func.rvs_as_str()).is_some() {
@@ -121,18 +320,8 @@ pub(crate) fn rvs_infer_caps_M(
                 .cloned()
                 .unwrap_or_else(CapabilitySet::rvs_new);
             for callee in &behavior.calls {
-                let callee_caps = inferred
-                    .get(callee)
-                    .or_else(|| seed.rvs_lookup(callee.rvs_as_str()))
-                    .cloned();
-
-                let callee_caps = callee_caps.or_else(|| {
-                    if !callee.rvs_as_str().contains('@') {
-                        rvs_resolve_impl_majority_caps_M(callee, &impl_index, &inferred, callgraph)
-                    } else {
-                        None
-                    }
-                });
+                let callee_caps =
+                    rvs_resolve_callee_caps_M(callee, callgraph, seed, &inferred, &impl_index);
                 if let Some(cc) = callee_caps {
                     for cap in cc.rvs_iter() {
                         if !CapabilityPolicy::rvs_is_propagated_cap(cap) {
@@ -151,11 +340,314 @@ pub(crate) fn rvs_infer_caps_M(
             break;
         }
     }
+    let impl_index = rvs_build_impl_index(callgraph);
+    let bodyless_paths: Vec<DefPath> = callgraph
+        .iter()
+        .filter(|(_, behavior)| !behavior.has_body)
+        .map(|(path, _)| path.clone())
+        .collect();
+    for func in bodyless_paths {
+        if seed.rvs_lookup(func.rvs_as_str()).is_some() {
+            continue;
+        }
+        if let Some(caps) =
+            rvs_resolve_callee_caps_M(&func, callgraph, seed, &inferred, &impl_index)
+        {
+            inferred.insert(func, caps);
+        }
+    }
     inferred
 }
 
-/// Resolve a trait method callee by taking a majority vote across all impl
-/// methods for each propagated capability.
+fn rvs_resolve_callee_caps_M(
+    callee: &DefPath,
+    callgraph: &BTreeMap<DefPath, FnBehavior>,
+    seed: &capsmap::CapsMap,
+    inferred: &BTreeMap<DefPath, CapabilitySet>,
+    impl_index: &HashMap<String, Vec<DefPath>>,
+) -> Option<CapabilitySet> {
+    if callgraph
+        .get(callee)
+        .is_some_and(|node| node.facts.is_port_method)
+    {
+        return Some(CapabilityPolicy::rvs_port_method_caps());
+    }
+    if let Some(caps) = seed.rvs_lookup(callee.rvs_as_str()) {
+        return Some(caps.clone());
+    }
+    if !callee.rvs_as_str().contains('@') {
+        let is_bodyless_decl = callgraph.get(callee).is_some_and(|node| !node.has_body);
+        if is_bodyless_decl
+            && let Some(mut caps) =
+                rvs_resolve_impl_majority_caps_M(callee, impl_index, inferred, callgraph)
+        {
+            if let Some(signature_caps) = inferred.get(callee) {
+                for cap in signature_caps.rvs_iter() {
+                    if !CapabilityPolicy::rvs_is_propagated_cap(cap) {
+                        caps.rvs_insert_M(cap);
+                    }
+                }
+            }
+            return Some(caps);
+        }
+    }
+    let declared_caps = rvs_declared_caps_from_def_path(callee);
+    if callgraph.get(callee).is_some_and(|node| !node.has_body) && declared_caps.is_some() {
+        return declared_caps;
+    }
+
+    inferred.get(callee).cloned().or(declared_caps).or_else(|| {
+        if !callee.rvs_as_str().contains('@') {
+            rvs_resolve_impl_majority_caps_M(callee, impl_index, inferred, callgraph)
+        } else {
+            None
+        }
+    })
+}
+
+fn rvs_declared_caps_from_def_path(def_path: &DefPath) -> Option<CapabilitySet> {
+    let fn_name = def_path.rvs_fn_name();
+    let raw_suffix = rvs_extract_raw_suffix(fn_name.rvs_as_str());
+    let has_unknown_suffix = raw_suffix
+        .chars()
+        .any(|letter| Capability::rvs_from_char(letter).is_none());
+    let caps = rvs_parse_function(fn_name.rvs_as_str()).map(|(_, caps)| caps)?;
+    if has_unknown_suffix && caps.rvs_is_empty() {
+        return None;
+    }
+    Some(caps)
+}
+
+pub(crate) fn rvs_infer_graph_M(graph: &mut FnGraph, seed: &capsmap::CapsMap) {
+    graph.nodes.retain(|_, node| !node.is_synthetic);
+    let inferred = rvs_infer_caps_M(&graph.nodes, seed);
+    for (_, node) in graph.rvs_iter_mut_M() {
+        node.rvs_clear_expected_public_caps_M();
+    }
+    for (func, caps) in inferred {
+        if let Some(node) = graph.rvs_get_mut_M(&func) {
+            node.rvs_set_expected_public_caps_M(caps);
+        } else {
+            let node = FnNode {
+                is_synthetic: true,
+                has_body: false,
+                expected_public_caps: Some(caps),
+                ..FnNode::default()
+            };
+            graph.rvs_insert_M(func, node);
+        }
+    }
+}
+
+pub(crate) fn rvs_project_expected_local_names_M(
+    graph: &mut FnGraph,
+    local_crate_names: &BTreeSet<CrateName>,
+) {
+    let local_prefixes: Vec<_> = local_crate_names
+        .iter()
+        .map(CrateName::rvs_prefix)
+        .collect();
+    let root_main_paths: BTreeSet<DefPath> = local_prefixes
+        .iter()
+        .map(|prefix| prefix.rvs_join_name(&FnName::rvs_new("main")))
+        .collect();
+
+    for (full_path, node) in graph.rvs_iter_mut_M() {
+        node.rvs_clear_expected_name_M();
+        let Some(caps) = node.expected_public_caps.as_ref() else {
+            continue;
+        };
+        let Some(relative_path) = local_prefixes
+            .iter()
+            .find_map(|prefix| full_path.rvs_strip_prefix(prefix))
+        else {
+            continue;
+        };
+        let short_name = relative_path.rvs_fn_name();
+        if root_main_paths.contains(full_path)
+            || node.is_test
+            || node.is_trait_impl
+            || node.is_synthetic
+        {
+            continue;
+        }
+        let caps_str = rvs_caps_to_string(caps);
+        let base_name = rvs_contract_base_name(short_name.rvs_as_str(), &caps_str);
+        let expected_name = if caps_str.is_empty() {
+            FnName::rvs_new(format!("rvs_{base_name}"))
+        } else {
+            FnName::rvs_new(format!("rvs_{base_name}_{caps_str}"))
+        };
+        node.rvs_set_expected_name_M(expected_name);
+    }
+}
+
+fn rvs_contract_base_name<'a>(name: &'a str, expected_caps: &str) -> &'a str {
+    if let Some((base, _)) = rvs_parse_function(name) {
+        return base;
+    }
+    if let Some((base, suffix)) = name.rsplit_once('_')
+        && !suffix.is_empty()
+        && !expected_caps.is_empty()
+        && suffix
+            .chars()
+            .all(|c| c.is_ascii_uppercase() && Capability::rvs_from_char(c).is_some())
+    {
+        return base;
+    }
+    name
+}
+
+pub(crate) fn rvs_contract_diff_is_enforced(
+    graph: &FnGraph,
+    diff: &FnContractDiff,
+    local_crate_names: &BTreeSet<CrateName>,
+) -> bool {
+    let root_main_paths: BTreeSet<_> = local_crate_names
+        .iter()
+        .map(|name| name.rvs_prefix().rvs_join_name(&FnName::rvs_new("main")))
+        .collect();
+    if root_main_paths.contains(&diff.def_path) {
+        return false;
+    }
+    let Some(node) = graph.rvs_get(diff.def_path.rvs_as_str()) else {
+        return false;
+    };
+    !node.is_test && !node.is_trait_impl && !node.is_synthetic
+}
+
+pub(crate) fn rvs_collect_enforced_contract_diffs(
+    graph: &FnGraph,
+    diffs: &[FnContractDiff],
+    local_crate_names: &BTreeSet<CrateName>,
+) -> Vec<FnContractDiff> {
+    diffs
+        .iter()
+        .filter(|diff| rvs_contract_diff_is_enforced(graph, diff, local_crate_names))
+        .cloned()
+        .collect()
+}
+
+pub(crate) fn rvs_collect_contract_diffs(
+    graph: &FnGraph,
+    local_crate_names: &BTreeSet<CrateName>,
+) -> Vec<FnContractDiff> {
+    let local_prefixes: Vec<_> = local_crate_names
+        .iter()
+        .map(CrateName::rvs_prefix)
+        .collect();
+    let mut diffs = Vec::new();
+    for (def_path, node) in graph.rvs_iter() {
+        if !local_prefixes
+            .iter()
+            .any(|prefix| def_path.rvs_starts_with(prefix))
+        {
+            continue;
+        }
+        let actual_name = def_path.rvs_fn_name();
+        let declared_public_caps =
+            rvs_parse_function(actual_name.rvs_as_str()).map(|(_, caps)| caps);
+        diffs.push(FnContractDiff {
+            def_path: def_path.clone(),
+            actual_name,
+            expected_name: node.expected_name.clone(),
+            declared_public_caps,
+            expected_public_caps: node.expected_public_caps.clone(),
+        });
+    }
+    diffs
+}
+
+pub(crate) fn rvs_collect_local_contract_diffs_M(
+    graph: &mut FnGraph,
+    seed: &capsmap::CapsMap,
+    local_crate_names: &BTreeSet<CrateName>,
+) -> Vec<FnContractDiff> {
+    rvs_infer_graph_M(graph, seed);
+    rvs_project_expected_local_names_M(graph, local_crate_names);
+    rvs_collect_contract_diffs(graph, local_crate_names)
+}
+
+pub(crate) fn rvs_summarize_contract_mismatches(
+    diffs: &[FnContractDiff],
+) -> BTreeMap<FnContractMismatchKind, usize> {
+    let mut counts = BTreeMap::new();
+    for mismatch in rvs_collect_contract_mismatch_items(diffs) {
+        *counts.entry(mismatch.kind).or_default() += 1;
+    }
+    counts
+}
+
+pub(crate) fn rvs_collect_contract_mismatch_items(
+    diffs: &[FnContractDiff],
+) -> Vec<FnContractMismatch> {
+    let mut items = Vec::new();
+    for diff in diffs {
+        for kind in diff.rvs_mismatch_kinds() {
+            items.push(FnContractMismatch {
+                def_path: diff.def_path.clone(),
+                actual_name: diff.actual_name.clone(),
+                kind,
+            });
+        }
+    }
+    items.sort();
+    items
+}
+
+pub(crate) fn rvs_collect_single_local_contract_diff_M(
+    def_path: DefPath,
+    node: FnNode,
+    local_crate_names: &BTreeSet<CrateName>,
+) -> FnContractDiff {
+    let mut graph = FnGraph::rvs_new();
+    graph.rvs_insert_M(def_path, node);
+    rvs_collect_local_contract_diffs_M(&mut graph, &capsmap::CapsMap::rvs_new(), local_crate_names)
+        .into_iter()
+        .next()
+        .expect("never: single local contract diff should always exist")
+}
+
+pub(crate) fn rvs_collect_signature_contract_diff_from_facts_M(
+    def_path: DefPath,
+    facts: crate::capability::CapabilityFacts,
+    local_crate_names: &BTreeSet<CrateName>,
+) -> FnContractDiff {
+    rvs_collect_single_local_contract_diff_M(
+        def_path,
+        FnNode {
+            calls: BTreeSet::new(),
+            facts,
+            has_body: true,
+            is_trait_impl: false,
+            is_test: false,
+            sources: BTreeSet::new(),
+            is_synthetic: false,
+            expected_public_caps: None,
+            expected_name: None,
+        },
+        local_crate_names,
+    )
+}
+
+pub(crate) fn rvs_infer_graph_caps(
+    graph: &FnGraph,
+    seed: &capsmap::CapsMap,
+) -> BTreeMap<DefPath, CapabilitySet> {
+    rvs_infer_caps_M(&graph.nodes, seed)
+}
+
+pub(crate) fn rvs_resolve_graph_impl_majority_caps_M(
+    callee: &DefPath,
+    impl_index: &HashMap<String, Vec<DefPath>>,
+    inferred: &BTreeMap<DefPath, CapabilitySet>,
+    graph: &FnGraph,
+) -> Option<CapabilitySet> {
+    rvs_resolve_impl_majority_caps_M(callee, impl_index, inferred, &graph.nodes)
+}
+
+/// Resolve a trait method callee by taking an at-least-half vote across all
+/// impl methods for each propagated capability.
 pub(crate) fn rvs_resolve_impl_majority_caps_M(
     callee: &DefPath,
     impl_index: &HashMap<String, Vec<DefPath>>,
@@ -260,10 +752,8 @@ pub(crate) fn rvs_collect_direct_external_deps(
             if seed.rvs_lookup(callee.rvs_as_str()).is_some() {
                 continue;
             }
-            if let Some(caps) = inferred.get(callee) {
-                known.entry(callee.clone()).or_insert_with(|| caps.clone());
-            } else if let Some(caps) =
-                rvs_resolve_impl_majority_caps_M(callee, impl_index, inferred, callgraph)
+            if let Some(caps) =
+                rvs_resolve_callee_caps_M(callee, callgraph, seed, inferred, impl_index)
             {
                 known.entry(callee.clone()).or_insert(caps);
             } else {
@@ -275,6 +765,25 @@ pub(crate) fn rvs_collect_direct_external_deps(
         }
     }
     (known, unknown)
+}
+
+pub(crate) fn rvs_collect_graph_direct_external_deps(
+    graph: &FnGraph,
+    local_crate_prefixes: &BTreeSet<CrateName>,
+    seed: &capsmap::CapsMap,
+    inferred: &BTreeMap<DefPath, CapabilitySet>,
+    impl_index: &HashMap<String, Vec<DefPath>>,
+) -> (
+    BTreeMap<DefPath, CapabilitySet>,
+    BTreeMap<DefPath, BTreeSet<DefPath>>,
+) {
+    rvs_collect_direct_external_deps(
+        &graph.nodes,
+        local_crate_prefixes,
+        seed,
+        inferred,
+        impl_index,
+    )
 }
 
 #[cfg(test)]
@@ -292,8 +801,13 @@ mod tests {
         FnBehavior {
             calls: BTreeSet::new(),
             facts: CapabilityFacts::default(),
+            has_body: true,
             is_trait_impl: false,
             is_test: false,
+            sources: BTreeSet::new(),
+            is_synthetic: false,
+            expected_public_caps: None,
+            expected_name: None,
         }
     }
 
@@ -309,6 +823,1015 @@ mod tests {
             &format!("{result:?}"),
         );
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_20260704_infer_caps_propagates_deep_chain_to_fixed_point() {
+        let mut callgraph: BTreeMap<DefPath, FnBehavior> = BTreeMap::new();
+        for i in 0..=20 {
+            let mut node = rvs_make_behavior();
+            let callee = if i == 20 {
+                DefPath::from("std::fs::read_to_string")
+            } else {
+                DefPath::from(format!("demo::rvs_f{:02}", i + 1))
+            };
+            node.calls.insert(callee);
+            callgraph.insert(DefPath::from(format!("demo::rvs_f{i:02}")), node);
+        }
+        let seed = capsmap::CapsMap::rvs_parse("std::fs::read_to_string=BI").unwrap();
+
+        let result = rvs_infer_caps_M(&callgraph, &seed);
+        let top_caps = result
+            .get("demo::rvs_f00")
+            .expect("top function should be inferred");
+        let output = format!("top_caps={}\n", rvs_caps_to_string(top_caps));
+        rvs_snapshot_BIS(
+            "test_20260704_infer_caps_propagates_deep_chain_to_fixed_point",
+            &output,
+        );
+
+        assert!(top_caps.rvs_contains(Capability::B));
+        assert!(top_caps.rvs_contains(Capability::I));
+    }
+
+    #[test]
+    fn test_20260704_infer_caps_uses_absent_rvs_callee_suffix() {
+        let mut callgraph: BTreeMap<DefPath, FnBehavior> = BTreeMap::new();
+        let mut node = rvs_make_behavior();
+        node.calls.insert(DefPath::from("dep::rvs_write_BI"));
+        callgraph.insert(DefPath::from("demo::rvs_run"), node);
+        let seed = capsmap::CapsMap::rvs_new();
+
+        let inferred = rvs_infer_caps_M(&callgraph, &seed);
+        let impl_index = rvs_build_impl_index(&callgraph);
+        let (known, unknown) = rvs_collect_direct_external_deps(
+            &callgraph,
+            &BTreeSet::from([CrateName::from("demo")]),
+            &seed,
+            &inferred,
+            &impl_index,
+        );
+        let run_caps = inferred
+            .get("demo::rvs_run")
+            .expect("caller should be inferred");
+        let output = format!(
+            "run_caps={}\nknown={known:?}\nunknown={unknown:?}\n",
+            rvs_caps_to_string(run_caps),
+        );
+        rvs_snapshot_BIS(
+            "test_20260704_infer_caps_uses_absent_rvs_callee_suffix",
+            &output,
+        );
+
+        assert!(run_caps.rvs_contains(Capability::B));
+        assert!(run_caps.rvs_contains(Capability::I));
+        assert!(known.contains_key("dep::rvs_write_BI"));
+        assert!(unknown.is_empty());
+    }
+
+    #[test]
+    fn test_20260705_infer_caps_uses_known_caps_from_mixed_unknown_suffix() {
+        let mut callgraph: BTreeMap<DefPath, FnBehavior> = BTreeMap::new();
+        let mut caller = rvs_make_behavior();
+        caller.calls.insert(DefPath::from("dep::rvs_send_AEIS"));
+        callgraph.insert(DefPath::from("demo::rvs_run"), caller);
+        let inferred = rvs_infer_caps_M(&callgraph, &capsmap::CapsMap::rvs_new());
+        let caps = inferred
+            .get("demo::rvs_run")
+            .expect("caller should be inferred");
+        rvs_snapshot_BIS(
+            "test_20260705_infer_caps_uses_known_caps_from_mixed_unknown_suffix",
+            &format!("caps={}\n", rvs_caps_to_string(caps)),
+        );
+
+        assert!(caps.rvs_contains(Capability::I));
+        assert!(caps.rvs_contains(Capability::S));
+    }
+
+    #[test]
+    fn test_20260704_declared_caps_from_def_path_handles_trait_impl_suffix() {
+        let caps = rvs_declared_caps_from_def_path(&DefPath::from(
+            "demo::Adapter::rvs_fetch_BI@demo::ApiClient",
+        ))
+        .expect("rvs trait impl method should declare caps");
+        let none = rvs_declared_caps_from_def_path(&DefPath::from("demo::fetch"));
+        let unknown = rvs_declared_caps_from_def_path(&DefPath::from("demo::rvs_fetch_E"));
+        let output = format!("caps={}\nnone={none:?}\n", rvs_caps_to_string(&caps));
+        rvs_snapshot_BIS(
+            "test_20260704_declared_caps_from_def_path_handles_trait_impl_suffix",
+            &output,
+        );
+
+        assert!(caps.rvs_contains(Capability::B));
+        assert!(caps.rvs_contains(Capability::I));
+        assert!(none.is_none());
+        assert!(unknown.is_none());
+    }
+
+    #[test]
+    fn test_20260704_infer_caps_uses_impl_caps_for_bodyless_trait_decl() {
+        let mut callgraph: BTreeMap<DefPath, FnBehavior> = BTreeMap::new();
+
+        let mut caller = rvs_make_behavior();
+        caller
+            .calls
+            .insert(DefPath::from("demo::Fetcher::rvs_fetch"));
+        callgraph.insert(DefPath::from("demo::rvs_run"), caller);
+
+        callgraph.insert(
+            DefPath::from("demo::Fetcher::rvs_fetch"),
+            FnBehavior {
+                has_body: false,
+                ..rvs_make_behavior()
+            },
+        );
+
+        let mut impl_method = rvs_make_behavior();
+        impl_method
+            .calls
+            .insert(DefPath::from("std::fs::read_to_string"));
+        callgraph.insert(
+            DefPath::from("demo::DiskFetcher::rvs_fetch@demo::Fetcher"),
+            impl_method,
+        );
+
+        let seed = capsmap::CapsMap::rvs_parse("std::fs::read_to_string=BI").unwrap();
+        let inferred = rvs_infer_caps_M(&callgraph, &seed);
+        let run_caps = inferred
+            .get("demo::rvs_run")
+            .expect("caller should be inferred");
+        let decl_caps = inferred
+            .get("demo::Fetcher::rvs_fetch")
+            .expect("bodyless declaration should be inferred");
+        let output = format!("run_caps={}\n", rvs_caps_to_string(run_caps));
+        rvs_snapshot_BIS(
+            "test_20260704_infer_caps_uses_impl_caps_for_bodyless_trait_decl",
+            &output,
+        );
+
+        assert!(run_caps.rvs_contains(Capability::B));
+        assert!(run_caps.rvs_contains(Capability::I));
+        assert!(decl_caps.rvs_contains(Capability::B));
+        assert!(decl_caps.rvs_contains(Capability::I));
+    }
+
+    #[test]
+    fn test_20260706_local_trait_decl_suffix_loses_to_impl_vote() {
+        let mut callgraph: BTreeMap<DefPath, FnBehavior> = BTreeMap::new();
+
+        let mut caller = rvs_make_behavior();
+        caller
+            .calls
+            .insert(DefPath::from("demo::Fetcher::rvs_fetch_BI"));
+        callgraph.insert(DefPath::from("demo::rvs_run"), caller);
+
+        callgraph.insert(
+            DefPath::from("demo::Fetcher::rvs_fetch_BI"),
+            FnBehavior {
+                has_body: false,
+                ..rvs_make_behavior()
+            },
+        );
+        callgraph.insert(
+            DefPath::from("demo::MemoryFetcher::rvs_fetch_BI@demo::Fetcher"),
+            rvs_make_behavior(),
+        );
+
+        let inferred = rvs_infer_caps_M(&callgraph, &capsmap::CapsMap::rvs_new());
+        let run_caps = inferred
+            .get("demo::rvs_run")
+            .expect("caller should be inferred");
+        let decl_caps = inferred
+            .get("demo::Fetcher::rvs_fetch_BI")
+            .expect("bodyless declaration should be inferred");
+        rvs_snapshot_BIS(
+            "test_20260706_local_trait_decl_suffix_loses_to_impl_vote",
+            &format!(
+                "run={}\ndecl={}\n",
+                rvs_caps_to_string(run_caps),
+                rvs_caps_to_string(decl_caps)
+            ),
+        );
+
+        assert!(run_caps.rvs_is_empty());
+        assert!(decl_caps.rvs_is_empty());
+    }
+
+    #[test]
+    fn test_20260706_bodyless_trait_decl_keeps_signature_caps_with_impl_vote() {
+        let mut callgraph: BTreeMap<DefPath, FnBehavior> = BTreeMap::new();
+
+        let mut caller = rvs_make_behavior();
+        caller
+            .calls
+            .insert(DefPath::from("demo::Fetcher::rvs_fetch_A"));
+        callgraph.insert(DefPath::from("demo::rvs_run"), caller);
+
+        let mut trait_decl = rvs_make_behavior();
+        trait_decl.has_body = false;
+        trait_decl.facts.has_async = true;
+        callgraph.insert(DefPath::from("demo::Fetcher::rvs_fetch_A"), trait_decl);
+        callgraph.insert(
+            DefPath::from("demo::MemoryFetcher::rvs_fetch_A@demo::Fetcher"),
+            rvs_make_behavior(),
+        );
+
+        let inferred = rvs_infer_caps_M(&callgraph, &capsmap::CapsMap::rvs_new());
+        let run_caps = inferred
+            .get("demo::rvs_run")
+            .expect("caller should be inferred");
+        let decl_caps = inferred
+            .get("demo::Fetcher::rvs_fetch_A")
+            .expect("bodyless declaration should be inferred");
+        rvs_snapshot_BIS(
+            "test_20260706_bodyless_trait_decl_keeps_signature_caps_with_impl_vote",
+            &format!(
+                "run={}\ndecl={}\n",
+                rvs_caps_to_string(run_caps),
+                rvs_caps_to_string(decl_caps)
+            ),
+        );
+
+        assert!(run_caps.rvs_is_empty());
+        assert!(decl_caps.rvs_contains(Capability::A));
+    }
+
+    #[test]
+    fn test_20260705_bodyless_port_decl_stays_port_caps() {
+        let mut callgraph: BTreeMap<DefPath, FnBehavior> = BTreeMap::new();
+        let mut caller = rvs_make_behavior();
+        caller
+            .calls
+            .insert(DefPath::from("demo::ApiClient::rvs_fetch_P"));
+        callgraph.insert(DefPath::from("demo::rvs_run"), caller);
+
+        let mut trait_decl = rvs_make_behavior();
+        trait_decl.has_body = false;
+        trait_decl.facts.is_port_method = true;
+        callgraph.insert(DefPath::from("demo::ApiClient::rvs_fetch_P"), trait_decl);
+
+        let mut impl_method = rvs_make_behavior();
+        impl_method
+            .calls
+            .insert(DefPath::from("std::fs::read_to_string"));
+        callgraph.insert(
+            DefPath::from("demo::DiskClient::rvs_fetch_P@demo::ApiClient"),
+            impl_method,
+        );
+
+        let seed = capsmap::CapsMap::rvs_parse("std::fs::read_to_string=BI").unwrap();
+        let inferred = rvs_infer_caps_M(&callgraph, &seed);
+        let run_caps = inferred
+            .get("demo::rvs_run")
+            .expect("caller should be inferred");
+        let decl_caps = inferred
+            .get("demo::ApiClient::rvs_fetch_P")
+            .expect("trait declaration should be inferred");
+        rvs_snapshot_BIS(
+            "test_20260705_bodyless_port_decl_stays_port_caps",
+            &format!(
+                "run={}\ndecl={}\n",
+                rvs_caps_to_string(run_caps),
+                rvs_caps_to_string(decl_caps)
+            ),
+        );
+
+        assert!(run_caps.rvs_contains(Capability::P));
+        assert!(!run_caps.rvs_contains(Capability::B));
+        assert!(!run_caps.rvs_contains(Capability::I));
+        assert!(decl_caps.rvs_contains(Capability::P));
+    }
+
+    #[test]
+    fn test_20260705_port_method_caps_ignore_stale_capsmap() {
+        let mut callgraph: BTreeMap<DefPath, FnBehavior> = BTreeMap::new();
+        let mut caller = rvs_make_behavior();
+        caller
+            .calls
+            .insert(DefPath::from("demo::ApiClient::rvs_fetch_P"));
+        callgraph.insert(DefPath::from("demo::rvs_run"), caller);
+
+        let mut trait_decl = rvs_make_behavior();
+        trait_decl.has_body = false;
+        trait_decl.facts.is_port_method = true;
+        callgraph.insert(DefPath::from("demo::ApiClient::rvs_fetch_P"), trait_decl);
+
+        let seed = capsmap::CapsMap::rvs_parse("demo::ApiClient::rvs_fetch_P=BI\n").unwrap();
+        let inferred = rvs_infer_caps_M(&callgraph, &seed);
+        let run_caps = inferred
+            .get("demo::rvs_run")
+            .expect("caller should be inferred");
+        let decl_caps = inferred
+            .get("demo::ApiClient::rvs_fetch_P")
+            .expect("trait declaration should be inferred");
+        rvs_snapshot_BIS(
+            "test_20260705_port_method_caps_ignore_stale_capsmap",
+            &format!(
+                "run={}\ndecl={}\n",
+                rvs_caps_to_string(run_caps),
+                rvs_caps_to_string(decl_caps)
+            ),
+        );
+
+        assert!(run_caps.rvs_contains(Capability::P));
+        assert!(!run_caps.rvs_contains(Capability::B));
+        assert!(!run_caps.rvs_contains(Capability::I));
+        assert!(decl_caps.rvs_contains(Capability::P));
+        assert!(!decl_caps.rvs_contains(Capability::B));
+        assert!(!decl_caps.rvs_contains(Capability::I));
+    }
+
+    #[test]
+    fn test_20260704_resolve_callee_caps_prefers_impl_for_bodyless_decl() {
+        let mut callgraph: BTreeMap<DefPath, FnBehavior> = BTreeMap::new();
+        callgraph.insert(
+            DefPath::from("demo::Fetcher::rvs_fetch"),
+            FnBehavior {
+                has_body: false,
+                ..rvs_make_behavior()
+            },
+        );
+        callgraph.insert(
+            DefPath::from("demo::DiskFetcher::rvs_fetch@demo::Fetcher"),
+            rvs_make_behavior(),
+        );
+        let impl_index = rvs_build_impl_index(&callgraph);
+        let inferred = BTreeMap::from([
+            (
+                DefPath::from("demo::Fetcher::rvs_fetch"),
+                CapabilitySet::rvs_new(),
+            ),
+            (
+                DefPath::from("demo::DiskFetcher::rvs_fetch@demo::Fetcher"),
+                CapabilitySet::rvs_from_validated("BI"),
+            ),
+        ]);
+
+        let caps = rvs_resolve_callee_caps_M(
+            &DefPath::from("demo::Fetcher::rvs_fetch"),
+            &callgraph,
+            &capsmap::CapsMap::rvs_new(),
+            &inferred,
+            &impl_index,
+        )
+        .expect("bodyless declaration should resolve through impl aggregation");
+        let output = format!("caps={}\n", rvs_caps_to_string(&caps));
+        rvs_snapshot_BIS(
+            "test_20260704_resolve_callee_caps_prefers_impl_for_bodyless_decl",
+            &output,
+        );
+
+        assert!(caps.rvs_contains(Capability::B));
+        assert!(caps.rvs_contains(Capability::I));
+    }
+
+    #[test]
+    fn test_20260704_resolve_callee_caps_uses_declared_suffix_for_bodyless_decl_without_impl() {
+        let mut callgraph: BTreeMap<DefPath, FnBehavior> = BTreeMap::new();
+        callgraph.insert(
+            DefPath::from("demo::Fetcher::rvs_fetch_BI"),
+            FnBehavior {
+                has_body: false,
+                ..rvs_make_behavior()
+            },
+        );
+        let impl_index = rvs_build_impl_index(&callgraph);
+        let inferred = BTreeMap::from([(
+            DefPath::from("demo::Fetcher::rvs_fetch_BI"),
+            CapabilitySet::rvs_new(),
+        )]);
+
+        let caps = rvs_resolve_callee_caps_M(
+            &DefPath::from("demo::Fetcher::rvs_fetch_BI"),
+            &callgraph,
+            &capsmap::CapsMap::rvs_new(),
+            &inferred,
+            &impl_index,
+        )
+        .expect("bodyless declaration should use its declared suffix when no impls exist");
+        let output = format!("caps={}\n", rvs_caps_to_string(&caps));
+        rvs_snapshot_BIS(
+            "test_20260704_resolve_callee_caps_uses_declared_suffix_for_bodyless_decl_without_impl",
+            &output,
+        );
+
+        assert!(caps.rvs_contains(Capability::B));
+        assert!(caps.rvs_contains(Capability::I));
+    }
+
+    #[test]
+    fn test_20260703_infer_graph_sets_node_caps() {
+        let mut graph = FnGraph::rvs_new();
+        graph.rvs_insert_M(DefPath::from("demo::rvs_run"), rvs_make_behavior());
+        let seed = capsmap::CapsMap::rvs_new();
+
+        rvs_infer_graph_M(&mut graph, &seed);
+
+        let caps = graph
+            .rvs_get("demo::rvs_run")
+            .and_then(|node| node.expected_public_caps.clone());
+        rvs_snapshot_BIS(
+            "test_20260703_infer_graph_sets_node_caps",
+            &format!("caps={caps:?}\n"),
+        );
+
+        assert!(caps.is_some());
+    }
+
+    #[test]
+    fn test_20260704_infer_graph_prunes_stale_synthetic_nodes() {
+        let mut graph = FnGraph::rvs_new();
+        let mut run = rvs_make_behavior();
+        run.calls.insert(DefPath::from("std::fs::read_to_string"));
+        graph.rvs_insert_M(DefPath::from("demo::rvs_run"), run);
+        let seed = capsmap::CapsMap::rvs_parse("std::fs::read_to_string=BI").unwrap();
+        rvs_infer_graph_M(&mut graph, &seed);
+        assert!(graph.rvs_get("std::fs::read_to_string").is_some());
+
+        graph
+            .rvs_get_mut_M(&DefPath::from("demo::rvs_run"))
+            .expect("demo node should exist")
+            .calls
+            .clear();
+        rvs_infer_graph_M(&mut graph, &capsmap::CapsMap::rvs_new());
+
+        let has_synthetic = graph.rvs_get("std::fs::read_to_string").is_some();
+        let run_caps = graph
+            .rvs_get("demo::rvs_run")
+            .and_then(|node| node.expected_public_caps.clone())
+            .expect("demo node should keep expected caps");
+        let output = format!(
+            "has_synthetic={has_synthetic}\nrun_caps={}\n",
+            rvs_caps_to_string(&run_caps),
+        );
+        rvs_snapshot_BIS(
+            "test_20260704_infer_graph_prunes_stale_synthetic_nodes",
+            &output,
+        );
+
+        assert!(!has_synthetic);
+        assert!(run_caps.rvs_is_empty());
+    }
+
+    #[test]
+    fn test_20260703_project_expected_local_names_sets_expected_name() {
+        let mut graph = FnGraph::rvs_new();
+        let mut node = rvs_make_behavior();
+        node.rvs_set_expected_public_caps_M(CapabilitySet::rvs_from_validated("BI"));
+        graph.rvs_insert_M(DefPath::from("demo::parse"), node);
+
+        rvs_project_expected_local_names_M(&mut graph, &BTreeSet::from([CrateName::from("demo")]));
+
+        let expected_name = graph
+            .rvs_get("demo::parse")
+            .and_then(|node| node.expected_name.as_ref())
+            .map(FnName::rvs_as_str)
+            .unwrap_or("");
+        rvs_snapshot_BIS(
+            "test_20260703_project_expected_local_names_sets_expected_name",
+            &format!("expected_name={expected_name}\n"),
+        );
+
+        assert_eq!(expected_name, "rvs_parse_BI");
+    }
+
+    #[test]
+    fn test_20260704_project_expected_local_names_preserves_pure_suffix_like_name() {
+        let mut graph = FnGraph::rvs_new();
+        let mut node = rvs_make_behavior();
+        node.rvs_set_expected_public_caps_M(CapabilitySet::rvs_new());
+        graph.rvs_insert_M(DefPath::from("demo::parse_BI"), node);
+
+        rvs_project_expected_local_names_M(&mut graph, &BTreeSet::from([CrateName::from("demo")]));
+
+        let expected_name = graph
+            .rvs_get("demo::parse_BI")
+            .and_then(|node| node.expected_name.as_ref())
+            .map(FnName::rvs_as_str)
+            .unwrap_or("");
+        rvs_snapshot_BIS(
+            "test_20260704_project_expected_local_names_preserves_pure_suffix_like_name",
+            &format!("expected_name={expected_name}\n"),
+        );
+
+        assert_eq!(expected_name, "rvs_parse_BI");
+    }
+
+    #[test]
+    fn test_20260704_contract_base_name_strips_rvs_and_suffix_like_names() {
+        let cases = [
+            ("rvs_parse_BI", "BI", "parse"),
+            ("parse_BI", "BI", "parse"),
+            ("parse_BI", "", "parse_BI"),
+            ("fetch_BI", "P", "fetch"),
+            ("parse_JSON", "", "parse_JSON"),
+            ("parse", "", "parse"),
+            ("parse_json", "", "parse_json"),
+        ];
+        let output = cases
+            .iter()
+            .map(|(input, caps, _)| {
+                format!("{input}/{caps} -> {}", rvs_contract_base_name(input, caps))
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        rvs_snapshot_BIS(
+            "test_20260704_contract_base_name_strips_rvs_and_suffix_like_names",
+            &output,
+        );
+
+        for (input, caps, expected) in cases {
+            assert_eq!(rvs_contract_base_name(input, caps), expected);
+        }
+    }
+
+    #[test]
+    fn test_20260704_project_expected_local_names_flags_non_lowercase_names() {
+        let mut graph = FnGraph::rvs_new();
+        for name in ["demo::Foo", "demo::_helper"] {
+            let mut node = rvs_make_behavior();
+            node.rvs_set_expected_public_caps_M(CapabilitySet::rvs_new());
+            graph.rvs_insert_M(DefPath::from(name), node);
+        }
+
+        let diffs = rvs_collect_local_contract_diffs_M(
+            &mut graph,
+            &capsmap::CapsMap::rvs_new(),
+            &BTreeSet::from([CrateName::from("demo")]),
+        );
+        let output = diffs
+            .iter()
+            .map(|diff| {
+                format!(
+                    "{} -> {:?} {:?}",
+                    diff.actual_name,
+                    diff.expected_name,
+                    diff.rvs_mismatch_kinds(),
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        rvs_snapshot_BIS(
+            "test_20260704_project_expected_local_names_flags_non_lowercase_names",
+            &output,
+        );
+
+        assert!(diffs.iter().any(|diff| {
+            diff.actual_name.rvs_as_str() == "Foo"
+                && diff
+                    .expected_name
+                    .as_ref()
+                    .is_some_and(|name| name.rvs_as_str() == "rvs_Foo")
+                && diff.rvs_missing_rvs_prefix()
+        }));
+        assert!(diffs.iter().any(|diff| {
+            diff.actual_name.rvs_as_str() == "_helper"
+                && diff
+                    .expected_name
+                    .as_ref()
+                    .is_some_and(|name| name.rvs_as_str() == "rvs__helper")
+                && diff.rvs_missing_rvs_prefix()
+        }));
+    }
+
+    #[test]
+    fn test_20260703_collect_local_contract_diffs_updates_existing_rvs_suffix() {
+        let mut graph = FnGraph::rvs_new();
+        graph.rvs_insert_M(
+            DefPath::from("demo::rvs_fetch_ABI"),
+            FnNode {
+                calls: BTreeSet::new(),
+                facts: CapabilityFacts {
+                    is_port_method: true,
+                    ..CapabilityFacts::default()
+                },
+                has_body: true,
+                is_trait_impl: false,
+                is_test: false,
+                sources: BTreeSet::new(),
+                is_synthetic: false,
+                expected_public_caps: None,
+                expected_name: None,
+            },
+        );
+
+        let diffs = rvs_collect_local_contract_diffs_M(
+            &mut graph,
+            &capsmap::CapsMap::rvs_new(),
+            &BTreeSet::from([CrateName::from("demo")]),
+        );
+        let diff = diffs.first().expect("expected one local contract diff");
+        rvs_snapshot_BIS(
+            "test_20260703_collect_local_contract_diffs_updates_existing_rvs_suffix",
+            &format!(
+                "diff={diff:?}\nnode={:?}\n",
+                graph.rvs_get("demo::rvs_fetch_ABI")
+            ),
+        );
+
+        assert_eq!(
+            diff.expected_name.as_ref().map(FnName::rvs_as_str),
+            Some("rvs_fetch_P")
+        );
+        assert!(diff.rvs_has_name_mismatch());
+    }
+
+    #[test]
+    fn test_20260706_local_trait_decl_expected_name_uses_impl_vote() {
+        let mut graph = FnGraph::rvs_new();
+        graph.rvs_insert_M(
+            DefPath::from("demo::Fetcher::rvs_fetch_BI"),
+            FnNode {
+                calls: BTreeSet::new(),
+                facts: CapabilityFacts::default(),
+                has_body: false,
+                is_trait_impl: false,
+                is_test: false,
+                sources: BTreeSet::new(),
+                is_synthetic: false,
+                expected_public_caps: None,
+                expected_name: None,
+            },
+        );
+        graph.rvs_insert_M(
+            DefPath::from("demo::MemoryFetcher::rvs_fetch_BI@demo::Fetcher"),
+            FnNode::default(),
+        );
+
+        let diffs = rvs_collect_local_contract_diffs_M(
+            &mut graph,
+            &capsmap::CapsMap::rvs_new(),
+            &BTreeSet::from([CrateName::from("demo")]),
+        );
+        let diff = diffs.first().expect("expected trait declaration diff");
+        rvs_snapshot_BIS(
+            "test_20260706_local_trait_decl_expected_name_uses_impl_vote",
+            &format!(
+                "actual={}\nexpected={:?}\ncaps={:?}\n",
+                diff.actual_name, diff.expected_name, diff.expected_public_caps
+            ),
+        );
+
+        assert_eq!(
+            diff.expected_name.as_ref().map(FnName::rvs_as_str),
+            Some("rvs_fetch")
+        );
+        assert!(
+            diff.expected_public_caps
+                .as_ref()
+                .is_some_and(CapabilitySet::rvs_is_empty)
+        );
+    }
+
+    #[test]
+    fn test_20260703_collect_contract_diffs_reports_name_and_caps_mismatch() {
+        let mut graph = FnGraph::rvs_new();
+        let mut node = rvs_make_behavior();
+        node.rvs_set_expected_public_caps_M(CapabilitySet::rvs_from_validated("P"));
+        node.rvs_set_expected_name_M(FnName::from("rvs_fetch_P"));
+        graph.rvs_insert_M(DefPath::from("demo::rvs_fetch_ABI"), node);
+
+        let diffs = rvs_collect_contract_diffs(&graph, &BTreeSet::from([CrateName::from("demo")]));
+        let diff = diffs.first().expect("expected one contract diff");
+        rvs_snapshot_BIS(
+            "test_20260703_collect_contract_diffs_reports_name_and_caps_mismatch",
+            &format!("diff={diff:?}\n"),
+        );
+
+        assert_eq!(diff.actual_name.rvs_as_str(), "rvs_fetch_ABI");
+        assert!(diff.rvs_has_name_mismatch());
+        assert_eq!(
+            diff.expected_public_caps.as_ref(),
+            Some(&CapabilitySet::rvs_from_validated("P"))
+        );
+        assert_eq!(
+            diff.declared_public_caps.as_ref(),
+            Some(&CapabilitySet::rvs_from_validated("ABI"))
+        );
+    }
+
+    #[test]
+    fn test_20260703_collect_contract_diffs_reads_trait_impl_method_name() {
+        let mut graph = FnGraph::rvs_new();
+        let mut node = rvs_make_behavior();
+        node.rvs_set_expected_public_caps_M(CapabilitySet::rvs_from_validated("P"));
+        graph.rvs_insert_M(
+            DefPath::from("demo::Adapter::rvs_fetch_BI@demo::Client"),
+            node,
+        );
+
+        let diffs = rvs_collect_contract_diffs(&graph, &BTreeSet::from([CrateName::from("demo")]));
+        let diff = diffs.first().expect("expected trait impl contract diff");
+        rvs_snapshot_BIS(
+            "test_20260703_collect_contract_diffs_reads_trait_impl_method_name",
+            &format!("diff={diff:?}\n"),
+        );
+
+        assert_eq!(diff.actual_name.rvs_as_str(), "rvs_fetch_BI");
+        assert_eq!(
+            diff.declared_public_caps.as_ref(),
+            Some(&CapabilitySet::rvs_from_validated("BI"))
+        );
+    }
+
+    #[test]
+    fn test_20260703_collect_local_contract_diffs_populates_expected_fields() {
+        let mut graph = FnGraph::rvs_new();
+        graph.rvs_insert_M(DefPath::from("demo::parse"), rvs_make_behavior());
+        let seed = capsmap::CapsMap::rvs_new();
+
+        let diffs = rvs_collect_local_contract_diffs_M(
+            &mut graph,
+            &seed,
+            &BTreeSet::from([CrateName::from("demo")]),
+        );
+        let diff = diffs.first().expect("expected one local contract diff");
+        rvs_snapshot_BIS(
+            "test_20260703_collect_local_contract_diffs_populates_expected_fields",
+            &format!("diff={diff:?}\nnode={:?}\n", graph.rvs_get("demo::parse")),
+        );
+
+        assert_eq!(
+            diff.expected_name.as_ref().map(FnName::rvs_as_str),
+            Some("rvs_parse")
+        );
+        assert_eq!(
+            graph
+                .rvs_get("demo::parse")
+                .and_then(|node| node.expected_name.as_ref())
+                .map(FnName::rvs_as_str),
+            Some("rvs_parse")
+        );
+        assert_eq!(
+            graph
+                .rvs_get("demo::parse")
+                .and_then(|node| node.expected_public_caps.as_ref()),
+            Some(&CapabilitySet::rvs_new())
+        );
+    }
+
+    #[test]
+    fn test_20260703_enforced_contract_diffs_skip_synthetic_nodes() {
+        let mut graph = FnGraph::rvs_new();
+        let mut caller = rvs_make_behavior();
+        caller.calls.insert(DefPath::from("demo::rvs_generated_BI"));
+        graph.rvs_insert_M(DefPath::from("demo::rvs_run"), caller);
+        let diffs = rvs_collect_local_contract_diffs_M(
+            &mut graph,
+            &capsmap::CapsMap::rvs_parse("demo::rvs_generated_BI=BI").unwrap(),
+            &BTreeSet::from([CrateName::from("demo")]),
+        );
+        let enforced = rvs_collect_enforced_contract_diffs(
+            &graph,
+            &diffs,
+            &BTreeSet::from([CrateName::from("demo")]),
+        );
+        let synthetic_diff = diffs
+            .iter()
+            .find(|diff| diff.def_path.rvs_as_str() == "demo::rvs_generated_BI")
+            .expect("synthetic local callee should have a raw diff");
+        let synthetic = graph
+            .rvs_get("demo::rvs_generated_BI")
+            .expect("seeded local callee should be represented for why output");
+        rvs_snapshot_BIS(
+            "test_20260703_enforced_contract_diffs_skip_synthetic_nodes",
+            &format!(
+                "synthetic={}\nraw={}\nenforced={enforced:?}\n",
+                synthetic.is_synthetic,
+                diffs.len(),
+            ),
+        );
+
+        assert!(synthetic.is_synthetic);
+        assert!(!rvs_contract_diff_is_enforced(
+            &graph,
+            synthetic_diff,
+            &BTreeSet::from([CrateName::from("demo")])
+        ));
+        assert!(
+            !enforced
+                .iter()
+                .any(|diff| diff.def_path.rvs_as_str() == "demo::rvs_generated_BI")
+        );
+    }
+
+    #[test]
+    fn test_20260703_collect_single_local_contract_diff_port_ignores_async() {
+        let node = FnNode {
+            calls: BTreeSet::new(),
+            facts: CapabilityFacts {
+                has_async: true,
+                is_port_method: true,
+                ..CapabilityFacts::default()
+            },
+            has_body: true,
+            is_trait_impl: false,
+            is_test: false,
+            sources: BTreeSet::new(),
+            is_synthetic: false,
+            expected_public_caps: None,
+            expected_name: None,
+        };
+        let diff = rvs_collect_single_local_contract_diff_M(
+            DefPath::from("demo::rvs_fetch_P"),
+            node,
+            &BTreeSet::from([CrateName::from("demo")]),
+        );
+        rvs_snapshot_BIS(
+            "test_20260703_collect_single_local_contract_diff_port_ignores_async",
+            &format!("diff={diff:?}\n"),
+        );
+
+        assert_eq!(
+            diff.expected_public_caps.as_ref(),
+            Some(&CapabilitySet::rvs_from_validated("P"))
+        );
+        assert_eq!(
+            diff.declared_public_caps.as_ref(),
+            Some(&CapabilitySet::rvs_from_validated("P"))
+        );
+    }
+
+    #[test]
+    fn test_20260703_collect_signature_contract_diff_from_facts() {
+        let diff = rvs_collect_signature_contract_diff_from_facts_M(
+            DefPath::from("demo::rvs_fetch_P"),
+            CapabilityFacts {
+                has_async: true,
+                is_port_method: true,
+                ..CapabilityFacts::default()
+            },
+            &BTreeSet::from([CrateName::from("demo")]),
+        );
+        rvs_snapshot_BIS(
+            "test_20260703_collect_signature_contract_diff_from_facts",
+            &format!("diff={diff:?}\n"),
+        );
+
+        assert_eq!(
+            diff.expected_public_caps.as_ref(),
+            Some(&CapabilitySet::rvs_from_validated("P"))
+        );
+        assert_eq!(
+            diff.declared_public_caps.as_ref(),
+            Some(&CapabilitySet::rvs_from_validated("P"))
+        );
+    }
+
+    #[test]
+    fn test_20260703_summarize_contract_mismatches() {
+        let diffs = vec![
+            FnContractDiff {
+                def_path: DefPath::from("demo::parse"),
+                actual_name: FnName::from("parse"),
+                expected_name: Some(FnName::from("rvs_parse")),
+                declared_public_caps: None,
+                expected_public_caps: Some(CapabilitySet::rvs_new()),
+            },
+            FnContractDiff {
+                def_path: DefPath::from("demo::rvs_fetch_BI"),
+                actual_name: FnName::from("rvs_fetch_BI"),
+                expected_name: Some(FnName::from("rvs_fetch_P")),
+                declared_public_caps: Some(CapabilitySet::rvs_from_validated("BI")),
+                expected_public_caps: Some(CapabilitySet::rvs_from_validated("AP")),
+            },
+        ];
+        let counts = rvs_summarize_contract_mismatches(&diffs);
+        rvs_snapshot_BIS(
+            "test_20260703_summarize_contract_mismatches",
+            &format!("counts={counts:?}\n"),
+        );
+
+        assert_eq!(
+            counts.get(&FnContractMismatchKind::MissingRvsPrefix),
+            Some(&1)
+        );
+        assert_eq!(counts.get(&FnContractMismatchKind::NameMismatch), Some(&1));
+        assert_eq!(counts.get(&FnContractMismatchKind::MissingPort), Some(&1));
+    }
+
+    #[test]
+    fn test_20260703_collect_contract_mismatch_items() {
+        let diffs = vec![FnContractDiff {
+            def_path: DefPath::from("demo::rvs_fetch_BI"),
+            actual_name: FnName::from("rvs_fetch_BI"),
+            expected_name: Some(FnName::from("rvs_fetch_P")),
+            declared_public_caps: Some(CapabilitySet::rvs_from_validated("BI")),
+            expected_public_caps: Some(CapabilitySet::rvs_from_validated("AP")),
+        }];
+        let items = rvs_collect_contract_mismatch_items(&diffs);
+        rvs_snapshot_BIS(
+            "test_20260703_collect_contract_mismatch_items",
+            &format!("items={items:?}\n"),
+        );
+
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0].kind, FnContractMismatchKind::NameMismatch);
+        assert_eq!(items[1].kind, FnContractMismatchKind::MissingAsync);
+        assert_eq!(items[2].kind, FnContractMismatchKind::MissingPort);
+    }
+
+    #[test]
+    fn test_20260703_contract_diff_missing_rvs_prefix() {
+        let diff = FnContractDiff {
+            def_path: DefPath::from("demo::parse"),
+            actual_name: FnName::from("parse"),
+            expected_name: Some(FnName::from("rvs_parse")),
+            declared_public_caps: None,
+            expected_public_caps: Some(CapabilitySet::rvs_new()),
+        };
+        rvs_snapshot_BIS(
+            "test_20260703_contract_diff_missing_rvs_prefix",
+            &format!("missing={}\n", diff.rvs_missing_rvs_prefix()),
+        );
+
+        assert!(diff.rvs_missing_rvs_prefix());
+    }
+
+    #[test]
+    fn test_20260703_contract_diff_mismatch_kinds() {
+        let diff = FnContractDiff {
+            def_path: DefPath::from("demo::rvs_fetch_BI"),
+            actual_name: FnName::from("rvs_fetch_BI"),
+            expected_name: Some(FnName::from("rvs_fetch_P")),
+            declared_public_caps: Some(CapabilitySet::rvs_from_validated("BI")),
+            expected_public_caps: Some(CapabilitySet::rvs_from_validated("AP")),
+        };
+        let mismatches = diff.rvs_mismatch_kinds();
+        rvs_snapshot_BIS(
+            "test_20260703_contract_diff_mismatch_kinds",
+            &format!("mismatches={mismatches:?}\n"),
+        );
+
+        assert!(mismatches.contains(&FnContractMismatchKind::NameMismatch));
+        assert!(mismatches.contains(&FnContractMismatchKind::MissingAsync));
+        assert!(mismatches.contains(&FnContractMismatchKind::MissingPort));
+        assert!(!mismatches.contains(&FnContractMismatchKind::MissingRvsPrefix));
+        assert_eq!(
+            FnContractMismatchKind::MissingAsync.rvs_as_str(),
+            "missing_async"
+        );
+    }
+
+    #[test]
+    fn test_20260703_graph_impl_wrapper_helpers() {
+        let mut graph = FnGraph::rvs_new();
+
+        let mut impl_a = rvs_make_behavior();
+        impl_a.calls.insert("std::fs::read_to_string".into());
+        graph.rvs_insert_M("demo::Reader::read@std::io::Read".into(), impl_a);
+
+        let mut impl_b = rvs_make_behavior();
+        impl_b.calls.insert("std::fs::read_to_string".into());
+        graph.rvs_insert_M("demo::Buffer::read@std::io::Read".into(), impl_b);
+
+        let inferred = rvs_infer_graph_caps(
+            &graph,
+            &capsmap::CapsMap::rvs_parse("std::fs::read_to_string=BI").unwrap(),
+        );
+        let impl_index = rvs_build_graph_impl_index(&graph);
+        let alias = DefPath::from("std::io::Read::read");
+        let resolved =
+            rvs_resolve_graph_impl_majority_caps_M(&alias, &impl_index, &inferred, &graph)
+                .expect("graph wrapper should resolve majority caps");
+        let aliases = rvs_generate_graph_trait_aliases_MP(&inferred, &impl_index, &graph);
+
+        rvs_snapshot_BIS(
+            "test_20260703_graph_impl_wrapper_helpers",
+            &format!("resolved={resolved:?}\naliases={aliases:?}\n"),
+        );
+
+        assert!(resolved.rvs_contains(Capability::B));
+        assert!(resolved.rvs_contains(Capability::I));
+        assert!(aliases.contains_key(&alias));
+    }
+
+    #[test]
+    fn test_20260703_collect_graph_external_dep_wrappers() {
+        let mut graph = FnGraph::rvs_new();
+        let mut local = rvs_make_behavior();
+        local.calls.insert("std::fs::write".into());
+        graph.rvs_insert_M("demo::rvs_run".into(), local);
+
+        let local_prefixes = BTreeSet::from([CrateName::from("demo")]);
+        let seed = capsmap::CapsMap::rvs_parse("std::fs::write=BI").unwrap();
+        let inferred = rvs_infer_graph_caps(&graph, &seed);
+        let impl_index = rvs_build_graph_impl_index(&graph);
+        let (known, unknown) = rvs_collect_graph_direct_external_deps(
+            &graph,
+            &local_prefixes,
+            &seed,
+            &inferred,
+            &impl_index,
+        );
+
+        rvs_snapshot_BIS(
+            "test_20260703_collect_graph_external_dep_wrappers",
+            &format!("known={known:?}\nunknown={unknown:?}\n"),
+        );
+
+        assert!(known.is_empty());
+        assert!(unknown.is_empty());
     }
 
     #[test]
@@ -867,6 +2390,48 @@ mod tests {
         let caps = known
             .get("some_external_crate::known_fn")
             .expect("should have entry in known");
+        assert!(caps.rvs_contains(Capability::B));
+        assert!(caps.rvs_contains(Capability::I));
+        assert!(unknown.is_empty());
+    }
+
+    #[test]
+    fn test_20260704_collect_direct_external_deps_uses_resolver_for_bodyless_decl() {
+        let mut callgraph: BTreeMap<DefPath, FnBehavior> = BTreeMap::new();
+        let mut caller = rvs_make_behavior();
+        caller
+            .calls
+            .insert(DefPath::from("dep::Fetcher::rvs_fetch_BI"));
+        callgraph.insert(DefPath::from("my_crate::rvs_run"), caller);
+        callgraph.insert(
+            DefPath::from("dep::Fetcher::rvs_fetch_BI"),
+            FnBehavior {
+                has_body: false,
+                ..rvs_make_behavior()
+            },
+        );
+        let inferred = BTreeMap::from([(
+            DefPath::from("dep::Fetcher::rvs_fetch_BI"),
+            CapabilitySet::rvs_new(),
+        )]);
+        let local_prefixes = BTreeSet::from([CrateName::from("my_crate")]);
+
+        let (known, unknown) = rvs_collect_direct_external_deps(
+            &callgraph,
+            &local_prefixes,
+            &capsmap::CapsMap::rvs_new(),
+            &inferred,
+            &rvs_build_impl_index(&callgraph),
+        );
+        let caps = known
+            .get("dep::Fetcher::rvs_fetch_BI")
+            .expect("external declaration should be known from declared suffix");
+        let output = format!("caps={}\nunknown={unknown:?}\n", rvs_caps_to_string(caps),);
+        rvs_snapshot_BIS(
+            "test_20260704_collect_direct_external_deps_uses_resolver_for_bodyless_decl",
+            &output,
+        );
+
         assert!(caps.rvs_contains(Capability::B));
         assert!(caps.rvs_contains(Capability::I));
         assert!(unknown.is_empty());

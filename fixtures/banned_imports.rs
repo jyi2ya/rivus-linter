@@ -1,5 +1,5 @@
 //! 测试 banned import 检测。
-//! 应检测 anyhow, eyre, color_eyre 等被禁 crate。
+//! 应检测 anyhow, eyre, color_eyre, thiserror 等被禁 crate。
 
 #![allow(dead_code)]
 #![allow(unused_imports)]
@@ -9,10 +9,10 @@ use anyhow::Result;
 use anyhow::{Error, Context};
 use eyre::Report;
 use color_eyre::eyre::Result as EyreResult;
+use thiserror::Error;
 
 // 这些应该没问题
 use std::collections::HashMap;
-use thiserror::Error;
 
 pub fn rvs_good_function_ABI() -> anyhow::Result<()> {
     // 使用被禁 crate 应该被检测

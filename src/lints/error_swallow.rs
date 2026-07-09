@@ -14,7 +14,7 @@ pub(crate) fn rvs_check_fn_MS<'tcx>(cx: &LateContext<'tcx>, body: &Body<'tcx>) {
                 cx.emit_span_lint(
                     RVS_ERROR_SWALLOW,
                     e.span,
-                    Msg::new(e.span, format!(".{n}() swallows errors")),
+                    Msg::rvs_new(e.span, format!(".{n}() swallows errors")),
                 );
             }
         }

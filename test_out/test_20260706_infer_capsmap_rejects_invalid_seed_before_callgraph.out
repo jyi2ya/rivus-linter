@@ -1,0 +1,2 @@
+result=Err("caps: $TMP/caps/seed: line 1: invalid capability string 'Z' for 'demo'")
+callgraph_exists=false

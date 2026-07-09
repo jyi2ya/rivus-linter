@@ -1,0 +1,1 @@
+Err("std callgraph cache must be a directory: $TMP/target/rivus-callgraph-std")

@@ -44,7 +44,7 @@ pub(crate) fn rvs_check_fn_MS<'tcx>(cx: &LateContext<'tcx>, body: &Body<'tcx>) {
             cx.emit_span_lint(
                 RVS_MISSING_DEBUG_ASSERT,
                 body.value.span,
-                Msg::new(
+                Msg::rvs_new(
                     body.value.span,
                     format!("param '{p}' missing debug_assert!"),
                 ),

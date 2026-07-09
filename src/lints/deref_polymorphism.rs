@@ -17,7 +17,7 @@ pub(crate) fn rvs_check_impl_S<'tcx>(
                 cx.emit_span_lint(
                     RVS_INTO_IMPL,
                     item.span,
-                    Msg::new(
+                    Msg::rvs_new(
                         item.span,
                         "impl Into — implement From instead (Into is auto-provided)",
                     ),
@@ -27,7 +27,7 @@ pub(crate) fn rvs_check_impl_S<'tcx>(
                 cx.emit_span_lint(
                     RVS_DEREF_POLYMORPHISM,
                     item.span,
-                    Msg::new(
+                    Msg::rvs_new(
                         item.span,
                         "impl Deref — use composition instead of Deref polymorphism",
                     ),

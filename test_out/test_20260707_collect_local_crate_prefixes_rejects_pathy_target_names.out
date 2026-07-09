@@ -1,0 +1,4 @@
+package=Err("[package].name must be a crate name, not a path")
+lib=Err("[lib].name must be a crate name, not a path")
+helper=Err("demo must be a crate name, not a path")
+len=0

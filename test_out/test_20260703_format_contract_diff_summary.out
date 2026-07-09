@@ -1,0 +1,7 @@
+expected name: rvs_fetch_P
+declared caps: ABI
+expected caps: AP
+missing caps: P
+extra declared caps: BI
+mismatches: name_mismatch, missing_port
+none=(not declared)

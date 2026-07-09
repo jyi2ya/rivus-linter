@@ -21,7 +21,7 @@ pub(crate) fn rvs_check_fn_params_S<'tcx>(cx: &LateContext<'_>, sig: &rustc_hir:
                         cx.emit_span_lint(
                             RVS_BORROWED_PARAM,
                             input.span,
-                            Msg::new(input.span, format!("&{name} — use {better} instead")),
+                            Msg::rvs_new(input.span, format!("&{name} — use {better} instead")),
                         );
                     }
                 }
@@ -46,7 +46,10 @@ pub(crate) fn rvs_check_borrowed_fields_S<'tcx>(cx: &LateContext<'_>, fields: &[
                         cx.emit_span_lint(
                             RVS_BORROWED_PARAM,
                             f.ty.span,
-                            Msg::new(f.ty.span, format!("&{name} field — use {better} instead")),
+                            Msg::rvs_new(
+                                f.ty.span,
+                                format!("&{name} field — use {better} instead"),
+                            ),
                         );
                     }
                 }

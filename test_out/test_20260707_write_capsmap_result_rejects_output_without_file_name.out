@@ -1,0 +1,2 @@
+result=Err("std capsmap output path must name a file: ")
+default_exists=false

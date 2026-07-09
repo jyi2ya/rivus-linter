@@ -1,0 +1,2 @@
+result=Err("rust-analyzer produced edit outside project root: $PROJECT/src/lib.rs resolves to $OUTSIDE/lib.rs")
+after=pub fn rvs_escape() {}

@@ -1,11 +1,15 @@
-use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+
+use std::path::PathBuf;
 
 use rustc_hir::{Body, ExprKind, HirId, Mutability, def::DefKind};
 use rustc_lint::LateContext;
+use rustc_span::{FileName, Ident};
 
-use super::utils::{rvs_def_path, rvs_has_attr, rvs_has_mutable_params, rvs_walk_closures};
-use crate::artifacts::FnBehavior;
+use super::utils::{
+    rvs_def_path, rvs_has_mutable_params, rvs_static_is_thread_local, rvs_walk_closures,
+};
+use crate::artifacts::{FnGraph, FnNode, FnSource};
 use crate::capability::CapabilityFacts;
 use crate::symbols::DefPath;
 
@@ -14,9 +18,10 @@ use crate::symbols::DefPath;
     reason = "callgraph collection needs full fn metadata to avoid extra wrapper structs"
 )]
 pub(crate) fn rvs_collect_callgraph_for_item_M<'tcx>(
-    callgraph: &mut BTreeMap<DefPath, FnBehavior>,
+    callgraph: &mut FnGraph,
     cx: &LateContext<'tcx>,
     hir_id: HirId,
+    ident: Ident,
     sig: &rustc_hir::FnSig<'tcx>,
     body: &Body<'tcx>,
     is_trait_impl: bool,
@@ -26,6 +31,7 @@ pub(crate) fn rvs_collect_callgraph_for_item_M<'tcx>(
     let local_def_id = hir_id.owner.def_id;
     let def_id = local_def_id.to_def_id();
     let caller_path = DefPath::rvs_new(rvs_def_path(cx, def_id));
+    let sources = rvs_fn_source(cx, ident).into_iter().collect();
 
     let mut calls: BTreeSet<DefPath> = BTreeSet::new();
     let mut has_static_ref = false;
@@ -36,18 +42,12 @@ pub(crate) fn rvs_collect_callgraph_for_item_M<'tcx>(
         if let ExprKind::Path(ref q) = e.kind {
             if let rustc_hir::def::Res::Def(kind, did) = cx.qpath_res(q, e.hir_id) {
                 if let DefKind::Static { mutability, .. } = kind {
+                    if rvs_static_is_thread_local(cx, did) {
+                        has_thread_local_ref = true;
+                    }
                     match mutability {
                         Mutability::Mut => has_static_mut_ref = true,
-                        Mutability::Not => {
-                            if let Some(local_did) = did.as_local() {
-                                let owner_id = rustc_hir::OwnerId { def_id: local_did };
-                                let attrs = cx.tcx.hir_attrs(rustc_hir::HirId::from(owner_id));
-                                if rvs_has_attr(attrs, "thread_local") {
-                                    has_thread_local_ref = true;
-                                }
-                            }
-                            has_static_ref = true;
-                        }
+                        Mutability::Not => has_static_ref = true,
                     }
                 }
             }
@@ -58,7 +58,7 @@ pub(crate) fn rvs_collect_callgraph_for_item_M<'tcx>(
         ExprKind::Call(func, _) => {
             if let ExprKind::Path(ref q) = func.kind {
                 if let rustc_hir::def::Res::Def(k, did) = cx.qpath_res(q, func.hir_id) {
-                    if matches!(k, DefKind::Fn | DefKind::AssocFn | DefKind::Variant) {
+                    if matches!(k, DefKind::Fn | DefKind::AssocFn) {
                         calls.insert(DefPath::rvs_new(rvs_def_path(cx, did)));
                     }
                 }
@@ -87,23 +87,29 @@ pub(crate) fn rvs_collect_callgraph_for_item_M<'tcx>(
         CapabilityFacts::rvs_from_signature(sig, rvs_has_mutable_params(sig), is_port_method)
             .rvs_with_static_refs(has_static_ref, has_static_mut_ref, has_thread_local_ref);
 
-    let entry = callgraph.entry(caller_path).or_insert_with(|| FnBehavior {
-        calls: BTreeSet::new(),
-        facts,
-        is_trait_impl,
-        is_test,
-    });
-    for callee in calls {
-        entry.calls.insert(callee);
-    }
+    callgraph.rvs_merge_node_M(
+        caller_path,
+        FnNode {
+            calls,
+            facts,
+            has_body: true,
+            is_trait_impl,
+            is_test,
+            sources,
+            is_synthetic: false,
+            expected_public_caps: None,
+            expected_name: None,
+        },
+    );
 }
 
 /// Collect callgraph entry from a signature alone (no body — e.g. trait method
 /// declarations without default implementation).
 pub(crate) fn rvs_collect_callgraph_for_signature_M(
-    callgraph: &mut BTreeMap<DefPath, FnBehavior>,
+    callgraph: &mut FnGraph,
     cx: &LateContext<'_>,
     hir_id: HirId,
+    ident: Ident,
     sig: &rustc_hir::FnSig<'_>,
     is_trait_impl: bool,
     is_port_method: bool,
@@ -111,6 +117,7 @@ pub(crate) fn rvs_collect_callgraph_for_signature_M(
     let local_def_id = hir_id.owner.def_id;
     let def_id = local_def_id.to_def_id();
     let caller_path = DefPath::rvs_new(rvs_def_path(cx, def_id));
+    let sources = rvs_fn_source(cx, ident).into_iter().collect();
 
     let facts = CapabilityFacts::rvs_from_signature(
         sig,
@@ -129,12 +136,43 @@ pub(crate) fn rvs_collect_callgraph_for_signature_M(
         is_port_method,
     );
 
-    callgraph.entry(caller_path).or_insert_with(|| FnBehavior {
-        calls: BTreeSet::new(),
-        facts,
-        is_trait_impl,
-        is_test: false,
-    });
+    callgraph.rvs_merge_node_M(
+        caller_path,
+        FnNode {
+            calls: BTreeSet::new(),
+            facts,
+            has_body: false,
+            is_trait_impl,
+            is_test: false,
+            sources,
+            is_synthetic: false,
+            expected_public_caps: None,
+            expected_name: None,
+        },
+    );
+}
+
+fn rvs_fn_source(cx: &LateContext<'_>, ident: Ident) -> Option<FnSource> {
+    let span = ident.span;
+    if span.from_expansion() {
+        return None;
+    }
+    let source_map = cx.tcx.sess.source_map();
+    let span_data = span.data();
+    let start = source_map.lookup_byte_offset(span_data.lo);
+    let end = source_map.lookup_byte_offset(span_data.hi);
+    if start.sf.name != end.sf.name {
+        return None;
+    }
+    let file = rvs_real_file_name(&start.sf.name)?;
+    Some(FnSource::rvs_new(file, start.pos.0, end.pos.0))
+}
+
+fn rvs_real_file_name(name: &FileName) -> Option<PathBuf> {
+    match name {
+        FileName::Real(real) => real.local_path().map(PathBuf::from),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -148,15 +186,21 @@ mod tests {
     )]
     fn test_20260630_callgraph_helper_coverage() {
         if std::hint::black_box(false) {
-            let _callgraph: &mut BTreeMap<DefPath, FnBehavior> = unreachable!();
+            let _callgraph: &mut FnGraph = unreachable!();
             let _cx: &LateContext<'_> = unreachable!();
             let _hir_id: HirId = unreachable!();
+            let _ident: Ident = unreachable!();
             let _sig: &rustc_hir::FnSig<'_> = unreachable!();
             let _body: &Body<'_> = unreachable!();
             rvs_collect_callgraph_for_item_M(
-                _callgraph, _cx, _hir_id, _sig, _body, false, false, false,
+                _callgraph, _cx, _hir_id, _ident, _sig, _body, false, false, false,
             );
-            rvs_collect_callgraph_for_signature_M(_callgraph, _cx, _hir_id, _sig, false, false);
+            rvs_collect_callgraph_for_signature_M(
+                _callgraph, _cx, _hir_id, _ident, _sig, false, false,
+            );
+            let _ = rvs_fn_source(_cx, _ident);
+            let _file_name: &FileName = unreachable!();
+            let _ = rvs_real_file_name(_file_name);
         }
     }
 }

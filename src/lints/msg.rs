@@ -8,7 +8,7 @@ pub(crate) struct Msg {
 }
 
 impl Msg {
-    pub(crate) fn new(span: Span, text: impl Into<String>) -> Self {
+    pub(crate) fn rvs_new(span: Span, text: impl Into<String>) -> Self {
         Self {
             span,
             text: text.into(),

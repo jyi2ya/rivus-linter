@@ -1,0 +1,1 @@
+Err(Message("capsmap path must be a directory: $TMP/caps"))

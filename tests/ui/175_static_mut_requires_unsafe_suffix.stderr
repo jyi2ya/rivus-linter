@@ -1,0 +1,18 @@
+error: static ref requires {S, U} but fn has {S} (missing U(Unsafe))
+  --> $DIR/tests/ui/175_static_mut_requires_unsafe_suffix.rs:6:14
+   |
+LL |     unsafe { COUNTER }
+   |              ^^^^^^^
+   |
+   = note: `#[deny(rivus::rvs_static_ref)]` on by default
+
+error: static mut access but suffix lacks U
+  --> $DIR/tests/ui/175_static_mut_requires_unsafe_suffix.rs:6:14
+   |
+LL |     unsafe { COUNTER }
+   |              ^^^^^^^
+   |
+   = note: `-D rivus::rvs-missing-unsafe` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_unsafe)]`
+
+error: aborting due to 2 previous errors

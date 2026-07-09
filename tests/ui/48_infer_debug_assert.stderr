@@ -1,3 +1,13 @@
+error: function body contains only debug_assert!
+  --> $DIR/tests/ui/48_infer_debug_assert.rs:3:1
+   |
+LL | / fn rvs_check_valid(x: i32) {
+LL | |     debug_assert!(x > 0);
+LL | | }
+   | |_^
+   |
+   = note: `#[deny(rivus::rvs_empty_fn)]` on by default
+
 error: good fn 'rvs_check_valid' not called by any test
   --> $DIR/tests/ui/48_infer_debug_assert.rs:3:1
    |
@@ -20,4 +30,4 @@ LL | | }
    = note: `-D rivus::rvs-untested-ok-fn` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_ok_fn)]`
 
-error: aborting due to 2 previous errors
+error: aborting due to 3 previous errors

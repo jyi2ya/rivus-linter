@@ -1,0 +1,2 @@
+Foo -> Some(FnName("rvs_Foo")) [MissingRvsPrefix]
+_helper -> Some(FnName("rvs__helper")) [MissingRvsPrefix]

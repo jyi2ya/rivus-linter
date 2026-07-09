@@ -1,0 +1,3 @@
+calls={DefPath("demo::rvs_local")}
+has_async=true
+has_mut_param=false

@@ -1,0 +1,9 @@
+error: {P} → rvs_read_BI (170_port_default_missing_rvs_checks_body::rvs_read_BI) ({B, I}) missing B(Blocking), I(IO)
+  --> $DIR/tests/ui/170_port_default_missing_rvs_checks_body.rs:15:9
+   |
+LL |         rvs_read_BI()
+   |         ^^^^^^^^^^^^^
+   |
+   = note: `#[deny(rivus::rvs_call_violation)]` on by default
+
+error: aborting due to 1 previous error

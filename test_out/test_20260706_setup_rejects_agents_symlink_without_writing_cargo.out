@@ -1,0 +1,3 @@
+result=Err("AGENTS.md must not be a symlink: $TMP/AGENTS.md")
+cargo_unchanged=true
+victim_unchanged=true

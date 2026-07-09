@@ -1,0 +1,3 @@
+run_caps=BI
+known={DefPath("dep::rvs_write_BI"): CapabilitySet({B, I})}
+unknown={}

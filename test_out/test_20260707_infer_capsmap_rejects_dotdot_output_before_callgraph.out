@@ -1,0 +1,3 @@
+result=Err("deps capsmap output path must not contain '..': $TMP/target/../target/rivus-inferred-capsmap.txt")
+callgraph_exists=false
+cache_exists=false

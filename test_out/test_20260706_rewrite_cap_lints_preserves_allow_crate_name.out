@@ -1,0 +1,5 @@
+rustc
+--crate-name
+allow
+--cap-lints
+warn

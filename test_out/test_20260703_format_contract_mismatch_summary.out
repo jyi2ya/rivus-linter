@@ -1,0 +1,10 @@
+
+Contract Mismatches
+------------------------------
+name_mismatch            1
+missing_port             2
+
+Sample Mismatches
+------------------------------
+missing_port: demo::rvs_fetch_BI
+name_mismatch: demo::rvs_fetch_BI

@@ -17,7 +17,7 @@ pub(crate) fn rvs_check_fn_S(cx: &LateContext<'_>, span: Span, raw_suffix: &str)
         cx.emit_span_lint(
             RVS_NON_ALPHABETICAL_SUFFIX,
             span,
-            Msg::new(span, "suffix not alphabetical"),
+            Msg::rvs_new(span, "suffix not alphabetical"),
         );
     }
     let mut seen = std::collections::HashSet::new();
@@ -26,7 +26,7 @@ pub(crate) fn rvs_check_fn_S(cx: &LateContext<'_>, span: Span, raw_suffix: &str)
             cx.emit_span_lint(
                 RVS_DUPLICATE_SUFFIX,
                 span,
-                Msg::new(span, format!("duplicate '{c}'")),
+                Msg::rvs_new(span, format!("duplicate '{c}'")),
             );
             break;
         }
@@ -36,7 +36,7 @@ pub(crate) fn rvs_check_fn_S(cx: &LateContext<'_>, span: Span, raw_suffix: &str)
         cx.emit_span_lint(
             RVS_UNKNOWN_SUFFIX_LETTER,
             span,
-            Msg::new(
+            Msg::rvs_new(
                 span,
                 format!(
                     "unknown letters: {}",

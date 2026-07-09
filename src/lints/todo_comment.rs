@@ -16,7 +16,7 @@ pub(crate) fn rvs_check_fn_S(cx: &LateContext<'_>, span: Span) {
                     cx.emit_span_lint(
                         RVS_TODO_COMMENT,
                         span,
-                        Msg::new(span, "TODO/FIXME comment found"),
+                        Msg::rvs_new(span, "TODO/FIXME comment found"),
                     );
                     return;
                 }

@@ -55,7 +55,7 @@ pub(crate) fn rvs_check_fn_MS<'tcx>(
                     cx.emit_span_lint(
                         RVS_CONSUMED_ARG_ON_ERROR,
                         input.span,
-                        Msg::new(
+                        Msg::rvs_new(
                             input.span,
                             format!(
                                 "owned param '{param_name}' consumed but not preserved in error type of {fn_name}"

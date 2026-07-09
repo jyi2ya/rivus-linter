@@ -1,0 +1,4 @@
+package=Err("[package].name must not contain whitespace")
+lib=Err("[lib].name must not contain whitespace")
+helper=Err("demo must not contain whitespace")
+len=0

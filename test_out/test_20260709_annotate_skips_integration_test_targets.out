@@ -1,0 +1,9 @@
+-- src/lib.rs --
+pub fn rvs_parse_M(values: &mut Vec<u8>) { values.push(1); }
+
+-- tests/fixtures/mod.rs --
+pub struct TestServer;
+
+impl TestServer {
+    pub fn url(&self, values: &mut Vec<u8>) { values.push(1); }
+}

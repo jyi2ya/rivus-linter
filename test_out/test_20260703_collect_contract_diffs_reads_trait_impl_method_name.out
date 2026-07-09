@@ -1,0 +1,1 @@
+diff=FnContractDiff { def_path: DefPath("demo::Adapter::rvs_fetch_BI@demo::Client"), actual_name: FnName("rvs_fetch_BI"), expected_name: None, declared_public_caps: Some(CapabilitySet({B, I})), expected_public_caps: Some(CapabilitySet({P})) }

@@ -13,7 +13,7 @@
 | 命令 | 用途 |
 |------|------|
 | `cargo rivus check` | 检查 `rvs_` 函数调用链能力合规性（默认） |
-| `cargo rivus report` | 统计项目能力分布，输出好函数率 |
+| `cargo rivus report` | 统计项目能力分布和契约不一致摘要，输出好函数率 |
 | `cargo rivus infer-capsmap` | 从种子标注推断完整 capsmap |
 | `cargo rivus infer-std` | 推断标准库函数能力标注（需 nightly） |
 | `cargo rivus setup` | 为新项目注入 AGENTS.md 和 clippy lint |
@@ -47,25 +47,27 @@
 基于 rustc-driver 的 HIR 分析。编译项目并在编译过程中检查 `rvs_` 函数的调用链能力合规性。
 
 ```bash
-cargo rivus check                    # 按回退链自动查找 capsmap
+cargo rivus check                    # 使用 target/rivus-std-capsmap.txt（若存在）+ 项目 caps/（若存在）
 cargo rivus check -m caps/           # 指定 caps 目录
 cargo rivus check -- --features foo  # 传递额外 cargo check 参数
 ```
 
 选项：
-- `-m, --capsmap <PATH>` — capsmap 目录路径。不指定时按以下优先级查找：（1）项目 `caps/` 目录；（2）随工具分发的内置 `caps/` 目录。找到的路径通过 `RIVUS_CAPSMAP` 环境变量传递给 lint 驱动层。
+- `-m, --capsmap <PATH>` — capsmap 目录路径。显式指定时只使用该目录。不指定时，若存在 `target/rivus-std-capsmap.txt` 会先加载它，再用项目 `caps/` 目录覆盖同名条目；如果二者都不存在，lint 驱动层使用空 capsmap。找到或生成的路径通过 `RIVUS_CAPSMAP` 环境变量传递给 lint 驱动层。工具不再提供内置 caps fallback。
 
-注意：capsmap 的查找和加载完全由 CLI 层（`rvs_resolve_capsmap_BIS`）控制。lint 驱动层只读 `RIVUS_CAPSMAP` 环境变量，不做任何额外的回退查找。capsmap 只支持目录形式；caps 目录使用统一的层级加载器（`CapsMap::rvs_load_dir_BIS`），按 `std → deps → seed → suppress → ext → 其余字母序` 的固定顺序合并。
+注意：capsmap 的查找和加载完全由 CLI 层控制。lint 驱动层只读 `RIVUS_CAPSMAP` 环境变量，不做任何额外的回退查找。capsmap 只支持目录形式；自动合并 generated std caps 时会写入 `target/rivus-effective-capsmap/` 作为 lint 驱动层的输入。caps 目录使用统一的层级加载器（`CapsMap::rvs_load_dir_BIS`），按 `std → deps → seed → suppress → ext → 其余字母序` 的固定顺序合并。
 
 注意：`check` 默认编译 `--tests`（含测试代码），因此 `#[test]` 函数也会被分析。`infer-capsmap` 和 `infer-std` 不编译测试代码。
 
-退出码：`check` 成功时返回 `0`；失败时透传底层 `cargo check` 的退出码。`infer-capsmap` / `infer-std` 在工具自身运行失败时返回 `2`。warning 不影响退出码。
+退出码：`check` 成功时返回 `0`；失败时透传底层 `cargo check` 的退出码。其他子命令成功时返回 `0`，工具自身运行失败时返回 `2`。warning 不影响退出码。
 
 ---
 
 ## `cargo rivus report [PATH]`
 
 对 `path` 指定的 Cargo 项目运行 `cargo check`，统计编译过程中发现的所有 `rvs_` 函数的能力分布，输出各能力标记的函数数量和行数占比。`good`（能力集合是 `{A,B,M}` 的子集，包括纯函数）和 `ok`（能力集合是 `{A,B,M,P}` 的子集）应尽量占比高。
+
+报告末尾还会尝试基于 fresh callgraph 追加 `Contract Mismatches` 和 `Sample Mismatches`，用于汇总函数名与推断公开契约不一致的情况。这个附加段需要额外执行一次 callgraph 收集；如果项目已有 deny-level lint 导致第二次收集失败，主能力报告仍会输出，并打印 `contract mismatch report unavailable` warning。
 
 `PATH` 最好直接指向目标 Cargo 项目的根目录；如果它不是包含 `Cargo.toml` 的项目根目录，命令会失败。
 
@@ -81,6 +83,8 @@ cargo rivus report /path/to  # 指定目录
 **严禁注水**：为了提高好函数率而注入无实际业务价值的纯函数是被禁止的。好函数率的提升必须来自有意义的重构。
 
 **以下函数被排除在统计之外**：`#[test]` 函数，以及 `#[allow(dead_code)]` 或 `#[allow(unused)]` 标记的函数。
+
+契约不一致摘要使用 callgraph 和本地 crate 前缀过滤，不参与能力分布的行数统计。
 
 示例输出：
 
@@ -103,7 +107,7 @@ Total: 42 functions, 890 lines
 
 推断分两步：首先对不在种子中的函数，直接从行为特征推断能力（`async fn` → A、`unsafe fn` → U、`&mut` 参数 → M、`static` 引用 → S、`static mut` 引用 → S+U、`thread_local!` 引用 → S+T）；然后通过固定点迭代，将所有被调用方的能力沿调用图向上传播。若同一函数同时被识别为普通 `static` 引用和 `thread_local!` 引用，结果会合并为 `S+T`（幂等）。种子中的条目作为推断的起点（下界），传播可能在其基础上累加更多能力。
 
-对于 trait 方法别名（如 `std::io::Read::read`），工具不会对所有 impl 做集合并，而是按能力逐项做 majority vote：某个可传播能力只有在至少一半 impl 都带有它时，才会出现在该 trait 方法别名上。少数 impl 独有的能力不会被抬升到别名层。这一规则同样会影响 `annotate` 和 `why` 的显示结果。
+对于本地非 Port trait 方法，公开能力由各 impl 按能力逐项做 at-least-half vote（阈值为 `ceil(n/2)`）决定；trait 声明自身写的后缀只在没有 impl 可聚合时作为回退。因此 2 个 impl 中 1 个带能力会被抬升，3 个 impl 中仅 1 个带能力不会被抬升。Port trait 方法例外：公开能力固定为 `P`，不受 impl 实际行为影响。这一规则同样会影响 `annotate` 和 `why` 的显示结果。
 
 ```bash
 cargo rivus infer-capsmap                    # 写入 <PATH>/target/rivus-inferred-capsmap.txt 和 <PATH>/target/rivus-deps-capsmap.txt，并输出 deps capsmap 到 stdout
@@ -113,7 +117,7 @@ cargo rivus infer-capsmap -m caps/           # 指定种子目录
 
 选项：
 - `-m, --capsmap <PATH>` — 种子 capsmap 目录（默认：`caps`）
-- `-o, --output <PATH>` — direct external deps capsmap 输出路径。命令始终尝试写入完整推断缓存 `<PATH>/target/rivus-inferred-capsmap.txt`；无 `-o` 时额外写入 `<PATH>/target/rivus-deps-capsmap.txt` 并输出 deps capsmap 到 stdout。若默认输出路径写入失败，命令会直接报错退出；指定 `-o` 时写入该路径而不再输出到 stdout
+- `-o, --output <PATH>` — direct external deps capsmap 输出路径；相对路径按目标项目目录解析。命令在确认没有 unknown callee 后写入完整推断缓存 `<PATH>/target/rivus-inferred-capsmap.txt`；无 `-o` 时额外写入 `<PATH>/target/rivus-deps-capsmap.txt` 并输出 deps capsmap 到 stdout。若默认输出路径写入失败，命令会直接报错退出；指定 `-o` 时写入该路径而不再输出到 stdout。`-o` 不能指向完整推断缓存路径本身
 
 注意：相对 `--capsmap` 路径按 `PATH` 指向的项目目录解析。
 
@@ -121,7 +125,7 @@ cargo rivus infer-capsmap -m caps/           # 指定种子目录
 
 ## `cargo rivus infer-std [OPTIONS] [PATH]`
 
-通过 `-Zbuild-std` 编译 std/core/alloc，推断标准库函数的能力标注。需要 nightly Rust；命令实际会调用 `cargo +nightly check`，如果本机没有可用的 nightly toolchain 会直接失败。`PATH` 必须是一个有效的本地 crate 项目；仅含 `[workspace]` 的虚拟根目录不受支持。
+通过 `-Zbuild-std` 编译 std/core/alloc，推断标准库函数的能力标注。需要 nightly Rust；命令实际会设置 `RUSTUP_TOOLCHAIN=nightly` 并运行 `cargo check -Zbuild-std=std,core,alloc`，如果本机没有可用的 nightly toolchain 会直接失败。`PATH` 必须是一个有效的本地 crate 项目；仅含 `[workspace]` 的虚拟根目录不受支持。
 
 注意：该命令只会从 `PATH/caps` 加载 `seed` 和 `suppress` 文件（不加载 `std`/`deps`/`ext`，因为那些是上一次生成的结果，会干扰重新生成），并在其基础上推断标准库条目。
 
@@ -131,7 +135,7 @@ cargo rivus infer-std -o caps/std        # 写入 <PATH>/target/rivus-std-capsma
 ```
 
 选项：
-- `-o, --output <PATH>` — 额外输出路径。始终尝试写入 `<PATH>/target/rivus-std-capsmap.txt`；无 `-o` 时额外输出到 stdout。若默认输出路径写入失败，命令会直接报错退出；指定 `-o` 时额外写入该路径而不再输出到 stdout
+- `-o, --output <PATH>` — 额外输出路径；相对路径按目标项目目录解析。始终尝试写入 `<PATH>/target/rivus-std-capsmap.txt`；无 `-o` 时额外输出到 stdout。若默认输出路径写入失败，命令会直接报错退出；指定 `-o` 时额外写入该路径而不再输出到 stdout
 
 ---
 
@@ -174,6 +178,7 @@ cargo rivus strip /path/to  # 指定目录
 
 注意：
 - 需要项目能成功 `cargo check`（ra 需要加载完整 workspace）
+- strip 只把普通 package target 的源码作为直接重命名候选；`tests/`、`examples/`、`benches/` 下的独立 Cargo target 暂不作为直接候选处理，以避免 integration test 多 crate 复用同一文件时产生 partial rename
 - 如果 strip 后产生同名冲突（如 `rvs_add_M` 和 `rvs_add_ABIS` 都变成 `add`），rename 可能失败并输出警告
 - 宏展开中的引用处理为 best-effort，建议 strip 后运行 `cargo check` 验证
 
@@ -181,7 +186,7 @@ cargo rivus strip /path/to  # 指定目录
 
 ## `cargo rivus annotate [PATH]`
 
-对项目中所有函数进行能力推断，然后添加 `rvs_` 前缀和能力后缀。使用 rust-analyzer 的语义分析引擎进行重命名。`PATH` 必须指向本地 crate 项目；仅含 `[workspace]` 的虚拟根目录不受支持。
+对项目中所有可定位、受契约检查的本地函数进行能力推断，然后添加 `rvs_` 前缀和能力后缀。使用 rust-analyzer 的语义分析引擎进行重命名。`PATH` 必须指向本地 crate 项目；仅含 `[workspace]` 的虚拟根目录不受支持。
 
 ```bash
 cargo rivus annotate           # 当前目录
@@ -190,7 +195,9 @@ cargo rivus annotate /path/to  # 指定目录
 
 注意：
 - 需要项目能成功 `cargo check`
-- trait 方法别名（如 `Trait::method`）的能力由各 impl 按 majority vote 聚合，少数 impl 独有的能力不会体现在别名层
+- annotate 只基于普通 `cargo check` 范围收集 callgraph 和候选；`tests/`、`examples/`、`benches/` 下的独立 Cargo target 暂不参与能力推断和直接重命名。`src/` 中的单元测试源码不按路径排除，但是否进入候选取决于普通 `cargo check` 是否编译到对应代码
+- root `main`、测试函数、trait impl 方法、synthetic 节点、宏展开或其他没有真实源码位置的函数不会作为直接 annotate 候选；trait impl 方法可能会随 trait 声明或调用点的语义重命名被间接更新
+- 本地非 Port trait 方法的能力由各 impl 按 at-least-half vote（`ceil(n/2)`）聚合；声明后缀只在没有 impl 可聚合时作为回退。Port 方法固定为 `P`
 - annotate 后 `#[serde(default = "...")]` 等字符串字面量中的函数引用不会自动更新，需要手动修复
 - annotate 会删除 `target/rivus-callgraph` 和 `target/rivus-callgraph-std` 缓存（函数名已变，旧缓存失效）
 
@@ -208,11 +215,12 @@ caps/
 ├── std       # std/core/alloc 的全量条目（可通过 infer-std 自动生成）
 ├── deps      # 第三方依赖条目
 ├── suppress  # 修正条目（覆盖 std/deps 中过宽的能力标记）
-└── ext       # 项目特定条目（最高优先级）
+└── ext       # 项目特定条目（标准层中最高优先级）
 ```
 
 目录内的文件按固定层级顺序加载（后加载的覆盖先加载的）：
 `std` → `deps` → `seed` → `suppress` → `ext` → 其余文件按字母序。
+因此 `ext` 是固定标准层中的最高优先级；若目录中还有额外文件，额外文件会在 `ext` 之后按文件名顺序加载并可覆盖前面的条目。
 
 每行一个条目，格式：
 
@@ -263,7 +271,7 @@ std::process::exit=S           # 副作用：终止进程
 | `MissingAllowWarning` | `rvs_` 函数有大写后缀但未被 `#[allow(non_snake_case)]` 或 `#[expect(non_snake_case)]` 覆盖 |
 | `TestNameFormatWarning` | `#[test]` 函数名不匹配 `^test_\d{8}_\w+$` 格式 |
 | `DuplicateTestWarning` | 同名测试函数出现多次（跨文件检测） |
-| `BannedImportWarning` | 导入了被禁 crate（`anyhow`、`eyre`、`color_eyre`） |
+| `BannedImportWarning` | 导入了被禁 crate（`thiserror`、`anyhow`、`eyre`、`color_eyre`） |
 | `NonRvsFnWarning` | 函数缺少 `rvs_` 前缀（`#[test]` 函数、`main`、`new`、`go`、`wblk`、trait impl 方法除外） |
 | `MissingDocWarning` | `rvs_` 开头的 pub 函数/方法缺少 `///` 文档注释 |
 | `DenyWarningsWarning` | crate 级 `#![deny(warnings)]` 反模式——应改用具名 lint |
@@ -284,6 +292,7 @@ std::process::exit=S           # 副作用：终止进程
 | `MissingTestOutputWarning` | `#[test]` 函数缺少对应的 `test_out/{name}.out` 快照文件（仅当 `test_out/` 目录存在时检查） |
 | `ValidateReturnsUnitWarning` | 名为 `validate`/`check`/`verify` 的函数返回 `Result<(), E>`——应改用 `TryFrom` 返回 `Result<Target, Error>`（parse instead of validate） |
 | `SpawnWarning` | 函数调用了非结构化 spawn（`tokio::spawn`、`std::thread::spawn` 等）——应改用结构化并发原语 |
+| `ContractMismatchWarning` | 函数名与推断出的公开契约不一致；当前主要用于 Port trait 方法应公开为 `_P` 但名称缺失或后缀错误的情况 |
 
 ## 推断提示
 

@@ -27,7 +27,7 @@ pub(crate) fn rvs_check_fn_S(
         cx.emit_span_lint(
             RVS_MISSING_DOC,
             span,
-            Msg::new(span, format!("pub fn '{name}' missing /// doc comment")),
+            Msg::rvs_new(span, format!("pub fn '{name}' missing /// doc comment")),
         );
     }
 }

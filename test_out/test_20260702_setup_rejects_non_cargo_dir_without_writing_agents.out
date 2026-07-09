@@ -1,2 +1,2 @@
-result=Err("'/home/jyi/tmp/rivus-setup-non-cargo-401092-1783044718640393893' is not a Cargo project")
+result=Err("Cargo.toml not found: $TMP/Cargo.toml")
 exists=false

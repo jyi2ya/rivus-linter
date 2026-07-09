@@ -55,7 +55,7 @@ impl Callbacks for RivusCallbacks {
                 previous(_sess, lint_store);
             }
             lint_store.register_lints(lints::RIVUS_LINTS);
-            lint_store.register_late_pass(|_| Box::new(lints::RivusLintPass::new()));
+            lint_store.register_late_pass(|_| Box::new(lints::RivusLintPass::rvs_new_BS()));
         }));
         config.opts.unstable_opts.mir_opt_level = Some(0);
     }
@@ -84,14 +84,7 @@ fn rvs_run_driver_BIMPS() -> ExitCode {
             return rustc_driver::run_compiler(&args, &mut DefaultCallbacks);
         }
 
-        let wrapper_mode = args
-            .get(1)
-            .map(|s| {
-                std::path::Path::new(s)
-                    .file_stem()
-                    .is_some_and(|stem| stem == "rustc")
-            })
-            .unwrap_or(false);
+        let wrapper_mode = args.get(1).is_some_and(|arg| rvs_is_rustc_arg(arg));
         if wrapper_mode {
             args.remove(1);
         }
@@ -101,23 +94,157 @@ fn rvs_run_driver_BIMPS() -> ExitCode {
         // allow for them, which causes rustc to skip the lint pass entirely).
         // Using --cap-lints warn (not removing entirely) prevents compilation
         // failures from std's #[deny(...)] attributes.
-        if wrapper_mode {
-            let has_cap_lints_allow = args
-                .windows(2)
-                .any(|window| matches!(window, [cap_lints, allow] if cap_lints == "--cap-lints" && allow == "allow"));
-            if has_cap_lints_allow {
-                args.retain(|a| a != "--cap-lints" && a != "allow");
-                args.push("--cap-lints".to_string());
-                args.push("warn".to_string());
-            }
+        if wrapper_mode && rvs_rivus_enabled_BS() {
+            rvs_rewrite_cap_lints_allow_M(&mut args);
         }
 
-        if env::var("RIVUS_ENABLED").is_ok() {
+        if wrapper_mode && rvs_rivus_enabled_BS() {
             rustc_driver::run_compiler(&args, &mut RivusCallbacks)
         } else {
             rustc_driver::run_compiler(&args, &mut DefaultCallbacks)
         }
     })
+}
+
+fn rvs_rivus_enabled_BS() -> bool {
+    match env::var("RIVUS_ENABLED") {
+        Ok(value) => rvs_rivus_enabled_value(&value),
+        Err(env::VarError::NotPresent) | Err(env::VarError::NotUnicode(_)) => false,
+    }
+}
+
+fn rvs_rivus_enabled_value(value: &str) -> bool {
+    value == "1"
+}
+
+fn rvs_is_rustc_arg(arg: &str) -> bool {
+    std::path::Path::new(arg)
+        .file_name()
+        .is_some_and(|name| name == "rustc" || name == "rustc.exe")
+}
+
+fn rvs_should_enter_driver(args: &[String]) -> bool {
+    args.get(1)
+        .is_some_and(|arg| arg == "--rustc" || rvs_is_rustc_arg(arg))
+}
+
+fn rvs_rewrite_cap_lints_allow_M(args: &mut [String]) {
+    for arg in args.iter_mut() {
+        if arg == "--cap-lints=allow" {
+            *arg = "--cap-lints=warn".to_string();
+        }
+    }
+    for index in 0..args.len().saturating_sub(1) {
+        let is_cap_lints_allow = args.get(index..index + 2).is_some_and(
+            |pair| matches!(pair, [flag, value] if flag == "--cap-lints" && value == "allow"),
+        );
+        if is_cap_lints_allow && let Some(value) = args.get_mut(index + 1) {
+            *value = "warn".to_string();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rvs_snapshot_BIS(name: &str, content: &str) {
+        std::fs::create_dir_all("test_out").unwrap();
+        std::fs::write(format!("test_out/{name}.out"), content).unwrap();
+    }
+
+    #[test]
+    fn test_20260706_rewrite_cap_lints_preserves_allow_crate_name() {
+        let mut args = vec![
+            "rustc".to_string(),
+            "--crate-name".to_string(),
+            "allow".to_string(),
+            "--cap-lints".to_string(),
+            "allow".to_string(),
+        ];
+
+        rvs_rewrite_cap_lints_allow_M(&mut args);
+        let output = format!("{}\n", args.join("\n"));
+        rvs_snapshot_BIS(
+            "test_20260706_rewrite_cap_lints_preserves_allow_crate_name",
+            &output,
+        );
+
+        assert_eq!(args[2], "allow");
+        assert_eq!(args[4], "warn");
+    }
+
+    #[test]
+    fn test_20260706_rewrite_cap_lints_equals_allow() {
+        let mut args = vec!["rustc".to_string(), "--cap-lints=allow".to_string()];
+
+        rvs_rewrite_cap_lints_allow_M(&mut args);
+        let output = format!("{}\n", args.join("\n"));
+        rvs_snapshot_BIS("test_20260706_rewrite_cap_lints_equals_allow", &output);
+
+        assert_eq!(args[1], "--cap-lints=warn");
+    }
+
+    #[test]
+    fn test_20260706_rivus_enabled_requires_one() {
+        let rows = [("", false), ("0", false), ("1", true), ("true", false)];
+        let output = rows
+            .iter()
+            .map(|(value, _)| format!("{value:?}={}", rvs_rivus_enabled_value(value)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        rvs_snapshot_BIS("test_20260706_rivus_enabled_requires_one", &output);
+
+        for (value, expected) in rows {
+            assert_eq!(rvs_rivus_enabled_value(value), expected);
+        }
+    }
+
+    #[test]
+    fn test_20260706_driver_gate_detects_wrapper_args() {
+        let cli = vec!["cargo-rivus".to_string(), "usage".to_string()];
+        let direct = vec!["cargo-rivus".to_string(), "--rustc".to_string()];
+        let wrapper = vec![
+            "cargo-rivus".to_string(),
+            "/toolchain/bin/rustc".to_string(),
+        ];
+        let windows_wrapper = vec!["cargo-rivus".to_string(), "rustc.exe".to_string()];
+        let false_positive = vec!["cargo-rivus".to_string(), "rustc.json".to_string()];
+        let output = format!(
+            "cli={}\ndirect={}\nwrapper={}\nwindows_wrapper={}\nfalse_positive={}\n",
+            rvs_should_enter_driver(&cli),
+            rvs_should_enter_driver(&direct),
+            rvs_should_enter_driver(&wrapper),
+            rvs_should_enter_driver(&windows_wrapper),
+            rvs_should_enter_driver(&false_positive),
+        );
+        rvs_snapshot_BIS("test_20260706_driver_gate_detects_wrapper_args", &output);
+
+        assert!(!rvs_should_enter_driver(&cli));
+        assert!(rvs_should_enter_driver(&direct));
+        assert!(rvs_should_enter_driver(&wrapper));
+        assert!(rvs_should_enter_driver(&windows_wrapper));
+        assert!(!rvs_should_enter_driver(&false_positive));
+        assert!(rvs_is_rustc_arg("/toolchain/bin/rustc"));
+        assert!(rvs_is_rustc_arg("rustc.exe"));
+        assert!(!rvs_is_rustc_arg("rustc.json"));
+    }
+
+    #[test]
+    fn test_20260706_disabled_wrapper_does_not_rewrite_cap_lints() {
+        let mut args = vec!["rustc".to_string(), "--cap-lints=allow".to_string()];
+        let enabled = false;
+        if enabled {
+            rvs_rewrite_cap_lints_allow_M(&mut args);
+        }
+        let output = args.join("\n") + "\n";
+        rvs_snapshot_BIS(
+            "test_20260706_disabled_wrapper_does_not_rewrite_cap_lints",
+            &output,
+        );
+
+        assert_eq!(args[1], "--cap-lints=allow");
+    }
 }
 
 // ─── CLI mode ────────────────────────────────────────────────────────────
@@ -161,7 +288,7 @@ enum Commands {
         /// Path to seed caps directory
         #[arg(short = 'm', long = "capsmap", default_value = "caps")]
         capsmap: PathBuf,
-        /// Output path for inferred capsmap (default: stdout)
+        /// Output path for direct external deps capsmap (default: stdout)
         #[arg(short = 'o', long = "output")]
         output: Option<PathBuf>,
     },
@@ -199,13 +326,13 @@ enum Commands {
 }
 
 fn main() -> ExitCode {
-    if env::var("RIVUS_ENABLED").is_ok() {
+    let raw_args: Vec<String> = env::args().collect();
+    if rvs_should_enter_driver(&raw_args) {
         return rvs_run_driver_BIMPS();
     }
 
     // Cargo subcommands: `cargo rivus check` invokes `cargo-rivus rivus check`.
     // Strip the leading "rivus" arg so clap sees the real subcommand.
-    let raw_args: Vec<String> = env::args().collect();
     let filtered_args: Vec<String> = if raw_args.get(1).map(|s| s.as_str()) == Some("rivus") {
         let mut v = raw_args;
         v.remove(1);

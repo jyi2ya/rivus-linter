@@ -1,0 +1,3 @@
+equals=Err("cargo rivus check does not support forwarded --manifest-path; run from the target project directory or use commands with an explicit path")
+split=Err("cargo rivus check does not support forwarded --manifest-path; run from the target project directory or use commands with an explicit path")
+normal=Ok(())

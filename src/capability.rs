@@ -3,6 +3,7 @@ use std::fmt;
 
 use rustc_hir::{self, Safety};
 use serde::{Deserialize, Serialize};
+use snafu::Snafu;
 
 /// 能力之八德：异步、阻塞、读写、可变、端口、副作用、线程、不安。
 /// 八德既立，函数之名即为契约，调用之际便有章法。
@@ -176,6 +177,7 @@ impl CapabilityPolicy {
     }
 
     /// Return whether signature inference requires a suffix capability.
+    #[cfg(test)]
     pub fn rvs_requires_signature_cap(facts: CapabilityFacts, cap: Capability) -> bool {
         Self::rvs_signature_caps(facts).rvs_contains(cap)
     }
@@ -210,9 +212,10 @@ impl CapabilityPolicy {
 
     /// Return whether `caller` is allowed to call `callee`.
     pub fn rvs_can_call(caller: &CapabilitySet, callee: &CapabilitySet) -> bool {
-        callee.0.iter().all(|cap| {
-            matches!(cap, Capability::A | Capability::M | Capability::U) || caller.0.contains(cap)
-        })
+        callee
+            .0
+            .iter()
+            .all(|cap| !Self::rvs_is_propagated_cap(*cap) || caller.0.contains(cap))
     }
 
     /// Return the capabilities missing from `caller` when calling `callee`.
@@ -220,7 +223,7 @@ impl CapabilityPolicy {
         callee
             .0
             .iter()
-            .filter(|cap| !matches!(cap, Capability::A | Capability::M | Capability::U))
+            .filter(|cap| Self::rvs_is_propagated_cap(**cap))
             .copied()
             .filter(|cap| !caller.0.contains(cap))
             .collect()
@@ -237,13 +240,17 @@ impl CapabilitySet {
     pub fn rvs_from_str(s: &str) -> Result<Self, CapabilityParseError> {
         let mut set = BTreeSet::new();
         for c in s.chars() {
-            let cap = Capability::rvs_from_char(c).ok_or(CapabilityParseError::InvalidLetter(c))?;
-            set.insert(cap);
+            let cap = Capability::rvs_from_char(c)
+                .ok_or(CapabilityParseError::InvalidLetter { letter: c })?;
+            if !set.insert(cap) {
+                return Err(CapabilityParseError::DuplicateLetter { letter: c });
+            }
         }
         Ok(Self(set))
     }
 
     /// 从已经校验过的后缀字符串解析能力集（预期任何字母都合法）。
+    #[cfg(test)]
     pub fn rvs_from_validated(s: &str) -> Self {
         let mut set = BTreeSet::new();
         for c in s.chars() {
@@ -317,10 +324,12 @@ impl fmt::Display for CapabilitySet {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Snafu)]
 pub enum CapabilityParseError {
-    #[error("invalid capability letter: '{0}'")]
-    InvalidLetter(char),
+    #[snafu(display("invalid capability letter: '{letter}'"))]
+    InvalidLetter { letter: char },
+    #[snafu(display("duplicate capability letter: '{letter}'"))]
+    DuplicateLetter { letter: char },
 }
 
 /// 拆解 rvs_ 函数之名，得其骨（基名）与其魂（能力集）。
@@ -335,13 +344,14 @@ pub enum CapabilityParseError {
 /// 例：rvs_add               → 基名 add，能力 {}
 /// 例：CapsMap::rvs_parse  → 基名 parse，能力 {}
 pub fn rvs_parse_function(name: &str) -> Option<(&str, CapabilitySet)> {
-    debug_assert!(!name.is_empty());
-
-    if let Some(result) = rvs_parse_segment(name) {
-        return Some(result);
+    if name.is_empty() {
+        return None;
     }
-    let last_segment = name.rsplit("::").next()?;
-    rvs_parse_segment(last_segment)
+    let (base, raw_suffix) = rvs_split_rvs_name(name)?;
+    let caps = raw_suffix
+        .map(CapabilitySet::rvs_from_str_allow_unknown)
+        .unwrap_or_else(CapabilitySet::rvs_new);
+    Some((base, caps))
 }
 
 /// 拆解单个片段：去掉 rvs_ 前缀后，萃取能力后缀。
@@ -349,37 +359,38 @@ pub fn rvs_parse_function(name: &str) -> Option<(&str, CapabilitySet)> {
 /// 后缀必须全是大写字母。若所有字母都是合法能力字母（ABIMPSTU），
 /// 直接萃取。若含未知大写字母（如 E），仍萃取已知部分，
 /// 由调用方负责报告未知字母警告。
+#[cfg(test)]
 fn rvs_parse_segment(name: &str) -> Option<(&str, CapabilitySet)> {
-    let rest = name.strip_prefix("rvs_")?;
+    rvs_parse_function(name)
+}
 
-    if let Some(pos) = rest.rfind('_') {
-        let potential_suffix = rest.get(pos + 1..).unwrap_or("");
-        let base = rest.get(..pos).unwrap_or("");
-
-        if !potential_suffix.is_empty() && potential_suffix.chars().all(|c| c.is_ascii_uppercase())
-        {
-            let caps = CapabilitySet::rvs_from_str_allow_unknown(potential_suffix);
-            return Some((base, caps));
-        }
+fn rvs_split_rvs_name(name: &str) -> Option<(&str, Option<&str>)> {
+    let segment = rvs_function_name_segment(name);
+    let rest = segment.strip_prefix("rvs_")?;
+    let Some(pos) = rest.rfind('_') else {
+        return Some((rest, None));
+    };
+    let potential_suffix = rest.get(pos + 1..).unwrap_or("");
+    let base = rest.get(..pos).unwrap_or("");
+    if !potential_suffix.is_empty() && potential_suffix.chars().all(|c| c.is_ascii_uppercase()) {
+        return Some((base, Some(potential_suffix)));
     }
+    Some((rest, None))
+}
 
-    Some((rest, CapabilitySet::rvs_new()))
+fn rvs_function_name_segment(name: &str) -> &str {
+    let method_path = name.split_once('@').map_or(name, |(method, _)| method);
+    method_path.rsplit("::").next().unwrap_or(method_path)
 }
 
 /// 从 rvs_ 函数名中萃取原始后缀字符串（未排序、未去重）。
 /// 用于检查命名规范（C4 字母序、C5 重复字母、未知字母）。
 /// 后缀必须全是大写字母才视为有效。
 pub fn rvs_extract_raw_suffix(name: &str) -> String {
-    if let Some(rest) = name.strip_prefix("rvs_")
-        && let Some(pos) = rest.rfind('_')
-    {
-        let potential_suffix = rest.get(pos + 1..).unwrap_or("");
-        if !potential_suffix.is_empty() && potential_suffix.chars().all(|c| c.is_ascii_uppercase())
-        {
-            return potential_suffix.to_string();
-        }
-    }
-    String::new()
+    rvs_split_rvs_name(name)
+        .and_then(|(_, suffix)| suffix)
+        .unwrap_or("")
+        .to_string()
 }
 
 /// 从原始后缀中萃取未知（非 ABIMPSTU）的大写字母，按出现顺序去重。
@@ -459,7 +470,10 @@ mod tests {
     fn test_20260425_from_str_invalid() {
         let err = CapabilitySet::rvs_from_str("AX").unwrap_err();
         match err {
-            CapabilityParseError::InvalidLetter(c) => assert_eq!(c, 'X'),
+            CapabilityParseError::InvalidLetter { letter } => assert_eq!(letter, 'X'),
+            CapabilityParseError::DuplicateLetter { letter } => {
+                panic!("unexpected duplicate letter: {letter}")
+            }
         }
     }
 
@@ -470,9 +484,20 @@ mod tests {
     }
 
     #[test]
-    fn test_20260425_from_str_dedup() {
-        let set = CapabilitySet::rvs_from_str("AAAB").unwrap();
-        assert_eq!(set.rvs_len(), 2);
+    fn test_20260707_from_str_rejects_duplicate_caps() {
+        let err = CapabilitySet::rvs_from_str("AAAB").unwrap_err();
+        std::fs::create_dir_all("test_out").unwrap();
+        std::fs::write(
+            "test_out/test_20260707_from_str_rejects_duplicate_caps.out",
+            format!("err={err}\n"),
+        )
+        .unwrap();
+        match err {
+            CapabilityParseError::DuplicateLetter { letter } => assert_eq!(letter, 'A'),
+            CapabilityParseError::InvalidLetter { letter } => {
+                panic!("unexpected invalid letter: {letter}")
+            }
+        }
     }
 
     #[test]
@@ -744,6 +769,19 @@ mod tests {
     }
 
     #[test]
+    fn test_20260707_parse_function_empty_name_returns_none() {
+        let parsed = rvs_parse_function("");
+        std::fs::create_dir_all("test_out").unwrap();
+        std::fs::write(
+            "test_out/test_20260707_parse_function_empty_name_returns_none.out",
+            format!("parsed={parsed:?}\n"),
+        )
+        .unwrap();
+
+        assert!(parsed.is_none());
+    }
+
+    #[test]
     fn test_20260425_parse_function_qualified() {
         let (base, caps) = rvs_parse_function("CapsMap::rvs_parse").unwrap();
         assert_eq!(base, "parse");
@@ -755,6 +793,53 @@ mod tests {
         let (base, caps) = rvs_parse_function("MyMod::rvs_do_thing_ABIM").unwrap();
         assert_eq!(base, "do_thing");
         assert_eq!(caps.rvs_len(), 4);
+    }
+
+    #[test]
+    fn test_20260705_parse_function_ignores_rvs_prefix_in_qualifier() {
+        let parsed = rvs_parse_function("rvs_dep::module::plain_BI");
+        let (base, caps) = rvs_parse_function("rvs_dep::module::rvs_fetch_BI").unwrap();
+        std::fs::create_dir_all("test_out").unwrap();
+        std::fs::write(
+            "test_out/test_20260705_parse_function_ignores_rvs_prefix_in_qualifier.out",
+            format!("plain={parsed:?}\nbase={base}\ncaps={caps}\n"),
+        )
+        .unwrap();
+        assert!(parsed.is_none());
+        assert_eq!(base, "fetch");
+        assert!(caps.rvs_contains(Capability::B));
+        assert!(caps.rvs_contains(Capability::I));
+    }
+
+    #[test]
+    fn test_20260705_parse_function_trait_impl_def_path() {
+        let (base, caps) =
+            rvs_parse_function("demo::Adapter::rvs_fetch_BI@demo::ApiClient").unwrap();
+        std::fs::create_dir_all("test_out").unwrap();
+        std::fs::write(
+            "test_out/test_20260705_parse_function_trait_impl_def_path.out",
+            format!("base={base}\ncaps={caps}\n"),
+        )
+        .unwrap();
+        assert_eq!(base, "fetch");
+        assert!(caps.rvs_contains(Capability::B));
+        assert!(caps.rvs_contains(Capability::I));
+    }
+
+    #[test]
+    fn test_20260708_split_rvs_name_uses_shared_segment_rules() {
+        let segment = rvs_function_name_segment("demo::Adapter::rvs_fetch_BI@demo::ApiClient");
+        let split = rvs_split_rvs_name("demo::Adapter::rvs_fetch_BI@demo::ApiClient");
+        std::fs::create_dir_all("test_out").unwrap();
+        std::fs::write(
+            "test_out/test_20260708_split_rvs_name_uses_shared_segment_rules.out",
+            format!("segment={segment}\nsplit={split:?}\n"),
+        )
+        .unwrap();
+
+        assert_eq!(segment, "rvs_fetch_BI");
+        assert_eq!(split, Some(("fetch", Some("BI"))));
+        assert_eq!(rvs_split_rvs_name("demo::plain_BI"), None);
     }
 
     #[test]
@@ -835,6 +920,11 @@ mod tests {
         assert_eq!(rvs_extract_raw_suffix("rvs_foo_BEIMS"), "BEIMS");
         assert_eq!(rvs_extract_raw_suffix("rvs_bar_E"), "E");
         assert_eq!(rvs_extract_raw_suffix("rvs_baz_AEIS"), "AEIS");
+        assert_eq!(
+            rvs_extract_raw_suffix("rvs_dep::module::rvs_fetch_BI@rvs_dep::ApiClient"),
+            "BI"
+        );
+        assert_eq!(rvs_extract_raw_suffix("rvs_dep::module::plain_BI"), "");
     }
 
     #[test]

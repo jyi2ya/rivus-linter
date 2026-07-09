@@ -21,7 +21,7 @@ pub(crate) fn rvs_check_enum_S<'tcx>(
                 cx.emit_span_lint(
                     RVS_CATCH_ALL_ERROR_VARIANT,
                     v.span,
-                    Msg::new(v.span, format!("catch-all variant '{vn}' in {name_s}")),
+                    Msg::rvs_new(v.span, format!("catch-all variant '{vn}' in {name_s}")),
                 );
             }
         }

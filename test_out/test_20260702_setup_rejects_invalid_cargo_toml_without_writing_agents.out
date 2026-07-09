@@ -1,2 +1,2 @@
-result=Err("/home/jyi/tmp/rivus-setup-invalid-cargo-toml-401092-1783044718640355648/Cargo.toml: invalid TOML: TOML parse error at line 1, column 9\n  |\n1 | [package\n  |         ^\ninvalid table header\nexpected `.`, `]`\n")
+result=Err("$TMP/Cargo.toml: invalid TOML: TOML parse error at line 1, column 9\n  |\n1 | [package\n  |         ^\ninvalid table header\nexpected `.`, `]`\n")
 exists=false

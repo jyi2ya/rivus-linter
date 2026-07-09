@@ -1,1 +1,1 @@
-Err("Cargo.toml: missing local crate target ([package].name, [lib].name, or [[bin]].name)")
+Err("Cargo.toml: missing local crate target ([package].name, [lib].name, [[bin]].name, [[test]].name, [[example]].name, or [[bench]].name)")

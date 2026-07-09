@@ -1,0 +1,3 @@
+result=Err("inferred capsmap output path conflicts with deps capsmap output path: $TMP/target/rivus-inferred-capsmap.txt and $TMP/target/rivus-inferred-capsmap.txt")
+callgraph_exists=false
+cache_exists=false

@@ -1,0 +1,5 @@
+capsmap=rivus-effective-capsmap
+read=Some("BI")
+env=Some("")
+std_has_env=true
+ext_has_env=true

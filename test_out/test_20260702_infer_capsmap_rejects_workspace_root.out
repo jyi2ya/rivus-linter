@@ -1,1 +1,1 @@
-Err("/home/jyi/tmp/rivus-infer-capsmap-workspace-root-401092-1783044718635172109/Cargo.toml: Cargo.toml: missing local crate target ([package].name, [lib].name, or [[bin]].name)")
+Err("$TMP/Cargo.toml: Cargo.toml: missing local crate target ([package].name, [lib].name, [[bin]].name, [[test]].name, [[example]].name, or [[bench]].name)")

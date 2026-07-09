@@ -1,0 +1,10 @@
+error: 'rvs_fetch_BI' should be named 'rvs_fetch_P'
+  --> $DIR/tests/ui/165_contract_mismatch_required_port.rs:6:5
+   |
+LL |     fn rvs_fetch_BI(&self) -> i32;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-contract-mismatch` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_contract_mismatch)]`
+
+error: aborting due to 1 previous error

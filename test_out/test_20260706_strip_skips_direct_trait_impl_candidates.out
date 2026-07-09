@@ -1,0 +1,4 @@
+pub trait Api { fn fetch(&self) -> i32; }
+pub struct Client;
+impl Api for Client { fn fetch(&self) -> i32 { 1 } }
+pub fn run(api: &dyn Api) -> i32 { api.fetch() }

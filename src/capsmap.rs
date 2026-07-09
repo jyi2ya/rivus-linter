@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
+
+use snafu::Snafu;
 
 use crate::capability::{CapabilityParseError, CapabilitySet};
 use crate::symbols::CapsMapKey;
@@ -11,24 +13,34 @@ pub struct CapsMap {
     entries: BTreeMap<CapsMapKey, CapabilitySet>,
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Snafu)]
 pub enum CapsMapError {
-    #[error("line {line}: invalid capability string '{caps}' for '{key}'")]
+    #[snafu(display("line {line}: invalid capability string '{caps}' for '{key}'"))]
     InvalidCaps {
         key: CapsMapKey,
         caps: String,
         line: usize,
-        #[source]
         source: CapabilityParseError,
     },
-    #[error("line {line}: missing '=' separator")]
+    #[snafu(display("line {line}: missing '=' separator"))]
     MissingSeparator { line: usize },
-    #[error("cannot read caps directory: {0}")]
-    DirRead(String),
-    #[error("cannot read {path}: {error}")]
+    #[snafu(display("line {line}: empty capsmap key"))]
+    EmptyKey { line: usize },
+    #[snafu(display("cannot read caps directory: {message}"))]
+    DirRead { message: String },
+    #[snafu(display("cannot read {path}: {error}"))]
     FileRead { path: String, error: String },
-    #[error("capsmap path must be a directory: {path}")]
+    #[snafu(display("{path}: {source}"))]
+    FileParse {
+        path: String,
+        source: Box<CapsMapError>,
+    },
+    #[snafu(display("capsmap path must be a directory: {path}"))]
     PathMustBeDirectory { path: String },
+    #[snafu(display("capsmap layer must be a file: {path}"))]
+    PathMustBeFile { path: String },
+    #[snafu(display("capsmap layer name must be a single file name: {layer}"))]
+    InvalidLayerName { layer: String },
 }
 
 /// 固定层级顺序。后加载的覆盖先加载的。
@@ -57,6 +69,9 @@ impl CapsMap {
             let (key, value) = trimmed
                 .split_once('=')
                 .ok_or(CapsMapError::MissingSeparator { line: line_num })?;
+            if key.trim().is_empty() {
+                return Err(CapsMapError::EmptyKey { line: line_num });
+            }
             let key = CapsMapKey::rvs_new(key.trim().to_string());
             let value = value.split('#').next().unwrap_or("").trim();
             let caps =
@@ -83,33 +98,35 @@ impl CapsMap {
         }
     }
 
+    pub(crate) fn rvs_to_text(&self) -> String {
+        let mut out = String::new();
+        for (key, caps) in &self.entries {
+            out.push_str(key.rvs_as_str());
+            out.push('=');
+            out.push_str(&crate::inference::rvs_caps_to_string(caps));
+            out.push('\n');
+        }
+        out
+    }
+
     /// 加载目录中所有 caps 文件，按固定层级顺序合并。
     ///
     /// 层级顺序：std → deps → seed → suppress → ext → 其余按字母序。
     /// 后加载的覆盖先加载的同名条目。
     pub fn rvs_load_dir_BIS(dir: &Path) -> Result<Self, CapsMapError> {
         let mut result = Self::rvs_new();
-        if !dir.is_dir() {
+        if !rvs_caps_dir_exists_BIS(dir)? {
             return Ok(result);
         }
-        let mut files: Vec<std::path::PathBuf> = Vec::new();
-        let entries = std::fs::read_dir(dir)
-            .map_err(|e| CapsMapError::DirRead(format!("{}: {e}", dir.display())))?;
-        for entry in entries {
-            let entry =
-                entry.map_err(|e| CapsMapError::DirRead(format!("{}: {e}", dir.display())))?;
-            let path = entry.path();
-            if path.is_file() {
-                files.push(path);
-            }
-        }
+        rvs_require_caps_dir_BIS(dir)?;
+        let mut files = rvs_collect_caps_dir_files_BIS(dir, &[])?;
         rvs_sort_by_layer_M(&mut files);
         for path in &files {
             let content = std::fs::read_to_string(path).map_err(|e| CapsMapError::FileRead {
                 path: path.display().to_string(),
                 error: e.to_string(),
             })?;
-            let partial = Self::rvs_parse(&content)?;
+            let partial = rvs_parse_caps_file(&path.display().to_string(), &content)?;
             result.rvs_extend_from_M(partial);
         }
         Ok(result)
@@ -119,16 +136,24 @@ impl CapsMap {
     /// 例如 `&["seed", "suppress"]` 只加载这两个文件。
     pub fn rvs_load_dir_layers_BIS(dir: &Path, layers: &[&str]) -> Result<Self, CapsMapError> {
         let mut result = Self::rvs_new();
-        for &layer in layers {
-            let path = dir.join(layer);
-            if !path.is_file() {
+        if !rvs_caps_dir_exists_BIS(dir)? {
+            return Ok(result);
+        }
+        rvs_require_caps_dir_BIS(dir)?;
+        let mut files: Vec<PathBuf> = layers
+            .iter()
+            .map(|layer| rvs_caps_layer_file_path(dir, layer))
+            .collect::<Result<_, _>>()?;
+        rvs_sort_by_layer_M(&mut files);
+        for path in files {
+            if !rvs_optional_caps_layer_file_BIS(&path)? {
                 continue;
             }
             let content = std::fs::read_to_string(&path).map_err(|e| CapsMapError::FileRead {
                 path: path.display().to_string(),
                 error: e.to_string(),
             })?;
-            let partial = Self::rvs_parse(&content)?;
+            let partial = rvs_parse_caps_file(&path.display().to_string(), &content)?;
             result.rvs_extend_from_M(partial);
         }
         Ok(result)
@@ -138,35 +163,18 @@ impl CapsMap {
     /// 例如 `&["deps"]` 加载 std/seed/suppress/ext 但不加载 deps。
     pub fn rvs_load_dir_excluding_BIS(dir: &Path, exclude: &[&str]) -> Result<Self, CapsMapError> {
         let mut result = Self::rvs_new();
-        if !dir.is_dir() {
+        if !rvs_caps_dir_exists_BIS(dir)? {
             return Ok(result);
         }
-        let mut files: Vec<std::path::PathBuf> = Vec::new();
-        let entries = std::fs::read_dir(dir)
-            .map_err(|e| CapsMapError::DirRead(format!("{}: {e}", dir.display())))?;
-        for entry in entries {
-            let entry =
-                entry.map_err(|e| CapsMapError::DirRead(format!("{}: {e}", dir.display())))?;
-            let path = entry.path();
-            if !path.is_file() {
-                continue;
-            }
-            let name = path
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(String::new);
-            if exclude.contains(&name.as_str()) {
-                continue;
-            }
-            files.push(path);
-        }
+        rvs_require_caps_dir_BIS(dir)?;
+        let mut files = rvs_collect_caps_dir_files_BIS(dir, exclude)?;
         rvs_sort_by_layer_M(&mut files);
         for path in &files {
             let content = std::fs::read_to_string(path).map_err(|e| CapsMapError::FileRead {
                 path: path.display().to_string(),
                 error: e.to_string(),
             })?;
-            let partial = Self::rvs_parse(&content)?;
+            let partial = rvs_parse_caps_file(&path.display().to_string(), &content)?;
             result.rvs_extend_from_M(partial);
         }
         Ok(result)
@@ -181,6 +189,113 @@ impl CapsMap {
                 path: path.display().to_string(),
             })
         }
+    }
+}
+
+fn rvs_parse_caps_file(path: &str, content: &str) -> Result<CapsMap, CapsMapError> {
+    CapsMap::rvs_parse(content).map_err(|source| CapsMapError::FileParse {
+        path: path.to_string(),
+        source: Box::new(source),
+    })
+}
+
+fn rvs_caps_layer_file_path(dir: &Path, layer: &str) -> Result<PathBuf, CapsMapError> {
+    let mut components = Path::new(layer).components();
+    match (components.next(), components.next()) {
+        (Some(Component::Normal(_)), None) => Ok(dir.join(layer)),
+        _ => Err(CapsMapError::InvalidLayerName {
+            layer: layer.to_string(),
+        }),
+    }
+}
+
+fn rvs_collect_caps_dir_files_BIS(
+    dir: &Path,
+    exclude: &[&str],
+) -> Result<Vec<std::path::PathBuf>, CapsMapError> {
+    let mut files = Vec::new();
+    let entries = std::fs::read_dir(dir).map_err(|e| CapsMapError::DirRead {
+        message: format!("{}: {e}", dir.display()),
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|e| CapsMapError::DirRead {
+            message: format!("{}: {e}", dir.display()),
+        })?;
+        let path = entry.path();
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(String::new);
+        if exclude.contains(&name.as_str()) {
+            continue;
+        }
+        if path.is_file() {
+            files.push(path);
+        } else if LAYER_ORDER.contains(&name.as_str()) {
+            return Err(CapsMapError::PathMustBeFile {
+                path: path.display().to_string(),
+            });
+        }
+    }
+    Ok(files)
+}
+
+fn rvs_require_caps_dir_BIS(dir: &Path) -> Result<(), CapsMapError> {
+    if dir.is_dir() {
+        Ok(())
+    } else {
+        Err(CapsMapError::PathMustBeDirectory {
+            path: dir.display().to_string(),
+        })
+    }
+}
+
+fn rvs_caps_dir_exists_BIS(dir: &Path) -> Result<bool, CapsMapError> {
+    match std::fs::metadata(dir) {
+        Ok(_) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            match std::fs::symlink_metadata(dir) {
+                Err(symlink_error) if symlink_error.kind() == std::io::ErrorKind::NotFound => {
+                    Ok(false)
+                }
+                Ok(_) => Err(CapsMapError::PathMustBeDirectory {
+                    path: dir.display().to_string(),
+                }),
+                Err(symlink_error) => Err(CapsMapError::DirRead {
+                    message: format!("{}: {symlink_error}", dir.display()),
+                }),
+            }
+        }
+        Err(e) => Err(CapsMapError::DirRead {
+            message: format!("{}: {e}", dir.display()),
+        }),
+    }
+}
+
+fn rvs_optional_caps_layer_file_BIS(path: &Path) -> Result<bool, CapsMapError> {
+    match std::fs::metadata(path) {
+        Ok(metadata) if metadata.is_file() => Ok(true),
+        Ok(_) => Err(CapsMapError::PathMustBeFile {
+            path: path.display().to_string(),
+        }),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            match std::fs::symlink_metadata(path) {
+                Err(symlink_error) if symlink_error.kind() == std::io::ErrorKind::NotFound => {
+                    Ok(false)
+                }
+                Ok(_) => Err(CapsMapError::PathMustBeFile {
+                    path: path.display().to_string(),
+                }),
+                Err(symlink_error) => Err(CapsMapError::FileRead {
+                    path: path.display().to_string(),
+                    error: symlink_error.to_string(),
+                }),
+            }
+        }
+        Err(e) => Err(CapsMapError::FileRead {
+            path: path.display().to_string(),
+            error: e.to_string(),
+        }),
     }
 }
 
@@ -248,6 +363,18 @@ mod tests {
     }
 
     #[test]
+    fn test_20260705_capsmap_parse_rejects_empty_key() {
+        let result = CapsMap::rvs_parse("=BI");
+        std::fs::create_dir_all("test_out").unwrap();
+        std::fs::write(
+            "test_out/test_20260705_capsmap_parse_rejects_empty_key.out",
+            format!("{result:?}\n"),
+        )
+        .unwrap();
+        assert!(matches!(result, Err(CapsMapError::EmptyKey { .. })));
+    }
+
+    #[test]
     fn test_20260615_capsmap_parse_hash_in_key() {
         let cm = CapsMap::rvs_parse("exr::image::closure#0::crop_samples=S # SideEffect").unwrap();
         let caps = cm
@@ -259,6 +386,18 @@ mod tests {
     #[test]
     fn test_20260425_capsmap_parse_invalid_caps() {
         let result = CapsMap::rvs_parse("func=XYZ");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_20260707_capsmap_parse_rejects_duplicate_caps() {
+        let result = CapsMap::rvs_parse("func=BB");
+        std::fs::create_dir_all("test_out").unwrap();
+        std::fs::write(
+            "test_out/test_20260707_capsmap_parse_rejects_duplicate_caps.out",
+            format!("{result:?}\n"),
+        )
+        .unwrap();
         assert!(result.is_err());
     }
 
@@ -286,6 +425,20 @@ mod tests {
         let cm = CapsMap::rvs_parse("danger=ABIMPSTU").unwrap();
         let caps = cm.rvs_lookup("danger").unwrap();
         assert_eq!(caps.rvs_len(), 8);
+    }
+
+    #[test]
+    fn test_20260705_capsmap_to_text_is_deterministic() {
+        let cm = CapsMap::rvs_parse("zeta=S\nalpha=BI\n").unwrap();
+        let text = cm.rvs_to_text();
+        std::fs::create_dir_all("test_out").unwrap();
+        std::fs::write(
+            "test_out/test_20260705_capsmap_to_text_is_deterministic.out",
+            &text,
+        )
+        .unwrap();
+
+        assert_eq!(text, "alpha=BI\nzeta=S\n");
     }
 
     #[test]
@@ -318,6 +471,165 @@ mod tests {
         assert!(cm.rvs_lookup("func_b").is_some());
         assert!(cm.rvs_lookup("func_c").is_none());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260708_load_dir_layers_rejects_path_escape() {
+        let dir = std::env::temp_dir().join("test_20260708_load_dir_layers_rejects_path_escape");
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("seed"), "func=S\n").unwrap();
+
+        let absolute = dir.join("seed").to_string_lossy().into_owned();
+        assert!(rvs_caps_layer_file_path(&dir, "seed").is_ok());
+        assert!(matches!(
+            rvs_caps_layer_file_path(&dir, "../seed"),
+            Err(CapsMapError::InvalidLayerName { .. })
+        ));
+        let results = ["../seed", "nested/seed", ".", absolute.as_str()]
+            .map(|layer| CapsMap::rvs_load_dir_layers_BIS(&dir, &[layer]));
+        let summary = results
+            .iter()
+            .map(|result| match result {
+                Err(CapsMapError::InvalidLayerName { layer }) => format!("invalid:{layer}"),
+                other => format!("unexpected:{other:?}"),
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::create_dir_all("test_out").unwrap();
+        std::fs::write(
+            "test_out/test_20260708_load_dir_layers_rejects_path_escape.out",
+            format!("{summary}\n").replace(&absolute, "$ABS"),
+        )
+        .unwrap();
+
+        assert!(
+            results
+                .iter()
+                .all(|result| matches!(result, Err(CapsMapError::InvalidLayerName { .. })))
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260706_load_dir_layers_uses_global_precedence() {
+        let dir = std::env::temp_dir().join("test_20260706_load_dir_layers_uses_global_precedence");
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("seed"), "func=S\n").unwrap();
+        std::fs::write(dir.join("suppress"), "func=\n").unwrap();
+
+        let cm = CapsMap::rvs_load_dir_layers_BIS(&dir, &["suppress", "seed"]).unwrap();
+        let caps = cm.rvs_lookup("func").unwrap();
+        std::fs::create_dir_all("test_out").unwrap();
+        std::fs::write(
+            "test_out/test_20260706_load_dir_layers_uses_global_precedence.out",
+            format!("caps={}\n", crate::inference::rvs_caps_to_string(caps)),
+        )
+        .unwrap();
+
+        assert!(caps.rvs_is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260706_load_dir_rejects_caps_file_path() {
+        let path = std::env::temp_dir().join("test_20260706_load_dir_rejects_caps_file_path");
+        std::fs::write(&path, "func=S\n").unwrap();
+        let results = [
+            CapsMap::rvs_load_dir_BIS(&path).is_err(),
+            CapsMap::rvs_load_dir_layers_BIS(&path, &["seed"]).is_err(),
+            CapsMap::rvs_load_dir_excluding_BIS(&path, &["deps"]).is_err(),
+        ];
+        std::fs::create_dir_all("test_out").unwrap();
+        std::fs::write(
+            "test_out/test_20260706_load_dir_rejects_caps_file_path.out",
+            format!("results={results:?}\n"),
+        )
+        .unwrap();
+
+        assert_eq!(results, [true, true, true]);
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_20260706_load_dir_rejects_broken_caps_symlink() {
+        let path = std::env::temp_dir().join("test_20260706_load_dir_rejects_broken_caps_symlink");
+        let _ = std::fs::remove_file(&path);
+        std::os::unix::fs::symlink(path.with_extension("missing"), &path).unwrap();
+        let results = [
+            CapsMap::rvs_load_dir_BIS(&path).is_err(),
+            CapsMap::rvs_load_dir_layers_BIS(&path, &["seed"]).is_err(),
+            CapsMap::rvs_load_dir_excluding_BIS(&path, &["deps"]).is_err(),
+        ];
+        std::fs::create_dir_all("test_out").unwrap();
+        std::fs::write(
+            "test_out/test_20260706_load_dir_rejects_broken_caps_symlink.out",
+            format!("results={results:?}\n"),
+        )
+        .unwrap();
+
+        assert_eq!(results, [true, true, true]);
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn test_20260706_load_dir_layers_rejects_layer_directory() {
+        let dir =
+            std::env::temp_dir().join("test_20260706_load_dir_layers_rejects_layer_directory");
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+        std::fs::create_dir_all(dir.join("seed")).unwrap();
+
+        let layered = CapsMap::rvs_load_dir_layers_BIS(&dir, &["seed"]);
+        let full = CapsMap::rvs_load_dir_BIS(&dir);
+        std::fs::create_dir_all("test_out").unwrap();
+        std::fs::write(
+            "test_out/test_20260706_load_dir_layers_rejects_layer_directory.out",
+            format!("layered={layered:?}\nfull={full:?}\n")
+                .replace(&dir.to_string_lossy().into_owned(), "$TMP"),
+        )
+        .unwrap();
+
+        assert!(layered.is_err());
+        assert!(full.is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260706_require_caps_dir_rejects_file_path() {
+        let path = std::env::temp_dir().join("test_20260706_require_caps_dir_rejects_file_path");
+        std::fs::write(&path, "func=S\n").unwrap();
+        let result = rvs_require_caps_dir_BIS(&path);
+        std::fs::create_dir_all("test_out").unwrap();
+        std::fs::write(
+            "test_out/test_20260706_require_caps_dir_rejects_file_path.out",
+            format!("{result:?}\n").replace(&path.to_string_lossy().into_owned(), "$TMP"),
+        )
+        .unwrap();
+
+        assert!(result.is_err());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn test_20260705_capsmap_file_parse_error_includes_path() {
+        let result = rvs_parse_caps_file("caps/seed", "broken=E");
+        let message = result.unwrap_err().to_string();
+        std::fs::create_dir_all("test_out").unwrap();
+        std::fs::write(
+            "test_out/test_20260705_capsmap_file_parse_error_includes_path.out",
+            format!("{message}\n"),
+        )
+        .unwrap();
+        assert!(message.contains("caps/seed"));
+        assert!(message.contains("line 1"));
     }
 
     #[test]

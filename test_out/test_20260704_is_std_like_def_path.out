@@ -1,0 +1,5 @@
+std=true
+core=true
+alloc=true
+compiler_builtins=true
+local=false

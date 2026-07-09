@@ -1,0 +1,3 @@
+result=Err("Cargo.toml must not be a symlink: $TMP/Cargo.toml")
+external_unchanged=true
+agents_exists=false

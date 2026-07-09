@@ -1,0 +1,2 @@
+segment=rvs_fetch_BI
+split=Some(("fetch", Some("BI")))

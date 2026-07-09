@@ -1,0 +1,9 @@
+error: {} → rvs_handle_ABI (152_calls_in_let_else::rvs_handle_ABI) ({A, B, I}) missing B(Blocking), I(IO)
+  --> $DIR/tests/ui/152_calls_in_let_else.rs:10:9
+   |
+LL |         rvs_handle_ABI();
+   |         ^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(rivus::rvs_call_violation)]` on by default
+
+error: aborting due to 1 previous error

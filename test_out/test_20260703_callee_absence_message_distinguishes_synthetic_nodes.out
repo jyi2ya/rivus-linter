@@ -1,0 +1,3 @@
+collected=(no callees)
+bodyless=(function has no body; callees intentionally absent)
+synthetic=(function body not collected; callees unknown)

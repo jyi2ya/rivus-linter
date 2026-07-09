@@ -17,7 +17,7 @@ pub(crate) fn rvs_check_fn_S(
         cx.emit_span_lint(
             RVS_MISSING_ALLOW,
             span,
-            Msg::new(span, "uppercase suffix without #[allow(non_snake_case)]"),
+            Msg::rvs_new(span, "uppercase suffix without #[allow(non_snake_case)]"),
         );
     }
 }

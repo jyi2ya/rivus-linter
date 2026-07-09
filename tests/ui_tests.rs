@@ -32,9 +32,6 @@ fn rvs_normalize_stderr_S(raw: &str) -> String {
     let dir_str = dir.to_string_lossy().to_string();
     let mut out = raw.to_string();
     out = out.replace(&dir_str, "$DIR");
-    for cap in ['A', 'B', 'I', 'M', 'P', 'S', 'T', 'U'] {
-        out = out.replace(&format!("rivus::rvs_{cap}"), &format!("rivus::rvs_{cap}"));
-    }
     let lines: Vec<&str> = out.lines().filter(|l| !l.contains("generated")).collect();
     lines.join("\n").trim_end().to_string()
 }
@@ -48,6 +45,10 @@ fn rvs_run_one_test_BIS(fixture: &Path, stderr_path: &Path) -> Result<(), String
 
     // Locate caps/ directory (next to the driver binary's source tree)
     let caps_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("caps");
+    let out_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("target")
+        .join("rivus-ui-tests");
+    fs::create_dir_all(&out_dir).map_err(|e| format!("create {:?}: {e}", out_dir))?;
 
     // Parse // compile-flags: and // check-pass directives from the fixture
     let source = fs::read_to_string(fixture).map_err(|e| format!("read {:?}: {e}", fixture))?;
@@ -77,6 +78,8 @@ fn rvs_run_one_test_BIS(fixture: &Path, stderr_path: &Path) -> Result<(), String
         .arg("rustc")
         .arg("--edition=2024")
         .arg("--emit=metadata")
+        .arg("--out-dir")
+        .arg(&out_dir)
         .arg("-Aunused")
         .arg("-Ainternal_features")
         .arg("-Zui-testing")

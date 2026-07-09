@@ -1,0 +1,7 @@
+lib:
+pub fn parse() -> i32 { 1 }
+
+main:
+fn parse() -> i32 { 2 }
+
+fn main() { let _ = parse(); }

@@ -138,7 +138,7 @@ impl DefPath {
 
     /// Return the last function-name segment of the def-path.
     pub fn rvs_fn_name(&self) -> FnName {
-        FnName::rvs_new(self.0.rsplit("::").next().unwrap_or(&self.0))
+        rvs_path_fn_name(&self.0)
     }
 
     /// Return whether this def-path belongs to the given crate prefix.
@@ -206,8 +206,13 @@ impl RelativeFnPath {
 
     /// Return the last function-name segment of the relative path.
     pub fn rvs_fn_name(&self) -> FnName {
-        FnName::rvs_new(self.0.rsplit("::").next().unwrap_or(&self.0))
+        rvs_path_fn_name(&self.0)
     }
+}
+
+fn rvs_path_fn_name(path: &str) -> FnName {
+    let method_path = path.split_once('@').map_or(path, |(method, _)| method);
+    FnName::rvs_new(method_path.rsplit("::").next().unwrap_or(method_path))
 }
 
 impl fmt::Display for RelativeFnPath {
@@ -334,5 +339,27 @@ mod tests {
         assert_eq!(relative.rvs_as_str(), "cli::main");
         assert!(def_path.rvs_starts_with(&prefix));
         assert_eq!(root_main.rvs_as_str(), "cargo_rivus::main");
+    }
+
+    #[test]
+    fn test_20260703_fn_name_ignores_trait_impl_suffix() {
+        let def_path = DefPath::rvs_new("demo::Adapter::rvs_fetch_BI@demo::Client");
+        let prefix = CrateName::from("demo").rvs_prefix();
+        let relative = def_path
+            .rvs_strip_prefix(&prefix)
+            .expect("def path should have local prefix");
+        let output = format!(
+            "def_name={}\nrelative_name={}\n",
+            def_path.rvs_fn_name(),
+            relative.rvs_fn_name(),
+        );
+        rvs_snapshot_BIS("test_20260703_fn_name_ignores_trait_impl_suffix", &output);
+
+        assert_eq!(
+            rvs_path_fn_name("demo::Adapter::rvs_fetch_BI@demo::Client").rvs_as_str(),
+            "rvs_fetch_BI"
+        );
+        assert_eq!(def_path.rvs_fn_name().rvs_as_str(), "rvs_fetch_BI");
+        assert_eq!(relative.rvs_fn_name().rvs_as_str(), "rvs_fetch_BI");
     }
 }

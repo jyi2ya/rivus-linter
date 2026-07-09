@@ -7,9 +7,7 @@ use rustc_hir::{
 use rustc_lint::LateContext;
 use rustc_span::{Span, Symbol};
 
-use crate::capability::{
-    Capability, CapabilityFacts, CapabilitySet, rvs_extract_raw_suffix, rvs_parse_function,
-};
+use crate::capability::{Capability, CapabilitySet, rvs_extract_raw_suffix, rvs_parse_function};
 
 // ─── Constants ───────────────────────────────────────────────────────────
 
@@ -150,22 +148,20 @@ pub(crate) fn rvs_is_pub_impl_item(cx: &LateContext<'_>, impl_item: &ImplItem<'_
 pub(crate) struct FnInfo {
     pub caps: CapabilitySet,
     pub raw_suffix: String,
-    pub facts: CapabilityFacts,
 }
 
 impl FnInfo {
-    pub(crate) fn rvs_extract_signature(name: &str, sig: &rustc_hir::FnSig<'_>) -> Option<Self> {
+    pub(crate) fn rvs_extract_signature(name: &str, _sig: &rustc_hir::FnSig<'_>) -> Option<Self> {
         let (_, caps) = rvs_parse_function(name)?;
         Some(Self {
             caps,
             raw_suffix: rvs_extract_raw_suffix(name),
-            facts: CapabilityFacts::rvs_from_signature(sig, rvs_has_mutable_params(sig), false),
         })
     }
 
     pub(crate) fn rvs_extract<'tcx>(
         name: &str,
-        sig: &rustc_hir::FnSig<'_>,
+        _sig: &rustc_hir::FnSig<'_>,
         _body: &Body<'tcx>,
         _tcx: rustc_middle::ty::TyCtxt<'tcx>,
     ) -> Option<Self> {
@@ -173,7 +169,6 @@ impl FnInfo {
         Some(Self {
             caps,
             raw_suffix: rvs_extract_raw_suffix(name),
-            facts: CapabilityFacts::rvs_from_signature(sig, rvs_has_mutable_params(sig), false),
         })
     }
 }
@@ -268,6 +263,9 @@ pub(crate) fn rvs_is_empty_body(body: &Body<'_>) -> (bool, bool) {
 }
 
 fn rvs_is_only_debug_asserts(e: &Expr<'_>) -> bool {
+    if rvs_expr_from_debug_assert_macro(e) {
+        return true;
+    }
     match &e.kind {
         ExprKind::Block(b, _) => {
             for s in b.stmts {
@@ -300,6 +298,29 @@ fn rvs_is_only_debug_asserts(e: &Expr<'_>) -> bool {
     }
 }
 
+fn rvs_expr_from_debug_assert_macro(e: &Expr<'_>) -> bool {
+    let da = Symbol::intern("debug_assert");
+    let dae = Symbol::intern("debug_assert_eq");
+    let dan = Symbol::intern("debug_assert_ne");
+    let outer = e.span.ctxt().outer_expn_data();
+    if let rustc_span::ExpnKind::Macro(rustc_span::MacroKind::Bang, name) = outer.kind
+        && (name == da || name == dae || name == dan)
+    {
+        return true;
+    }
+    let mut expn_id = outer.parent;
+    while expn_id != rustc_span::ExpnId::root() {
+        let expn = expn_id.expn_data();
+        if let rustc_span::ExpnKind::Macro(rustc_span::MacroKind::Bang, name) = expn.kind
+            && (name == da || name == dae || name == dan)
+        {
+            return true;
+        }
+        expn_id = expn.parent;
+    }
+    false
+}
+
 pub(crate) fn rvs_scan_debug_asserts_M<'tcx>(
     tcx: rustc_middle::ty::TyCtxt<'tcx>,
     body: &Body<'tcx>,
@@ -308,32 +329,42 @@ pub(crate) fn rvs_scan_debug_asserts_M<'tcx>(
     let dae = Symbol::intern("debug_assert_eq");
     let dan = Symbol::intern("debug_assert_ne");
     let mut out = BTreeSet::new();
-    rvs_walk_closures(tcx, body.value, |e| {
-        if e.span.from_expansion() {
-            let mut expn_id = e.span.ctxt().outer_expn_data().parent;
-            let mut is_debug_assert = false;
-            let outer_expn = e.span.ctxt().outer_expn_data();
-            if let rustc_span::ExpnKind::Macro(rustc_span::MacroKind::Bang, name) = outer_expn.kind
-            {
-                if name == da || name == dae || name == dan {
-                    is_debug_assert = true;
-                }
-            }
-            while expn_id != rustc_span::ExpnId::root() {
-                let expn = expn_id.expn_data();
-                if let rustc_span::ExpnKind::Macro(rustc_span::MacroKind::Bang, name) = expn.kind {
+    let resolver = |_bid: rustc_hir::BodyId| -> Option<&'tcx Body<'tcx>> { None };
+    let body_expr = rvs_root_body_expr(tcx, body);
+    rvs_walk_expr_M(
+        body_expr,
+        &mut |e| {
+            if e.span.from_expansion() {
+                let mut expn_id = e.span.ctxt().outer_expn_data().parent;
+                let mut is_debug_assert = false;
+                let outer_expn = e.span.ctxt().outer_expn_data();
+                if let rustc_span::ExpnKind::Macro(rustc_span::MacroKind::Bang, name) =
+                    outer_expn.kind
+                {
                     if name == da || name == dae || name == dan {
                         is_debug_assert = true;
-                        break;
                     }
                 }
-                expn_id = expn.parent;
+                while expn_id != rustc_span::ExpnId::root() {
+                    let expn = expn_id.expn_data();
+                    if let rustc_span::ExpnKind::Macro(rustc_span::MacroKind::Bang, name) =
+                        expn.kind
+                    {
+                        if name == da || name == dae || name == dan {
+                            is_debug_assert = true;
+                            break;
+                        }
+                    }
+                    expn_id = expn.parent;
+                }
+                if is_debug_assert {
+                    rvs_collect_all_idents_M(e, &mut out);
+                }
             }
-            if is_debug_assert {
-                rvs_collect_all_idents_M(e, &mut out);
-            }
-        }
-    });
+        },
+        &resolver,
+        0,
+    );
     out
 }
 
@@ -437,13 +468,14 @@ pub(crate) fn rvs_scan_static_refs_M<'tcx>(
                         mutability: Mutability::Mut,
                         ..
                     } => {
-                        let required = {
-                            let mut cs = CapabilitySet::rvs_new();
-                            cs.rvs_insert_M(Capability::S);
-                            cs.rvs_insert_M(Capability::U);
-                            cs
-                        };
-                        refs.push((e.span, required, false));
+                        let mut required = CapabilitySet::rvs_new();
+                        required.rvs_insert_M(Capability::S);
+                        required.rvs_insert_M(Capability::U);
+                        let is_thread_local = rvs_static_is_thread_local(cx, did);
+                        if is_thread_local {
+                            required.rvs_insert_M(Capability::T);
+                        }
+                        refs.push((e.span, required, is_thread_local));
                     }
                     rustc_hir::def::DefKind::Static {
                         mutability: Mutability::Not,
@@ -451,12 +483,7 @@ pub(crate) fn rvs_scan_static_refs_M<'tcx>(
                     } => {
                         let mut cs = CapabilitySet::rvs_new();
                         cs.rvs_insert_M(Capability::S);
-                        let mut is_thread_local = false;
-                        if let Some(local_did) = did.as_local() {
-                            let owner_id = rustc_hir::OwnerId { def_id: local_did };
-                            let attrs = cx.tcx.hir_attrs(rustc_hir::HirId::from(owner_id));
-                            is_thread_local = rvs_has_attr(attrs, "thread_local");
-                        }
+                        let is_thread_local = rvs_static_is_thread_local(cx, did);
                         if is_thread_local {
                             cs.rvs_insert_M(Capability::T);
                         }
@@ -468,6 +495,15 @@ pub(crate) fn rvs_scan_static_refs_M<'tcx>(
         }
     });
     refs
+}
+
+pub(crate) fn rvs_static_is_thread_local(cx: &LateContext<'_>, did: DefId) -> bool {
+    if let Some(local_did) = did.as_local() {
+        let owner_id = rustc_hir::OwnerId { def_id: local_did };
+        let attrs = cx.tcx.hir_attrs(rustc_hir::HirId::from(owner_id));
+        return rvs_has_attr(attrs, "thread_local");
+    }
+    false
 }
 
 pub(crate) fn rvs_collect_test_call_names_M<'tcx>(
@@ -499,7 +535,8 @@ pub(crate) fn rvs_count_effective_lines_M<'tcx>(
     body: &Body<'tcx>,
 ) -> usize {
     let source_map = cx.tcx.sess.source_map();
-    let block = match &body.value.kind {
+    let body_expr = rvs_root_body_expr(cx.tcx, body);
+    let block = match &body_expr.kind {
         ExprKind::Block(b, _) => b,
         _ => return 0,
     };
@@ -519,6 +556,24 @@ pub(crate) fn rvs_count_effective_lines_M<'tcx>(
         }
     }
     count
+}
+
+fn rvs_root_body_expr<'tcx>(
+    tcx: rustc_middle::ty::TyCtxt<'tcx>,
+    body: &Body<'tcx>,
+) -> &'tcx Expr<'tcx> {
+    let mut expr = body.value;
+    loop {
+        match &expr.kind {
+            ExprKind::Closure(closure) => {
+                expr = tcx.hir_body(closure.body).value;
+            }
+            ExprKind::DropTemps(inner) | ExprKind::Become(inner) | ExprKind::Use(inner, _) => {
+                expr = inner;
+            }
+            _ => return expr,
+        }
+    }
 }
 
 fn rvs_line_has_effective_code_M(line: &str, in_comment: &mut bool) -> bool {
@@ -569,120 +624,137 @@ fn rvs_line_has_effective_code_M(line: &str, in_comment: &mut bool) -> bool {
 
 // ─── Walker ──────────────────────────────────────────────────────────────
 
+fn rvs_walk_expr_M<'tcx, F: FnMut(&'tcx Expr<'tcx>)>(
+    e: &'tcx Expr<'tcx>,
+    f: &mut F,
+    resolve_body: &dyn Fn(rustc_hir::BodyId) -> Option<&'tcx Body<'tcx>>,
+    depth: u32,
+) {
+    debug_assert!(
+        depth <= 17,
+        "closure walk depth is capped before recursion continues"
+    );
+    if depth > 16 {
+        return;
+    }
+    f(e);
+    match &e.kind {
+        ExprKind::Array(a) | ExprKind::Tup(a) => a
+            .iter()
+            .for_each(|x| rvs_walk_expr_M(x, f, resolve_body, depth)),
+        ExprKind::Call(fn_, a) => {
+            rvs_walk_expr_M(fn_, f, resolve_body, depth);
+            a.iter()
+                .for_each(|x| rvs_walk_expr_M(x, f, resolve_body, depth));
+        }
+        ExprKind::MethodCall(_, r, a, _) => {
+            rvs_walk_expr_M(r, f, resolve_body, depth);
+            a.iter()
+                .for_each(|x| rvs_walk_expr_M(x, f, resolve_body, depth));
+        }
+        ExprKind::Binary(_, l, r) | ExprKind::AssignOp(_, l, r) => {
+            rvs_walk_expr_M(l, f, resolve_body, depth);
+            rvs_walk_expr_M(r, f, resolve_body, depth);
+        }
+        ExprKind::Unary(_, x)
+        | ExprKind::Cast(x, _)
+        | ExprKind::Type(x, _)
+        | ExprKind::Field(x, _)
+        | ExprKind::Index(x, _, _)
+        | ExprKind::AddrOf(_, _, x)
+        | ExprKind::Repeat(x, _)
+        | ExprKind::Yield(x, _) => rvs_walk_expr_M(x, f, resolve_body, depth),
+        ExprKind::Let(l) => rvs_walk_expr_M(&l.init, f, resolve_body, depth),
+        ExprKind::If(c, t, el) => {
+            rvs_walk_expr_M(c, f, resolve_body, depth);
+            rvs_walk_expr_M(t, f, resolve_body, depth);
+            if let Some(e) = el {
+                rvs_walk_expr_M(e, f, resolve_body, depth);
+            }
+        }
+        ExprKind::Match(s, arms, _) => {
+            rvs_walk_expr_M(s, f, resolve_body, depth);
+            for arm in *arms {
+                if let Some(guard) = arm.guard {
+                    rvs_walk_expr_M(guard, f, resolve_body, depth);
+                }
+                rvs_walk_expr_M(&arm.body, f, resolve_body, depth);
+            }
+        }
+        ExprKind::Loop(b, ..) | ExprKind::Block(b, _) => {
+            rvs_walk_block_M(b, f, resolve_body, depth)
+        }
+        ExprKind::Assign(l, r, _) => {
+            rvs_walk_expr_M(l, f, resolve_body, depth);
+            rvs_walk_expr_M(r, f, resolve_body, depth);
+        }
+        ExprKind::Break(_, Some(x)) | ExprKind::Ret(Some(x)) => {
+            rvs_walk_expr_M(&**x, f, resolve_body, depth)
+        }
+        ExprKind::Struct(_, fld, rest) => {
+            fld.iter()
+                .for_each(|fl| rvs_walk_expr_M(&fl.expr, f, resolve_body, depth));
+            if let rustc_hir::StructTailExpr::Base(r) = rest {
+                rvs_walk_expr_M(r, f, resolve_body, depth);
+            }
+        }
+        ExprKind::Closure(closure) => {
+            if let Some(body) = resolve_body(closure.body) {
+                rvs_walk_expr_M(body.value, f, resolve_body, depth + 1);
+            }
+        }
+        ExprKind::InlineAsm(asm) => asm.operands.iter().for_each(|(op, _)| match op {
+            rustc_hir::InlineAsmOperand::In { expr, .. }
+            | rustc_hir::InlineAsmOperand::Out {
+                expr: Some(expr), ..
+            } => rvs_walk_expr_M(expr, f, resolve_body, depth),
+            _ => {}
+        }),
+        ExprKind::DropTemps(x) => rvs_walk_expr_M(x, f, resolve_body, depth),
+        ExprKind::Become(x) => rvs_walk_expr_M(x, f, resolve_body, depth),
+        ExprKind::Use(x, _) => rvs_walk_expr_M(x, f, resolve_body, depth),
+        _ => {}
+    }
+}
+
+fn rvs_walk_block_M<'tcx, F: FnMut(&'tcx Expr<'tcx>)>(
+    b: &'tcx Block<'tcx>,
+    f: &mut F,
+    resolve_body: &dyn Fn(rustc_hir::BodyId) -> Option<&'tcx Body<'tcx>>,
+    depth: u32,
+) {
+    debug_assert!(
+        depth <= 17,
+        "closure walk depth is capped before recursion continues"
+    );
+    for s in b.stmts {
+        match &s.kind {
+            rustc_hir::StmtKind::Expr(e) | rustc_hir::StmtKind::Semi(e) => {
+                rvs_walk_expr_M(e, f, resolve_body, depth)
+            }
+            rustc_hir::StmtKind::Let(l) => {
+                if let Some(i) = l.init {
+                    rvs_walk_expr_M(i, f, resolve_body, depth);
+                }
+                if let Some(els) = l.els {
+                    rvs_walk_block_M(els, f, resolve_body, depth);
+                }
+            }
+            _ => {}
+        }
+    }
+    if let Some(e) = b.expr {
+        rvs_walk_expr_M(e, f, resolve_body, depth);
+    }
+}
+
 pub(crate) fn rvs_walk_closures<'tcx, F: FnMut(&'tcx Expr<'tcx>)>(
     tcx: rustc_middle::ty::TyCtxt<'tcx>,
     e: &'tcx Expr<'tcx>,
     mut f: F,
 ) {
-    fn go<'tcx, F: FnMut(&'tcx Expr<'tcx>)>(
-        e: &'tcx Expr<'tcx>,
-        f: &mut F,
-        resolve_body: &dyn Fn(rustc_hir::BodyId) -> Option<&'tcx Body<'tcx>>,
-        depth: u32,
-    ) {
-        if depth > 16 {
-            return;
-        }
-        f(e);
-        match &e.kind {
-            ExprKind::Array(a) | ExprKind::Tup(a) => {
-                a.iter().for_each(|x| go(x, f, resolve_body, depth))
-            }
-            ExprKind::Call(fn_, a) => {
-                go(fn_, f, resolve_body, depth);
-                a.iter().for_each(|x| go(x, f, resolve_body, depth));
-            }
-            ExprKind::MethodCall(_, r, a, _) => {
-                go(r, f, resolve_body, depth);
-                a.iter().for_each(|x| go(x, f, resolve_body, depth));
-            }
-            ExprKind::Binary(_, l, r) | ExprKind::AssignOp(_, l, r) => {
-                go(l, f, resolve_body, depth);
-                go(r, f, resolve_body, depth);
-            }
-            ExprKind::Unary(_, x)
-            | ExprKind::Cast(x, _)
-            | ExprKind::Type(x, _)
-            | ExprKind::Field(x, _)
-            | ExprKind::Index(x, _, _)
-            | ExprKind::AddrOf(_, _, x)
-            | ExprKind::Repeat(x, _)
-            | ExprKind::Yield(x, _) => go(x, f, resolve_body, depth),
-            ExprKind::Let(l) => go(&l.init, f, resolve_body, depth),
-            ExprKind::If(c, t, el) => {
-                go(c, f, resolve_body, depth);
-                go(t, f, resolve_body, depth);
-                if let Some(e) = el {
-                    go(e, f, resolve_body, depth);
-                }
-            }
-            ExprKind::Match(s, arms, _) => {
-                go(s, f, resolve_body, depth);
-                for arm in *arms {
-                    if let Some(guard) = arm.guard {
-                        go(guard, f, resolve_body, depth);
-                    }
-                    go(&arm.body, f, resolve_body, depth);
-                }
-            }
-            ExprKind::Loop(b, ..) | ExprKind::Block(b, _) => wblk(b, f, resolve_body, depth),
-            ExprKind::Assign(l, r, _) => {
-                go(l, f, resolve_body, depth);
-                go(r, f, resolve_body, depth);
-            }
-            ExprKind::Break(_, Some(x)) | ExprKind::Ret(Some(x)) => {
-                go(&**x, f, resolve_body, depth)
-            }
-            ExprKind::Struct(_, fld, rest) => {
-                fld.iter()
-                    .for_each(|fl| go(&fl.expr, f, resolve_body, depth));
-                if let rustc_hir::StructTailExpr::Base(r) = rest {
-                    go(r, f, resolve_body, depth);
-                }
-            }
-            ExprKind::Closure(closure) => {
-                if let Some(body) = resolve_body(closure.body) {
-                    go(body.value, f, resolve_body, depth + 1);
-                }
-            }
-            ExprKind::InlineAsm(asm) => asm.operands.iter().for_each(|(op, _)| match op {
-                rustc_hir::InlineAsmOperand::In { expr, .. }
-                | rustc_hir::InlineAsmOperand::Out {
-                    expr: Some(expr), ..
-                } => go(expr, f, resolve_body, depth),
-                _ => {}
-            }),
-            ExprKind::DropTemps(x) => go(x, f, resolve_body, depth),
-            ExprKind::Become(x) => go(x, f, resolve_body, depth),
-            ExprKind::Use(x, _) => go(x, f, resolve_body, depth),
-            _ => {}
-        }
-    }
-    fn wblk<'tcx, F: FnMut(&'tcx Expr<'tcx>)>(
-        b: &'tcx Block<'tcx>,
-        f: &mut F,
-        resolve_body: &dyn Fn(rustc_hir::BodyId) -> Option<&'tcx Body<'tcx>>,
-        depth: u32,
-    ) {
-        for s in b.stmts {
-            match &s.kind {
-                rustc_hir::StmtKind::Expr(e) | rustc_hir::StmtKind::Semi(e) => {
-                    go(e, f, resolve_body, depth)
-                }
-                rustc_hir::StmtKind::Let(l) => {
-                    if let Some(i) = l.init {
-                        go(i, f, resolve_body, depth);
-                    }
-                }
-                _ => {}
-            }
-        }
-        if let Some(e) = b.expr {
-            go(e, f, resolve_body, depth);
-        }
-    }
     let resolver = |bid: rustc_hir::BodyId| -> Option<&'tcx Body<'tcx>> { Some(tcx.hir_body(bid)) };
-    go(e, &mut f, &resolver, 0);
+    rvs_walk_expr_M(e, &mut f, &resolver, 0);
 }
 
 // ─── Path helpers ────────────────────────────────────────────────────────
@@ -725,14 +797,16 @@ pub(crate) fn rvs_plast(q: &QPath<'_>) -> Option<String> {
 pub(crate) fn rvs_def_path(cx: &LateContext<'_>, did: DefId) -> String {
     let tcx = cx.tcx;
     let dp = tcx.def_path(did);
-    let inherent_impl_ty: Option<String> = cx
+    let impl_ty: Option<String> = cx
         .tcx
         .opt_associated_item(did)
         .map(|assoc| (assoc, assoc.container_id(cx.tcx)))
         .and_then(|(_, impl_def_id)| {
-            if let rustc_hir::def::DefKind::Impl { of_trait: false } = cx.tcx.def_kind(impl_def_id)
-            {
-                rvs_inherent_impl_type_name(cx, impl_def_id)
+            if matches!(
+                cx.tcx.def_kind(impl_def_id),
+                rustc_hir::def::DefKind::Impl { .. }
+            ) {
+                rvs_impl_type_name(cx, impl_def_id)
             } else {
                 None
             }
@@ -748,7 +822,7 @@ pub(crate) fn rvs_def_path(cx: &LateContext<'_>, did: DefId) -> String {
                 parts.push(s.to_string());
             }
             rustc_hir::definitions::DefPathData::Impl => {
-                if let Some(ref ty_name) = inherent_impl_ty {
+                if let Some(ref ty_name) = impl_ty {
                     parts.push(ty_name.clone());
                 }
                 has_impl = true;
@@ -777,7 +851,7 @@ pub(crate) fn rvs_def_path(cx: &LateContext<'_>, did: DefId) -> String {
     path
 }
 
-fn rvs_inherent_impl_type_name(cx: &LateContext<'_>, impl_def_id: DefId) -> Option<String> {
+fn rvs_impl_type_name(cx: &LateContext<'_>, impl_def_id: DefId) -> Option<String> {
     let self_ty = cx.tcx.type_of(impl_def_id).skip_binder();
     let ty_str = self_ty.to_string();
     match self_ty.kind() {
@@ -868,6 +942,7 @@ mod tests {
             let _impl_item: &ImplItem<'_> = unreachable!();
             let _sig: &rustc_hir::FnSig<'_> = unreachable!();
             let _body: &Body<'_> = unreachable!();
+            let _block: &Block<'_> = unreachable!();
             let _expr: &Expr<'_> = unreachable!();
             let _qpath: &QPath<'_> = unreachable!();
             let _ty: &rustc_hir::Ty<'_> = unreachable!();
@@ -890,18 +965,24 @@ mod tests {
             rvs_scan_stub(_tcx, _body);
             rvs_is_empty_body(_body);
             rvs_is_only_debug_asserts(_expr);
+            rvs_expr_from_debug_assert_macro(_expr);
             rvs_scan_debug_asserts_M(_tcx, _body);
             rvs_collect_all_idents_M(_expr, &mut set);
             rvs_scan_static_refs_M(_cx, _body);
+            rvs_static_is_thread_local(_cx, _def_id);
             rvs_collect_test_call_names_M(_tcx, _body, &mut names);
             rvs_count_effective_lines_M(_cx, _body);
+            rvs_root_body_expr(_tcx, _body);
             rvs_line_has_effective_code_M("let x = 1;", &mut in_comment);
+            let resolver = |_bid: rustc_hir::BodyId| -> Option<&Body<'_>> { None };
+            rvs_walk_expr_M(_expr, &mut |_| {}, &resolver, 0);
+            rvs_walk_block_M(_block, &mut |_| {}, &resolver, 0);
             rvs_walk_closures(_tcx, _expr, |_| {});
             rvs_qp(_qpath);
             rvs_tys(_ty);
             rvs_plast(_qpath);
             rvs_def_path(_cx, _def_id);
-            rvs_inherent_impl_type_name(_cx, _def_id);
+            rvs_impl_type_name(_cx, _def_id);
             rvs_ty_last_ident(_ty);
             rvs_generic_args_result_type(None);
             rvs_collect_type_idents_M(_ty, &mut refs);

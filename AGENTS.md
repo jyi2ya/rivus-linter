@@ -87,7 +87,7 @@ test_out/
 
 > *"To err is human; to forgive, divine."*
 
-每个可能失败的函数定义完整的错误类型枚举，调用者必须处理每种错误。采用 Rust 的 `Result<T, E>` 模式。用 thiserror，禁止使用 `anyhow`、`eyre`、`color_eyre`。
+每个可能失败的函数定义完整的错误类型枚举，调用者必须处理每种错误。采用 Rust 的 `Result<T, E>` 模式。用 snafu，禁止使用 `thiserror`、`anyhow`、`eyre`、`color_eyre`。
 
 **Result/Option 由类型系统强制处理**——编译器保证调用方必须 `match` 或 `?`，因此不需要额外的能力标记。
 
@@ -96,20 +96,23 @@ test_out/
 - 每个模块/领域定义自己的错误枚举
 - 错误变体应当穷举所有可能的失败模式，不留 `Unknown` 或 `Other` 之类的兜底（除非是 FFI 边界）
 - 错误类型携带足够的上下文信息用于诊断
-- 上层模块可以将下层错误 `#[from]` 包装，形成错误链
+- 上层模块转换下层错误时必须显式添加当前层上下文；禁止用 `#[from]` 风格无上下文转发
+- 错误变体按调用者可采取的动作或当前层操作命名，不按依赖来源命名（如 `Db`/`Io`/`Serde`）
 
 ### 示例
 
 ```rust
-#[derive(Debug, thiserror::Error)]
+use snafu::Snafu;
+
+#[derive(Debug, Snafu)]
 enum UserRepoError {
-    #[error("user {id} not found")]
+    #[snafu(display("user {id} not found"))]
     NotFound { id: UserId },
-    #[error("duplicate email: {email}")]
+    #[snafu(display("duplicate email: {email}"))]
     DuplicateEmail { email: String },
-    #[error("database connection failed")]
-    ConnectionFailed(#[from] DbError),
-    #[error("user {id} is suspended, reason: {reason}")]
+    #[snafu(display("failed to load user {id} from repository"))]
+    LoadUser { id: UserId, source: DbError },
+    #[snafu(display("user {id} is suspended, reason: {reason}"))]
     Suspended { id: UserId, reason: String },
 }
 ```
@@ -180,15 +183,9 @@ async fn rvs_send_email_ABIS(email: &Validated<Email>, body: &str) -> Result<(),
 | `T` | **ThreadLocal** | 依赖线程局部状态，不可跨线程共享 | 线程安全 / 无状态 |
 | `U` | **Unsafe** | 包含不安全操作（裸指针、FFI、transmute） | 安全代码 |
 
-#### 函数级别
-
-| 级别 | 能力范围 | 含义 | 测试策略 |
-|------|---------|------|---------|
-| pure | 空集 | 确定性、无副作用 | 直接单元测试，穷举边界条件 |
-| good | `{A,B,M}` 子集 | 无 I/O、无副作用 | 直接单元测试 |
-| ok | `{A,B,M,P}` 子集 | good 的超集；Port 方法可通过 mock 测试 | [mockall](https://docs.rs/mockall) mock 测试 |
-
-Linter 对未测试的 good 函数和未测试的 ok 函数都会发出警告。
+其中，能力集合是 `{A,B,M}` 的子集的函数为好函数（good），即 `{A,B,M}` 的部分函数；
+能力集合是 `{A,B,M,P}` 的子集的函数为 `ok` 函数。
+`ok` 包含 `good`，用于 Port 场景下通过 mock 进行隔离测试。
 
 ### 常见行为模式示例
 
@@ -218,7 +215,7 @@ Port 方法的 P 不从函数后缀中解析，而是由 trait 名推断。当�
 - 没有获得 P 的函数不能调用 Port 方法
 - Port 方法可以通过 [mockall](https://docs.rs/mockall) 生成 mock 实现进行测试
 
-推荐使用 `rvs_*_P` 命名约定显式标注 Port 方法（当 trait 名不足以推断时）。
+推荐使用 `rvs_*_P` 命名约定显式标注 Port 方法的调用方。
 
 ### 调用规则
 
@@ -568,7 +565,7 @@ fn test_20260422_create_order_ok() {
 * 提交前必须运行日常开发流程中的全部检查命令，汇总检查结果和变更内容生成一份汇报，询问用户是否确认提交，收到确认后才执行 `git commit` 和 `git push`
 * 函数能力最好按照字母顺序排列
 * 多用泛型少用 dyn
-* 用 `.expect("never: 补充说明")` 标注不会 panic 的 `.expect()` 调用——这只是一种编码惯例，linter 不再检测 P 能力（P 现在表示 Port）
+* 用 `.expect("never: 补充说明")` 标注不会 panic 的 `.expect()` 调用——这只是一种编码惯例，linter 不再检测 P 能力
 * 用结构体显式定义数据类型，不要直接使用 `serde_json::Value` 和 `serde_json::json!`
 * 编程过程中需要创建临时目录时，优先使用 `$TMPDIR`（如果已设置）或 `~/tmp`，而不是 `/tmp`
 * 禁止使用 `#![deny(warnings)]`——应改用具名 lint（如 `#![deny(unused_imports)]`）

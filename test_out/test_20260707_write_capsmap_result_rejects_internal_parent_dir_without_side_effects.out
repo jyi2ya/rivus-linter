@@ -1,0 +1,4 @@
+result=Err("std capsmap output path must not contain '..': $TMP/missing/../deps")
+default_exists=false
+missing_exists=false
+deps_exists=false

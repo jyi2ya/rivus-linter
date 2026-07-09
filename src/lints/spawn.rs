@@ -22,7 +22,7 @@ pub(crate) fn rvs_check_fn_MS<'tcx>(cx: &LateContext<'tcx>, body: &Body<'tcx>, i
                             cx.emit_span_lint(
                                 RVS_SPAWN_WARNING,
                                 e.span,
-                                Msg::new(
+                                Msg::rvs_new(
                                     e.span,
                                     format!("spawn: {fp} — use structured concurrency"),
                                 ),
@@ -35,7 +35,10 @@ pub(crate) fn rvs_check_fn_MS<'tcx>(cx: &LateContext<'tcx>, body: &Body<'tcx>, i
                         cx.emit_span_lint(
                             RVS_SPAWN_WARNING,
                             e.span,
-                            Msg::new(e.span, format!("spawn: {ps} — use structured concurrency")),
+                            Msg::rvs_new(
+                                e.span,
+                                format!("spawn: {ps} — use structured concurrency"),
+                            ),
                         );
                     }
                 }
@@ -50,7 +53,7 @@ pub(crate) fn rvs_check_fn_MS<'tcx>(cx: &LateContext<'tcx>, body: &Body<'tcx>, i
                     cx.emit_span_lint(
                         RVS_SPAWN_WARNING,
                         e.span,
-                        Msg::new(e.span, format!("spawn: {fp}")),
+                        Msg::rvs_new(e.span, format!("spawn: {fp}")),
                     );
                 }
             }

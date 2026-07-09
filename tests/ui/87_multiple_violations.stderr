@@ -6,7 +6,7 @@ LL | fn rvs_inner_ABI() {}
    |
    = note: `#[deny(rivus::rvs_empty_fn)]` on by default
 
-error: {} → {A, B, I} missing B(Blocking), I(IO)
+error: {} → rvs_inner_ABI (87_multiple_violations::rvs_inner_ABI) ({A, B, I}) missing B(Blocking), I(IO)
   --> $DIR/tests/ui/87_multiple_violations.rs:5:5
    |
 LL |     rvs_inner_ABI();
@@ -20,7 +20,7 @@ error: empty function body
 LL | fn rvs_pure_M() {}
    | ^^^^^^^^^^^^^^^^^^
 
-error: {} → {A, B, I} missing B(Blocking), I(IO)
+error: {} → rvs_inner_ABI (87_multiple_violations::rvs_inner_ABI) ({A, B, I}) missing B(Blocking), I(IO)
   --> $DIR/tests/ui/87_multiple_violations.rs:9:5
    |
 LL |     rvs_inner_ABI();

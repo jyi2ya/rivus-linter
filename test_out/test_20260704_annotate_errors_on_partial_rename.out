@@ -1,0 +1,2 @@
+Err("rename candidate 'missing' did not match any rust-analyzer symbol")
+pub fn parse() -> i32 { 1 }

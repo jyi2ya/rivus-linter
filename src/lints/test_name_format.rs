@@ -11,7 +11,7 @@ pub(crate) fn rvs_check_fn_S(cx: &LateContext<'_>, name: &str, span: Span, is_te
         cx.emit_span_lint(
             RVS_TEST_NAME_FORMAT,
             span,
-            Msg::new(span, format!("test '{name}' not test_YYYYMMDD_name")),
+            Msg::rvs_new(span, format!("test '{name}' not test_YYYYMMDD_name")),
         );
     }
 }

@@ -1,0 +1,1 @@
+mismatch=CallContractMismatch { callee_display: "rvs_fetch_BI (demo::rvs_fetch_BI)", kind: MissingCapabilities, callee_caps: Some(CapabilitySet({B, I})), missing_caps: {B, I} }

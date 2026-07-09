@@ -1,0 +1,6 @@
+inherent=User
+generic_impl=User
+generic_type=User
+qualified=User
+trait_impl=impl ApiClient for User
+module=api

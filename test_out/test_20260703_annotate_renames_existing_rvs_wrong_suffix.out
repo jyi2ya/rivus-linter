@@ -1,0 +1,2 @@
+pub trait ApiClient { fn rvs_fetch_P(&self) -> i32 { 1 } }
+pub fn rvs_use_P<C: ApiClient>(client: &C) -> i32 { client.rvs_fetch_P() }

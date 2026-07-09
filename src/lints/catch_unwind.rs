@@ -23,7 +23,7 @@ pub(crate) fn rvs_check_fn_MS<'tcx>(cx: &LateContext<'tcx>, body: &Body<'tcx>) {
                             cx.emit_span_lint(
                                 RVS_CATCH_UNWIND,
                                 e.span,
-                                Msg::new(e.span, "catch_unwind — fix panic source instead"),
+                                Msg::rvs_new(e.span, "catch_unwind — fix panic source instead"),
                             );
                         }
                     }
@@ -36,7 +36,7 @@ pub(crate) fn rvs_check_fn_MS<'tcx>(cx: &LateContext<'tcx>, body: &Body<'tcx>) {
                 cx.emit_span_lint(
                     RVS_CATCH_UNWIND,
                     e.span,
-                    Msg::new(e.span, "catch_unwind — fix panic source instead"),
+                    Msg::rvs_new(e.span, "catch_unwind — fix panic source instead"),
                 );
             }
         }

@@ -1,6 +1,13 @@
+use std::io::Write;
 use std::path::Path;
 
 use toml_edit::{DocumentMut, Item, Table};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SetupFileRequirement {
+    MustExist,
+    Optional,
+}
 
 pub const CLIPPY_LINTS: &[(&str, &str)] = &[
     ("string_slice", "warn"),
@@ -47,21 +54,21 @@ pub const CLIPPY_LINTS: &[(&str, &str)] = &[
 
 /// Inject clippy lint rules into a Cargo.toml string.
 /// Returns the new Cargo.toml string and the count of injected lints.
-pub fn rvs_inject_clippy_lints_M(cargo_toml: &str) -> (String, usize) {
-    let mut doc: DocumentMut = match cargo_toml.parse() {
-        Ok(d) => d,
-        Err(_) => return (cargo_toml.to_string(), 0),
-    };
+pub fn rvs_inject_clippy_lints_M(cargo_toml: &str) -> Result<(String, usize), String> {
+    let mut doc: DocumentMut = cargo_toml
+        .parse()
+        .map_err(|e| format!("invalid TOML: {e}"))?;
 
     let lints = doc.entry("lints").or_insert(Item::Table(Table::new()));
-    let clippy = lints.as_table_mut().and_then(|t| {
-        t.entry("clippy")
-            .or_insert(Item::Table(Table::new()))
-            .as_table_mut()
-    });
+    let Some(lints_table) = lints.as_table_mut() else {
+        return Err("[lints] must be a table".into());
+    };
+    let clippy = lints_table
+        .entry("clippy")
+        .or_insert(Item::Table(Table::new()));
 
-    let Some(clippy_table) = clippy else {
-        return (cargo_toml.to_string(), 0);
+    let Some(clippy_table) = clippy.as_table_mut() else {
+        return Err("[lints.clippy] must be a table".into());
     };
 
     let mut count = 0;
@@ -73,31 +80,38 @@ pub fn rvs_inject_clippy_lints_M(cargo_toml: &str) -> (String, usize) {
     }
 
     if count == 0 {
-        return (cargo_toml.to_string(), 0);
+        return Ok((cargo_toml.to_string(), 0));
     }
 
-    (doc.to_string(), count)
+    Ok((doc.to_string(), count))
 }
 
 pub(crate) fn rvs_run_setup_BIMS(path: &Path) -> Result<(), String> {
+    let cargo_toml_path = path.join("Cargo.toml");
+    let agents_md = path.join("AGENTS.md");
+    rvs_preflight_setup_file_BIS(
+        &cargo_toml_path,
+        "Cargo.toml",
+        &SetupFileRequirement::MustExist,
+    )?;
+    rvs_preflight_setup_file_BIS(&agents_md, "AGENTS.md", &SetupFileRequirement::Optional)?;
     crate::workspace::rvs_load_local_crate_prefixes_BIS(path)?;
 
-    let cargo_toml_path = path.join("Cargo.toml");
     let content = std::fs::read_to_string(&cargo_toml_path)
         .map_err(|e| format!("cannot read '{}': {e}", cargo_toml_path.display()))?;
     content
         .parse::<DocumentMut>()
         .map_err(|e| format!("invalid TOML in '{}': {e}", cargo_toml_path.display()))?;
 
-    let agents_md = path.join("AGENTS.md");
-    std::fs::write(&agents_md, crate::RIVUS_MD)
-        .map_err(|e| format!("cannot write '{}': {e}", agents_md.display()))?;
-    println!("Written {}", agents_md.display());
+    let (new_content, count) = rvs_inject_clippy_lints_M(&content).map_err(|e| {
+        format!(
+            "cannot inject clippy lints into '{}': {e}",
+            cargo_toml_path.display()
+        )
+    })?;
 
-    let (new_content, count) = rvs_inject_clippy_lints_M(&content);
     if count > 0 {
-        std::fs::write(&cargo_toml_path, &new_content)
-            .map_err(|e| format!("cannot write '{}': {e}", cargo_toml_path.display()))?;
+        rvs_write_file_atomic_BIS(&cargo_toml_path, &new_content)?;
         println!(
             "Injected {count} clippy lint(s) into {}",
             cargo_toml_path.display()
@@ -108,8 +122,110 @@ pub(crate) fn rvs_run_setup_BIMS(path: &Path) -> Result<(), String> {
             cargo_toml_path.display()
         );
     }
+    if let Err(e) = rvs_write_file_atomic_BIS(&agents_md, crate::RIVUS_MD) {
+        if count > 0
+            && let Err(restore_error) = rvs_write_file_atomic_BIS(&cargo_toml_path, &content)
+        {
+            return Err(format!(
+                "cannot write '{}': {e}; additionally failed to restore '{}': {restore_error}",
+                agents_md.display(),
+                cargo_toml_path.display()
+            ));
+        }
+        return Err(format!("cannot write '{}': {e}", agents_md.display()));
+    }
+    println!("Written {}", agents_md.display());
 
     Ok(())
+}
+
+fn rvs_preflight_setup_file_BIS(
+    path: &Path,
+    label: &str,
+    requirement: &SetupFileRequirement,
+) -> Result<(), String> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            Err(format!("{label} must not be a symlink: {}", path.display()))
+        }
+        Ok(metadata) if metadata.is_file() => Ok(()),
+        Ok(_) => Err(format!(
+            "{label} must be a regular file: {}",
+            path.display()
+        )),
+        Err(e)
+            if e.kind() == std::io::ErrorKind::NotFound
+                && *requirement == SetupFileRequirement::Optional =>
+        {
+            Ok(())
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            Err(format!("{label} not found: {}", path.display()))
+        }
+        Err(e) => Err(format!("cannot inspect {}: {e}", path.display())),
+    }
+}
+
+fn rvs_write_file_atomic_BIS(path: &Path, content: &str) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("cannot determine parent for '{}'", path.display()))?;
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| format!("cannot determine file name for '{}'", path.display()))?
+        .to_string_lossy();
+    let mut tmp_path = None;
+    let result = (|| -> Result<(), String> {
+        let mut file = None;
+        for attempt in 0..100usize {
+            debug_assert!(attempt < 100, "temp filename retry bound");
+            let candidate = parent.join(format!(
+                ".{file_name}.{}.{}.tmp",
+                std::process::id(),
+                attempt
+            ));
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&candidate)
+            {
+                Ok(opened) => {
+                    tmp_path = Some(candidate);
+                    file = Some(opened);
+                    break;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(format!("cannot create '{}': {e}", candidate.display())),
+            }
+        }
+        let mut file = file.ok_or_else(|| {
+            format!(
+                "cannot create temp file for '{}': too many collisions",
+                path.display()
+            )
+        })?;
+        let tmp_path = tmp_path
+            .as_ref()
+            .expect("never: temp path set when temp file was opened");
+        file.write_all(content.as_bytes())
+            .map_err(|e| format!("cannot write '{}': {e}", tmp_path.display()))?;
+        file.sync_all()
+            .map_err(|e| format!("cannot sync '{}': {e}", tmp_path.display()))?;
+        drop(file);
+        std::fs::rename(tmp_path, path).map_err(|e| {
+            format!(
+                "cannot rename '{}' to '{}': {e}",
+                tmp_path.display(),
+                path.display()
+            )
+        })?;
+        Ok(())
+    })();
+    if result.is_err()
+        && let Some(tmp_path) = &tmp_path
+        && let Err(_cleanup_error) = std::fs::remove_file(tmp_path)
+    {}
+    result
 }
 
 #[cfg(test)]
@@ -137,7 +253,7 @@ mod tests {
     #[test]
     fn test_20260501_inject_into_empty_cargo_toml() {
         let input = "[package]\nname = \"test\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\n";
-        let (result, count) = rvs_inject_clippy_lints_M(input);
+        let (result, count) = rvs_inject_clippy_lints_M(input).unwrap();
         debug_assert_eq!(count, CLIPPY_LINTS.len());
         debug_assert!(result.contains("[lints.clippy]"));
         debug_assert!(result.contains("string_slice = \"warn\""));
@@ -147,8 +263,8 @@ mod tests {
     #[test]
     fn test_20260502_inject_idempotent() {
         let input = "[package]\nname = \"test\"\n\n[dependencies]\n";
-        let (first, count1) = rvs_inject_clippy_lints_M(input);
-        let (second, count2) = rvs_inject_clippy_lints_M(&first);
+        let (first, count1) = rvs_inject_clippy_lints_M(input).unwrap();
+        let (second, count2) = rvs_inject_clippy_lints_M(&first).unwrap();
         debug_assert!(count1 > 0);
         debug_assert_eq!(count2, 0);
         debug_assert_eq!(first, second);
@@ -157,7 +273,7 @@ mod tests {
     #[test]
     fn test_20260503_inject_preserves_existing() {
         let input = "[package]\nname = \"test\"\n\n[lints.clippy]\nstring_slice = \"deny\"\nunwrap_used = \"warn\"\n\n[dependencies]\n";
-        let (result, count) = rvs_inject_clippy_lints_M(input);
+        let (result, count) = rvs_inject_clippy_lints_M(input).unwrap();
         debug_assert!(result.contains("string_slice = \"deny\""));
         debug_assert!(result.contains("unwrap_used = \"warn\""));
         debug_assert_eq!(count, CLIPPY_LINTS.len() - 2);
@@ -166,7 +282,7 @@ mod tests {
     #[test]
     fn test_20260607_setup_inject_clippy_empty() {
         let input = "[package]\nname = \"test\"\n\n[dependencies]\n";
-        let (result, count) = rvs_inject_clippy_lints_M(input);
+        let (result, count) = rvs_inject_clippy_lints_M(input).unwrap();
         rvs_snapshot_BIS(
             "test_20260607_setup_inject_clippy_empty",
             &format!("count: {count}\n{result}"),
@@ -178,8 +294,8 @@ mod tests {
     #[test]
     fn test_20260607_setup_inject_clippy_idempotent() {
         let input = "[package]\nname = \"test\"\n\n[dependencies]\n";
-        let (first, c1) = rvs_inject_clippy_lints_M(input);
-        let (second, c2) = rvs_inject_clippy_lints_M(&first);
+        let (first, c1) = rvs_inject_clippy_lints_M(input).unwrap();
+        let (second, c2) = rvs_inject_clippy_lints_M(&first).unwrap();
         assert!(c1 > 0);
         assert_eq!(c2, 0);
         assert_eq!(first, second);
@@ -188,7 +304,7 @@ mod tests {
     #[test]
     fn test_20260607_setup_inject_clippy_preserves() {
         let input = "[package]\nname = \"test\"\n\n[lints.clippy]\nstring_slice = \"deny\"\n\n[dependencies]\n";
-        let (result, count) = rvs_inject_clippy_lints_M(input);
+        let (result, count) = rvs_inject_clippy_lints_M(input).unwrap();
         assert!(result.contains("string_slice = \"deny\""));
         assert_eq!(count, CLIPPY_LINTS.len() - 1);
     }
@@ -198,7 +314,8 @@ mod tests {
         let dir = rvs_make_temp_dir_BIS("setup-non-cargo");
         let agents_md = dir.join("AGENTS.md");
         let result = rvs_run_setup_BIMS(&dir);
-        let output = format!("result={result:?}\nexists={}\n", agents_md.exists());
+        let output = format!("result={result:?}\nexists={}\n", agents_md.exists())
+            .replace(&dir.to_string_lossy().into_owned(), "$TMP");
         rvs_snapshot_BIS(
             "test_20260702_setup_rejects_non_cargo_dir_without_writing_agents",
             &output,
@@ -220,7 +337,8 @@ mod tests {
         let agents_md = dir.join("AGENTS.md");
 
         let result = rvs_run_setup_BIMS(&dir);
-        let output = format!("result={result:?}\nexists={}\n", agents_md.exists());
+        let output = format!("result={result:?}\nexists={}\n", agents_md.exists())
+            .replace(&dir.to_string_lossy().into_owned(), "$TMP");
         rvs_snapshot_BIS(
             "test_20260702_setup_rejects_invalid_cargo_toml_without_writing_agents",
             &output,
@@ -232,6 +350,146 @@ mod tests {
             "setup should not write AGENTS.md when Cargo.toml is invalid"
         );
 
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260706_setup_rejects_non_table_lints_without_writing_agents() {
+        let dir = rvs_make_temp_dir_BIS("setup-non-table-lints");
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "lints = \"bad\"\n\n[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        let agents_md = dir.join("AGENTS.md");
+
+        let result = rvs_run_setup_BIMS(&dir);
+        let output = format!("result={result:?}\nexists={}\n", agents_md.exists())
+            .replace(&dir.to_string_lossy().into_owned(), "$TMP");
+        rvs_snapshot_BIS(
+            "test_20260706_setup_rejects_non_table_lints_without_writing_agents",
+            &output,
+        );
+
+        assert!(result.is_err(), "setup should fail for non-table lints");
+        assert!(
+            !agents_md.exists(),
+            "setup should not write AGENTS.md on failure"
+        );
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260706_setup_rejects_non_table_clippy_lints_without_writing_agents() {
+        let dir = rvs_make_temp_dir_BIS("setup-non-table-clippy-lints");
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[lints]\nclippy = \"bad\"\n",
+        )
+        .unwrap();
+        let agents_md = dir.join("AGENTS.md");
+
+        let result = rvs_run_setup_BIMS(&dir);
+        let output = format!("result={result:?}\nexists={}\n", agents_md.exists())
+            .replace(&dir.to_string_lossy().into_owned(), "$TMP");
+        rvs_snapshot_BIS(
+            "test_20260706_setup_rejects_non_table_clippy_lints_without_writing_agents",
+            &output,
+        );
+
+        assert!(
+            result.is_err(),
+            "setup should fail for non-table lints.clippy"
+        );
+        assert!(
+            !agents_md.exists(),
+            "setup should not write AGENTS.md on failure"
+        );
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260707_setup_rejects_agents_directory_without_writing_cargo() {
+        let dir = rvs_make_temp_dir_BIS("setup-agents-directory");
+        let cargo_toml = "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n";
+        std::fs::write(dir.join("Cargo.toml"), cargo_toml).unwrap();
+        std::fs::create_dir_all(dir.join("AGENTS.md")).unwrap();
+
+        let result = rvs_run_setup_BIMS(&dir);
+        let restored = std::fs::read_to_string(dir.join("Cargo.toml")).unwrap();
+        let output = format!(
+            "result={result:?}\nrestored={}\nagents_is_dir={}\n",
+            restored == cargo_toml,
+            dir.join("AGENTS.md").is_dir()
+        )
+        .replace(&dir.to_string_lossy().into_owned(), "$TMP");
+        rvs_snapshot_BIS(
+            "test_20260707_setup_rejects_agents_directory_without_writing_cargo",
+            &output,
+        );
+
+        assert!(result.is_err());
+        assert_eq!(restored, cargo_toml);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_20260706_setup_rejects_agents_symlink_without_writing_cargo() {
+        let dir = rvs_make_temp_dir_BIS("setup-agents-symlink");
+        let cargo_toml = "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n";
+        std::fs::write(dir.join("Cargo.toml"), cargo_toml).unwrap();
+        let victim = dir.join("victim.md");
+        std::fs::write(&victim, "victim\n").unwrap();
+        std::os::unix::fs::symlink(&victim, dir.join("AGENTS.md")).unwrap();
+
+        let result = rvs_run_setup_BIMS(&dir);
+        let cargo_after = std::fs::read_to_string(dir.join("Cargo.toml")).unwrap();
+        let victim_after = std::fs::read_to_string(&victim).unwrap();
+        let output = format!(
+            "result={result:?}\ncargo_unchanged={}\nvictim_unchanged={}\n",
+            cargo_after == cargo_toml,
+            victim_after == "victim\n"
+        )
+        .replace(&dir.to_string_lossy().into_owned(), "$TMP");
+        rvs_snapshot_BIS(
+            "test_20260706_setup_rejects_agents_symlink_without_writing_cargo",
+            &output,
+        );
+
+        assert!(result.is_err());
+        assert_eq!(cargo_after, cargo_toml);
+        assert_eq!(victim_after, "victim\n");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_20260706_setup_rejects_cargo_toml_symlink_without_writing_agents() {
+        let dir = rvs_make_temp_dir_BIS("setup-cargo-symlink");
+        let cargo_toml = "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n";
+        let external = dir.join("external-Cargo.toml");
+        std::fs::write(&external, cargo_toml).unwrap();
+        std::os::unix::fs::symlink(&external, dir.join("Cargo.toml")).unwrap();
+
+        let result = rvs_run_setup_BIMS(&dir);
+        let external_after = std::fs::read_to_string(&external).unwrap();
+        let agents_exists = dir.join("AGENTS.md").exists();
+        let output = format!(
+            "result={result:?}\nexternal_unchanged={}\nagents_exists={agents_exists}\n",
+            external_after == cargo_toml
+        )
+        .replace(&dir.to_string_lossy().into_owned(), "$TMP");
+        rvs_snapshot_BIS(
+            "test_20260706_setup_rejects_cargo_toml_symlink_without_writing_agents",
+            &output,
+        );
+
+        assert!(result.is_err());
+        assert_eq!(external_after, cargo_toml);
+        assert!(!agents_exists);
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

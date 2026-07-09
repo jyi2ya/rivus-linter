@@ -1,0 +1,2 @@
+macro_rules! make_parse { () => { pub fn parse() -> i32 { 1 } }; }
+make_parse!();

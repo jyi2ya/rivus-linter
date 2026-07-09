@@ -13,7 +13,7 @@ pub(crate) fn rvs_check_fn_MS<'tcx>(cx: &LateContext<'tcx>, body: &Body<'tcx>, s
         cx.emit_span_lint(
             RVS_STUB_MACRO,
             span,
-            Msg::new(span, "stub: todo!()/unimplemented!()"),
+            Msg::rvs_new(span, "stub: todo!()/unimplemented!()"),
         );
     }
     is_stub
