@@ -408,45 +408,37 @@ pub fn rvs_extract_unknown_suffix_letters(raw_suffix: &str) -> Vec<char> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::rvs_snapshot_BIS;
 
-    #[test]
-    fn test_20260425_from_char_valid() {
-        assert_eq!(Capability::rvs_from_char('A'), Some(Capability::A));
-        assert_eq!(Capability::rvs_from_char('B'), Some(Capability::B));
-        assert_eq!(Capability::rvs_from_char('I'), Some(Capability::I));
-        assert_eq!(Capability::rvs_from_char('M'), Some(Capability::M));
-        assert_eq!(Capability::rvs_from_char('P'), Some(Capability::P));
-        assert_eq!(Capability::rvs_from_char('S'), Some(Capability::S));
-        assert_eq!(Capability::rvs_from_char('T'), Some(Capability::T));
-        assert_eq!(Capability::rvs_from_char('U'), Some(Capability::U));
+    fn rvs_caps_letters(caps: &CapabilitySet) -> String {
+        caps.rvs_iter().map(|cap| cap.rvs_as_char()).collect()
     }
 
     #[test]
-    fn test_20260425_from_char_invalid() {
-        assert_eq!(Capability::rvs_from_char('X'), None);
-        assert_eq!(Capability::rvs_from_char('a'), None);
-        assert_eq!(Capability::rvs_from_char('1'), None);
-        assert_eq!(Capability::rvs_from_char('_'), None);
-    }
-
-    #[test]
-    fn test_20260425_as_char_roundtrip() {
-        for c in VALID_SUFFIX_CHARS.iter().copied() {
-            let cap = Capability::rvs_from_char(c).unwrap();
-            assert_eq!(cap.rvs_as_char(), c);
+    fn test_20260709_capability_metadata_table() {
+        let valid = [
+            ('A', Capability::A, "Async"),
+            ('B', Capability::B, "Blocking"),
+            ('I', Capability::I, "IO"),
+            ('M', Capability::M, "Mutable"),
+            ('P', Capability::P, "Port"),
+            ('S', Capability::S, "SideEffect"),
+            ('T', Capability::T, "ThreadLocal"),
+            ('U', Capability::U, "Unsafe"),
+        ];
+        for (letter, cap, description) in valid {
+            assert_eq!(Capability::rvs_from_char(letter), Some(cap), "{letter}");
+            assert_eq!(cap.rvs_as_char(), letter, "{letter}");
+            assert_eq!(cap.rvs_description(), description, "{letter}");
+            assert_eq!(format!("{cap}"), format!("{letter}({description})"));
         }
-    }
-
-    #[test]
-    fn test_20260425_description_all() {
-        assert_eq!(Capability::A.rvs_description(), "Async");
-        assert_eq!(Capability::B.rvs_description(), "Blocking");
-        assert_eq!(Capability::I.rvs_description(), "IO");
-        assert_eq!(Capability::M.rvs_description(), "Mutable");
-        assert_eq!(Capability::P.rvs_description(), "Port");
-        assert_eq!(Capability::S.rvs_description(), "SideEffect");
-        assert_eq!(Capability::T.rvs_description(), "ThreadLocal");
-        assert_eq!(Capability::U.rvs_description(), "Unsafe");
+        for letter in ['X', 'a', '1', '_'] {
+            assert_eq!(Capability::rvs_from_char(letter), None, "{letter}");
+        }
+        for letter in VALID_SUFFIX_CHARS.iter().copied() {
+            let cap = Capability::rvs_from_char(letter).unwrap();
+            assert_eq!(cap.rvs_as_char(), letter);
+        }
     }
 
     #[test]
@@ -457,140 +449,69 @@ mod tests {
     }
 
     #[test]
-    fn test_20260425_from_str_valid() {
-        let set = CapabilitySet::rvs_from_str("ABIM").unwrap();
-        assert!(set.rvs_contains(Capability::A));
-        assert!(set.rvs_contains(Capability::B));
-        assert!(set.rvs_contains(Capability::I));
-        assert!(set.rvs_contains(Capability::M));
-        assert_eq!(set.rvs_len(), 4);
-    }
+    fn test_20260709_capability_set_parse_table() {
+        let valid_cases = [
+            ("valid", "ABIM", "ABIM"),
+            ("empty", "", ""),
+            ("allow_unknown", "ABEPZ", "ABP"),
+            ("validated", "ABSU", "ABSU"),
+        ];
+        for (name, input, expected) in valid_cases {
+            let set = if name == "allow_unknown" {
+                CapabilitySet::rvs_from_str_allow_unknown(input)
+            } else if name == "validated" {
+                CapabilitySet::rvs_from_validated(input)
+            } else {
+                CapabilitySet::rvs_from_str(input).unwrap()
+            };
+            assert_eq!(rvs_caps_letters(&set), expected, "{name}");
+        }
 
-    #[test]
-    fn test_20260425_from_str_invalid() {
-        let err = CapabilitySet::rvs_from_str("AX").unwrap_err();
-        match err {
-            CapabilityParseError::InvalidLetter { letter } => assert_eq!(letter, 'X'),
-            CapabilityParseError::DuplicateLetter { letter } => {
-                panic!("unexpected duplicate letter: {letter}")
+        let error_cases = [("invalid", "AX", 'X'), ("duplicate", "AAAB", 'A')];
+        let mut output = String::new();
+        for (name, input, expected_letter) in error_cases {
+            let err = CapabilitySet::rvs_from_str(input).unwrap_err();
+            output.push_str(&format!("{name}: {err}\n"));
+            match (name, err) {
+                ("invalid", CapabilityParseError::InvalidLetter { letter }) => {
+                    assert_eq!(letter, expected_letter)
+                }
+                ("duplicate", CapabilityParseError::DuplicateLetter { letter }) => {
+                    assert_eq!(letter, expected_letter)
+                }
+                (_, err) => panic!("unexpected parse error for {name}: {err}"),
             }
         }
+        rvs_snapshot_BIS("test_20260709_capability_set_parse_table", &output);
     }
 
     #[test]
-    fn test_20260425_from_str_empty() {
-        let set = CapabilitySet::rvs_from_str("").unwrap();
-        assert!(set.rvs_is_empty());
-    }
-
-    #[test]
-    fn test_20260707_from_str_rejects_duplicate_caps() {
-        let err = CapabilitySet::rvs_from_str("AAAB").unwrap_err();
-        std::fs::create_dir_all("test_out").unwrap();
-        std::fs::write(
-            "test_out/test_20260707_from_str_rejects_duplicate_caps.out",
-            format!("err={err}\n"),
-        )
-        .unwrap();
-        match err {
-            CapabilityParseError::DuplicateLetter { letter } => assert_eq!(letter, 'A'),
-            CapabilityParseError::InvalidLetter { letter } => {
-                panic!("unexpected invalid letter: {letter}")
-            }
+    fn test_20260709_capability_call_rule_table() {
+        let cases = [
+            ("superset", "ABIM", "ABI", true, ""),
+            ("equal", "ABM", "ABM", true, ""),
+            ("missing_t", "AB", "ABT", false, "T"),
+            ("empty_callee", "A", "", true, ""),
+            ("signature_m_ignored", "B", "BM", true, ""),
+            ("signature_a_ignored", "B", "BA", true, ""),
+            ("signature_u_ignored", "B", "BU", true, ""),
+            ("port_propagates", "B", "BP", false, "P"),
+            ("amu_excluded_from_missing", "B", "ABSTU", false, "ST"),
+        ];
+        for (name, caller, callee, expected_can_call, expected_missing) in cases {
+            let caller = CapabilitySet::rvs_from_validated(caller);
+            let callee = CapabilitySet::rvs_from_validated(callee);
+            assert_eq!(
+                CapabilityPolicy::rvs_can_call(&caller, &callee),
+                expected_can_call,
+                "{name}"
+            );
+            let missing: String = CapabilityPolicy::rvs_missing_for(&caller, &callee)
+                .iter()
+                .map(|cap| cap.rvs_as_char())
+                .collect();
+            assert_eq!(missing, expected_missing, "{name}");
         }
-    }
-
-    #[test]
-    fn test_20260425_from_validated() {
-        let set = CapabilitySet::rvs_from_validated("ABSU");
-        assert_eq!(set.rvs_len(), 4);
-        assert!(set.rvs_contains(Capability::A));
-        assert!(set.rvs_contains(Capability::B));
-        assert!(set.rvs_contains(Capability::S));
-        assert!(set.rvs_contains(Capability::U));
-    }
-
-    #[test]
-    fn test_20260425_can_call_superset() {
-        let caller = CapabilitySet::rvs_from_validated("ABIM");
-        let callee = CapabilitySet::rvs_from_validated("ABI");
-        assert!(CapabilityPolicy::rvs_can_call(&caller, &callee));
-    }
-
-    #[test]
-    fn test_20260425_can_call_equal() {
-        let a = CapabilitySet::rvs_from_validated("ABM");
-        let b = CapabilitySet::rvs_from_validated("ABM");
-        assert!(CapabilityPolicy::rvs_can_call(&a, &b));
-    }
-
-    #[test]
-    fn test_20260425_can_call_missing_cap() {
-        let caller = CapabilitySet::rvs_from_validated("AB");
-        let callee = CapabilitySet::rvs_from_validated("ABT");
-        assert!(!CapabilityPolicy::rvs_can_call(&caller, &callee));
-    }
-
-    #[test]
-    fn test_20260425_can_call_empty_callee() {
-        let caller = CapabilitySet::rvs_from_validated("A");
-        let callee = CapabilitySet::rvs_new();
-        assert!(CapabilityPolicy::rvs_can_call(&caller, &callee));
-    }
-
-    #[test]
-    fn test_20260425_missing_for_no_missing() {
-        let a = CapabilitySet::rvs_from_validated("ABIM");
-        let b = CapabilitySet::rvs_from_validated("AB");
-        assert!(CapabilityPolicy::rvs_missing_for(&a, &b).is_empty());
-    }
-
-    #[test]
-    fn test_20260425_missing_for_has_missing() {
-        let a = CapabilitySet::rvs_from_validated("AB");
-        let b = CapabilitySet::rvs_from_validated("ABT");
-        let missing = CapabilityPolicy::rvs_missing_for(&a, &b);
-        assert_eq!(missing.len(), 1);
-        assert!(missing.contains(&Capability::T));
-    }
-
-    #[test]
-    fn test_20260614_can_call_excludes_amu() {
-        // A, M, U are signature-only capabilities — they don't participate
-        // in the call rule. A function without M can call one with M, etc.
-        // P (Port) DOES participate — a function without P cannot call one with P.
-        let caller = CapabilitySet::rvs_from_validated("B");
-        let callee_m = CapabilitySet::rvs_from_validated("BM");
-        let callee_a = CapabilitySet::rvs_from_validated("BA");
-        let callee_u = CapabilitySet::rvs_from_validated("BU");
-        let callee_p = CapabilitySet::rvs_from_validated("BP");
-        assert!(
-            CapabilityPolicy::rvs_can_call(&caller, &callee_m),
-            "missing M should not block"
-        );
-        assert!(
-            CapabilityPolicy::rvs_can_call(&caller, &callee_a),
-            "missing A should not block"
-        );
-        assert!(
-            CapabilityPolicy::rvs_can_call(&caller, &callee_u),
-            "missing U should not block"
-        );
-        assert!(
-            !CapabilityPolicy::rvs_can_call(&caller, &callee_p),
-            "missing P should block"
-        );
-    }
-
-    #[test]
-    fn test_20260614_missing_for_excludes_amu() {
-        let caller = CapabilitySet::rvs_from_validated("B");
-        let callee = CapabilitySet::rvs_from_validated("ABSTU");
-        let missing = CapabilityPolicy::rvs_missing_for(&caller, &callee);
-        // Only S and T should be missing — A, M, U are excluded from call rule
-        assert_eq!(missing.len(), 2);
-        assert!(missing.contains(&Capability::T));
-        assert!(missing.contains(&Capability::S));
     }
 
     #[test]
@@ -643,65 +564,24 @@ mod tests {
     }
 
     #[test]
-    fn test_20260425_is_subset_of_true() {
-        let set = CapabilitySet::rvs_from_validated("AB");
-        let allowed = CapabilitySet::rvs_from_validated("ABIM");
-        assert!(set.rvs_is_subset_of(&allowed));
-        assert!(CapabilityPolicy::rvs_is_good(&set));
-        assert!(CapabilityPolicy::rvs_is_ok(&set));
-    }
+    fn test_20260709_capability_set_classification_table() {
+        let subset_cases = [
+            ("subset_true", "AB", "ABIM", true, true, true),
+            ("subset_false", "ABT", "ABM", false, false, false),
+            ("empty_subset", "", "ABM", true, true, true),
+        ];
+        for (name, set, allowed, is_subset, is_good, is_ok) in subset_cases {
+            let set = CapabilitySet::rvs_from_validated(set);
+            let allowed = CapabilitySet::rvs_from_validated(allowed);
+            assert_eq!(set.rvs_is_subset_of(&allowed), is_subset, "{name}");
+            assert_eq!(CapabilityPolicy::rvs_is_good(&set), is_good, "{name}");
+            assert_eq!(CapabilityPolicy::rvs_is_ok(&set), is_ok, "{name}");
+        }
 
-    #[test]
-    fn test_20260425_is_subset_of_false() {
-        let set = CapabilitySet::rvs_from_validated("ABT");
-        let allowed = CapabilitySet::rvs_from_validated("ABM");
-        assert!(!set.rvs_is_subset_of(&allowed));
-        assert!(!CapabilityPolicy::rvs_is_good(&set));
-        assert!(!CapabilityPolicy::rvs_is_ok(&set));
-    }
-
-    #[test]
-    fn test_20260425_is_subset_of_empty() {
-        let empty = CapabilitySet::rvs_new();
-        let allowed = CapabilitySet::rvs_from_validated("ABM");
-        assert!(empty.rvs_is_subset_of(&allowed));
-    }
-
-    #[test]
-    fn test_20260425_from_good_caps() {
         let good = CapabilityPolicy::rvs_good_caps();
-        assert!(good.rvs_contains(Capability::A));
-        assert!(good.rvs_contains(Capability::B));
-        assert!(good.rvs_contains(Capability::M));
-        assert!(!good.rvs_contains(Capability::P));
-        assert!(!good.rvs_contains(Capability::I));
-        assert!(!good.rvs_contains(Capability::S));
-        assert!(!good.rvs_contains(Capability::T));
-        assert!(!good.rvs_contains(Capability::U));
-        assert_eq!(good.rvs_len(), 3);
-    }
-
-    #[test]
-    fn test_20260623_from_ok_caps() {
         let ok = CapabilityPolicy::rvs_ok_caps();
-        assert!(ok.rvs_contains(Capability::A));
-        assert!(ok.rvs_contains(Capability::B));
-        assert!(ok.rvs_contains(Capability::M));
-        assert!(ok.rvs_contains(Capability::P));
-        assert!(!ok.rvs_contains(Capability::I));
-        assert!(!ok.rvs_contains(Capability::S));
-        assert!(!ok.rvs_contains(Capability::T));
-        assert!(!ok.rvs_contains(Capability::U));
-        assert_eq!(ok.rvs_len(), 4);
-    }
-
-    #[test]
-    fn test_20260630_from_str_allow_unknown() {
-        let caps = CapabilitySet::rvs_from_str_allow_unknown("ABEPZ");
-        assert!(caps.rvs_contains(Capability::A));
-        assert!(caps.rvs_contains(Capability::B));
-        assert!(caps.rvs_contains(Capability::P));
-        assert_eq!(caps.rvs_len(), 3);
+        assert_eq!(rvs_caps_letters(&good), "ABM");
+        assert_eq!(rvs_caps_letters(&ok), "ABMP");
     }
 
     #[test]
@@ -740,199 +620,94 @@ mod tests {
     }
 
     #[test]
-    fn test_20260425_parse_function_with_suffix() {
-        let (base, caps) = rvs_parse_function("rvs_write_db_ABI").unwrap();
-        assert_eq!(base, "write_db");
-        assert!(caps.rvs_contains(Capability::A));
-        assert!(caps.rvs_contains(Capability::B));
-        assert!(caps.rvs_contains(Capability::I));
-        assert_eq!(caps.rvs_len(), 3);
+    fn test_20260709_parse_function_table() {
+        let valid_cases = [
+            ("suffix", "rvs_write_db_ABI", "write_db", "ABI"),
+            ("no_suffix", "rvs_add", "add", ""),
+            ("bare_rvs", "rvs_", "", ""),
+            ("qualified", "CapsMap::rvs_parse", "parse", ""),
+            (
+                "qualified_caps",
+                "MyMod::rvs_do_thing_ABIM",
+                "do_thing",
+                "ABIM",
+            ),
+            (
+                "trait_impl",
+                "demo::Adapter::rvs_fetch_BI@demo::ApiClient",
+                "fetch",
+                "BI",
+            ),
+            (
+                "unknown_mixed",
+                "rvs_execute_effects_BEIMS",
+                "execute_effects",
+                "BIMS",
+            ),
+            ("unknown_only", "rvs_render_art_E", "render_art", ""),
+            ("unknown_aeis", "rvs_render_msg_AEIS", "render_msg", "AIS"),
+        ];
+        let mut output = String::new();
+        for (name, input, expected_base, expected_caps) in valid_cases {
+            let (base, caps) = rvs_parse_function(input).unwrap();
+            output.push_str(&format!("{name}: base={base} caps={caps}\n"));
+            assert_eq!(base, expected_base, "{name}");
+            assert_eq!(rvs_caps_letters(&caps), expected_caps, "{name}");
+        }
+        for input in ["foo_bar", "", "rvs_dep::module::plain_BI"] {
+            assert_eq!(rvs_parse_function(input), None, "{input}");
+        }
+        rvs_snapshot_BIS("test_20260709_parse_function_table", &output);
     }
 
     #[test]
-    fn test_20260425_parse_function_no_suffix() {
-        let (base, caps) = rvs_parse_function("rvs_add").unwrap();
-        assert_eq!(base, "add");
-        assert!(caps.rvs_is_empty());
-    }
-
-    #[test]
-    fn test_20260425_parse_function_bare_rvs() {
-        let (base, caps) = rvs_parse_function("rvs_").unwrap();
-        assert_eq!(base, "");
-        assert!(caps.rvs_is_empty());
-    }
-
-    #[test]
-    fn test_20260425_parse_function_non_rvs() {
-        assert!(rvs_parse_function("foo_bar").is_none());
-    }
-
-    #[test]
-    fn test_20260707_parse_function_empty_name_returns_none() {
-        let parsed = rvs_parse_function("");
-        std::fs::create_dir_all("test_out").unwrap();
-        std::fs::write(
-            "test_out/test_20260707_parse_function_empty_name_returns_none.out",
-            format!("parsed={parsed:?}\n"),
-        )
-        .unwrap();
-
-        assert!(parsed.is_none());
-    }
-
-    #[test]
-    fn test_20260425_parse_function_qualified() {
-        let (base, caps) = rvs_parse_function("CapsMap::rvs_parse").unwrap();
-        assert_eq!(base, "parse");
-        assert!(caps.rvs_is_empty());
-    }
-
-    #[test]
-    fn test_20260425_parse_function_qualified_with_caps() {
-        let (base, caps) = rvs_parse_function("MyMod::rvs_do_thing_ABIM").unwrap();
-        assert_eq!(base, "do_thing");
-        assert_eq!(caps.rvs_len(), 4);
-    }
-
-    #[test]
-    fn test_20260705_parse_function_ignores_rvs_prefix_in_qualifier() {
-        let parsed = rvs_parse_function("rvs_dep::module::plain_BI");
-        let (base, caps) = rvs_parse_function("rvs_dep::module::rvs_fetch_BI").unwrap();
-        std::fs::create_dir_all("test_out").unwrap();
-        std::fs::write(
-            "test_out/test_20260705_parse_function_ignores_rvs_prefix_in_qualifier.out",
-            format!("plain={parsed:?}\nbase={base}\ncaps={caps}\n"),
-        )
-        .unwrap();
-        assert!(parsed.is_none());
-        assert_eq!(base, "fetch");
-        assert!(caps.rvs_contains(Capability::B));
-        assert!(caps.rvs_contains(Capability::I));
-    }
-
-    #[test]
-    fn test_20260705_parse_function_trait_impl_def_path() {
-        let (base, caps) =
-            rvs_parse_function("demo::Adapter::rvs_fetch_BI@demo::ApiClient").unwrap();
-        std::fs::create_dir_all("test_out").unwrap();
-        std::fs::write(
-            "test_out/test_20260705_parse_function_trait_impl_def_path.out",
-            format!("base={base}\ncaps={caps}\n"),
-        )
-        .unwrap();
-        assert_eq!(base, "fetch");
-        assert!(caps.rvs_contains(Capability::B));
-        assert!(caps.rvs_contains(Capability::I));
-    }
-
-    #[test]
-    fn test_20260708_split_rvs_name_uses_shared_segment_rules() {
-        let segment = rvs_function_name_segment("demo::Adapter::rvs_fetch_BI@demo::ApiClient");
-        let split = rvs_split_rvs_name("demo::Adapter::rvs_fetch_BI@demo::ApiClient");
-        std::fs::create_dir_all("test_out").unwrap();
-        std::fs::write(
-            "test_out/test_20260708_split_rvs_name_uses_shared_segment_rules.out",
-            format!("segment={segment}\nsplit={split:?}\n"),
-        )
-        .unwrap();
-
-        assert_eq!(segment, "rvs_fetch_BI");
-        assert_eq!(split, Some(("fetch", Some("BI"))));
+    fn test_20260709_split_and_suffix_table() {
+        let trait_impl = "demo::Adapter::rvs_fetch_BI@demo::ApiClient";
+        assert_eq!(rvs_function_name_segment(trait_impl), "rvs_fetch_BI");
+        assert_eq!(rvs_split_rvs_name(trait_impl), Some(("fetch", Some("BI"))));
         assert_eq!(rvs_split_rvs_name("demo::plain_BI"), None);
+
+        let segment = rvs_parse_segment("rvs_write_db_ABI1").unwrap();
+        assert_eq!(segment.0, "write_db_ABI1");
+        assert!(segment.1.rvs_is_empty());
+
+        let raw_cases = [
+            ("rvs_write_db_ABI", "ABI"),
+            ("rvs_add", ""),
+            ("foo_bar", ""),
+            ("rvs_foo_MBA", "MBA"),
+            ("rvs_foo_BEIMS", "BEIMS"),
+            ("rvs_bar_E", "E"),
+            ("rvs_baz_AEIS", "AEIS"),
+            ("rvs_dep::module::rvs_fetch_BI@rvs_dep::ApiClient", "BI"),
+            ("rvs_dep::module::plain_BI", ""),
+        ];
+        for (input, expected) in raw_cases {
+            assert_eq!(rvs_extract_raw_suffix(input), expected, "{input}");
+        }
+
+        let unknown_cases = [
+            ("BEIMS", vec!['E']),
+            ("AEIS", vec!['E']),
+            ("E", vec!['E']),
+            ("ABMS", Vec::new()),
+            ("", Vec::new()),
+        ];
+        for (raw_suffix, expected) in unknown_cases {
+            assert_eq!(
+                rvs_extract_unknown_suffix_letters(raw_suffix),
+                expected,
+                "{raw_suffix}"
+            );
+        }
     }
 
     #[test]
-    fn test_20260425_parse_segment_suffix_not_all_caps() {
-        let (base, caps) = rvs_parse_segment("rvs_write_db_ABI1").unwrap();
-        assert_eq!(base, "write_db_ABI1");
-        assert!(caps.rvs_is_empty());
-    }
-
-    #[test]
-    fn test_20260425_extract_raw_suffix_present() {
-        assert_eq!(rvs_extract_raw_suffix("rvs_write_db_ABI"), "ABI");
-    }
-
-    #[test]
-    fn test_20260425_extract_raw_suffix_empty() {
-        assert_eq!(rvs_extract_raw_suffix("rvs_add"), "");
-    }
-
-    #[test]
-    fn test_20260425_extract_raw_suffix_non_rvs() {
-        assert_eq!(rvs_extract_raw_suffix("foo_bar"), "");
-    }
-
-    #[test]
-    fn test_20260425_extract_raw_suffix_preserves_order() {
-        assert_eq!(rvs_extract_raw_suffix("rvs_foo_MBA"), "MBA");
-    }
-
-    #[test]
-    fn test_20260425_display_capability() {
-        assert_eq!(format!("{}", Capability::A), "A(Async)");
-        assert_eq!(format!("{}", Capability::M), "M(Mutable)");
-    }
-
-    #[test]
-    fn test_20260425_display_capability_set() {
-        let set = CapabilitySet::rvs_from_validated("BAM");
-        assert_eq!(format!("{set}"), "{A, B, M}");
-    }
-
-    #[test]
-    fn test_20260425_display_empty_capability_set() {
-        let set = CapabilitySet::rvs_new();
-        assert_eq!(format!("{set}"), "{}");
-    }
-
-    #[test]
-    fn test_20260515_parse_suffix_with_unknown_letter_e() {
-        let (base, caps) = rvs_parse_function("rvs_execute_effects_BEIMS").unwrap();
-        assert_eq!(base, "execute_effects");
-        assert!(caps.rvs_contains(Capability::B));
-        assert!(caps.rvs_contains(Capability::I));
-        assert!(caps.rvs_contains(Capability::M));
-        assert!(caps.rvs_contains(Capability::S));
-        assert_eq!(caps.rvs_len(), 4);
-    }
-
-    #[test]
-    fn test_20260515_parse_suffix_only_unknown_letter() {
-        let (base, caps) = rvs_parse_function("rvs_render_art_E").unwrap();
-        assert_eq!(base, "render_art");
-        assert!(caps.rvs_is_empty());
-    }
-
-    #[test]
-    fn test_20260515_parse_suffix_mixed_aeip() {
-        let (base, caps) = rvs_parse_function("rvs_render_msg_AEIS").unwrap();
-        assert_eq!(base, "render_msg");
-        assert!(caps.rvs_contains(Capability::A));
-        assert!(caps.rvs_contains(Capability::I));
-        assert!(caps.rvs_contains(Capability::S));
-        assert_eq!(caps.rvs_len(), 3);
-    }
-
-    #[test]
-    fn test_20260515_extract_raw_suffix_with_unknown() {
-        assert_eq!(rvs_extract_raw_suffix("rvs_foo_BEIMS"), "BEIMS");
-        assert_eq!(rvs_extract_raw_suffix("rvs_bar_E"), "E");
-        assert_eq!(rvs_extract_raw_suffix("rvs_baz_AEIS"), "AEIS");
-        assert_eq!(
-            rvs_extract_raw_suffix("rvs_dep::module::rvs_fetch_BI@rvs_dep::ApiClient"),
-            "BI"
-        );
-        assert_eq!(rvs_extract_raw_suffix("rvs_dep::module::plain_BI"), "");
-    }
-
-    #[test]
-    fn test_20260515_extract_unknown_suffix_letters() {
-        assert_eq!(rvs_extract_unknown_suffix_letters("BEIMS"), vec!['E']);
-        assert_eq!(rvs_extract_unknown_suffix_letters("AEIS"), vec!['E']);
-        assert_eq!(rvs_extract_unknown_suffix_letters("E"), vec!['E']);
-        assert!(rvs_extract_unknown_suffix_letters("ABMS").is_empty());
-        assert!(rvs_extract_unknown_suffix_letters("").is_empty());
+    fn test_20260709_capability_set_display_table() {
+        let cases = [("BAM", "{A, B, M}"), ("", "{}")];
+        for (input, expected) in cases {
+            let set = CapabilitySet::rvs_from_validated(input);
+            assert_eq!(format!("{set}"), expected, "{input}");
+        }
     }
 }
