@@ -170,11 +170,7 @@ fn rvs_unknown_callee_hint(callee_display: &str) -> String {
 mod tests {
     use super::*;
     use crate::inference::rvs_make_callee_display;
-
-    fn rvs_snapshot_BIS(name: &str, content: &str) {
-        std::fs::create_dir_all("test_out").unwrap();
-        std::fs::write(format!("test_out/{name}.out"), content).unwrap();
-    }
+    use crate::test_support::rvs_snapshot_BIS;
 
     #[test]
     fn test_20260703_lookup_caps_requires_exact_def_path() {

@@ -38,6 +38,8 @@ mod rename;
 mod report_commands;
 mod setup;
 mod symbols;
+#[cfg(test)]
+mod test_support;
 mod workspace;
 
 const RIVUS_MD: &str = include_str!("../rivus.md");
@@ -148,11 +150,7 @@ fn rvs_rewrite_cap_lints_allow_M(args: &mut [String]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn rvs_snapshot_BIS(name: &str, content: &str) {
-        std::fs::create_dir_all("test_out").unwrap();
-        std::fs::write(format!("test_out/{name}.out"), content).unwrap();
-    }
+    use crate::test_support::rvs_snapshot_BIS;
 
     #[test]
     fn test_20260706_rewrite_cap_lints_preserves_allow_crate_name() {

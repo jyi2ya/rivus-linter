@@ -793,11 +793,7 @@ pub(crate) fn rvs_collect_graph_direct_external_deps(
 mod tests {
     use super::*;
     use crate::capability::CapabilityFacts;
-
-    fn rvs_snapshot_BIS(name: &str, content: &str) {
-        std::fs::create_dir_all("test_out").unwrap();
-        std::fs::write(format!("test_out/{name}.out"), content).unwrap();
-    }
+    use crate::test_support::rvs_snapshot_BIS;
 
     /// Helper: build a default `FnBehavior` with all flags false and no calls.
     fn rvs_make_behavior() -> FnBehavior {

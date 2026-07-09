@@ -966,11 +966,7 @@ fn rvs_check_trait_item_MS<'tcx>(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn rvs_snapshot_BIS(name: &str, content: &str) {
-        std::fs::create_dir_all("test_out").unwrap();
-        std::fs::write(format!("test_out/{name}.out"), content).unwrap();
-    }
+    use crate::test_support::rvs_snapshot_BIS;
 
     #[test]
     #[expect(

@@ -236,11 +236,7 @@ fn rvs_write_json_artifact_BIS(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn rvs_snapshot_BIS(name: &str, content: &str) {
-        std::fs::create_dir_all("test_out").unwrap();
-        std::fs::write(format!("test_out/{name}.out"), content).unwrap();
-    }
+    use crate::test_support::rvs_snapshot_BIS;
 
     #[test]
     fn test_20260703_has_test_output_false_when_dir_missing() {

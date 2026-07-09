@@ -430,12 +430,8 @@ mod tests {
     use super::*;
     use crate::artifacts::{FnNode, FnSource};
     use crate::capability::CapabilityFacts;
+    use crate::test_support::rvs_snapshot_BIS;
     use std::path::PathBuf;
-
-    fn rvs_snapshot_BIS(name: &str, content: &str) {
-        std::fs::create_dir_all("test_out").unwrap();
-        std::fs::write(format!("test_out/{name}.out"), content).unwrap();
-    }
 
     fn rvs_node(calls: &[&str]) -> FnNode {
         let mut node = FnNode::default();
