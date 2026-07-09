@@ -327,117 +327,84 @@ fn rvs_sort_by_layer_M(files: &mut [std::path::PathBuf]) {
 mod tests {
     use super::*;
     use crate::capability::Capability;
+    use crate::test_support::rvs_snapshot_BIS;
 
     #[test]
-    fn test_20260425_capsmap_new_empty() {
-        let cm = CapsMap::rvs_new();
-        assert!(cm.rvs_lookup("anything").is_none());
+    fn test_20260709_capsmap_parse_and_lookup_table() {
+        let parse_cases = [
+            ("new_empty", CapsMap::rvs_new(), "anything", None),
+            (
+                "single",
+                CapsMap::rvs_parse("std::fs::read=BI").unwrap(),
+                "std::fs::read",
+                Some("BI"),
+            ),
+            (
+                "empty_value",
+                CapsMap::rvs_parse("HashMap::new=").unwrap(),
+                "HashMap::new",
+                Some(""),
+            ),
+            (
+                "comments",
+                CapsMap::rvs_parse("# comment\nfunc=BI # inline\n").unwrap(),
+                "func",
+                Some("BI"),
+            ),
+            (
+                "hash_in_key",
+                CapsMap::rvs_parse("exr::image::closure#0::crop_samples=S # SideEffect").unwrap(),
+                "exr::image::closure#0::crop_samples",
+                Some("S"),
+            ),
+            (
+                "empty_content",
+                CapsMap::rvs_parse("").unwrap(),
+                "anything",
+                None,
+            ),
+            (
+                "all_caps",
+                CapsMap::rvs_parse("danger=ABIMPSTU").unwrap(),
+                "danger",
+                Some("ABIMPSTU"),
+            ),
+        ];
+        for (name, capsmap, key, expected) in parse_cases {
+            let actual = capsmap
+                .rvs_lookup(key)
+                .map(crate::inference::rvs_caps_to_string);
+            assert_eq!(actual.as_deref(), expected, "{name}");
+        }
+
+        let lookup = CapsMap::rvs_parse("HashMap::new=").unwrap();
+        assert!(lookup.rvs_lookup("HashMap::new").is_some());
+        assert!(lookup.rvs_lookup("HashMap").is_none());
+        assert!(lookup.rvs_lookup("nonexistent").is_none());
     }
 
     #[test]
-    fn test_20260425_capsmap_parse_single() {
-        let cm = CapsMap::rvs_parse("std::fs::read=BI").unwrap();
-        let caps = cm.rvs_lookup("std::fs::read").unwrap();
-        assert!(caps.rvs_contains(Capability::B));
-        assert!(caps.rvs_contains(Capability::I));
-        assert_eq!(caps.rvs_len(), 2);
-    }
-
-    #[test]
-    fn test_20260425_capsmap_parse_empty_value() {
-        let cm = CapsMap::rvs_parse("HashMap::new=").unwrap();
-        let caps = cm.rvs_lookup("HashMap::new").unwrap();
-        assert!(caps.rvs_is_empty());
-    }
-
-    #[test]
-    fn test_20260425_capsmap_parse_comments() {
-        let cm = CapsMap::rvs_parse("# comment\nfunc=BI # inline\n").unwrap();
-        assert!(cm.rvs_lookup("func").is_some());
-        assert!(cm.rvs_lookup("# comment").is_none());
-    }
-
-    #[test]
-    fn test_20260425_capsmap_parse_missing_separator() {
-        let result = CapsMap::rvs_parse("no_separator");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_20260705_capsmap_parse_rejects_empty_key() {
-        let result = CapsMap::rvs_parse("=BI");
-        std::fs::create_dir_all("test_out").unwrap();
-        std::fs::write(
-            "test_out/test_20260705_capsmap_parse_rejects_empty_key.out",
-            format!("{result:?}\n"),
-        )
-        .unwrap();
-        assert!(matches!(result, Err(CapsMapError::EmptyKey { .. })));
-    }
-
-    #[test]
-    fn test_20260615_capsmap_parse_hash_in_key() {
-        let cm = CapsMap::rvs_parse("exr::image::closure#0::crop_samples=S # SideEffect").unwrap();
-        let caps = cm
-            .rvs_lookup("exr::image::closure#0::crop_samples")
-            .unwrap();
-        assert!(caps.rvs_contains(Capability::S));
-    }
-
-    #[test]
-    fn test_20260425_capsmap_parse_invalid_caps() {
-        let result = CapsMap::rvs_parse("func=XYZ");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_20260707_capsmap_parse_rejects_duplicate_caps() {
-        let result = CapsMap::rvs_parse("func=BB");
-        std::fs::create_dir_all("test_out").unwrap();
-        std::fs::write(
-            "test_out/test_20260707_capsmap_parse_rejects_duplicate_caps.out",
-            format!("{result:?}\n"),
-        )
-        .unwrap();
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_20260425_capsmap_lookup_exact_only() {
-        let cm = CapsMap::rvs_parse("HashMap::new=").unwrap();
-        assert!(cm.rvs_lookup("HashMap::new").is_some());
-        assert!(cm.rvs_lookup("HashMap").is_none());
-    }
-
-    #[test]
-    fn test_20260425_capsmap_lookup_no_match() {
-        let cm = CapsMap::rvs_parse("HashMap::new=").unwrap();
-        assert!(cm.rvs_lookup("nonexistent").is_none());
-    }
-
-    #[test]
-    fn test_20260425_capsmap_parse_empty_content() {
-        let cm = CapsMap::rvs_parse("").unwrap();
-        assert!(cm.rvs_lookup("anything").is_none());
-    }
-
-    #[test]
-    fn test_20260425_capsmap_parse_all_caps() {
-        let cm = CapsMap::rvs_parse("danger=ABIMPSTU").unwrap();
-        let caps = cm.rvs_lookup("danger").unwrap();
-        assert_eq!(caps.rvs_len(), 8);
+    fn test_20260709_capsmap_parse_error_table() {
+        let cases = [
+            ("missing_separator", "no_separator"),
+            ("empty_key", "=BI"),
+            ("invalid_caps", "func=XYZ"),
+            ("duplicate_caps", "func=BB"),
+        ];
+        let mut output = String::new();
+        for (name, input) in cases {
+            let result = CapsMap::rvs_parse(input);
+            output.push_str(&format!("{name}: {result:?}\n"));
+            assert!(result.is_err(), "{name}");
+        }
+        rvs_snapshot_BIS("test_20260709_capsmap_parse_error_table", &output);
     }
 
     #[test]
     fn test_20260705_capsmap_to_text_is_deterministic() {
         let cm = CapsMap::rvs_parse("zeta=S\nalpha=BI\n").unwrap();
         let text = cm.rvs_to_text();
-        std::fs::create_dir_all("test_out").unwrap();
-        std::fs::write(
-            "test_out/test_20260705_capsmap_to_text_is_deterministic.out",
-            &text,
-        )
-        .unwrap();
+        rvs_snapshot_BIS("test_20260705_capsmap_to_text_is_deterministic", &text);
 
         assert_eq!(text, "alpha=BI\nzeta=S\n");
     }
