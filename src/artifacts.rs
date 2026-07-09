@@ -37,6 +37,12 @@ pub struct FnNode {
     pub is_test: bool,
     #[serde(default)]
     pub sources: BTreeSet<FnSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report_caps: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report_line_count: Option<usize>,
+    #[serde(default, skip_serializing_if = "rvs_is_false")]
+    pub allows_dead_code: bool,
     #[serde(skip)]
     pub is_synthetic: bool,
     #[serde(skip)]
@@ -54,6 +60,9 @@ impl Default for FnNode {
             is_trait_impl: false,
             is_test: false,
             sources: BTreeSet::new(),
+            report_caps: None,
+            report_line_count: None,
+            allows_dead_code: false,
             is_synthetic: false,
             expected_public_caps: None,
             expected_name: None,
@@ -76,6 +85,9 @@ impl FnNode {
         self.is_trait_impl |= other.is_trait_impl;
         self.is_test |= other.is_test;
         self.sources.extend(other.sources.iter().cloned());
+        self.report_caps = self.report_caps.clone().or(other.report_caps.clone());
+        self.report_line_count = self.report_line_count.or(other.report_line_count);
+        self.allows_dead_code |= other.allows_dead_code;
         self.is_synthetic = self.is_synthetic && other.is_synthetic;
     }
 
@@ -97,6 +109,10 @@ impl FnNode {
 }
 
 pub type FnBehavior = FnNode;
+
+fn rvs_is_false(value: &bool) -> bool {
+    !*value
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 #[serde(transparent)]
@@ -178,15 +194,6 @@ impl FnGraph {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct FnReportEntry {
-    pub name: FnName,
-    pub caps: String,
-    pub lines: usize,
-    pub is_test: bool,
-    pub allows_dead_code: bool,
-}
-
 /// Parse serialized callgraph JSON into shared callgraph records.
 pub fn rvs_parse_callgraph_json_S(json: &str) -> Result<FnGraph, String> {
     let graph: FnGraph =
@@ -217,32 +224,6 @@ pub fn rvs_parse_callgraph_json_S(json: &str) -> Result<FnGraph, String> {
         }
     }
     Ok(graph)
-}
-
-/// Parse serialized function report JSON into shared report records.
-pub fn rvs_parse_report_json_S(json: &str) -> Result<Vec<FnReportEntry>, String> {
-    let entries: Vec<FnReportEntry> =
-        serde_json::from_str(json).map_err(|e| format!("invalid report JSON: {e}"))?;
-    for entry in &entries {
-        if entry.name.rvs_as_str().is_empty() {
-            return Err("invalid report JSON: function name is empty".into());
-        }
-        if entry.lines == 0 {
-            return Err(format!(
-                "invalid report JSON: line count for '{}' must be positive",
-                entry.name
-            ));
-        }
-        if !entry.caps.is_empty() {
-            CapabilitySet::rvs_from_str(&entry.caps).map_err(|e| {
-                format!(
-                    "invalid report JSON: invalid capability string '{}' for '{}': {e}",
-                    entry.caps, entry.name
-                )
-            })?;
-        }
-    }
-    Ok(entries)
 }
 
 #[cfg(test)]
@@ -596,54 +577,6 @@ mod tests {
         let result = rvs_parse_callgraph_json_S(json);
         rvs_snapshot_BIS(
             "test_20260707_parse_callgraph_rejects_empty_callee_path",
-            &format!("{result:?}"),
-        );
-
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_20260707_parse_report_rejects_empty_function_name() {
-        let json = r#"[{"name":"","caps":"","lines":1,"is_test":false,"allows_dead_code":false}]"#;
-        let result = rvs_parse_report_json_S(json);
-        rvs_snapshot_BIS(
-            "test_20260707_parse_report_rejects_empty_function_name",
-            &format!("{result:?}"),
-        );
-
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_20260707_parse_report_rejects_invalid_caps() {
-        let json = r#"[{"name":"rvs_bad_Z","caps":"Z","lines":1,"is_test":false,"allows_dead_code":false}]"#;
-        let result = rvs_parse_report_json_S(json);
-        rvs_snapshot_BIS(
-            "test_20260707_parse_report_rejects_invalid_caps",
-            &format!("{result:?}"),
-        );
-
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_20260707_parse_report_rejects_duplicate_caps() {
-        let json = r#"[{"name":"rvs_bad_BB","caps":"BB","lines":1,"is_test":false,"allows_dead_code":false}]"#;
-        let result = rvs_parse_report_json_S(json);
-        rvs_snapshot_BIS(
-            "test_20260707_parse_report_rejects_duplicate_caps",
-            &format!("{result:?}"),
-        );
-
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_20260707_parse_report_rejects_zero_lines() {
-        let json = r#"[{"name":"rvs_empty","caps":"","lines":0,"is_test":false,"allows_dead_code":false}]"#;
-        let result = rvs_parse_report_json_S(json);
-        rvs_snapshot_BIS(
-            "test_20260707_parse_report_rejects_zero_lines",
             &format!("{result:?}"),
         );
 

@@ -85,7 +85,7 @@ pub(crate) struct CargoCheckConfig<'a> {
     pub(crate) extra_env: Vec<(&'a str, OsString)>,
     /// Extra cargo check arguments.
     pub(crate) extra_args: Vec<&'a str>,
-    /// Output subdirectory name under target/ (e.g. "rivus-build", "rivus-report-build").
+    /// Output subdirectory name under target/ (e.g. "rivus-build").
     /// If None, uses default target/ directory.
     pub(crate) target_subdir: Option<&'a str>,
 }
@@ -148,8 +148,6 @@ fn rvs_prepare_cargo_check_command_BIMS(
     for key in [
         "RIVUS_CALLGRAPH",
         "RIVUS_CALLGRAPH_DIR",
-        "RIVUS_REPORT",
-        "RIVUS_REPORT_DIR",
         "RIVUS_CAPSMAP",
         "RIVUS_OFFLINE_CAPS",
         "RIVUS_ENABLED",
@@ -171,7 +169,7 @@ fn rvs_prepare_cargo_check_command_BIMS(
         "RUSTC_WORKSPACE_WRAPPER"
     };
     for (key, val) in &config.extra_env {
-        if matches!(*key, "RIVUS_CALLGRAPH" | "RIVUS_REPORT") && val != "1" {
+        if *key == "RIVUS_CALLGRAPH" && val != "1" {
             return Err(CargoCheckError::Message(format!(
                 "driver-controlled env {key} must be set to 1 when provided"
             )));
@@ -355,8 +353,6 @@ fn rvs_reject_dangerous_forwarded_config(value: &str) -> Result<(), String> {
         "env.RIVUS_CAPSMAP",
         "env.RIVUS_CALLGRAPH",
         "env.RIVUS_CALLGRAPH_DIR",
-        "env.RIVUS_REPORT",
-        "env.RIVUS_REPORT_DIR",
         "env.RUSTC",
         "env.RUSTC_WRAPPER",
         "env.RUSTC_WORKSPACE_WRAPPER",
@@ -1836,9 +1832,8 @@ name = "throughput-bench"
             None => "inherited",
         };
         let output = format!(
-            "callgraph={:?}\nreport={:?}\ncapsmap={capsmap_state}\nrustc={:?}\nrivus_enabled={:?}\n",
+            "callgraph={:?}\ncapsmap={capsmap_state}\nrustc={:?}\nrivus_enabled={:?}\n",
             rvs_command_env_value(&cmd, "RIVUS_CALLGRAPH"),
-            rvs_command_env_value(&cmd, "RIVUS_REPORT"),
             rvs_command_env_value(&cmd, "RUSTC"),
             rvs_command_env_value(&cmd, "RIVUS_ENABLED"),
         );
@@ -1852,8 +1847,6 @@ name = "throughput-bench"
             rvs_command_env_value(&cmd, "RIVUS_CALLGRAPH_DIR"),
             Some(None)
         );
-        assert_eq!(rvs_command_env_value(&cmd, "RIVUS_REPORT"), Some(None));
-        assert_eq!(rvs_command_env_value(&cmd, "RIVUS_REPORT_DIR"), Some(None));
         assert_eq!(rvs_command_env_value(&cmd, "RIVUS_CAPSMAP"), Some(None));
         assert_eq!(rvs_command_env_value(&cmd, "RUSTC"), Some(None));
         assert_eq!(
@@ -1927,30 +1920,6 @@ name = "throughput-bench"
         let output = format!("result={result:?}\n");
         rvs_snapshot_BIS(
             "test_20260706_prepare_cargo_check_callgraph_env_requires_one",
-            &output,
-        );
-
-        assert!(result.is_err());
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn test_20260707_prepare_cargo_check_report_env_requires_one() {
-        let dir = rvs_make_workspace_temp_dir_BIS("report-env-zero");
-        let config = CargoCheckConfig {
-            project_path: &dir,
-            wrap_all_crates: false,
-            with_tests: true,
-            build_std: false,
-            extra_env: vec![("RIVUS_REPORT", "0".into())],
-            extra_args: vec![],
-            target_subdir: None,
-        };
-
-        let result = rvs_prepare_cargo_check_command_BIMS(&config);
-        let output = format!("result={result:?}\n");
-        rvs_snapshot_BIS(
-            "test_20260707_prepare_cargo_check_report_env_requires_one",
             &output,
         );
 
@@ -2693,7 +2662,7 @@ name = "throughput-bench"
             build_std: false,
             extra_env: vec![],
             extra_args: vec![],
-            target_subdir: Some("rivus-report-build"),
+            target_subdir: Some("rivus-custom-build"),
         };
 
         let cmd = rvs_prepare_cargo_check_command_BIMS(&config).unwrap();
@@ -2724,7 +2693,7 @@ name = "throughput-bench"
         assert!(current_dir.is_absolute());
         assert!(target_dir.is_absolute());
         assert!(capsmap.is_absolute());
-        assert!(target_dir.ends_with("target/rivus-report-build"));
+        assert!(target_dir.ends_with("target/rivus-custom-build"));
         assert!(capsmap.ends_with("caps"));
 
         std::fs::remove_dir_all(absolute_project).unwrap();

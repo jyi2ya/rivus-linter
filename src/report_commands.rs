@@ -1,8 +1,9 @@
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::fmt;
 use std::path::Path;
 
-use crate::artifacts::{self, FnGraph};
+use crate::artifacts::FnGraph;
 use crate::capability::{Capability, CapabilityPolicy, CapabilitySet};
 use crate::inference::{
     FnContractDiff, FnContractMismatch, FnContractMismatchKind,
@@ -11,8 +12,8 @@ use crate::inference::{
 };
 use crate::symbols::CrateName;
 use crate::workspace::{
-    CargoCheckConfig, CargoCheckError, rvs_clean_dir_BIS, rvs_collect_callgraph_and_caps_BIMS,
-    rvs_ensure_cargo_project_BIS, rvs_load_local_crate_prefixes_BIS, rvs_run_cargo_check_impl_BIMS,
+    rvs_collect_callgraph_and_caps_BIMS, rvs_ensure_cargo_project_BIS,
+    rvs_function_matches_local_prefix, rvs_load_local_crate_prefixes_BIS,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -185,115 +186,40 @@ fn rvs_checked_report_sum(current: usize, delta: usize, label: &str) -> Result<u
         .ok_or_else(|| format!("{label} overflow while building capability report"))
 }
 
-fn rvs_read_report_entries_with_count_BIS(
-    report_dir: &Path,
-) -> Result<(Vec<FnEntry>, usize), String> {
-    let rd = match std::fs::read_dir(report_dir) {
-        Ok(rd) => rd,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            match std::fs::symlink_metadata(report_dir) {
-                Err(symlink_error) if symlink_error.kind() == std::io::ErrorKind::NotFound => {
-                    return Ok((Vec::new(), 0));
-                }
-                Ok(_) => {
-                    return Err(format!(
-                        "report dir must be a directory: {}",
-                        report_dir.display()
-                    ));
-                }
-                Err(symlink_error) => {
-                    return Err(format!(
-                        "cannot inspect report dir {}: {symlink_error}",
-                        report_dir.display()
-                    ));
-                }
-            }
-        }
-        Err(e) => return Err(format!("cannot read {}: {e}", report_dir.display())),
-    };
-
-    let mut json_paths = Vec::new();
-    for entry in rd {
-        let entry = entry.map_err(|e| format!("readdir error in {}: {e}", report_dir.display()))?;
-        let file_type = entry
-            .file_type()
-            .map_err(|e| format!("cannot inspect {}: {e}", entry.path().display()))?;
-        let path = entry.path();
-        if path.extension().is_none_or(|ext| ext != "json") {
+fn rvs_report_entries_from_callgraph(
+    graph: &FnGraph,
+    local_crate_names: &BTreeSet<CrateName>,
+) -> Result<Vec<FnEntry>, String> {
+    let mut entries = Vec::new();
+    for (def_path, node) in graph.rvs_iter() {
+        if !rvs_function_matches_local_prefix(def_path.rvs_as_str(), local_crate_names) {
             continue;
         }
-        if !file_type.is_file() {
+        if node.is_trait_impl && !node.facts.is_port_method {
             continue;
         }
-        json_paths.push(path);
-    }
-    json_paths.sort();
-
-    let artifact_count = json_paths.len();
-    let mut all_entries = Vec::new();
-    for path in json_paths {
-        let json_str = std::fs::read_to_string(&path)
-            .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-        let entries = artifacts::rvs_parse_report_json_S(&json_str)
-            .map_err(|e| format!("parsing {}: {e}", path.display()))?;
-        for entry in entries {
-            let capabilities = if entry.caps.is_empty() {
-                CapabilitySet::rvs_new()
-            } else {
-                CapabilitySet::rvs_from_str(&entry.caps).map_err(|e| {
-                    format!(
-                        "{}: invalid capability string '{}' for {}: {e}",
-                        path.display(),
-                        entry.caps,
-                        entry.name
-                    )
-                })?
-            };
-            all_entries.push(FnEntry {
-                capabilities,
-                line_count: entry.lines,
-                is_test: entry.is_test,
-                allows_dead_code: entry.allows_dead_code,
-            });
+        let Some(line_count) = node.report_line_count else {
+            continue;
+        };
+        let capabilities = match node.report_caps.as_deref() {
+            Some("") | None => CapabilitySet::rvs_new(),
+            Some(caps) => CapabilitySet::rvs_from_str(caps).map_err(|e| {
+                format!("callgraph report caps for {def_path} are invalid ('{caps}'): {e}")
+            })?,
+        };
+        if line_count == 0 {
+            return Err(format!(
+                "callgraph report line count for {def_path} must be positive"
+            ));
         }
-    }
-    Ok((all_entries, artifact_count))
-}
-
-#[cfg(test)]
-fn rvs_read_report_entries_BIS(report_dir: &Path) -> Result<Vec<FnEntry>, String> {
-    rvs_read_report_entries_with_count_BIS(report_dir).map(|(entries, _)| entries)
-}
-
-fn rvs_read_required_report_entries_BIS(report_dir: &Path) -> Result<Vec<FnEntry>, String> {
-    let (entries, artifact_count) = rvs_read_report_entries_with_count_BIS(report_dir)?;
-    if artifact_count == 0 {
-        return Err(format!(
-            "no report JSON artifacts found in {}",
-            report_dir.display()
-        ));
+        entries.push(FnEntry {
+            capabilities,
+            line_count,
+            is_test: node.is_test,
+            allows_dead_code: node.allows_dead_code,
+        });
     }
     Ok(entries)
-}
-
-fn rvs_read_report_entries_after_cargo_BIS(
-    report_dir: &Path,
-    cargo_check: Result<(), CargoCheckError>,
-) -> Result<Vec<FnEntry>, String> {
-    match cargo_check {
-        Ok(()) => rvs_read_required_report_entries_BIS(report_dir),
-        Err(e) => {
-            // Report mode should still produce output even if lint violations
-            // (deny-level errors) cause cargo check to fail. The report JSON
-            // is written by the lint pass before compilation aborts.
-            let (entries, artifact_count) = rvs_read_report_entries_with_count_BIS(report_dir)?;
-            if artifact_count == 0 {
-                return Err(e.to_string());
-            }
-            eprintln!("warning: {e}");
-            Ok(entries)
-        }
-    }
 }
 
 fn rvs_format_contract_mismatch_summary(
@@ -327,55 +253,21 @@ fn rvs_collect_reportable_contract_diffs(
 /// Panics if the current executable path, current directory, or cargo cannot be resolved.
 pub(crate) fn rvs_run_report_BIMPS(path: &Path) -> Result<(), String> {
     rvs_ensure_cargo_project_BIS(path)?;
-
-    let report_dir = path.join("target").join("rivus-report");
-    let abs_report_dir = std::env::current_dir()
-        .map_err(|e| format!("current dir invalid: {e}"))?
-        .join(&report_dir);
-    rvs_clean_dir_BIS(&report_dir)?;
-    rvs_clean_dir_BIS(&path.join("target").join("rivus-report-build"))?;
-
-    let cargo_check = rvs_run_cargo_check_impl_BIMS(&CargoCheckConfig {
-        project_path: path,
-        wrap_all_crates: false,
-        with_tests: true,
-        build_std: false,
-        extra_env: vec![
-            ("RIVUS_REPORT", "1".into()),
-            ("RIVUS_REPORT_DIR", abs_report_dir.into_os_string()),
-        ],
-        extra_args: vec![],
-        target_subdir: Some("rivus-report-build"),
-    });
-    let report_entries = rvs_read_report_entries_after_cargo_BIS(&report_dir, cargo_check)?;
-
+    let local_crate_names = rvs_load_local_crate_prefixes_BIS(path)?;
+    let (mut callgraph, caps) = rvs_collect_callgraph_and_caps_BIMS(path, true)?;
+    let diffs = rvs_collect_local_contract_diffs_M(&mut callgraph, &caps, &local_crate_names);
+    let report_entries = rvs_report_entries_from_callgraph(&callgraph, &local_crate_names)?;
     let report = rvs_build_report(&report_entries)?;
-    let mismatch_output = match rvs_collect_report_contract_mismatches_BIMPS(path) {
-        Ok(output) => output,
-        Err(e) => {
-            eprintln!("warning: contract mismatch report unavailable: {e}");
-            String::new()
-        }
-    };
+    let reportable_diffs =
+        rvs_collect_reportable_contract_diffs(&callgraph, &diffs, &local_crate_names);
+    let mismatch_items = rvs_collect_contract_mismatch_items(&reportable_diffs);
+    let mismatch_summary = rvs_summarize_contract_mismatches(&reportable_diffs);
+    let mismatch_output = rvs_format_contract_mismatch_summary(&mismatch_summary, &mismatch_items);
     print!("{report}");
     if !mismatch_output.is_empty() {
         print!("{mismatch_output}");
     }
     Ok(())
-}
-
-fn rvs_collect_report_contract_mismatches_BIMPS(path: &Path) -> Result<String, String> {
-    let local_crate_names = rvs_load_local_crate_prefixes_BIS(path)?;
-    let (mut callgraph, caps) = rvs_collect_callgraph_and_caps_BIMS(path, true)?;
-    let diffs = rvs_collect_local_contract_diffs_M(&mut callgraph, &caps, &local_crate_names);
-    let reportable_diffs =
-        rvs_collect_reportable_contract_diffs(&callgraph, &diffs, &local_crate_names);
-    let mismatch_items = rvs_collect_contract_mismatch_items(&reportable_diffs);
-    let mismatch_summary = rvs_summarize_contract_mismatches(&reportable_diffs);
-    Ok(rvs_format_contract_mismatch_summary(
-        &mismatch_summary,
-        &mismatch_items,
-    ))
 }
 
 #[cfg(test)]
@@ -410,77 +302,6 @@ mod tests {
         rvs_snapshot_BIS("test_20260607_report_empty", &output);
         assert_eq!(report.total_fn_count, 0);
         assert_eq!(report.total_line_count, 0);
-    }
-
-    #[test]
-    fn test_20260706_read_report_entries_missing_dir_is_empty() {
-        let dir = rvs_make_temp_dir_BIS("missing-report-dir");
-        let missing = dir.join("target/rivus-report");
-
-        let result = rvs_read_report_entries_BIS(&missing);
-        rvs_snapshot_BIS(
-            "test_20260706_read_report_entries_missing_dir_is_empty",
-            &format!("{result:?}\n").replace(&dir.to_string_lossy().into_owned(), "$TMP"),
-        );
-
-        assert!(matches!(result, Ok(entries) if entries.is_empty()));
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn test_20260706_read_report_entries_rejects_broken_symlink_dir() {
-        let dir = rvs_make_temp_dir_BIS("report-broken-symlink-dir");
-        std::fs::create_dir_all(dir.join("target")).unwrap();
-        let report_path = dir.join("target/rivus-report");
-        std::os::unix::fs::symlink(dir.join("missing-report-dir"), &report_path).unwrap();
-
-        let result = rvs_read_report_entries_BIS(&report_path);
-        rvs_snapshot_BIS(
-            "test_20260706_read_report_entries_rejects_broken_symlink_dir",
-            &format!("{result:?}\n").replace(&dir.to_string_lossy().into_owned(), "$TMP"),
-        );
-
-        assert!(result.is_err());
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn test_20260706_read_report_entries_rejects_report_file_path() {
-        let dir = rvs_make_temp_dir_BIS("report-dir-is-file");
-        let report_path = dir.join("target/rivus-report");
-        std::fs::create_dir_all(report_path.parent().unwrap()).unwrap();
-        std::fs::write(&report_path, "not a directory\n").unwrap();
-
-        let result = rvs_read_report_entries_BIS(&report_path);
-        rvs_snapshot_BIS(
-            "test_20260706_read_report_entries_rejects_report_file_path",
-            &format!("{result:?}\n").replace(&dir.to_string_lossy().into_owned(), "$TMP"),
-        );
-
-        assert!(result.is_err());
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn test_20260706_read_report_entries_rejects_invalid_caps() {
-        let dir = rvs_make_temp_dir_BIS("report-invalid-caps");
-        let report_dir = dir.join("target/rivus-report");
-        std::fs::create_dir_all(&report_dir).unwrap();
-        std::fs::write(
-            report_dir.join("demo-1.json"),
-            r#"[{"name":"rvs_bad_Z","caps":"Z","lines":1,"is_test":false,"allows_dead_code":false}]"#,
-        )
-        .unwrap();
-
-        let result = rvs_read_report_entries_BIS(&report_dir);
-        rvs_snapshot_BIS(
-            "test_20260706_read_report_entries_rejects_invalid_caps",
-            &format!("{result:?}\n").replace(&dir.to_string_lossy().into_owned(), "$TMP"),
-        );
-
-        assert!(result.is_err());
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -559,39 +380,6 @@ mod tests {
         rvs_snapshot_BIS("test_20260607_report_skips_test_and_dead_code", &output);
         assert_eq!(report.total_fn_count, 1);
         assert_eq!(report.total_line_count, 10);
-    }
-
-    #[test]
-    fn test_20260608_json_parse_empty() {
-        let entries = artifacts::rvs_parse_report_json_S("[]").unwrap();
-        assert!(entries.is_empty());
-    }
-
-    #[test]
-    fn test_20260608_json_parse_single_pure() {
-        let json =
-            r#"[{"name":"rvs_add","caps":"","lines":5,"is_test":false,"allows_dead_code":false}]"#;
-        let entries = artifacts::rvs_parse_report_json_S(json).unwrap();
-        assert_eq!(entries.len(), 1);
-        assert!(entries[0].caps.is_empty());
-        assert_eq!(entries[0].lines, 5);
-        assert!(!entries[0].is_test);
-    }
-
-    #[test]
-    fn test_20260608_json_parse_with_caps() {
-        let json = r#"[{"name":"rvs_write_BI","caps":"BI","lines":10,"is_test":false,"allows_dead_code":false}]"#;
-        let entries = artifacts::rvs_parse_report_json_S(json).unwrap();
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].caps, "BI");
-    }
-
-    #[test]
-    fn test_20260608_json_parse_test_fn() {
-        let json = r#"[{"name":"test_20260608_foo","caps":"S","lines":3,"is_test":true,"allows_dead_code":false}]"#;
-        let entries = artifacts::rvs_parse_report_json_S(json).unwrap();
-        assert_eq!(entries.len(), 1);
-        assert!(entries[0].is_test);
     }
 
     #[test]
@@ -759,6 +547,64 @@ mod tests {
     }
 
     #[test]
+    fn test_20260709_report_entries_skip_non_port_trait_impl_methods() {
+        let mut graph = FnGraph::rvs_new();
+        graph.rvs_insert_M(
+            DefPath::from("demo::Worker::rvs_run_A@demo::Runnable"),
+            FnNode {
+                is_trait_impl: true,
+                report_caps: Some("A".to_string()),
+                report_line_count: Some(10),
+                ..FnNode::default()
+            },
+        );
+        graph.rvs_insert_M(
+            DefPath::from("demo::rvs_plain_B"),
+            FnNode {
+                report_caps: Some("B".to_string()),
+                report_line_count: Some(3),
+                ..FnNode::default()
+            },
+        );
+        let mut port_impl = FnNode {
+            is_trait_impl: true,
+            report_caps: Some("P".to_string()),
+            report_line_count: Some(4),
+            ..FnNode::default()
+        };
+        port_impl.facts.is_port_method = true;
+        graph.rvs_insert_M(DefPath::from("demo::Repo::rvs_get@demo::Client"), port_impl);
+
+        let entries = rvs_report_entries_from_callgraph(
+            &graph,
+            &std::collections::BTreeSet::from([CrateName::from("demo")]),
+        )
+        .unwrap();
+        let output = format!("{entries:?}\n");
+        rvs_snapshot_BIS(
+            "test_20260709_report_entries_skip_non_port_trait_impl_methods",
+            &output,
+        );
+
+        assert_eq!(entries.len(), 2);
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.capabilities == CapabilitySet::rvs_from_validated("B"))
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.capabilities == CapabilitySet::rvs_from_validated("P"))
+        );
+        assert!(
+            !entries
+                .iter()
+                .any(|entry| entry.capabilities == CapabilitySet::rvs_from_validated("A"))
+        );
+    }
+
+    #[test]
     fn test_20260706_build_report_rejects_line_count_overflow() {
         let entries = vec![
             FnEntry {
@@ -798,136 +644,6 @@ mod tests {
     }
 
     #[test]
-    fn test_20260706_read_report_entries_sorts_json_files() {
-        let dir = rvs_make_temp_dir_BIS("report-sorted-json");
-        std::fs::write(
-            dir.join("z.json"),
-            r#"[{"name":"rvs_z","caps":"","lines":2,"is_test":false,"allows_dead_code":false}]"#,
-        )
-        .unwrap();
-        std::fs::write(
-            dir.join("a.json"),
-            r#"[{"name":"rvs_a","caps":"","lines":1,"is_test":false,"allows_dead_code":false}]"#,
-        )
-        .unwrap();
-
-        let entries = rvs_read_report_entries_BIS(&dir).unwrap();
-        let lines = entries
-            .iter()
-            .map(|entry| entry.line_count.to_string())
-            .collect::<Vec<_>>()
-            .join(",");
-        rvs_snapshot_BIS(
-            "test_20260706_read_report_entries_sorts_json_files",
-            &format!("lines={lines}\n"),
-        );
-
-        assert_eq!(lines, "1,2");
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn test_20260706_read_report_entries_ignores_json_directory() {
-        let dir = rvs_make_temp_dir_BIS("report-json-directory");
-        std::fs::create_dir_all(dir.join("a.json")).unwrap();
-        std::fs::write(
-            dir.join("b.json"),
-            r#"[{"name":"rvs_b","caps":"","lines":3,"is_test":false,"allows_dead_code":false}]"#,
-        )
-        .unwrap();
-
-        let entries = rvs_read_report_entries_BIS(&dir).unwrap();
-        let output = format!("len={}\nlines={}\n", entries.len(), entries[0].line_count);
-        rvs_snapshot_BIS(
-            "test_20260706_read_report_entries_ignores_json_directory",
-            &output,
-        );
-
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].line_count, 3);
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn test_20260706_read_report_entries_rejects_empty_function_name() {
-        let dir = rvs_make_temp_dir_BIS("report-empty-name");
-        std::fs::write(
-            dir.join("entry.json"),
-            r#"[{"name":"","caps":"","lines":1,"is_test":false,"allows_dead_code":false}]"#,
-        )
-        .unwrap();
-
-        let result = rvs_read_report_entries_BIS(&dir);
-        let output = format!("{result:?}\n").replace(&dir.to_string_lossy().into_owned(), "$TMP");
-        rvs_snapshot_BIS(
-            "test_20260706_read_report_entries_rejects_empty_function_name",
-            &output,
-        );
-
-        assert!(result.is_err());
-        assert!(output.contains("function name is empty"));
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn test_20260706_failed_cargo_with_empty_report_dir_returns_error() {
-        let dir = rvs_make_temp_dir_BIS("report-empty-after-failed-cargo");
-        std::fs::create_dir_all(&dir).unwrap();
-
-        let result =
-            rvs_read_report_entries_after_cargo_BIS(&dir, Err(CargoCheckError::ExitCode(101)));
-        let output = format!("{result:?}\n").replace(&dir.to_string_lossy().into_owned(), "$TMP");
-        rvs_snapshot_BIS(
-            "test_20260706_failed_cargo_with_empty_report_dir_returns_error",
-            &output,
-        );
-
-        assert!(result.is_err());
-        assert!(output.contains("cargo check failed"));
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn test_20260708_successful_cargo_requires_report_artifact() {
-        let dir = rvs_make_temp_dir_BIS("report-missing-after-successful-cargo");
-        let missing = dir.join("target/rivus-report");
-
-        let result = rvs_read_report_entries_after_cargo_BIS(&missing, Ok(()));
-        let output = format!("{result:?}\n").replace(&dir.to_string_lossy().into_owned(), "$TMP");
-        rvs_snapshot_BIS(
-            "test_20260708_successful_cargo_requires_report_artifact",
-            &output,
-        );
-
-        assert!(result.is_err());
-        assert!(output.contains("no report JSON artifacts"));
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn test_20260708_failed_cargo_reports_wrong_type_report_path() {
-        let dir = rvs_make_temp_dir_BIS("report-file-after-failed-cargo");
-        let report_path = dir.join("target/rivus-report");
-        std::fs::create_dir_all(report_path.parent().unwrap()).unwrap();
-        std::fs::write(&report_path, "not a directory\n").unwrap();
-
-        let result = rvs_read_report_entries_after_cargo_BIS(
-            &report_path,
-            Err(CargoCheckError::ExitCode(101)),
-        );
-        let output = format!("{result:?}\n").replace(&dir.to_string_lossy().into_owned(), "$TMP");
-        rvs_snapshot_BIS(
-            "test_20260708_failed_cargo_reports_wrong_type_report_path",
-            &output,
-        );
-
-        assert!(result.is_err());
-        assert!(output.contains("cannot read"));
-        assert!(!output.contains("cargo check failed"));
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
     fn test_20260708_run_report_accepts_async_fn_project() {
         let dir = rvs_make_temp_dir_BIS("report-async-project");
         std::fs::create_dir_all(dir.join("src")).unwrap();
@@ -959,7 +675,10 @@ mod tests {
         .unwrap();
 
         let result = rvs_run_report_BIMPS(&dir);
-        let report_entries = rvs_read_required_report_entries_BIS(&dir.join("target/rivus-report"));
+        let local_crate_names = rvs_load_local_crate_prefixes_BIS(&dir).unwrap();
+        let (mut callgraph, caps) = rvs_collect_callgraph_and_caps_BIMS(&dir, true).unwrap();
+        let _diffs = rvs_collect_local_contract_diffs_M(&mut callgraph, &caps, &local_crate_names);
+        let report_entries = rvs_report_entries_from_callgraph(&callgraph, &local_crate_names);
         let async_lines = report_entries.as_ref().ok().and_then(|entries| {
             entries
                 .iter()

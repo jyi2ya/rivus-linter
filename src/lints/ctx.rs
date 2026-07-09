@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use rustc_span::Span;
 
-use crate::artifacts::{FnGraph, FnReportEntry};
+use crate::artifacts::FnGraph;
 use crate::capsmap::CapsMap;
 use rustc_span::def_id::DefId;
 
@@ -13,7 +13,6 @@ pub(crate) struct FnCheckData<'a> {
     pub capsmap: &'a Option<CapsMap>,
     pub good_fns: &'a mut Vec<(String, Span)>,
     pub ok_fns: &'a mut Vec<(String, Span)>,
-    pub fn_report: &'a mut Vec<FnReportEntry>,
     pub callgraph: &'a mut FnGraph,
     pub collect_callgraph: bool,
     pub should_emit_lints: bool,

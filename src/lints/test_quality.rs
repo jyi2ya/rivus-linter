@@ -9,30 +9,23 @@ use super::msg::Msg;
 use super::{
     RVS_DUPLICATE_TEST, RVS_MISSING_TEST_OUTPUT, RVS_UNTESTED_GOOD_FN, RVS_UNTESTED_OK_FN,
 };
-use crate::artifacts::{FnGraph, FnReportEntry};
+use crate::artifacts::FnGraph;
 use crate::symbols::CrateName;
 
 /// `check_crate_post` — cross-cutting test quality checks and output writing.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "crate-post checks consume all cross-function test-quality aggregates"
-)]
 pub(crate) fn rvs_check_crate_post_BIMS<'tcx>(
     cx: &LateContext<'tcx>,
     test_names: &BTreeMap<String, Vec<rustc_span::Span>>,
     good_fns: &[(String, rustc_span::Span)],
     ok_fns: &[(String, rustc_span::Span)],
     test_call_names: &HashSet<String>,
-    fn_report: &[FnReportEntry],
     callgraph: &FnGraph,
-    emit_report: bool,
     collect_callgraph: bool,
 ) {
     rvs_check_duplicate_tests_S(cx, test_names);
     rvs_check_missing_test_output_BIS(cx, test_names);
     rvs_check_untested_good_fns_S(cx, good_fns, test_call_names);
     rvs_check_untested_ok_fns_S(cx, ok_fns, test_call_names);
-    rvs_write_report_BIS(cx, fn_report, emit_report);
     rvs_write_callgraph_BIS(cx, callgraph, collect_callgraph);
 }
 
@@ -125,31 +118,6 @@ fn rvs_env_os_flag_enabled_BS(name: &str) -> bool {
 
 fn rvs_env_os_flag_value_enabled(value: Option<&OsStr>) -> bool {
     value.and_then(OsStr::to_str) == Some("1")
-}
-
-fn rvs_write_report_BIS<'tcx>(
-    cx: &LateContext<'tcx>,
-    fn_report: &[FnReportEntry],
-    emit_report: bool,
-) {
-    if emit_report {
-        if !fn_report.is_empty() {
-            match serde_json::to_string(fn_report) {
-                Ok(json) => {
-                    let report_dir = std::env::var_os("RIVUS_REPORT_DIR")
-                        .map(PathBuf::from)
-                        .unwrap_or_else(|| PathBuf::from("target/rivus-report"));
-                    let crate_name = CrateName::rvs_from_manifest_name(
-                        cx.tcx.crate_name(rustc_span::def_id::LOCAL_CRATE).as_str(),
-                    );
-                    if let Err(e) = rvs_write_json_artifact_BIS(&report_dir, &crate_name, &json) {
-                        eprintln!("warning: cannot write rivus report artifact: {e}");
-                    }
-                }
-                Err(e) => eprintln!("warning: cannot serialize rivus report artifact: {e}"),
-            }
-        }
-    }
 }
 
 fn rvs_write_callgraph_BIS<'tcx>(

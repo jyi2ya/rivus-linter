@@ -1,1 +1,0 @@
-Err("parsing $TMP/target/rivus-report/demo-1.json: invalid report JSON: invalid capability string 'Z' for 'rvs_bad_Z': invalid capability letter: 'Z'")

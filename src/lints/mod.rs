@@ -14,7 +14,7 @@ use rustc_session::declare_tool_lint;
 use rustc_span::Span;
 
 use crate::capsmap::CapsMap;
-use crate::symbols::{CrateName, DefPath, FnName};
+use crate::symbols::{CrateName, DefPath};
 
 mod banned_import;
 mod borrowed_param;
@@ -52,7 +52,6 @@ mod validate;
 
 pub use crate::artifacts::FnGraph;
 
-use crate::artifacts::FnReportEntry;
 use ctx::FnCheckData;
 
 // ─── Lint declarations ───────────────────────────────────────────────────
@@ -271,11 +270,9 @@ pub struct RivusLintPass {
     good_fns: Vec<(String, Span)>,
     ok_fns: Vec<(String, Span)>,
     test_call_names: HashSet<String>,
-    fn_report: Vec<FnReportEntry>,
     callgraph: FnGraph,
     done_crate_level: bool,
     collect_callgraph: bool,
-    emit_report: bool,
     should_emit_lints: bool,
     should_emit_caps_lints: bool,
     test_fn_names: HashSet<String>,
@@ -294,11 +291,9 @@ impl RivusLintPass {
             good_fns: Vec::new(),
             ok_fns: Vec::new(),
             test_call_names: HashSet::new(),
-            fn_report: Vec::new(),
             callgraph: FnGraph::rvs_new(),
             done_crate_level: false,
             collect_callgraph,
-            emit_report: rvs_env_flag_enabled_BS("RIVUS_REPORT"),
             should_emit_lints: !collect_callgraph,
             should_emit_caps_lints: !collect_callgraph && !offline_caps_check,
             test_fn_names: HashSet::new(),
@@ -400,9 +395,7 @@ impl<'tcx> LateLintPass<'tcx> for RivusLintPass {
             &self.good_fns,
             &self.ok_fns,
             &self.test_call_names,
-            &self.fn_report,
             &self.callgraph,
-            self.emit_report,
             self.collect_callgraph,
         );
     }
@@ -412,7 +405,6 @@ impl<'tcx> LateLintPass<'tcx> for RivusLintPass {
             capsmap: &self.capsmap,
             good_fns: &mut self.good_fns,
             ok_fns: &mut self.ok_fns,
-            fn_report: &mut self.fn_report,
             callgraph: &mut self.callgraph,
             collect_callgraph: self.collect_callgraph,
             should_emit_lints: self.should_emit_lints,
@@ -438,7 +430,6 @@ impl<'tcx> LateLintPass<'tcx> for RivusLintPass {
             capsmap: &self.capsmap,
             good_fns: &mut self.good_fns,
             ok_fns: &mut self.ok_fns,
-            fn_report: &mut self.fn_report,
             callgraph: &mut self.callgraph,
             collect_callgraph: self.collect_callgraph,
             should_emit_lints: self.should_emit_lints,
@@ -464,7 +455,6 @@ impl<'tcx> LateLintPass<'tcx> for RivusLintPass {
             capsmap: &self.capsmap,
             good_fns: &mut self.good_fns,
             ok_fns: &mut self.ok_fns,
-            fn_report: &mut self.fn_report,
             callgraph: &mut self.callgraph,
             collect_callgraph: self.collect_callgraph,
             should_emit_lints: self.should_emit_lints,
@@ -591,23 +581,6 @@ fn rvs_run_fn_checks_MS<'tcx>(
         {
             data.ok_fns.push((name.to_string(), span));
         }
-
-        // Collect fn report entry
-        let allows_dead_code =
-            utils::rvs_has_allow(attrs, "dead_code") || utils::rvs_has_allow(attrs, "unused");
-        let effective_lines = if has_body {
-            utils::rvs_count_effective_lines_M(cx, body)
-        } else {
-            1
-        };
-        let caps_str: String = info.caps.rvs_iter().map(|c| c.rvs_as_char()).collect();
-        data.fn_report.push(FnReportEntry {
-            name: FnName::rvs_new(name.to_string()),
-            caps: caps_str,
-            lines: effective_lines,
-            is_test,
-            allows_dead_code,
-        });
     } else {
         if is_port_method {
             let is_stub = stub_macro::rvs_check_fn_MS(cx, body, span);
@@ -656,20 +629,6 @@ fn rvs_run_fn_checks_MS<'tcx>(
             {
                 data.ok_fns.push((name.to_string(), span));
             }
-            let allows_dead_code =
-                utils::rvs_has_allow(attrs, "dead_code") || utils::rvs_has_allow(attrs, "unused");
-            let effective_lines = if has_body {
-                utils::rvs_count_effective_lines_M(cx, body)
-            } else {
-                1
-            };
-            data.fn_report.push(FnReportEntry {
-                name: FnName::rvs_new(name.to_string()),
-                caps: "P".to_string(),
-                lines: effective_lines,
-                is_test,
-                allows_dead_code,
-            });
         } else {
             if data.should_emit_caps_lints {
                 non_rvs_fn::rvs_check_contract_mismatches_S(

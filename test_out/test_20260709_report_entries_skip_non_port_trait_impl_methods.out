@@ -1,0 +1,1 @@
+[FnEntry { capabilities: CapabilitySet({P}), line_count: 4, is_test: false, allows_dead_code: false }, FnEntry { capabilities: CapabilitySet({B}), line_count: 3, is_test: false, allows_dead_code: false }]
