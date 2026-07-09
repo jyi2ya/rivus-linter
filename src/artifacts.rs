@@ -423,19 +423,12 @@ mod tests {
     }
 
     #[test]
-    fn test_20260609_parse_callgraph_invalid_json() {
-        let json = "this is not json at all";
-        let result = rvs_parse_callgraph_json_S(json);
-        rvs_snapshot_BIS(
-            "test_20260609_parse_callgraph_invalid_json",
-            &format!("{result:?}"),
-        );
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_20260704_parse_callgraph_rejects_missing_has_body() {
-        let json = r#"{
+    fn test_20260709_parse_callgraph_rejection_table() {
+        let cases = [
+            ("invalid_json", "this is not json at all"),
+            (
+                "missing_has_body",
+                r#"{
             "my_crate::rvs_add": {
                 "calls": [],
                 "has_async": false,
@@ -446,19 +439,11 @@ mod tests {
                 "has_thread_local_ref": false,
                 "is_trait_impl": false
             }
-        }"#;
-        let result = rvs_parse_callgraph_json_S(json);
-        rvs_snapshot_BIS(
-            "test_20260704_parse_callgraph_rejects_missing_has_body",
-            &format!("{result:?}"),
-        );
-
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_20260706_parse_callgraph_rejects_reversed_source_range() {
-        let json = r#"{
+        }"#,
+            ),
+            (
+                "reversed_source_range",
+                r#"{
             "my_crate::rvs_add": {
                 "calls": [],
                 "has_body": true,
@@ -471,19 +456,11 @@ mod tests {
                 "is_trait_impl": false,
                 "sources": [{"file":"src/lib.rs","name_start":10,"name_end":3}]
             }
-        }"#;
-        let result = rvs_parse_callgraph_json_S(json);
-        rvs_snapshot_BIS(
-            "test_20260706_parse_callgraph_rejects_reversed_source_range",
-            &format!("{result:?}"),
-        );
-
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_20260707_parse_callgraph_rejects_empty_source_file() {
-        let json = r#"{
+        }"#,
+            ),
+            (
+                "empty_source_file",
+                r#"{
             "my_crate::rvs_add": {
                 "calls": [],
                 "has_body": true,
@@ -496,19 +473,11 @@ mod tests {
                 "is_trait_impl": false,
                 "sources": [{"file":"","name_start":3,"name_end":10}]
             }
-        }"#;
-        let result = rvs_parse_callgraph_json_S(json);
-        rvs_snapshot_BIS(
-            "test_20260707_parse_callgraph_rejects_empty_source_file",
-            &format!("{result:?}"),
-        );
-
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_20260707_parse_callgraph_rejects_empty_source_range() {
-        let json = r#"{
+        }"#,
+            ),
+            (
+                "empty_source_range",
+                r#"{
             "my_crate::rvs_add": {
                 "calls": [],
                 "has_body": true,
@@ -521,19 +490,11 @@ mod tests {
                 "is_trait_impl": false,
                 "sources": [{"file":"src/lib.rs","name_start":10,"name_end":10}]
             }
-        }"#;
-        let result = rvs_parse_callgraph_json_S(json);
-        rvs_snapshot_BIS(
-            "test_20260707_parse_callgraph_rejects_empty_source_range",
-            &format!("{result:?}"),
-        );
-
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_20260707_parse_callgraph_rejects_empty_function_path() {
-        let json = r#"{
+        }"#,
+            ),
+            (
+                "empty_function_path",
+                r#"{
             "": {
                 "calls": [],
                 "has_body": true,
@@ -545,19 +506,11 @@ mod tests {
                 "has_thread_local_ref": false,
                 "is_trait_impl": false
             }
-        }"#;
-        let result = rvs_parse_callgraph_json_S(json);
-        rvs_snapshot_BIS(
-            "test_20260707_parse_callgraph_rejects_empty_function_path",
-            &format!("{result:?}"),
-        );
-
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_20260707_parse_callgraph_rejects_empty_callee_path() {
-        let json = r#"{
+        }"#,
+            ),
+            (
+                "empty_callee_path",
+                r#"{
             "my_crate::rvs_add": {
                 "calls": [""],
                 "has_body": true,
@@ -569,13 +522,15 @@ mod tests {
                 "has_thread_local_ref": false,
                 "is_trait_impl": false
             }
-        }"#;
-        let result = rvs_parse_callgraph_json_S(json);
-        rvs_snapshot_BIS(
-            "test_20260707_parse_callgraph_rejects_empty_callee_path",
-            &format!("{result:?}"),
-        );
-
-        assert!(result.is_err());
+        }"#,
+            ),
+        ];
+        let mut output = String::new();
+        for (name, json) in cases {
+            let result = rvs_parse_callgraph_json_S(json);
+            output.push_str(&format!("{name}: {result:?}\n"));
+            assert!(result.is_err(), "{name}");
+        }
+        rvs_snapshot_BIS("test_20260709_parse_callgraph_rejection_table", &output);
     }
 }

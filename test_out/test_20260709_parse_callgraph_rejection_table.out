@@ -1,0 +1,7 @@
+invalid_json: Err("invalid callgraph JSON: expected ident at line 1 column 2")
+missing_has_body: Err("invalid callgraph JSON: missing field `has_body` at line 11 column 13")
+reversed_source_range: Err("invalid callgraph JSON: source range for my_crate::rvs_add is empty or reversed (10..3)")
+empty_source_file: Err("invalid callgraph JSON: source file for my_crate::rvs_add is empty")
+empty_source_range: Err("invalid callgraph JSON: source range for my_crate::rvs_add is empty or reversed (10..10)")
+empty_function_path: Err("invalid callgraph JSON: function path is empty")
+empty_callee_path: Err("invalid callgraph JSON: callee path for my_crate::rvs_add is empty")
