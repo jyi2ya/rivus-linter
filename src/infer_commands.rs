@@ -11,19 +11,14 @@ use crate::inference::{
 use crate::symbols::{CapsMapKey, DefPath, DefPathPrefix};
 use crate::workspace::{
     rvs_collect_callgraph_BIMS, rvs_detect_local_crate_prefixes_for_cargo_check_BIS,
-    rvs_ensure_cargo_project_BIS, rvs_preflight_capsmap_output_set_BIS, rvs_resolve_capsmap_path,
-    rvs_validate_optional_capsmap_dir_BIS, rvs_write_capsmap_file_BIS,
-    rvs_write_capsmap_result_BIS,
+    rvs_ensure_cargo_project_BIS, rvs_preflight_capsmap_file_BIS,
+    rvs_validate_optional_capsmap_dir_BIS, rvs_write_capsmap_result_BIS,
 };
 
 /// # Panics
 ///
 /// Panics if the current executable path, current directory, or cargo cannot be resolved.
-pub(crate) fn rvs_run_infer_capsmap_BIMPS(
-    path: &Path,
-    seed_capsmap: &Path,
-    output: &Option<PathBuf>,
-) -> Result<(), String> {
+pub(crate) fn rvs_run_infer_capsmap_BIMPS(path: &Path, output: &Path) -> Result<(), String> {
     rvs_ensure_cargo_project_BIS(path)?;
     let project_path = path
         .canonicalize()
@@ -31,7 +26,7 @@ pub(crate) fn rvs_run_infer_capsmap_BIMPS(
     let local_crate_prefixes =
         rvs_detect_local_crate_prefixes_for_cargo_check_BIS(&project_path, false)?;
 
-    let abs_seed = rvs_resolve_capsmap_path(&project_path, seed_capsmap);
+    let abs_seed = project_path.join("caps");
     if !rvs_validate_optional_capsmap_dir_BIS(&abs_seed)? {
         return Err(format!(
             "capsmap path must be a directory: {}",
@@ -40,23 +35,8 @@ pub(crate) fn rvs_run_infer_capsmap_BIMPS(
     }
     let seed = CapsMap::rvs_load_dir_excluding_BIS(&abs_seed, &["deps"])
         .map_err(|e| format!("caps: {e}"))?;
-    let cache_path = project_path
-        .join("target")
-        .join("rivus-inferred-capsmap.txt");
-    let deps_default_path = project_path.join("target").join("rivus-deps-capsmap.txt");
-    let resolved_output = output
-        .as_deref()
-        .map(|p| rvs_resolve_output_path(&project_path, p));
-    match resolved_output.as_deref() {
-        Some(path) => rvs_preflight_capsmap_output_set_BIS(&[
-            (&cache_path, "inferred capsmap"),
-            (path, "deps capsmap"),
-        ])?,
-        None => rvs_preflight_capsmap_output_set_BIS(&[
-            (&cache_path, "inferred capsmap"),
-            (&deps_default_path, "deps capsmap"),
-        ])?,
-    }
+    let resolved_output = rvs_resolve_output_path(&project_path, output);
+    rvs_preflight_capsmap_file_BIS(&resolved_output, "deps capsmap")?;
 
     let callgraph = rvs_collect_callgraph_BIMS(
         &project_path,
@@ -84,27 +64,11 @@ pub(crate) fn rvs_run_infer_capsmap_BIMPS(
         ));
     }
 
-    let all_result = rvs_format_capsmap(&inferred);
     let deps_result = rvs_format_capsmap(&direct_external_calls);
-
-    rvs_write_capsmap_file_BIS(&cache_path, &all_result, "inferred capsmap")?;
-    match resolved_output.as_deref() {
-        Some(output_path) => {
-            rvs_write_capsmap_file_BIS(output_path, &deps_result, "deps capsmap")?;
-            println!("Written deps capsmap to {}", output_path.display());
-        }
-        None => {
-            rvs_write_capsmap_file_BIS(&deps_default_path, &deps_result, "deps capsmap")?;
-            print!("{deps_result}");
-        }
-    }
-    Ok(())
+    rvs_write_capsmap_result_BIS(&deps_result, &resolved_output, "deps capsmap")
 }
 
-/// # Panics
-///
-/// Panics if the current executable path, current directory, or cargo cannot be resolved.
-pub(crate) fn rvs_run_infer_std_BIMPS(path: &Path, output: &Option<PathBuf>) -> Result<(), String> {
+pub(crate) fn rvs_run_infer_std_BIMPS(path: &Path, output: &Path) -> Result<(), String> {
     rvs_ensure_cargo_project_BIS(path)?;
     let project_path = path
         .canonicalize()
@@ -181,11 +145,8 @@ pub(crate) fn rvs_run_infer_std_BIMPS(path: &Path, output: &Option<PathBuf>) -> 
     }
 
     let result = rvs_format_capsmap(&std_only);
-    let default_path = project_path.join("target").join("rivus-std-capsmap.txt");
-    let resolved_output = output
-        .as_ref()
-        .map(|output_path| rvs_resolve_output_path(&project_path, output_path));
-    rvs_write_capsmap_result_BIS(&result, &default_path, &resolved_output, "std capsmap")
+    let resolved_output = rvs_resolve_output_path(&project_path, output);
+    rvs_write_capsmap_result_BIS(&result, &resolved_output, "std capsmap")
 }
 
 fn rvs_resolve_output_path(project_path: &Path, output_path: &Path) -> PathBuf {
@@ -269,7 +230,7 @@ mod tests {
         .unwrap();
         std::fs::create_dir_all(dir.join("caps")).unwrap();
 
-        let result = rvs_run_infer_capsmap_BIMPS(&dir, Path::new("caps"), &None);
+        let result = rvs_run_infer_capsmap_BIMPS(&dir, Path::new("caps/deps"));
         let output = format!("{result:?}").replace(&dir.to_string_lossy().into_owned(), "$TMP");
         rvs_snapshot_BIS(
             "test_20260702_infer_capsmap_rejects_workspace_root",
@@ -291,7 +252,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = rvs_run_infer_std_BIMPS(&dir, &None);
+        let result = rvs_run_infer_std_BIMPS(&dir, Path::new("caps/std"));
         let output = format!("{result:?}").replace(&dir.to_string_lossy().into_owned(), "$TMP");
         rvs_snapshot_BIS("test_20260702_infer_std_rejects_workspace_root", &output);
 
@@ -313,7 +274,7 @@ mod tests {
         std::fs::write(dir.join("src/lib.rs"), "pub fn rvs_add() -> i32 { 1 }\n").unwrap();
         std::fs::write(dir.join("caps"), "bad=Z\n").unwrap();
 
-        let result = rvs_run_infer_std_BIMPS(&dir, &None);
+        let result = rvs_run_infer_std_BIMPS(&dir, Path::new("caps/std"));
         let output = format!("{result:?}").replace(&dir.to_string_lossy().into_owned(), "$TMP");
         rvs_snapshot_BIS("test_20260706_infer_std_rejects_caps_file", &output);
 
@@ -378,7 +339,7 @@ mod tests {
         std::fs::write(dir.join("src/lib.rs"), "pub fn rvs_add() -> i32 { 1 }\n").unwrap();
         std::os::unix::fs::symlink(dir.join("missing-caps"), dir.join("caps")).unwrap();
 
-        let result = rvs_run_infer_std_BIMPS(&dir, &None);
+        let result = rvs_run_infer_std_BIMPS(&dir, Path::new("caps/std"));
         let output = format!("{result:?}\n").replace(&dir.to_string_lossy().into_owned(), "$TMP");
         rvs_snapshot_BIS(
             "test_20260706_infer_std_rejects_broken_caps_symlink",
@@ -404,7 +365,7 @@ mod tests {
         std::fs::write(dir.join("src/lib.rs"), "pub fn rvs_add() -> i32 { 1 }\n").unwrap();
         std::fs::write(dir.join("caps/seed"), "demo=Z\n").unwrap();
 
-        let result = rvs_run_infer_std_BIMPS(&dir, &None);
+        let result = rvs_run_infer_std_BIMPS(&dir, Path::new("caps/std"));
         let callgraph_exists = dir.join("target/rivus-callgraph-std").exists();
         let output = format!("result={result:?}\ncallgraph_exists={callgraph_exists}\n",)
             .replace(&dir.to_string_lossy().into_owned(), "$TMP");
@@ -432,7 +393,7 @@ mod tests {
         let output_path = dir.join("out-dir");
         std::fs::create_dir_all(&output_path).unwrap();
 
-        let result = rvs_run_infer_capsmap_BIMPS(&dir, Path::new("caps"), &Some(output_path));
+        let result = rvs_run_infer_capsmap_BIMPS(&dir, &output_path);
         let cache_exists = dir.join("target/rivus-inferred-capsmap.txt").exists();
         let output = format!(
             "result_is_err={}\ncache_exists={cache_exists}\n",
@@ -444,37 +405,6 @@ mod tests {
         );
 
         assert!(result.is_err());
-        assert!(!cache_exists);
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn test_20260707_infer_capsmap_rejects_output_equal_to_cache_before_callgraph() {
-        let dir = rvs_make_temp_dir_BIS("infer-capsmap-output-equals-cache");
-        std::fs::write(
-            dir.join("Cargo.toml"),
-            "[package]\nname = \"infer-capsmap-output-equals-cache\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
-        )
-        .unwrap();
-        std::fs::create_dir_all(dir.join("src")).unwrap();
-        std::fs::create_dir_all(dir.join("caps")).unwrap();
-        std::fs::write(dir.join("src/lib.rs"), "pub fn rvs_add() -> i32 { 1 }\n").unwrap();
-        let output_path = dir.join("target/rivus-inferred-capsmap.txt");
-
-        let result = rvs_run_infer_capsmap_BIMPS(&dir, Path::new("caps"), &Some(output_path));
-        let callgraph_exists = dir.join("target/rivus-callgraph").exists();
-        let cache_exists = dir.join("target/rivus-inferred-capsmap.txt").exists();
-        let output = format!(
-            "result={result:?}\ncallgraph_exists={callgraph_exists}\ncache_exists={cache_exists}\n",
-        )
-        .replace(&dir.to_string_lossy().into_owned(), "$TMP");
-        rvs_snapshot_BIS(
-            "test_20260707_infer_capsmap_rejects_output_equal_to_cache_before_callgraph",
-            &output,
-        );
-
-        assert!(result.is_err());
-        assert!(!callgraph_exists);
         assert!(!cache_exists);
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -492,7 +422,7 @@ mod tests {
         std::fs::write(dir.join("src/lib.rs"), "pub fn rvs_add() -> i32 { 1 }\n").unwrap();
         let output_path = PathBuf::from("target/../target/rivus-inferred-capsmap.txt");
 
-        let result = rvs_run_infer_capsmap_BIMPS(&dir, Path::new("caps"), &Some(output_path));
+        let result = rvs_run_infer_capsmap_BIMPS(&dir, &output_path);
         let callgraph_exists = dir.join("target/rivus-callgraph").exists();
         let cache_exists = dir.join("target/rivus-inferred-capsmap.txt").exists();
         let output = format!(
@@ -501,37 +431,6 @@ mod tests {
         .replace(&dir.to_string_lossy().into_owned(), "$TMP");
         rvs_snapshot_BIS(
             "test_20260707_infer_capsmap_rejects_dotdot_output_before_callgraph",
-            &output,
-        );
-
-        assert!(result.is_err());
-        assert!(!callgraph_exists);
-        assert!(!cache_exists);
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn test_20260707_infer_capsmap_rejects_output_under_cache_before_callgraph() {
-        let dir = rvs_make_temp_dir_BIS("infer-capsmap-output-under-cache");
-        std::fs::write(
-            dir.join("Cargo.toml"),
-            "[package]\nname = \"infer-capsmap-output-under-cache\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
-        )
-        .unwrap();
-        std::fs::create_dir_all(dir.join("src")).unwrap();
-        std::fs::create_dir_all(dir.join("caps")).unwrap();
-        std::fs::write(dir.join("src/lib.rs"), "pub fn rvs_add() -> i32 { 1 }\n").unwrap();
-        let output_path = PathBuf::from("target/rivus-inferred-capsmap.txt/child");
-
-        let result = rvs_run_infer_capsmap_BIMPS(&dir, Path::new("caps"), &Some(output_path));
-        let callgraph_exists = dir.join("target/rivus-callgraph").exists();
-        let cache_exists = dir.join("target/rivus-inferred-capsmap.txt").exists();
-        let output = format!(
-            "result={result:?}\ncallgraph_exists={callgraph_exists}\ncache_exists={cache_exists}\n",
-        )
-        .replace(&dir.to_string_lossy().into_owned(), "$TMP");
-        rvs_snapshot_BIS(
-            "test_20260707_infer_capsmap_rejects_output_under_cache_before_callgraph",
             &output,
         );
 
@@ -554,7 +453,7 @@ mod tests {
         std::fs::write(dir.join("src/lib.rs"), "pub fn rvs_add() -> i32 { 1 }\n").unwrap();
         std::fs::write(dir.join("caps/seed"), "demo=Z\n").unwrap();
 
-        let result = rvs_run_infer_capsmap_BIMPS(&dir, Path::new("caps"), &None);
+        let result = rvs_run_infer_capsmap_BIMPS(&dir, Path::new("caps/deps"));
         let callgraph_exists = dir.join("target/rivus-callgraph").exists();
         let output = format!("result={result:?}\ncallgraph_exists={callgraph_exists}\n",)
             .replace(&dir.to_string_lossy().into_owned(), "$TMP");

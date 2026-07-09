@@ -98,6 +98,7 @@ impl CapsMap {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn rvs_to_text(&self) -> String {
         let mut out = String::new();
         for (key, caps) in &self.entries {

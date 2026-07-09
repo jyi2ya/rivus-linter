@@ -525,11 +525,8 @@ mod tests {
 "#,
         )
         .unwrap();
-        std::fs::write(
-            dir.join("target/rivus-std-capsmap.txt"),
-            "std::fs::rvs_read_BI=BI\n",
-        )
-        .unwrap();
+        std::fs::create_dir_all(dir.join("caps")).unwrap();
+        std::fs::write(dir.join("caps/std"), "std::fs::rvs_read_BI=BI\n").unwrap();
 
         let result = rvs_run_why_BIMPS("std::fs::rvs_read_BI", &dir);
         let output = format!("{result:?}\n");

@@ -340,7 +340,6 @@ pub(crate) fn rvs_run_report_BIMPS(path: &Path) -> Result<(), String> {
         wrap_all_crates: false,
         with_tests: true,
         build_std: false,
-        user_capsmap: None,
         extra_env: vec![
             ("RIVUS_REPORT", "1".into()),
             ("RIVUS_REPORT_DIR", abs_report_dir.into_os_string()),

@@ -14,8 +14,8 @@
 |------|------|
 | `cargo rivus check` | 检查 `rvs_` 函数调用链能力合规性（默认） |
 | `cargo rivus report` | 统计项目能力分布和契约不一致摘要，输出好函数率 |
-| `cargo rivus infer-capsmap` | 从种子标注推断完整 capsmap |
-| `cargo rivus infer-std` | 推断标准库函数能力标注（需 nightly） |
+| `cargo rivus infer-capsmap` | 从项目 `caps/` 推断 direct external deps，并写到 `-o` 指定路径 |
+| `cargo rivus infer-std` | 推断标准库函数能力标注并写到 `-o` 指定路径（需 nightly） |
 | `cargo rivus setup` | 为新项目注入 AGENTS.md 和 clippy lint |
 | `cargo rivus strip` | 移除所有 `rvs_` 前缀和能力后缀 |
 | `cargo rivus annotate` | 推断能力并添加 `rvs_` 前缀和后缀 |
@@ -47,15 +47,12 @@
 基于 rustc-driver 的 HIR 分析。编译项目并在编译过程中检查 `rvs_` 函数的调用链能力合规性。
 
 ```bash
-cargo rivus check                    # 使用 target/rivus-std-capsmap.txt（若存在）+ 项目 caps/（若存在）
-cargo rivus check -m caps/           # 指定 caps 目录
+cargo rivus check                    # 使用项目 caps/（若存在）
 cargo rivus check -- --features foo  # 传递额外 cargo check 参数
 ```
 
-选项：
-- `-m, --capsmap <PATH>` — capsmap 目录路径。显式指定时只使用该目录。不指定时，若存在 `target/rivus-std-capsmap.txt` 会先加载它，再用项目 `caps/` 目录覆盖同名条目；如果二者都不存在，lint 驱动层使用空 capsmap。找到或生成的路径通过 `RIVUS_CAPSMAP` 环境变量传递给 lint 驱动层。工具不再提供内置 caps fallback。
+注意：capsmap 只从项目 `caps/` 目录加载。CLI 不再支持 `-m/--capsmap`，也不再读取或生成 `target/rivus-std-capsmap.txt`、`target/rivus-inferred-capsmap.txt`、`target/rivus-deps-capsmap.txt`、`target/rivus-effective-capsmap/`。若项目存在 `caps/`，该路径通过 `RIVUS_CAPSMAP` 传给 lint 驱动层；否则 lint 使用空 capsmap。caps 目录使用统一的层级加载器（`CapsMap::rvs_load_dir_BIS`），按 `std → deps → seed → suppress → ext → 其余字母序` 的固定顺序合并。
 
-注意：capsmap 的查找和加载完全由 CLI 层控制。lint 驱动层只读 `RIVUS_CAPSMAP` 环境变量，不做任何额外的回退查找。capsmap 只支持目录形式；自动合并 generated std caps 时会写入 `target/rivus-effective-capsmap/` 作为 lint 驱动层的输入。caps 目录使用统一的层级加载器（`CapsMap::rvs_load_dir_BIS`），按 `std → deps → seed → suppress → ext → 其余字母序` 的固定顺序合并。
 
 注意：`check` 默认编译 `--tests`（含测试代码），因此 `#[test]` 函数也会被分析。`infer-capsmap` 和 `infer-std` 不编译测试代码。
 
@@ -110,16 +107,14 @@ Total: 42 functions, 890 lines
 对于本地非 Port trait 方法，公开能力由各 impl 按能力逐项做 at-least-half vote（阈值为 `ceil(n/2)`）决定；trait 声明自身写的后缀只在没有 impl 可聚合时作为回退。因此 2 个 impl 中 1 个带能力会被抬升，3 个 impl 中仅 1 个带能力不会被抬升。Port trait 方法例外：公开能力固定为 `P`，不受 impl 实际行为影响。这一规则同样会影响 `annotate` 和 `why` 的显示结果。
 
 ```bash
-cargo rivus infer-capsmap                    # 写入 <PATH>/target/rivus-inferred-capsmap.txt 和 <PATH>/target/rivus-deps-capsmap.txt，并输出 deps capsmap 到 stdout
-cargo rivus infer-capsmap -o caps/deps       # 写入完整推断缓存，并把 direct external deps 写到指定文件
-cargo rivus infer-capsmap -m caps/           # 指定种子目录
+cargo rivus infer-capsmap -o caps/deps       # 从项目 caps/ 推断，并把 direct external deps 写到指定文件
 ```
 
 选项：
-- `-m, --capsmap <PATH>` — 种子 capsmap 目录（默认：`caps`）
-- `-o, --output <PATH>` — direct external deps capsmap 输出路径；相对路径按目标项目目录解析。命令在确认没有 unknown callee 后写入完整推断缓存 `<PATH>/target/rivus-inferred-capsmap.txt`；无 `-o` 时额外写入 `<PATH>/target/rivus-deps-capsmap.txt` 并输出 deps capsmap 到 stdout。若默认输出路径写入失败，命令会直接报错退出；指定 `-o` 时写入该路径而不再输出到 stdout。`-o` 不能指向完整推断缓存路径本身
+- `-o, --output <PATH>` — **必填**。direct external deps capsmap 输出路径；相对路径按目标项目目录解析。通常写到 `caps/deps`。命令只写这个显式输出，不再写入 `target/rivus-inferred-capsmap.txt` 或 `target/rivus-deps-capsmap.txt`。
 
-注意：相对 `--capsmap` 路径按 `PATH` 指向的项目目录解析。
+注意：种子始终从项目 `caps/` 加载（排除 `deps` 层，避免旧 deps 干扰重新推断）。
+
 
 ---
 
@@ -130,12 +125,12 @@ cargo rivus infer-capsmap -m caps/           # 指定种子目录
 注意：该命令只会从 `PATH/caps` 加载 `seed` 和 `suppress` 文件（不加载 `std`/`deps`/`ext`，因为那些是上一次生成的结果，会干扰重新生成），并在其基础上推断标准库条目。
 
 ```bash
-cargo rivus infer-std                    # 写入 <PATH>/target/rivus-std-capsmap.txt 并输出到 stdout
-cargo rivus infer-std -o caps/std        # 写入 <PATH>/target/rivus-std-capsmap.txt 和 caps/std
+cargo rivus infer-std -o caps/std        # 将 std caps 写到指定文件（通常 caps/std）
 ```
 
 选项：
-- `-o, --output <PATH>` — 额外输出路径；相对路径按目标项目目录解析。始终尝试写入 `<PATH>/target/rivus-std-capsmap.txt`；无 `-o` 时额外输出到 stdout。若默认输出路径写入失败，命令会直接报错退出；指定 `-o` 时额外写入该路径而不再输出到 stdout
+- `-o, --output <PATH>` — **必填**。std capsmap 输出路径；相对路径按目标项目目录解析。通常写到 `caps/std`。命令只写这个显式输出，不再写入 `target/rivus-std-capsmap.txt`。
+
 
 ---
 
@@ -205,15 +200,13 @@ cargo rivus annotate /path/to  # 指定目录
 
 ## capsmap
 
-为非 `rvs_` 函数声明能力。只支持目录形式：
-
-**目录形式**（推荐）：项目根目录下的 `caps/` 目录，包含多个 caps 文件：
+为非 `rvs_` 函数声明能力。**只支持项目根目录下的 `caps/` 目录**：
 
 ```
 caps/
 ├── seed      # 手动维护的底层基线（分配、I/O 内部、编译器内部、async 展开等）
-├── std       # std/core/alloc 的全量条目（可通过 infer-std 自动生成）
-├── deps      # 第三方依赖条目
+├── std       # std/core/alloc 的全量条目（`cargo rivus infer-std -o caps/std`）
+├── deps      # 第三方依赖条目（`cargo rivus infer-capsmap -o caps/deps`）
 ├── suppress  # 修正条目（覆盖 std/deps 中过宽的能力标记）
 └── ext       # 项目特定条目（标准层中最高优先级）
 ```
@@ -239,7 +232,13 @@ std::process::exit=S           # 副作用：终止进程
 - linter 对 capsmap 中的键做精确匹配（全限定路径完全一致）。不支持后缀匹配——caps 文件中的键必须使用 rustc 给出的 def_path
 - 如果 linter 报告某函数"既非 rvs_-prefixed nor in capsmap"，你需要补全 capsmap。方法优先级：检查源码 > 编写测试验证行为 > 合理猜测
 - caps 文件中的条目使用 rustc-driver 解析出的全限定路径（如 `core::result::impl::expect=`），而非源码中的短名
-- capsmap 只支持目录形式，不支持单文件 capsmap
+- capsmap 只支持 `caps/` 目录，不支持单文件 capsmap，也不支持 CLI `-m/--capsmap`
+- 不再读取或写入 `target/rivus-std-capsmap.txt`、`target/rivus-inferred-capsmap.txt`、`target/rivus-deps-capsmap.txt`、`target/rivus-effective-capsmap/`
+- 更新 `std` / `deps` 必须显式：
+  ```bash
+  cargo rivus infer-std -o caps/std
+  cargo rivus infer-capsmap -o caps/deps
+  ```
 
 ---
 

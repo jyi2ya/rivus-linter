@@ -1,2 +1,0 @@
-result=Err("std capsmap output path conflicts with std capsmap output path: $TMP/target/rivus-std-capsmap.txt and $TMP/target/rivus-std-capsmap.txt/child")
-default_exists=false

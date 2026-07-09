@@ -261,9 +261,6 @@ struct Cli {
 enum Commands {
     /// Check capability compliance via rustc plugin (cargo check)
     Check {
-        /// Path to caps directory
-        #[arg(short = 'm', long = "capsmap")]
-        capsmap: Option<PathBuf>,
         /// Extra cargo check args
         #[arg(trailing_var_arg = true)]
         args: Vec<String>,
@@ -285,12 +282,9 @@ enum Commands {
         /// Path to project directory (must contain Cargo.toml)
         #[arg(default_value = ".")]
         path: PathBuf,
-        /// Path to seed caps directory
-        #[arg(short = 'm', long = "capsmap", default_value = "caps")]
-        capsmap: PathBuf,
-        /// Output path for direct external deps capsmap (default: stdout)
-        #[arg(short = 'o', long = "output")]
-        output: Option<PathBuf>,
+        /// Output path for direct external deps capsmap under caps/
+        #[arg(short = 'o', long = "output", required = true)]
+        output: PathBuf,
     },
     /// Strip rvs_ prefix and capability suffix from all functions
     Strip {
@@ -309,9 +303,9 @@ enum Commands {
         /// Path to project directory (must contain Cargo.toml)
         #[arg(default_value = ".")]
         path: PathBuf,
-        /// Output path for std capsmap (default: target/rivus-std-capsmap.txt)
-        #[arg(short = 'o', long = "output")]
-        output: Option<PathBuf>,
+        /// Output path for std capsmap (e.g. caps/std)
+        #[arg(short = 'o', long = "output", required = true)]
+        output: PathBuf,
     },
     /// Show why a function has its caps (prints callees and their caps)
     Why {
@@ -345,13 +339,12 @@ fn main() -> ExitCode {
     match cli.command {
         None => {
             let empty_args: Vec<String> = Vec::new();
-            let empty_capsmap: Option<PathBuf> = None;
-            if let Err(code) = workspace::rvs_run_cargo_check_BIMS(&empty_capsmap, &empty_args) {
+            if let Err(code) = workspace::rvs_run_cargo_check_BIMS(&empty_args) {
                 process::exit(code);
             }
         }
-        Some(Commands::Check { capsmap, args }) => {
-            if let Err(code) = workspace::rvs_run_cargo_check_BIMS(&capsmap, &args) {
+        Some(Commands::Check { args }) => {
+            if let Err(code) = workspace::rvs_run_cargo_check_BIMS(&args) {
                 process::exit(code);
             }
         }
@@ -367,12 +360,8 @@ fn main() -> ExitCode {
                 return ExitCode::from(2u8);
             }
         }
-        Some(Commands::InferCapsmap {
-            path,
-            capsmap,
-            output,
-        }) => {
-            if let Err(e) = infer_commands::rvs_run_infer_capsmap_BIMPS(&path, &capsmap, &output) {
+        Some(Commands::InferCapsmap { path, output }) => {
+            if let Err(e) = infer_commands::rvs_run_infer_capsmap_BIMPS(&path, &output) {
                 eprintln!("Error: {e}");
                 return ExitCode::from(2u8);
             }

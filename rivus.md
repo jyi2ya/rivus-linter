@@ -255,21 +255,26 @@ rvs_parse_int      可调用  rvs_fetch_user_A      ✅ (A 为签名能力，不
 
 ### capsmap
 
-为非 `rvs_` 函数声明能力。只支持目录形式：
-
-**目录形式**（推荐）：项目根目录下的 `caps/` 目录，包含多个 caps 文件：
+为非 `rvs_` 函数声明能力。**只支持项目根目录下的 `caps/` 目录**；不支持单文件 capsmap、不支持 `-m/--capsmap` 覆盖路径，也不再读取或生成 `target/rivus-*-capsmap*` / `target/rivus-effective-capsmap/`。
 
 ```
 caps/
 ├── seed      # 手动维护的底层基线（分配、I/O 内部、编译器内部、async 展开等）
-├── std       # std/core/alloc 的全量条目（可通过 infer-std 自动生成）
-├── deps      # 第三方依赖条目
+├── std       # std/core/alloc 的全量条目（通过 `cargo rivus infer-std -o caps/std` 生成）
+├── deps      # 第三方依赖条目（通过 `cargo rivus infer-capsmap -o caps/deps` 生成）
 ├── suppress  # 修正条目（覆盖 std/deps 中过宽的能力标记）
 └── ext       # 项目特定条目（最高优先级）
 ```
 
 目录内的文件按固定层级顺序加载（后加载的覆盖先加载的）：
 `std` → `deps` → `seed` → `suppress` → `ext` → 其余文件按字母序。
+
+更新 caps 时必须显式指定输出：
+
+```bash
+cargo rivus infer-std -o caps/std
+cargo rivus infer-capsmap -o caps/deps
+```
 
 每行一个条目，格式：
 
@@ -288,7 +293,8 @@ std::process::exit=S           # 副作用：终止进程
 - linter 对 capsmap 中的键做精确匹配（全限定路径完全一致）。不支持后缀匹配——caps 文件中的键必须使用 rustc 给出的 def_path
 - 如果 linter 报告某函数"既非 rvs_-prefixed nor in capsmap"，你需要补全 capsmap。方法优先级：检查源码 > 编写测试验证行为 > 合理猜测
 - caps 文件中的条目使用 rustc-driver 解析出的全限定路径（如 `core::result::impl::expect=`），而非源码中的短名
-- capsmap 只支持目录形式，不支持单文件 capsmap
+- `cargo rivus check` / `report` / `annotate` / `why` 只从项目 `caps/` 加载能力数据；缺失时按空 capsmap 处理
+
 
 ### 日常开发流程
 

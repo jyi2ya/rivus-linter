@@ -1,3 +1,0 @@
-result=Ok(())
-default="std::fs::read=BI\n"
-output="std::fs::read=BI\n"

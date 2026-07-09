@@ -12,55 +12,13 @@ use crate::symbols::CrateName;
 
 /// Resolve the capsmap path for the lint pass.
 ///
-/// Priority: user-provided > project caps/ dir. There is no built-in caps
-/// fallback; projects must provide explicit capability data when they need it.
-/// Note: target/rivus-inferred-capsmap.txt is NOT used here - it's a
-/// partial snapshot from infer-capsmap, not a complete caps source.
-fn rvs_resolve_capsmap_BIMS(
-    cmd: &mut Command,
-    user_capsmap: &[&Path],
-    project_path: &Path,
-) -> Result<(), String> {
-    if let Some(path) = user_capsmap.first().copied() {
-        let abs = if path.is_absolute() {
-            path.to_path_buf()
-        } else {
-            project_path.join(path)
-        };
-        rvs_require_capsmap_dir_BIS(&abs)?;
-        cmd.env("RIVUS_CAPSMAP", abs);
-        return Ok(());
-    }
-
+/// Only the project `caps/` directory is used. There is no built-in caps
+/// fallback, no target/* caps cache, and no `-m` override.
+fn rvs_resolve_capsmap_BIMS(cmd: &mut Command, project_path: &Path) -> Result<(), String> {
     let project_caps = project_path.join("caps");
-    let has_project_caps = rvs_validate_optional_capsmap_dir_BIS(&project_caps)?;
-    let std_caps = project_path.join("target").join("rivus-std-capsmap.txt");
-    if rvs_validate_optional_file_BIS(&std_caps, "std capsmap cache")? {
-        let generated_std_caps = rvs_load_std_caps_BIS(project_path)?;
-        let effective_dir = project_path.join("target").join("rivus-effective-capsmap");
-        rvs_clean_dir_BIS(&effective_dir)?;
-        std::fs::create_dir_all(&effective_dir)
-            .map_err(|e| format!("cannot create {}: {e}", effective_dir.display()))?;
-        rvs_write_capsmap_file_BIS(
-            &effective_dir.join("std"),
-            &generated_std_caps.rvs_to_text(),
-            "effective std capsmap",
-        )?;
-        if has_project_caps {
-            let project_caps = rvs_load_project_caps_BIS(project_path)?;
-            rvs_write_capsmap_file_BIS(
-                &effective_dir.join("ext"),
-                &project_caps.rvs_to_text(),
-                "effective project capsmap",
-            )?;
-        }
-        cmd.env("RIVUS_CAPSMAP", effective_dir);
-        return Ok(());
-    }
-    if has_project_caps {
+    if rvs_validate_optional_capsmap_dir_BIS(&project_caps)? {
         rvs_load_project_caps_BIS(project_path)?;
         cmd.env("RIVUS_CAPSMAP", project_caps);
-        return Ok(());
     }
     Ok(())
 }
@@ -123,8 +81,6 @@ pub(crate) struct CargoCheckConfig<'a> {
     pub(crate) with_tests: bool,
     /// Use -Zbuild-std with nightly toolchain.
     pub(crate) build_std: bool,
-    /// User-provided capsmap path (highest priority).
-    pub(crate) user_capsmap: Option<&'a Path>,
     /// Extra environment variables to set.
     pub(crate) extra_env: Vec<(&'a str, OsString)>,
     /// Extra cargo check arguments.
@@ -258,9 +214,7 @@ fn rvs_prepare_cargo_check_command_BIMS(
         }
     }
     if !has_callgraph_env && !has_capsmap_env {
-        let user_capsmap: Vec<&Path> = config.user_capsmap.into_iter().collect();
-        rvs_resolve_capsmap_BIMS(&mut cmd, &user_capsmap, &project_path)
-            .map_err(CargoCheckError::Message)?;
+        rvs_resolve_capsmap_BIMS(&mut cmd, &project_path).map_err(CargoCheckError::Message)?;
     }
 
     cmd.arg("check");
@@ -304,10 +258,7 @@ fn rvs_current_wrapper_exe_BIS() -> Result<PathBuf, std::io::Error> {
 /// # Panics
 ///
 /// Panics if the current executable path is invalid or cargo cannot be spawned.
-pub(crate) fn rvs_run_cargo_check_BIMS(
-    capsmap: &Option<PathBuf>,
-    extra_args: &[String],
-) -> Result<(), i32> {
+pub(crate) fn rvs_run_cargo_check_BIMS(extra_args: &[String]) -> Result<(), i32> {
     if let Err(e) = rvs_reject_forwarded_check_args(extra_args) {
         eprintln!("{e}");
         return Err(2);
@@ -319,7 +270,6 @@ pub(crate) fn rvs_run_cargo_check_BIMS(
         wrap_all_crates: false,
         with_tests: true,
         build_std: false,
-        user_capsmap: capsmap.as_deref(),
         extra_env: vec![],
         extra_args: extra_args_ref,
         target_subdir: None,
@@ -445,7 +395,6 @@ pub(crate) fn rvs_collect_callgraph_BIMS(
         wrap_all_crates: true,
         with_tests,
         build_std,
-        user_capsmap: None,
         extra_env: env_vars,
         extra_args: vec![],
         target_subdir: Some(&build_subdir),
@@ -573,16 +522,6 @@ pub(crate) fn rvs_load_project_caps_BIS(path: &Path) -> Result<capsmap::CapsMap,
     CapsMap::rvs_load_dir_BIS(&caps_dir).map_err(|e| format!("caps/: {e}"))
 }
 
-fn rvs_load_std_caps_BIS(path: &Path) -> Result<capsmap::CapsMap, String> {
-    let caps_path = path.join("target").join("rivus-std-capsmap.txt");
-    if !rvs_validate_optional_file_BIS(&caps_path, "std capsmap cache")? {
-        return Err("std capsmap cache not found; run cargo rivus infer-std first".into());
-    }
-    let content = std::fs::read_to_string(&caps_path)
-        .map_err(|e| format!("cannot read {}: {e}", caps_path.display()))?;
-    CapsMap::rvs_parse(&content).map_err(|e| format!("{}: {e}", caps_path.display()))
-}
-
 pub(crate) fn rvs_load_callgraph_and_caps_for_function_BIMS(
     path: &Path,
     function: &str,
@@ -593,16 +532,7 @@ pub(crate) fn rvs_load_callgraph_and_caps_for_function_BIMS(
     } else {
         rvs_collect_project_callgraph_with_optional_std_cache_BIMS(path, true)?
     };
-    let mut caps = if mode == CachedCallgraphMode::StdOnlyAllowed {
-        rvs_load_std_caps_BIS(path)?
-    } else {
-        CapsMap::rvs_new()
-    };
-    if mode == CachedCallgraphMode::StdOnlyAllowed {
-        caps.rvs_extend_from_M(rvs_load_project_caps_BIS(path)?);
-    } else {
-        caps = rvs_load_project_caps_with_optional_std_BIS(path)?;
-    }
+    let caps = rvs_load_project_caps_BIS(path)?;
     Ok((callgraph, caps))
 }
 
@@ -655,7 +585,7 @@ pub(crate) fn rvs_collect_callgraph_and_caps_BIMS(
     with_tests: bool,
 ) -> Result<(FnGraph, capsmap::CapsMap), String> {
     let callgraph = rvs_collect_project_callgraph_with_optional_std_cache_BIMS(path, with_tests)?;
-    let caps = rvs_load_project_caps_with_optional_std_BIS(path)?;
+    let caps = rvs_load_project_caps_BIS(path)?;
     Ok((callgraph, caps))
 }
 
@@ -685,37 +615,6 @@ fn rvs_collect_project_callgraph_with_optional_std_cache_BIMS(
         }
     }
     Ok(callgraph)
-}
-
-fn rvs_load_project_caps_with_optional_std_BIS(path: &Path) -> Result<capsmap::CapsMap, String> {
-    let caps_path = path.join("target").join("rivus-std-capsmap.txt");
-    let mut caps = if rvs_validate_optional_file_BIS(&caps_path, "std capsmap cache")? {
-        rvs_load_std_caps_BIS(path)?
-    } else {
-        CapsMap::rvs_new()
-    };
-    caps.rvs_extend_from_M(rvs_load_project_caps_BIS(path)?);
-    Ok(caps)
-}
-
-fn rvs_validate_optional_file_BIS(path: &Path, label: &str) -> Result<bool, String> {
-    match std::fs::metadata(path) {
-        Ok(metadata) if metadata.is_file() => Ok(true),
-        Ok(_) => Err(format!("{label} must be a file: {}", path.display())),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            match std::fs::symlink_metadata(path) {
-                Err(symlink_error) if symlink_error.kind() == std::io::ErrorKind::NotFound => {
-                    Ok(false)
-                }
-                Ok(_) => Err(format!("{label} must be a file: {}", path.display())),
-                Err(symlink_error) => Err(format!(
-                    "cannot inspect {label} {}: {symlink_error}",
-                    path.display()
-                )),
-            }
-        }
-        Err(e) => Err(format!("cannot inspect {label} {}: {e}", path.display())),
-    }
 }
 
 fn rvs_validate_optional_dir_BIS(path: &Path, label: &str) -> Result<bool, String> {
@@ -750,43 +649,16 @@ fn rvs_warn_optional_dir_BIS(path: &Path, label: &str) -> bool {
 
 pub(crate) fn rvs_write_capsmap_result_BIS(
     result: &str,
-    default_path: &Path,
-    output: &Option<PathBuf>,
+    output: &Path,
     label: &str,
 ) -> Result<(), String> {
-    if let Some(path) = output.as_deref() {
-        rvs_preflight_capsmap_output_set_BIS(&[(default_path, label), (path, label)])?;
-    } else {
-        rvs_preflight_capsmap_file_BIS(default_path, label)?;
-    }
-    rvs_write_capsmap_file_BIS(default_path, result, label)?;
-    if let Some(path) = output.as_deref() {
-        rvs_write_capsmap_file_BIS(path, result, label)?;
-        println!("Written {label} to {}", path.display());
-    } else {
-        print!("{result}");
-    }
+    rvs_preflight_capsmap_file_BIS(output, label)?;
+    rvs_write_capsmap_file_BIS(output, result, label)?;
+    println!("Written {label} to {}", output.display());
     Ok(())
 }
 
-pub(crate) fn rvs_preflight_capsmap_output_set_BIS(paths: &[(&Path, &str)]) -> Result<(), String> {
-    for (path, label) in paths {
-        rvs_preflight_capsmap_file_BIS(path, label)?;
-    }
-    for (left_index, (left, left_label)) in paths.iter().enumerate() {
-        for (right, right_label) in paths.iter().skip(left_index + 1) {
-            if rvs_capsmap_output_paths_overlap_BIS(left, right)? {
-                return Err(format!(
-                    "{left_label} output path conflicts with {right_label} output path: {} and {}",
-                    left.display(),
-                    right.display()
-                ));
-            }
-        }
-    }
-    Ok(())
-}
-
+#[cfg(test)]
 fn rvs_capsmap_output_paths_overlap_BIS(left: &Path, right: &Path) -> Result<bool, String> {
     debug_assert!(!left.as_os_str().is_empty(), "left path must not be empty");
     debug_assert!(
@@ -951,6 +823,7 @@ pub(crate) fn rvs_write_capsmap_file_BIS(
     write_result
 }
 
+#[cfg(test)]
 fn rvs_normalize_path_lexically(path: &Path) -> PathBuf {
     let mut normalized = PathBuf::new();
     for component in path.components() {
@@ -981,6 +854,7 @@ fn rvs_normalize_path_lexically(path: &Path) -> PathBuf {
     normalized
 }
 
+#[cfg(test)]
 fn rvs_normalize_existing_ancestor_path_BIS(path: &Path) -> Result<PathBuf, String> {
     debug_assert!(
         !path.as_os_str().is_empty(),
@@ -1288,14 +1162,6 @@ pub(crate) fn rvs_clean_dir_BIS(path: &Path) -> Result<(), String> {
         Err(e) => return Err(format!("cannot inspect {}: {e}", path.display())),
     }
     Ok(())
-}
-
-pub(crate) fn rvs_resolve_capsmap_path(project_dir: &Path, capsmap_path: &Path) -> PathBuf {
-    if capsmap_path.is_absolute() {
-        capsmap_path.to_path_buf()
-    } else {
-        project_dir.join(capsmap_path)
-    }
 }
 
 fn rvs_merge_callgraph_dir_BIS(cg_dir: &Path) -> Result<FnGraph, String> {
@@ -1880,28 +1746,6 @@ name = "throughput-bench"
         std::fs::remove_dir_all(dir).unwrap();
     }
 
-    #[test]
-    fn test_20260702_resolve_capsmap_path_relative_to_project() {
-        let project_dir = Path::new("/workspace/project");
-        let relative = Path::new("caps");
-        let absolute = Path::new("/shared/caps");
-
-        let resolved_relative = rvs_resolve_capsmap_path(project_dir, relative);
-        let resolved_absolute = rvs_resolve_capsmap_path(project_dir, absolute);
-        let output = format!(
-            "relative={}\nabsolute={}",
-            resolved_relative.display(),
-            resolved_absolute.display()
-        );
-        rvs_snapshot_BIS(
-            "test_20260702_resolve_capsmap_path_relative_to_project",
-            &output,
-        );
-
-        assert_eq!(resolved_relative, PathBuf::from("/workspace/project/caps"));
-        assert_eq!(resolved_absolute, PathBuf::from("/shared/caps"));
-    }
-
     fn rvs_command_env_value(cmd: &Command, key: &str) -> Option<Option<String>> {
         cmd.get_envs().find_map(|(name, value)| {
             if name == key {
@@ -1930,7 +1774,6 @@ name = "throughput-bench"
             wrap_all_crates: false,
             with_tests: true,
             build_std: false,
-            user_capsmap: None,
             extra_env: vec![],
             extra_args: vec![],
             target_subdir: None,
@@ -1985,7 +1828,6 @@ name = "throughput-bench"
             wrap_all_crates: false,
             with_tests: true,
             build_std: false,
-            user_capsmap: None,
             extra_env: vec![
                 ("RIVUS_ENABLED", "0".into()),
                 ("RUSTC", "bad-rustc".into()),
@@ -2027,7 +1869,6 @@ name = "throughput-bench"
             wrap_all_crates: false,
             with_tests: true,
             build_std: false,
-            user_capsmap: None,
             extra_env: vec![("RIVUS_CALLGRAPH", "0".into())],
             extra_args: vec![],
             target_subdir: None,
@@ -2052,7 +1893,6 @@ name = "throughput-bench"
             wrap_all_crates: false,
             with_tests: true,
             build_std: false,
-            user_capsmap: None,
             extra_env: vec![("RIVUS_REPORT", "0".into())],
             extra_args: vec![],
             target_subdir: None,
@@ -2106,7 +1946,6 @@ name = "throughput-bench"
             wrap_all_crates: false,
             with_tests: true,
             build_std: false,
-            user_capsmap: None,
             extra_env: vec![("RIVUS_CAPSMAP", explicit_caps.clone().into_os_string())],
             extra_args: vec![],
             target_subdir: None,
@@ -2144,7 +1983,6 @@ name = "throughput-bench"
             wrap_all_crates: false,
             with_tests: true,
             build_std: false,
-            user_capsmap: None,
             extra_env: vec![("RIVUS_CAPSMAP", explicit_caps.clone().into_os_string())],
             extra_args: vec![],
             target_subdir: None,
@@ -2179,7 +2017,6 @@ name = "throughput-bench"
             wrap_all_crates: false,
             with_tests: true,
             build_std: false,
-            user_capsmap: None,
             extra_env: vec![("RIVUS_CAPSMAP", explicit_caps.into_os_string())],
             extra_args: vec![],
             target_subdir: None,
@@ -2205,7 +2042,6 @@ name = "throughput-bench"
             wrap_all_crates: false,
             with_tests: true,
             build_std: false,
-            user_capsmap: None,
             extra_env: vec![("RIVUS_CAPSMAP", "explicit-caps".into())],
             extra_args: vec![],
             target_subdir: None,
@@ -2238,7 +2074,6 @@ name = "throughput-bench"
             wrap_all_crates: false,
             with_tests: true,
             build_std: false,
-            user_capsmap: None,
             extra_env: vec![],
             extra_args: vec![],
             target_subdir: None,
@@ -2271,7 +2106,6 @@ name = "throughput-bench"
             wrap_all_crates: false,
             with_tests: true,
             build_std: false,
-            user_capsmap: None,
             extra_env: vec![],
             extra_args: vec![],
             target_subdir: None,
@@ -2438,114 +2272,6 @@ name = "throughput-bench"
     }
 
     #[test]
-    fn test_20260705_prepare_cargo_check_merges_generated_std_caps() {
-        let dir = rvs_make_workspace_temp_dir_BIS("effective-capsmap");
-        std::fs::create_dir_all(dir.join("target")).unwrap();
-        std::fs::create_dir_all(dir.join("caps")).unwrap();
-        std::fs::write(
-            dir.join("target/rivus-std-capsmap.txt"),
-            "std::fs::read_to_string=BI\nstd::env::var=S\n",
-        )
-        .unwrap();
-        std::fs::write(dir.join("caps/ext"), "std::env::var=\n").unwrap();
-        let config = CargoCheckConfig {
-            project_path: &dir,
-            wrap_all_crates: false,
-            with_tests: true,
-            build_std: false,
-            user_capsmap: None,
-            extra_env: vec![],
-            extra_args: vec![],
-            target_subdir: None,
-        };
-
-        let cmd = rvs_prepare_cargo_check_command_BIMS(&config).unwrap();
-        let capsmap = rvs_command_env_value(&cmd, "RIVUS_CAPSMAP")
-            .and_then(|value| value)
-            .map(PathBuf::from)
-            .expect("effective capsmap should be configured");
-        let loaded = CapsMap::rvs_load_dir_BIS(&capsmap).unwrap();
-        let read_caps = loaded
-            .rvs_lookup("std::fs::read_to_string")
-            .map(crate::inference::rvs_caps_to_string);
-        let env_caps = loaded
-            .rvs_lookup("std::env::var")
-            .map(crate::inference::rvs_caps_to_string);
-        let std_layer = std::fs::read_to_string(capsmap.join("std")).unwrap_or_default();
-        let ext_layer = std::fs::read_to_string(capsmap.join("ext")).unwrap_or_default();
-        let output = format!(
-            "capsmap={}\nread={read_caps:?}\nenv={env_caps:?}\nstd_has_env={}\next_has_env={}\n",
-            capsmap.file_name().unwrap().to_string_lossy(),
-            std_layer.contains("std::env::var=S"),
-            ext_layer.contains("std::env::var="),
-        );
-        rvs_snapshot_BIS(
-            "test_20260705_prepare_cargo_check_merges_generated_std_caps",
-            &output,
-        );
-
-        assert!(capsmap.ends_with("target/rivus-effective-capsmap"));
-        assert_eq!(read_caps.as_deref(), Some("BI"));
-        assert_eq!(env_caps.as_deref(), Some(""));
-        assert!(std_layer.contains("std::env::var=S"));
-        assert!(ext_layer.contains("std::env::var="));
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn test_20260706_prepare_cargo_check_rejects_std_caps_cache_directory() {
-        let dir = rvs_make_workspace_temp_dir_BIS("std-caps-cache-dir");
-        std::fs::create_dir_all(dir.join("target/rivus-std-capsmap.txt")).unwrap();
-        let config = CargoCheckConfig {
-            project_path: &dir,
-            wrap_all_crates: false,
-            with_tests: true,
-            build_std: false,
-            user_capsmap: None,
-            extra_env: vec![],
-            extra_args: vec![],
-            target_subdir: None,
-        };
-
-        let result = rvs_prepare_cargo_check_command_BIMS(&config);
-        let output = format!("{result:?}\n").replace(&dir.to_string_lossy().into_owned(), "$TMP");
-        rvs_snapshot_BIS(
-            "test_20260706_prepare_cargo_check_rejects_std_caps_cache_directory",
-            &output,
-        );
-
-        assert!(result.is_err());
-        assert!(output.contains("std capsmap cache must be a file"));
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn test_20260706_write_capsmap_result_creates_parent_dirs() {
-        let dir = rvs_make_workspace_temp_dir_BIS("capsmap-write-parent-dirs");
-        let default_path = dir.join("target/generated/rivus-std-capsmap.txt");
-        let output_path = dir.join("out/std/capsmap");
-        let output = Some(output_path.clone());
-
-        let result = rvs_write_capsmap_result_BIS(
-            "std::fs::read=BI\n",
-            &default_path,
-            &output,
-            "std capsmap",
-        );
-        let default_text = std::fs::read_to_string(&default_path).unwrap_or_default();
-        let output_text = std::fs::read_to_string(&output_path).unwrap_or_default();
-        rvs_snapshot_BIS(
-            "test_20260706_write_capsmap_result_creates_parent_dirs",
-            &format!("result={result:?}\ndefault={default_text:?}\noutput={output_text:?}\n"),
-        );
-
-        assert!(result.is_ok());
-        assert_eq!(default_text, "std::fs::read=BI\n");
-        assert_eq!(output_text, "std::fs::read=BI\n");
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
     fn test_20260706_write_capsmap_result_rejects_output_directory_before_default_write() {
         let dir = rvs_make_workspace_temp_dir_BIS("capsmap-output-dir-preflight");
         let default_path = dir.join("target/rivus-std-capsmap.txt");
@@ -2553,8 +2279,11 @@ name = "throughput-bench"
         std::fs::create_dir_all(&output_path).unwrap();
         let output = Some(output_path);
 
-        let result =
-            rvs_write_capsmap_result_BIS("new=BI\n", &default_path, &output, "std capsmap");
+        let result = rvs_write_capsmap_result_BIS(
+            "new=BI\n",
+            output.as_deref().unwrap_or(&default_path),
+            "std capsmap",
+        );
         let default_exists = default_path.exists();
         rvs_snapshot_BIS(
             "test_20260706_write_capsmap_result_rejects_output_directory_before_default_write",
@@ -2570,37 +2299,16 @@ name = "throughput-bench"
     }
 
     #[test]
-    fn test_20260706_write_capsmap_result_rejects_default_directory_before_output_write() {
-        let dir = rvs_make_workspace_temp_dir_BIS("capsmap-default-dir-preflight");
-        let default_path = dir.join("target/rivus-std-capsmap.txt");
-        let output_path = dir.join("out/std");
-        std::fs::create_dir_all(&default_path).unwrap();
-        let output = Some(output_path.clone());
-
-        let result =
-            rvs_write_capsmap_result_BIS("new=BI\n", &default_path, &output, "std capsmap");
-        let output_exists = output_path.exists();
-        rvs_snapshot_BIS(
-            "test_20260706_write_capsmap_result_rejects_default_directory_before_output_write",
-            &format!(
-                "result_is_err={}\noutput_exists={output_exists}\n",
-                result.is_err()
-            ),
-        );
-
-        assert!(result.is_err());
-        assert!(!output_exists);
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
     fn test_20260707_write_capsmap_result_rejects_output_without_file_name() {
         let dir = rvs_make_workspace_temp_dir_BIS("capsmap-output-no-file-name");
         let default_path = dir.join("target/rivus-std-capsmap.txt");
         let output = Some(PathBuf::new());
 
-        let result =
-            rvs_write_capsmap_result_BIS("new=BI\n", &default_path, &output, "std capsmap");
+        let result = rvs_write_capsmap_result_BIS(
+            "new=BI\n",
+            output.as_deref().unwrap_or(&default_path),
+            "std capsmap",
+        );
         let default_exists = default_path.exists();
         let output = format!("result={result:?}\ndefault_exists={default_exists}\n",)
             .replace(&dir.to_string_lossy().into_owned(), "$TMP");
@@ -2621,8 +2329,11 @@ name = "throughput-bench"
         let output_path = dir.join("missing").join("..");
         let output = Some(output_path);
 
-        let result =
-            rvs_write_capsmap_result_BIS("new=BI\n", &default_path, &output, "std capsmap");
+        let result = rvs_write_capsmap_result_BIS(
+            "new=BI\n",
+            output.as_deref().unwrap_or(&default_path),
+            "std capsmap",
+        );
         let default_exists = default_path.exists();
         let output = format!("result={result:?}\ndefault_exists={default_exists}\n")
             .replace(&dir.to_string_lossy().into_owned(), "$TMP");
@@ -2643,8 +2354,11 @@ name = "throughput-bench"
         let output_path = dir.join("missing").join("..").join("deps");
         let output = Some(output_path);
 
-        let result =
-            rvs_write_capsmap_result_BIS("new=BI\n", &default_path, &output, "std capsmap");
+        let result = rvs_write_capsmap_result_BIS(
+            "new=BI\n",
+            output.as_deref().unwrap_or(&default_path),
+            "std capsmap",
+        );
         let default_exists = default_path.exists();
         let missing_exists = dir.join("missing").exists();
         let deps_exists = dir.join("deps").exists();
@@ -2671,8 +2385,11 @@ name = "throughput-bench"
         let output_path = dir.join("missing").join(".");
         let output = Some(output_path);
 
-        let result =
-            rvs_write_capsmap_result_BIS("new=BI\n", &default_path, &output, "std capsmap");
+        let result = rvs_write_capsmap_result_BIS(
+            "new=BI\n",
+            output.as_deref().unwrap_or(&default_path),
+            "std capsmap",
+        );
         let default_exists = default_path.exists();
         let output = format!("result={result:?}\ndefault_exists={default_exists}\n")
             .replace(&dir.to_string_lossy().into_owned(), "$TMP");
@@ -2692,8 +2409,11 @@ name = "throughput-bench"
         let default_path = dir.join("target/rivus-std-capsmap.txt");
         let output = Some(PathBuf::from(format!("{}/out/", dir.to_string_lossy())));
 
-        let result =
-            rvs_write_capsmap_result_BIS("new=BI\n", &default_path, &output, "std capsmap");
+        let result = rvs_write_capsmap_result_BIS(
+            "new=BI\n",
+            output.as_deref().unwrap_or(&default_path),
+            "std capsmap",
+        );
         let default_exists = default_path.exists();
         let output = format!("result={result:?}\ndefault_exists={default_exists}\n")
             .replace(&dir.to_string_lossy().into_owned(), "$TMP");
@@ -2767,53 +2487,6 @@ name = "throughput-bench"
 
     #[cfg(unix)]
     #[test]
-    fn test_20260707_write_capsmap_result_rejects_symlink_parent_collision_before_default_write() {
-        let dir = rvs_make_workspace_temp_dir_BIS("capsmap-output-symlink-parent-collision");
-        let target_dir = dir.join("target");
-        std::fs::create_dir_all(&target_dir).unwrap();
-        let link_dir = dir.join("target-link");
-        std::os::unix::fs::symlink(&target_dir, &link_dir).unwrap();
-        let default_path = target_dir.join("rivus-std-capsmap.txt");
-        let output = Some(link_dir.join("rivus-std-capsmap.txt"));
-
-        let result =
-            rvs_write_capsmap_result_BIS("new=BI\n", &default_path, &output, "std capsmap");
-        let default_exists = default_path.exists();
-        let output = format!("result={result:?}\ndefault_exists={default_exists}\n")
-            .replace(&dir.to_string_lossy().into_owned(), "$TMP");
-        rvs_snapshot_BIS(
-            "test_20260707_write_capsmap_result_rejects_symlink_parent_collision_before_default_write",
-            &output,
-        );
-
-        assert!(result.is_err());
-        assert!(!default_exists);
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn test_20260707_write_capsmap_result_rejects_output_under_default_before_default_write() {
-        let dir = rvs_make_workspace_temp_dir_BIS("capsmap-output-under-default");
-        let default_path = dir.join("target/rivus-std-capsmap.txt");
-        let output_path = default_path.join("child");
-        let output = Some(output_path);
-
-        let result =
-            rvs_write_capsmap_result_BIS("new=BI\n", &default_path, &output, "std capsmap");
-        let default_exists = default_path.exists();
-        let output = format!("result={result:?}\ndefault_exists={default_exists}\n")
-            .replace(&dir.to_string_lossy().into_owned(), "$TMP");
-        rvs_snapshot_BIS(
-            "test_20260707_write_capsmap_result_rejects_output_under_default_before_default_write",
-            &output,
-        );
-
-        assert!(result.is_err());
-        assert!(!default_exists);
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
     fn test_20260706_write_capsmap_file_preserves_existing_temp_collision() {
         let dir = rvs_make_workspace_temp_dir_BIS("capsmap-temp-collision");
         let path = dir.join("deps");
@@ -2845,8 +2518,11 @@ name = "throughput-bench"
         std::os::unix::fs::symlink(&output_target, &output_path).unwrap();
         let output = Some(output_path.clone());
 
-        let result =
-            rvs_write_capsmap_result_BIS("new=BI\n", &default_path, &output, "std capsmap");
+        let result = rvs_write_capsmap_result_BIS(
+            "new=BI\n",
+            output.as_deref().unwrap_or(&default_path),
+            "std capsmap",
+        );
         let default_exists = default_path.exists();
         let symlink_exists = std::fs::symlink_metadata(&output_path).is_ok();
         rvs_snapshot_BIS(
@@ -2872,8 +2548,11 @@ name = "throughput-bench"
         let listener = std::os::unix::net::UnixListener::bind(&output_path).unwrap();
         let output = Some(output_path.clone());
 
-        let result =
-            rvs_write_capsmap_result_BIS("new=BI\n", &default_path, &output, "std capsmap");
+        let result = rvs_write_capsmap_result_BIS(
+            "new=BI\n",
+            output.as_deref().unwrap_or(&default_path),
+            "std capsmap",
+        );
         let default_exists = default_path.exists();
         let socket_exists = std::fs::symlink_metadata(&output_path).is_ok();
         rvs_snapshot_BIS(
@@ -2900,8 +2579,11 @@ name = "throughput-bench"
         std::os::unix::fs::symlink(dir.join("missing-parent"), &parent_link).unwrap();
         let output = Some(parent_link.join("capsmap"));
 
-        let result =
-            rvs_write_capsmap_result_BIS("new=BI\n", &default_path, &output, "std capsmap");
+        let result = rvs_write_capsmap_result_BIS(
+            "new=BI\n",
+            output.as_deref().unwrap_or(&default_path),
+            "std capsmap",
+        );
         let default_exists = default_path.exists();
         rvs_snapshot_BIS(
             "test_20260706_write_capsmap_result_rejects_broken_parent_symlink_before_default_write",
@@ -2926,7 +2608,6 @@ name = "throughput-bench"
             wrap_all_crates: false,
             with_tests: true,
             build_std: false,
-            user_capsmap: None,
             extra_env: vec![],
             extra_args: vec![],
             target_subdir: None,
@@ -2961,7 +2642,6 @@ name = "throughput-bench"
             wrap_all_crates: false,
             with_tests: true,
             build_std: false,
-            user_capsmap: None,
             extra_env: vec![],
             extra_args: vec![],
             target_subdir: Some("rivus-report-build"),
@@ -2999,43 +2679,6 @@ name = "throughput-bench"
         assert!(capsmap.ends_with("caps"));
 
         std::fs::remove_dir_all(absolute_project).unwrap();
-    }
-
-    #[test]
-    fn test_20260704_prepare_cargo_check_resolves_user_capsmap_relative_to_project() {
-        let dir = rvs_make_workspace_temp_dir_BIS("relative-user-capsmap");
-        std::fs::create_dir_all(dir.join("caps")).unwrap();
-
-        let config = CargoCheckConfig {
-            project_path: &dir,
-            wrap_all_crates: false,
-            with_tests: true,
-            build_std: false,
-            user_capsmap: Some(Path::new("caps")),
-            extra_env: vec![],
-            extra_args: vec![],
-            target_subdir: None,
-        };
-
-        let cmd = rvs_prepare_cargo_check_command_BIMS(&config).unwrap();
-        let capsmap = rvs_command_env_value(&cmd, "RIVUS_CAPSMAP")
-            .and_then(|value| value)
-            .map(PathBuf::from)
-            .expect("user capsmap should be configured");
-        let output = format!(
-            "is_project_caps={}\npath={}\n",
-            capsmap == dir.join("caps"),
-            capsmap.display(),
-        )
-        .replace(&dir.to_string_lossy().into_owned(), "$TMP");
-        rvs_snapshot_BIS(
-            "test_20260704_prepare_cargo_check_resolves_user_capsmap_relative_to_project",
-            &output,
-        );
-
-        assert_eq!(capsmap, dir.join("caps"));
-
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -3094,88 +2737,6 @@ name = "throughput-bench"
         assert_eq!(callgraph.rvs_len(), 1);
         assert!(caps.rvs_lookup("std::thread::spawn").is_some());
 
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn test_20260705_project_caps_load_optional_generated_std_caps() {
-        let dir = rvs_make_workspace_temp_dir_BIS("project-caps-generated-std");
-        std::fs::create_dir_all(dir.join("target")).unwrap();
-        std::fs::create_dir_all(dir.join("caps")).unwrap();
-        std::fs::write(
-            dir.join("target/rivus-std-capsmap.txt"),
-            "std::fs::read_to_string=BI\nstd::env::var=S\n",
-        )
-        .unwrap();
-        std::fs::write(dir.join("caps/ext"), "std::env::var=\n").unwrap();
-
-        let caps = rvs_load_project_caps_with_optional_std_BIS(&dir).unwrap();
-        let read_caps = caps
-            .rvs_lookup("std::fs::read_to_string")
-            .map(crate::inference::rvs_caps_to_string);
-        let env_caps = caps
-            .rvs_lookup("std::env::var")
-            .map(crate::inference::rvs_caps_to_string);
-        let output = format!("read={read_caps:?}\nenv={env_caps:?}\n");
-        rvs_snapshot_BIS(
-            "test_20260705_project_caps_load_optional_generated_std_caps",
-            &output,
-        );
-
-        assert_eq!(read_caps.as_deref(), Some("BI"));
-        assert_eq!(env_caps.as_deref(), Some(""));
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn test_20260705_project_caps_reject_invalid_optional_generated_std_caps() {
-        let dir = rvs_make_workspace_temp_dir_BIS("project-caps-invalid-generated-std");
-        std::fs::create_dir_all(dir.join("target")).unwrap();
-        std::fs::create_dir_all(dir.join("caps")).unwrap();
-        std::fs::write(dir.join("target/rivus-std-capsmap.txt"), "=BI\n").unwrap();
-        std::fs::write(dir.join("caps/ext"), "demo::rvs_run=\n").unwrap();
-
-        let result = rvs_load_project_caps_with_optional_std_BIS(&dir);
-        let output =
-            format!("result={result:?}\n").replace(&dir.to_string_lossy().into_owned(), "$TMP");
-        rvs_snapshot_BIS(
-            "test_20260705_project_caps_reject_invalid_optional_generated_std_caps",
-            &output,
-        );
-
-        assert!(result.is_err());
-        assert!(output.contains("rivus-std-capsmap.txt"));
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn test_20260707_prepare_cargo_check_rejects_invalid_generated_std_capsmap() {
-        let dir = rvs_make_workspace_temp_dir_BIS("prepare-invalid-generated-std-caps");
-        std::fs::create_dir_all(dir.join("target")).unwrap();
-        std::fs::create_dir_all(dir.join("caps")).unwrap();
-        std::fs::write(dir.join("target/rivus-std-capsmap.txt"), "=BI\n").unwrap();
-        std::fs::write(dir.join("caps/ext"), "demo::rvs_run=\n").unwrap();
-        let config = CargoCheckConfig {
-            project_path: &dir,
-            wrap_all_crates: false,
-            with_tests: true,
-            build_std: false,
-            user_capsmap: None,
-            extra_env: vec![],
-            extra_args: vec![],
-            target_subdir: None,
-        };
-
-        let result = rvs_prepare_cargo_check_command_BIMS(&config);
-        let output =
-            format!("result={result:?}\n").replace(&dir.to_string_lossy().into_owned(), "$TMP");
-        rvs_snapshot_BIS(
-            "test_20260707_prepare_cargo_check_rejects_invalid_generated_std_capsmap",
-            &output,
-        );
-
-        assert!(result.is_err());
-        assert!(output.contains("rivus-std-capsmap.txt"));
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -3299,194 +2860,6 @@ name = "throughput-bench"
 
         assert!(has_std);
         assert_eq!(callgraph.rvs_len(), 1);
-
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn test_20260704_std_only_loads_generated_std_capsmap() {
-        let dir = rvs_make_workspace_temp_dir_BIS("std-only-loads-std-caps");
-        std::fs::create_dir_all(dir.join("target/rivus-callgraph-std")).unwrap();
-        std::fs::write(
-            dir.join("target/rivus-callgraph-std/callgraph.json"),
-            r#"{
-  "std::fs::read_to_string": {
-    "calls": [],
-    "has_body": true,
-    "has_async": false,
-    "is_unsafe_fn": false,
-    "has_mut_param": false,
-    "has_static_ref": false,
-    "has_static_mut_ref": false,
-    "has_thread_local_ref": false,
-    "is_trait_impl": false,
-    "is_test": false
-  }
-}
-"#,
-        )
-        .unwrap();
-        std::fs::write(
-            dir.join("target/rivus-std-capsmap.txt"),
-            "std::fs::read_to_string=BI\n",
-        )
-        .unwrap();
-
-        let (_callgraph, caps) =
-            rvs_load_callgraph_and_caps_for_function_BIMS(&dir, "std::fs::read_to_string").unwrap();
-        let caps_str = caps
-            .rvs_lookup("std::fs::read_to_string")
-            .map(crate::inference::rvs_caps_to_string)
-            .unwrap_or_default();
-        rvs_snapshot_BIS(
-            "test_20260704_std_only_loads_generated_std_capsmap",
-            &format!("caps={caps_str}\n"),
-        );
-
-        assert_eq!(caps_str, "BI");
-
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn test_20260704_std_only_project_caps_override_generated_std_capsmap() {
-        let dir = rvs_make_workspace_temp_dir_BIS("std-only-project-caps-override");
-        std::fs::create_dir_all(dir.join("target/rivus-callgraph-std")).unwrap();
-        std::fs::write(
-            dir.join("target/rivus-callgraph-std/callgraph.json"),
-            r#"{
-  "std::fs::read_to_string": {
-    "calls": [],
-    "has_body": true,
-    "has_async": false,
-    "is_unsafe_fn": false,
-    "has_mut_param": false,
-    "has_static_ref": false,
-    "has_static_mut_ref": false,
-    "has_thread_local_ref": false,
-    "is_trait_impl": false,
-    "is_test": false
-  }
-}
-"#,
-        )
-        .unwrap();
-        std::fs::write(
-            dir.join("target/rivus-std-capsmap.txt"),
-            "std::fs::read_to_string=BI\n",
-        )
-        .unwrap();
-        std::fs::create_dir_all(dir.join("caps")).unwrap();
-        std::fs::write(dir.join("caps/suppress"), "std::fs::read_to_string=\n").unwrap();
-
-        let (_callgraph, caps) =
-            rvs_load_callgraph_and_caps_for_function_BIMS(&dir, "std::fs::read_to_string").unwrap();
-        let caps_str = caps
-            .rvs_lookup("std::fs::read_to_string")
-            .map(crate::inference::rvs_caps_to_string)
-            .unwrap_or_default();
-        rvs_snapshot_BIS(
-            "test_20260704_std_only_project_caps_override_generated_std_capsmap",
-            &format!("caps={caps_str}\n"),
-        );
-
-        assert_eq!(caps_str, "");
-
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn test_20260704_std_only_invalid_generated_std_capsmap_errors() {
-        let dir = rvs_make_workspace_temp_dir_BIS("std-only-invalid-std-caps");
-        std::fs::create_dir_all(dir.join("target/rivus-callgraph-std")).unwrap();
-        std::fs::write(
-            dir.join("target/rivus-callgraph-std/callgraph.json"),
-            r#"{
-  "std::fs::read_to_string": {
-    "calls": [],
-    "has_body": true,
-    "has_async": false,
-    "is_unsafe_fn": false,
-    "has_mut_param": false,
-    "has_static_ref": false,
-    "has_static_mut_ref": false,
-    "has_thread_local_ref": false,
-    "is_trait_impl": false,
-    "is_test": false
-  }
-}
-"#,
-        )
-        .unwrap();
-        std::fs::write(
-            dir.join("target/rivus-std-capsmap.txt"),
-            "not a caps line\n",
-        )
-        .unwrap();
-
-        let result = rvs_load_callgraph_and_caps_for_function_BIMS(&dir, "std::fs::read_to_string");
-        let output = format!("{result:?}\n").replace(&dir.to_string_lossy().into_owned(), "$TMP");
-        rvs_snapshot_BIS(
-            "test_20260704_std_only_invalid_generated_std_capsmap_errors",
-            &output,
-        );
-
-        assert!(result.is_err());
-        assert!(output.contains("rivus-std-capsmap.txt"));
-
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn test_20260706_std_caps_cache_directory_errors_in_direct_load() {
-        let dir = rvs_make_workspace_temp_dir_BIS("std-caps-cache-dir-direct");
-        std::fs::create_dir_all(dir.join("target/rivus-std-capsmap.txt")).unwrap();
-
-        let result = rvs_load_std_caps_BIS(&dir);
-        let output = format!("{result:?}\n").replace(&dir.to_string_lossy().into_owned(), "$TMP");
-        rvs_snapshot_BIS(
-            "test_20260706_std_caps_cache_directory_errors_in_direct_load",
-            &output,
-        );
-
-        assert!(result.is_err());
-        assert!(output.contains("std capsmap cache must be a file"));
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn test_20260704_std_only_missing_generated_std_capsmap_errors() {
-        let dir = rvs_make_workspace_temp_dir_BIS("std-only-missing-std-caps");
-        std::fs::create_dir_all(dir.join("target/rivus-callgraph-std")).unwrap();
-        std::fs::write(
-            dir.join("target/rivus-callgraph-std/callgraph.json"),
-            r#"{
-  "std::fs::read_to_string": {
-    "calls": [],
-    "has_body": true,
-    "has_async": false,
-    "is_unsafe_fn": false,
-    "has_mut_param": false,
-    "has_static_ref": false,
-    "has_static_mut_ref": false,
-    "has_thread_local_ref": false,
-    "is_trait_impl": false,
-    "is_test": false
-  }
-}
-"#,
-        )
-        .unwrap();
-
-        let result = rvs_load_callgraph_and_caps_for_function_BIMS(&dir, "std::fs::read_to_string");
-        let output = format!("{result:?}\n").replace(&dir.to_string_lossy().into_owned(), "$TMP");
-        rvs_snapshot_BIS(
-            "test_20260704_std_only_missing_generated_std_capsmap_errors",
-            &output,
-        );
-
-        assert!(result.is_err());
-        assert!(output.contains("run cargo rivus infer-std first"));
 
         std::fs::remove_dir_all(dir).unwrap();
     }
