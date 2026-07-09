@@ -1,3 +1,0 @@
-my_crate::A=S # SideEffect
-my_crate::B=S # SideEffect
-my_crate::C=S # SideEffect

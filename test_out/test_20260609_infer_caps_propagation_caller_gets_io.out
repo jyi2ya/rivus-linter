@@ -1,2 +1,0 @@
-my_crate::rvs_process=BI # Blocking IO
-std::fs::read_to_string=BI # Blocking IO

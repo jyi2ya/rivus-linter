@@ -1,0 +1,8 @@
+caller_gets_io: my_crate::rvs_process=BI # Blocking IO
+std::fs::read_to_string=BI # Blocking IO
+propagation_chain: my_crate::A=S # SideEffect
+my_crate::B=S # SideEffect
+my_crate::C=S # SideEffect
+cycle_self: my_crate::rvs_loop=
+cycle_mutual: my_crate::A=
+my_crate::B=

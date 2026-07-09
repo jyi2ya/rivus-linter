@@ -813,6 +813,18 @@ mod tests {
         }
     }
 
+    fn rvs_infer_caps_case_M(
+        entries: &[(&str, FnBehavior)],
+        seed_text: &str,
+    ) -> BTreeMap<DefPath, CapabilitySet> {
+        let callgraph = entries
+            .iter()
+            .map(|(path, behavior)| (DefPath::from(*path), behavior.clone()))
+            .collect::<BTreeMap<_, _>>();
+        let seed = capsmap::CapsMap::rvs_parse(seed_text).unwrap();
+        rvs_infer_caps_M(&callgraph, &seed)
+    }
+
     // ─── rvs_infer_caps_M ────────────────────────────────────────────────
 
     #[test]
@@ -1883,198 +1895,150 @@ mod tests {
     }
 
     #[test]
-    fn test_20260609_infer_caps_single_pure() {
-        let mut callgraph: BTreeMap<DefPath, FnBehavior> = BTreeMap::new();
-        callgraph.insert("my_crate::rvs_add".into(), rvs_make_behavior());
-        let seed = capsmap::CapsMap::rvs_new();
-        let result = rvs_infer_caps_M(&callgraph, &seed);
-        let output = rvs_format_capsmap(&result);
-        rvs_snapshot_BIS("test_20260609_infer_caps_single_pure", &output);
-        assert!(
-            result
-                .get("my_crate::rvs_add")
-                .is_none_or(|c| c.rvs_is_empty())
-        );
+    fn test_20260709_infer_caps_small_cases_table() {
+        let static_ref = {
+            let mut behavior = rvs_make_behavior();
+            behavior.facts.has_static_ref = true;
+            behavior
+        };
+        let suffix_name = {
+            let mut behavior = rvs_make_behavior();
+            behavior.facts.has_async = true;
+            behavior.facts.has_mut_param = true;
+            behavior
+        };
+
+        let cases = [
+            (
+                "single_pure",
+                vec![("my_crate::rvs_add", rvs_make_behavior())],
+                "",
+                "my_crate::rvs_add",
+                "",
+            ),
+            (
+                "single_panic",
+                vec![("my_crate::rvs_divide", rvs_make_behavior())],
+                "",
+                "my_crate::rvs_divide",
+                "",
+            ),
+            (
+                "single_static_ref",
+                vec![("my_crate::rvs_get_env_S", static_ref)],
+                "",
+                "my_crate::rvs_get_env_S",
+                "S",
+            ),
+            (
+                "single_unsafe_block",
+                vec![("my_crate::rvs_ffi_call", rvs_make_behavior())],
+                "",
+                "my_crate::rvs_ffi_call",
+                "",
+            ),
+            (
+                "seed_override",
+                vec![("my_crate::rvs_read_BI", rvs_make_behavior())],
+                "my_crate::rvs_read_BI=BI",
+                "my_crate::rvs_read_BI",
+                "BI",
+            ),
+            (
+                "suffix_from_name",
+                vec![("my_crate::rvs_write_db_ABM", suffix_name)],
+                "",
+                "my_crate::rvs_write_db_ABM",
+                "AM",
+            ),
+        ];
+
+        let mut output = String::new();
+        for (name, entries, seed, key, expected_caps) in cases {
+            let result = rvs_infer_caps_case_M(&entries, seed);
+            let caps = result.get(key).expect("case result should contain target");
+            output.push_str(&format!("{name}: {}\n", rvs_caps_to_string(caps)));
+            assert_eq!(rvs_caps_to_string(caps), expected_caps, "{name}");
+        }
+        rvs_snapshot_BIS("test_20260709_infer_caps_small_cases_table", &output);
     }
 
     #[test]
-    fn test_20260609_infer_caps_single_panic() {
-        let mut callgraph: BTreeMap<DefPath, FnBehavior> = BTreeMap::new();
-        let behavior = rvs_make_behavior();
-        callgraph.insert("my_crate::rvs_divide".into(), behavior);
-        let seed = capsmap::CapsMap::rvs_new();
-        let result = rvs_infer_caps_M(&callgraph, &seed);
-        let output = rvs_format_capsmap(&result);
-        rvs_snapshot_BIS("test_20260609_infer_caps_single_panic", &output);
-        let caps = result
-            .get("my_crate::rvs_divide")
-            .expect("should have entry");
-        assert!(caps.rvs_is_empty());
-        assert_eq!(caps.rvs_len(), 0);
-    }
+    fn test_20260709_infer_caps_propagation_cycle_table() {
+        let caller_gets_io = {
+            let mut caller_behavior = rvs_make_behavior();
+            caller_behavior
+                .calls
+                .insert("std::fs::read_to_string".into());
+            vec![
+                ("my_crate::rvs_process", caller_behavior),
+                ("std::fs::read_to_string", rvs_make_behavior()),
+            ]
+        };
+        let propagation_chain = {
+            let mut a_behavior = rvs_make_behavior();
+            a_behavior.calls.insert("my_crate::B".into());
+            let mut b_behavior = rvs_make_behavior();
+            b_behavior.calls.insert("my_crate::C".into());
+            vec![
+                ("my_crate::A", a_behavior),
+                ("my_crate::B", b_behavior),
+                ("my_crate::C", rvs_make_behavior()),
+            ]
+        };
+        let cycle_self = {
+            let mut behavior = rvs_make_behavior();
+            behavior.calls.insert("my_crate::rvs_loop".into());
+            vec![("my_crate::rvs_loop", behavior)]
+        };
+        let cycle_mutual = {
+            let mut a_behavior = rvs_make_behavior();
+            a_behavior.calls.insert("my_crate::B".into());
+            let mut b_behavior = rvs_make_behavior();
+            b_behavior.calls.insert("my_crate::A".into());
+            vec![("my_crate::A", a_behavior), ("my_crate::B", b_behavior)]
+        };
 
-    #[test]
-    fn test_20260609_infer_caps_single_static_ref() {
-        let mut callgraph: BTreeMap<DefPath, FnBehavior> = BTreeMap::new();
-        let mut behavior = rvs_make_behavior();
-        behavior.facts.has_static_ref = true;
-        callgraph.insert("my_crate::rvs_get_env_S".into(), behavior);
-        let seed = capsmap::CapsMap::rvs_new();
-        let result = rvs_infer_caps_M(&callgraph, &seed);
-        let output = rvs_format_capsmap(&result);
-        rvs_snapshot_BIS("test_20260609_infer_caps_single_static_ref", &output);
-        let caps = result
-            .get("my_crate::rvs_get_env_S")
-            .expect("should have entry");
-        assert!(caps.rvs_contains(Capability::S));
-        assert_eq!(caps.rvs_len(), 1);
-    }
+        let cases = [
+            (
+                "caller_gets_io",
+                caller_gets_io,
+                "std::fs::read_to_string=BI",
+                vec![("my_crate::rvs_process", "BI")],
+            ),
+            (
+                "propagation_chain",
+                propagation_chain,
+                "my_crate::C=S",
+                vec![("my_crate::A", "S"), ("my_crate::B", "S")],
+            ),
+            (
+                "cycle_self",
+                cycle_self,
+                "",
+                vec![("my_crate::rvs_loop", "")],
+            ),
+            (
+                "cycle_mutual",
+                cycle_mutual,
+                "",
+                vec![("my_crate::A", ""), ("my_crate::B", "")],
+            ),
+        ];
 
-    #[test]
-    fn test_20260609_infer_caps_single_unsafe_block() {
-        let mut callgraph: BTreeMap<DefPath, FnBehavior> = BTreeMap::new();
-        let behavior = rvs_make_behavior();
-        callgraph.insert("my_crate::rvs_ffi_call".into(), behavior);
-        let seed = capsmap::CapsMap::rvs_new();
-        let result = rvs_infer_caps_M(&callgraph, &seed);
-        let caps = result.get("my_crate::rvs_ffi_call");
-        assert!(caps.is_some());
-        assert!(caps.unwrap().rvs_is_empty());
-    }
-
-    #[test]
-    fn test_20260609_infer_caps_propagation_caller_gets_io() {
-        let mut callgraph: BTreeMap<DefPath, FnBehavior> = BTreeMap::new();
-        let mut caller_behavior = rvs_make_behavior();
-        caller_behavior
-            .calls
-            .insert("std::fs::read_to_string".into());
-        callgraph.insert("my_crate::rvs_process".into(), caller_behavior);
-        callgraph.insert("std::fs::read_to_string".into(), rvs_make_behavior());
-
-        let seed = capsmap::CapsMap::rvs_parse("std::fs::read_to_string=BI").unwrap();
-
-        let result = rvs_infer_caps_M(&callgraph, &seed);
-        let output = rvs_format_capsmap(&result);
-        rvs_snapshot_BIS(
-            "test_20260609_infer_caps_propagation_caller_gets_io",
-            &output,
-        );
-
-        let caller_caps = result
-            .get("my_crate::rvs_process")
-            .expect("caller should have entry");
-        assert!(caller_caps.rvs_contains(Capability::B));
-        assert!(caller_caps.rvs_contains(Capability::I));
-        assert_eq!(caller_caps.rvs_len(), 2);
-    }
-
-    #[test]
-    fn test_20260609_infer_caps_propagation_chain() {
-        let mut callgraph: BTreeMap<DefPath, FnBehavior> = BTreeMap::new();
-        let mut a_behavior = rvs_make_behavior();
-        a_behavior.calls.insert("my_crate::B".into());
-        callgraph.insert("my_crate::A".into(), a_behavior);
-
-        let mut b_behavior = rvs_make_behavior();
-        b_behavior.calls.insert("my_crate::C".into());
-        callgraph.insert("my_crate::B".into(), b_behavior);
-
-        callgraph.insert("my_crate::C".into(), rvs_make_behavior());
-
-        let seed = capsmap::CapsMap::rvs_parse("my_crate::C=S").unwrap();
-
-        let result = rvs_infer_caps_M(&callgraph, &seed);
-        let output = rvs_format_capsmap(&result);
-        rvs_snapshot_BIS("test_20260609_infer_caps_propagation_chain", &output);
-
-        let a_caps = result.get("my_crate::A").expect("A should have entry");
-        let b_caps = result.get("my_crate::B").expect("B should have entry");
-        assert!(a_caps.rvs_contains(Capability::S));
-        assert!(b_caps.rvs_contains(Capability::S));
-    }
-
-    #[test]
-    fn test_20260609_infer_caps_cycle_self_recursive() {
-        let mut callgraph: BTreeMap<DefPath, FnBehavior> = BTreeMap::new();
-        let mut behavior = rvs_make_behavior();
-        behavior.calls.insert("my_crate::rvs_loop".into());
-        callgraph.insert("my_crate::rvs_loop".into(), behavior);
-
-        let seed = capsmap::CapsMap::rvs_new();
-        let result = rvs_infer_caps_M(&callgraph, &seed);
-        let output = rvs_format_capsmap(&result);
-        rvs_snapshot_BIS("test_20260609_infer_caps_cycle_self_recursive", &output);
-
-        assert!(
-            result
-                .get("my_crate::rvs_loop")
-                .is_none_or(|c| c.rvs_is_empty())
-        );
-    }
-
-    #[test]
-    fn test_20260609_infer_caps_cycle_mutual_recursion() {
-        let mut callgraph: BTreeMap<DefPath, FnBehavior> = BTreeMap::new();
-        let mut a_behavior = rvs_make_behavior();
-        a_behavior.calls.insert("my_crate::B".into());
-        callgraph.insert("my_crate::A".into(), a_behavior);
-
-        let mut b_behavior = rvs_make_behavior();
-        b_behavior.calls.insert("my_crate::A".into());
-        callgraph.insert("my_crate::B".into(), b_behavior);
-
-        let seed = capsmap::CapsMap::rvs_new();
-        let result = rvs_infer_caps_M(&callgraph, &seed);
-        let output = rvs_format_capsmap(&result);
-        rvs_snapshot_BIS("test_20260609_infer_caps_cycle_mutual_recursion", &output);
-
-        assert!(result.get("my_crate::A").is_none_or(|c| c.rvs_is_empty()));
-        assert!(result.get("my_crate::B").is_none_or(|c| c.rvs_is_empty()));
-    }
-
-    #[test]
-    fn test_20260609_infer_caps_seed_override() {
-        let mut callgraph: BTreeMap<DefPath, FnBehavior> = BTreeMap::new();
-        let behavior = rvs_make_behavior();
-        callgraph.insert("my_crate::rvs_read_BI".into(), behavior);
-
-        let seed = capsmap::CapsMap::rvs_parse("my_crate::rvs_read_BI=BI").unwrap();
-        let result = rvs_infer_caps_M(&callgraph, &seed);
-        let output = rvs_format_capsmap(&result);
-        rvs_snapshot_BIS("test_20260609_infer_caps_seed_override", &output);
-
-        let caps = result
-            .get("my_crate::rvs_read_BI")
-            .expect("should have entry");
-        assert!(caps.rvs_contains(Capability::B));
-        assert!(caps.rvs_contains(Capability::I));
-        assert!(
-            !caps.rvs_contains(Capability::T),
-            "seed should override behavioral flags"
-        );
-        assert_eq!(caps.rvs_len(), 2);
-    }
-
-    #[test]
-    fn test_20260609_infer_caps_rvs_suffix_from_name() {
-        let mut callgraph: BTreeMap<DefPath, FnBehavior> = BTreeMap::new();
-        let mut behavior = rvs_make_behavior();
-        behavior.facts.has_async = true;
-        behavior.facts.has_mut_param = true;
-        callgraph.insert("my_crate::rvs_write_db_ABM".into(), behavior);
-
-        let seed = capsmap::CapsMap::rvs_new();
-        let result = rvs_infer_caps_M(&callgraph, &seed);
-        let output = rvs_format_capsmap(&result);
-        rvs_snapshot_BIS("test_20260609_infer_caps_rvs_suffix_from_name", &output);
-
-        let caps = result
-            .get("my_crate::rvs_write_db_ABM")
-            .expect("should have entry");
-        assert!(caps.rvs_contains(Capability::A));
-        assert!(caps.rvs_contains(Capability::M));
-        assert_eq!(caps.rvs_len(), 2);
+        let mut output = String::new();
+        for (name, entries, seed, expected_pairs) in cases {
+            let result = rvs_infer_caps_case_M(&entries, seed);
+            output.push_str(&format!(
+                "{name}: {}\n",
+                rvs_format_capsmap(&result).trim_end()
+            ));
+            for (key, expected_caps) in expected_pairs {
+                let caps = result.get(key).expect("case result should contain key");
+                assert_eq!(rvs_caps_to_string(caps), expected_caps, "{name}:{key}");
+            }
+        }
+        rvs_snapshot_BIS("test_20260709_infer_caps_propagation_cycle_table", &output);
     }
 
     #[test]
