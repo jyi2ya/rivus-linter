@@ -1,0 +1,4 @@
+legacy_base=None
+legacy_json={"file":"src/lib.rs","name_start":7,"name_end":16}
+exact_base=Some("/workspace")
+exact_json={"file":"member/src/lib.rs","base":"/workspace","name_start":7,"name_end":16}

@@ -67,31 +67,69 @@ pub(crate) fn rvs_normalize_source_for_project_BIS(
     source: &FnSource,
     project_path: &Path,
 ) -> Result<FnSource, String> {
-    let mut candidates = Vec::new();
-    if source.file.is_absolute() {
-        candidates.push(source.file.clone());
+    let file = if source.file.is_absolute() {
+        if source.base.is_some() {
+            return Err(format!(
+                "absolute source '{}' must not have a recorded base",
+                source.file.display()
+            ));
+        }
+        source.file.canonicalize().map_err(|e| {
+            format!(
+                "cannot canonicalize source '{}': {e}",
+                source.file.display()
+            )
+        })?
+    } else if let Some(base) = &source.base {
+        if !base.is_absolute() {
+            return Err(format!(
+                "recorded source base '{}' for '{}' must be absolute",
+                base.display(),
+                source.file.display()
+            ));
+        }
+        base.join(&source.file).canonicalize().map_err(|e| {
+            format!(
+                "cannot canonicalize source '{}' against recorded base '{}': {e}",
+                source.file.display(),
+                base.display()
+            )
+        })?
     } else {
-        candidates.push(project_path.join(&source.file));
+        let mut candidate_paths = vec![project_path.join(&source.file)];
         if let Some(parent) = project_path.parent() {
-            candidates.push(parent.join(&source.file));
+            candidate_paths.push(parent.join(&source.file));
         }
-    }
-    let mut error_count = 0usize;
-    let mut file = None;
-    for candidate in candidates {
-        match candidate.canonicalize() {
-            Ok(resolved) => {
-                file = Some(resolved);
-                break;
+        let candidate_count = candidate_paths.len();
+        let mut resolved = Vec::new();
+        for candidate in candidate_paths {
+            if let Ok(canonical) = candidate.canonicalize()
+                && !resolved.contains(&canonical)
+            {
+                resolved.push(canonical);
             }
-            Err(_) => error_count += 1,
         }
-    }
-    let Some(file) = file else {
-        return Err(format!(
-            "cannot canonicalize source '{}' from {error_count} candidate path(s)",
-            source.file.display(),
-        ));
+        match resolved.as_slice() {
+            [file] => file.clone(),
+            [] => {
+                return Err(format!(
+                    "cannot canonicalize legacy source '{}' from {candidate_count} candidate path(s)",
+                    source.file.display(),
+                ));
+            }
+            files => {
+                return Err(format!(
+                    "ambiguous legacy source '{}': {} candidate bases resolve to distinct files [{}]; regenerate callgraph metadata",
+                    source.file.display(),
+                    files.len(),
+                    files
+                        .iter()
+                        .map(|file| format!("'{}'", file.display()))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+        }
     };
     Ok(FnSource::rvs_new(file, source.name_start, source.name_end))
 }

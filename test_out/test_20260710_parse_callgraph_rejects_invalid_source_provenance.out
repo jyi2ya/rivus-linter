@@ -1,0 +1,3 @@
+relative_base: Err("invalid callgraph JSON: source base for demo::rvs_parse must be absolute")
+base_on_absolute_file: Err("invalid callgraph JSON: absolute source file for demo::rvs_parse must not have a base")
+empty_base: Err("invalid callgraph JSON: source base for demo::rvs_parse is empty")

@@ -845,6 +845,75 @@ mod tests {
     }
 
     #[test]
+    fn test_20260710_callgraph_source_records_exact_workspace_member_base() {
+        let workspace = rvs_make_workspace_temp_dir_BIS("source-provenance");
+        let member = workspace.join("member");
+        std::fs::write(
+            workspace.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"member\"]\nresolver = \"2\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(member.join("src")).unwrap();
+        std::fs::write(
+            member.join("Cargo.toml"),
+            "[package]\nname = \"member\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        let member_text = "pub fn rvs_parse() -> u8 { 1 }\n";
+        std::fs::write(member.join("src/lib.rs"), member_text).unwrap();
+
+        std::fs::create_dir_all(workspace.join("src")).unwrap();
+        std::fs::write(
+            workspace.join("src/lib.rs"),
+            "pub fn workspace_decoy() {}\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(member.join("member/src")).unwrap();
+        std::fs::write(
+            member.join("member/src/lib.rs"),
+            "pub fn nested_decoy() {}\n",
+        )
+        .unwrap();
+
+        let graph = rvs_collect_callgraph_BIMS(&member, false, false, vec![]).unwrap();
+        let source = graph
+            .rvs_get("member::rvs_parse")
+            .and_then(|node| node.sources.first())
+            .expect("member function should have source metadata");
+        let normalized =
+            crate::rename::rvs_normalize_source_for_project_BIS(source, &member).unwrap();
+        let range = source.name_start as usize..source.name_end as usize;
+        let recorded_name = member_text
+            .get(range)
+            .expect("source range should select the function name");
+        let output = format!(
+            "file={}\nbase={}\nrelative={}\nnormalized={}\nname={recorded_name}\n",
+            source.file.display(),
+            source
+                .base
+                .as_deref()
+                .map_or("<none>".into(), |base| base.display().to_string()),
+            source.file.is_relative(),
+            normalized.file.display(),
+        )
+        .replace(&workspace.to_string_lossy().into_owned(), "$WORKSPACE");
+        rvs_snapshot_BIS(
+            "test_20260710_callgraph_source_records_exact_workspace_member_base",
+            &output,
+        );
+
+        if source.file.is_relative() {
+            assert!(source.base.is_some());
+        }
+        assert_eq!(
+            normalized.file,
+            member.join("src/lib.rs").canonicalize().unwrap()
+        );
+        assert_eq!(recorded_name, "rvs_parse");
+        std::fs::remove_dir_all(workspace).unwrap();
+    }
+
+    #[test]
     fn test_20260709_collect_local_crate_prefixes_rejects_invalid_target_names_table() {
         let cases = [
             (

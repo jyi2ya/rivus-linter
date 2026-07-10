@@ -172,7 +172,19 @@ fn rvs_fn_source(cx: &LateContext<'_>, ident: Ident) -> Option<FnSource> {
         return None;
     }
     let file = rvs_real_file_name(&start.sf.name)?;
-    Some(FnSource::rvs_new(file, start.pos.0, end.pos.0))
+    if file.is_absolute() {
+        return Some(FnSource::rvs_new(file, start.pos.0, end.pos.0));
+    }
+    let base = cx.tcx.sess.opts.working_dir.local_path()?.to_path_buf();
+    if !base.is_absolute() {
+        return None;
+    }
+    Some(FnSource::rvs_new_relative(
+        file,
+        base,
+        start.pos.0,
+        end.pos.0,
+    ))
 }
 
 fn rvs_real_file_name(name: &FileName) -> Option<PathBuf> {

@@ -1,0 +1,5 @@
+file=member/src/lib.rs
+base=$WORKSPACE
+relative=true
+normalized=$WORKSPACE/member/src/lib.rs
+name=rvs_parse

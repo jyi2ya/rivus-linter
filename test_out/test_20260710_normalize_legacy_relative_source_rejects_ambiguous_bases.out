@@ -1,0 +1,1 @@
+Err("ambiguous legacy source 'member/src/lib.rs': 2 candidate bases resolve to distinct files ['$WORKSPACE/member/member/src/lib.rs', '$WORKSPACE/member/src/lib.rs']; regenerate callgraph metadata")

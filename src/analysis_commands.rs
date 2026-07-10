@@ -367,6 +367,97 @@ mod tests {
     }
 
     #[test]
+    fn test_20260710_normalize_legacy_relative_source_rejects_ambiguous_bases() {
+        let workspace = rvs_make_temp_dir_BIS("normalize-source-ambiguous");
+        let member = workspace.join("member");
+        std::fs::create_dir_all(member.join("src")).unwrap();
+        std::fs::create_dir_all(member.join("member/src")).unwrap();
+        std::fs::write(member.join("src/lib.rs"), "fn member_parse() {}\n").unwrap();
+        std::fs::write(
+            member.join("member/src/lib.rs"),
+            "fn nested_member_parse() {}\n",
+        )
+        .unwrap();
+        let source = FnSource::rvs_new(std::path::PathBuf::from("member/src/lib.rs"), 3, 8);
+
+        let result = rename::rvs_normalize_source_for_project_BIS(&source, &member);
+        let output = format!("{result:?}\n")
+            .replace(&workspace.to_string_lossy().into_owned(), "$WORKSPACE");
+        rvs_snapshot_BIS(
+            "test_20260710_normalize_legacy_relative_source_rejects_ambiguous_bases",
+            &output,
+        );
+
+        assert!(result.is_err(), "legacy source base must not be guessed");
+        assert!(output.contains("ambiguous"));
+        std::fs::remove_dir_all(workspace).unwrap();
+    }
+
+    #[test]
+    fn test_20260710_normalize_relative_source_uses_recorded_exact_base() {
+        let workspace = rvs_make_temp_dir_BIS("normalize-source-exact-base");
+        let member = workspace.join("member");
+        std::fs::create_dir_all(member.join("src")).unwrap();
+        std::fs::create_dir_all(member.join("member/src")).unwrap();
+        std::fs::write(member.join("src/lib.rs"), "fn member_parse() {}\n").unwrap();
+        std::fs::write(
+            member.join("member/src/lib.rs"),
+            "fn nested_member_parse() {}\n",
+        )
+        .unwrap();
+        let source = FnSource::rvs_new_relative(
+            std::path::PathBuf::from("member/src/lib.rs"),
+            workspace.clone(),
+            3,
+            8,
+        );
+
+        let normalized = rename::rvs_normalize_source_for_project_BIS(&source, &member).unwrap();
+        let output = format!(
+            "resolved={}\nbase_after_normalize={:?}\nrange={}..{}\n",
+            normalized.file.display(),
+            normalized.base,
+            normalized.name_start,
+            normalized.name_end,
+        )
+        .replace(&workspace.to_string_lossy().into_owned(), "$WORKSPACE");
+        rvs_snapshot_BIS(
+            "test_20260710_normalize_relative_source_uses_recorded_exact_base",
+            &output,
+        );
+
+        assert_eq!(
+            normalized.file,
+            member.join("src/lib.rs").canonicalize().unwrap()
+        );
+        assert!(normalized.base.is_none());
+        std::fs::remove_dir_all(workspace).unwrap();
+    }
+
+    #[test]
+    fn test_20260710_recorded_source_base_does_not_fall_back() {
+        let workspace = rvs_make_temp_dir_BIS("normalize-source-no-fallback");
+        let member = workspace.join("member");
+        std::fs::create_dir_all(member.join("src")).unwrap();
+        std::fs::write(member.join("src/lib.rs"), "fn member_parse() {}\n").unwrap();
+        let recorded_base = workspace.join("compiler-working-dir");
+        let source =
+            FnSource::rvs_new_relative(std::path::PathBuf::from("src/lib.rs"), recorded_base, 3, 8);
+
+        let result = rename::rvs_normalize_source_for_project_BIS(&source, &member);
+        let output = format!("{result:?}\n")
+            .replace(&workspace.to_string_lossy().into_owned(), "$WORKSPACE");
+        rvs_snapshot_BIS(
+            "test_20260710_recorded_source_base_does_not_fall_back",
+            &output,
+        );
+
+        assert!(result.is_err());
+        assert!(output.contains("recorded base"));
+        std::fs::remove_dir_all(workspace).unwrap();
+    }
+
+    #[test]
     fn test_20260703_why_contract_summary_skips_root_main() {
         let mut graph = FnGraph::rvs_new();
         let node = crate::artifacts::FnNode {

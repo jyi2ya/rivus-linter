@@ -10,6 +10,9 @@ use crate::symbols::{DefPath, FnName};
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct FnSource {
     pub file: PathBuf,
+    /// Exact rustc working directory for a relative file; absent for absolute or legacy paths.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) base: Option<PathBuf>,
     pub name_start: u32,
     pub name_end: u32,
 }
@@ -19,6 +22,24 @@ impl FnSource {
         debug_assert!(name_start < name_end, "source name range must be non-empty");
         Self {
             file,
+            base: None,
+            name_start,
+            name_end,
+        }
+    }
+
+    pub(crate) fn rvs_new_relative(
+        file: PathBuf,
+        base: PathBuf,
+        name_start: u32,
+        name_end: u32,
+    ) -> Self {
+        debug_assert!(file.is_relative(), "source file must be relative");
+        debug_assert!(base.is_absolute(), "source base must be absolute");
+        debug_assert!(name_start < name_end, "source name range must be non-empty");
+        Self {
+            file,
+            base: Some(base),
             name_start,
             name_end,
         }
@@ -209,6 +230,23 @@ pub fn rvs_parse_callgraph_json_S(json: &str) -> Result<FnGraph, String> {
                     "invalid callgraph JSON: source file for {path} is empty"
                 ));
             }
+            if let Some(base) = &source.base {
+                if base.as_os_str().is_empty() {
+                    return Err(format!(
+                        "invalid callgraph JSON: source base for {path} is empty"
+                    ));
+                }
+                if source.file.is_absolute() {
+                    return Err(format!(
+                        "invalid callgraph JSON: absolute source file for {path} must not have a base"
+                    ));
+                }
+                if !base.is_absolute() {
+                    return Err(format!(
+                        "invalid callgraph JSON: source base for {path} must be absolute"
+                    ));
+                }
+            }
             if source.name_start >= source.name_end {
                 return Err(format!(
                     "invalid callgraph JSON: source range for {path} is empty or reversed ({}..{})",
@@ -395,6 +433,114 @@ mod tests {
         assert!(node.facts.has_async);
         assert_eq!(node.sources.len(), 1);
         assert_eq!(node.calls.len(), 1);
+    }
+
+    #[test]
+    fn test_20260710_fn_source_provenance_json_compatibility() {
+        let legacy_json = r#"{
+            "demo::rvs_parse": {
+                "calls": [],
+                "has_body": true,
+                "sources": [{"file":"src/lib.rs","name_start":7,"name_end":16}]
+            }
+        }"#;
+        let legacy = rvs_parse_callgraph_json_S(legacy_json).unwrap();
+        let legacy_source = legacy
+            .rvs_get("demo::rvs_parse")
+            .and_then(|node| node.sources.first())
+            .expect("legacy source should parse");
+        let exact_source = FnSource::rvs_new_relative(
+            PathBuf::from("member/src/lib.rs"),
+            PathBuf::from("/workspace"),
+            7,
+            16,
+        );
+        let legacy_serialized = serde_json::to_string(legacy_source).unwrap();
+        let exact_serialized = serde_json::to_string(&exact_source).unwrap();
+        let output = format!(
+            "legacy_base={:?}\nlegacy_json={legacy_serialized}\nexact_base={:?}\nexact_json={exact_serialized}\n",
+            legacy_source.base, exact_source.base,
+        );
+        rvs_snapshot_BIS(
+            "test_20260710_fn_source_provenance_json_compatibility",
+            &output,
+        );
+
+        assert!(legacy_source.base.is_none());
+        assert!(!legacy_serialized.contains("base"));
+        assert_eq!(exact_source.base, Some(PathBuf::from("/workspace")));
+        assert!(exact_serialized.contains(r#""base":"/workspace""#));
+    }
+
+    #[test]
+    fn test_20260710_parse_callgraph_rejects_invalid_source_provenance() {
+        let cases = [
+            (
+                "relative_base",
+                r#"{"file":"src/lib.rs","base":"workspace","name_start":3,"name_end":8}"#,
+            ),
+            (
+                "base_on_absolute_file",
+                r#"{"file":"/workspace/src/lib.rs","base":"/workspace","name_start":3,"name_end":8}"#,
+            ),
+            (
+                "empty_base",
+                r#"{"file":"src/lib.rs","base":"","name_start":3,"name_end":8}"#,
+            ),
+        ];
+        let mut output = String::new();
+        for (name, source) in cases {
+            let json = format!(
+                r#"{{"demo::rvs_parse":{{"calls":[],"has_body":true,"sources":[{source}]}}}}"#
+            );
+            let result = rvs_parse_callgraph_json_S(&json);
+            output.push_str(&format!("{name}: {result:?}\n"));
+            assert!(result.is_err(), "{name}");
+        }
+        rvs_snapshot_BIS(
+            "test_20260710_parse_callgraph_rejects_invalid_source_provenance",
+            &output,
+        );
+    }
+
+    #[test]
+    fn test_20260710_fn_source_ordering_keeps_relative_provenance_distinct() {
+        let member_source = FnSource::rvs_new_relative(
+            PathBuf::from("src/lib.rs"),
+            PathBuf::from("/workspace/member"),
+            7,
+            16,
+        );
+        let workspace_source = FnSource::rvs_new_relative(
+            PathBuf::from("src/lib.rs"),
+            PathBuf::from("/workspace"),
+            7,
+            16,
+        );
+        let sources = BTreeSet::from([member_source.clone(), workspace_source.clone()]);
+        let output = sources
+            .iter()
+            .map(|source| {
+                format!(
+                    "file={} base={} range={}..{}",
+                    source.file.display(),
+                    source
+                        .base
+                        .as_deref()
+                        .map_or("<none>".into(), |base| base.display().to_string()),
+                    source.name_start,
+                    source.name_end,
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        rvs_snapshot_BIS(
+            "test_20260710_fn_source_ordering_keeps_relative_provenance_distinct",
+            &(output + "\n"),
+        );
+
+        assert_ne!(member_source, workspace_source);
+        assert_eq!(sources.len(), 2);
     }
 
     #[test]

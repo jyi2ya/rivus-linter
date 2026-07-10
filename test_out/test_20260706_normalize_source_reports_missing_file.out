@@ -1,1 +1,1 @@
-Err("cannot canonicalize source 'src/missing.rs' from 2 candidate path(s)")
+Err("cannot canonicalize legacy source 'src/missing.rs' from 2 candidate path(s)")

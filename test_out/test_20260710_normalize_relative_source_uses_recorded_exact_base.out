@@ -1,0 +1,3 @@
+resolved=$WORKSPACE/member/src/lib.rs
+base_after_normalize=None
+range=3..8
