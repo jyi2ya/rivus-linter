@@ -2260,6 +2260,17 @@ name = "throughput-bench"
 
     #[test]
     fn test_20260704_is_std_like_def_path() {
+        let cases = [
+            ("std::fs::read", true),
+            ("core::mem::drop", true),
+            ("alloc::vec::Vec::new", true),
+            ("compiler_builtins::mem::memcpy", true),
+            ("demo::rvs_run", false),
+            ("stdx::fs::read", false),
+            ("corex::mem::drop", false),
+            ("allocx::vec::Vec::new", false),
+            ("compiler_builtinsx::mem::memcpy", false),
+        ];
         let output = format!(
             "std={}\ncore={}\nalloc={}\ncompiler_builtins={}\nlocal={}\n",
             rvs_is_std_like_def_path("std::fs::read"),
@@ -2270,11 +2281,9 @@ name = "throughput-bench"
         );
         rvs_snapshot_BIS("test_20260704_is_std_like_def_path", &output);
 
-        assert!(rvs_is_std_like_def_path("std::fs::read"));
-        assert!(rvs_is_std_like_def_path("core::mem::drop"));
-        assert!(rvs_is_std_like_def_path("alloc::vec::Vec::new"));
-        assert!(rvs_is_std_like_def_path("compiler_builtins::mem::memcpy"));
-        assert!(!rvs_is_std_like_def_path("demo::rvs_run"));
+        for (path, expected) in cases {
+            assert_eq!(rvs_is_std_like_def_path(path), expected, "{path}");
+        }
     }
 
     #[test]

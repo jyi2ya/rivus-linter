@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use crate::artifacts::FnGraph;
+use crate::callgraph_cache::rvs_is_std_like_def_path;
 use crate::inference::{
     CalleeCapsResolver, FnContractDiff, rvs_build_impl_index, rvs_caps_to_string,
     rvs_collect_local_contract_diffs_M, rvs_contract_diff_is_enforced,
@@ -73,20 +74,13 @@ pub(crate) fn rvs_run_annotate_BIMPS(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn rvs_is_std_like_query(function: &str) -> bool {
-    function.starts_with("std::")
-        || function.starts_with("core::")
-        || function.starts_with("alloc::")
-        || function.starts_with("compiler_builtins::")
-}
-
 /// # Panics
 ///
 /// Panics if the current executable path, current directory, or cargo cannot be resolved.
 pub(crate) fn rvs_run_why_BIMPS(function: &str, path: &Path) -> Result<(), String> {
     rvs_ensure_cargo_project_BIS(path)?;
 
-    let local_crate_names = if rvs_is_std_like_query(function) {
+    let local_crate_names = if rvs_is_std_like_def_path(function) {
         let loaded = rvs_load_local_crate_prefixes_BIS(path);
         match loaded {
             Ok(names) if rvs_function_matches_local_prefix(function, &names) => names,
@@ -463,8 +457,8 @@ mod tests {
             &output,
         );
 
-        assert!(rvs_is_std_like_query("std::fs::rvs_read_BI"));
-        assert!(!rvs_is_std_like_query("demo::rvs_read_BI"));
+        assert!(rvs_is_std_like_def_path("std::fs::rvs_read_BI"));
+        assert!(!rvs_is_std_like_def_path("demo::rvs_read_BI"));
         assert!(result.is_ok());
         std::fs::remove_dir_all(dir).unwrap();
     }

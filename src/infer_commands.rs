@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
+use crate::callgraph_cache::rvs_is_std_like_def_path;
 use crate::capsmap::CapsMap;
 use crate::cargo_targets::rvs_detect_local_crate_prefixes_for_cargo_check_BIS;
 use crate::inference::{
@@ -80,7 +81,6 @@ pub(crate) fn rvs_run_infer_std_BIMPS(path: &Path, output: &Path) -> Result<(), 
         .map_err(|e| format!("caps: {e}"))?;
     let callgraph = rvs_collect_callgraph_BIMS(&project_path, true, false, vec![])?;
 
-    let std_crates: &[&str] = &["std::", "core::", "alloc::", "compiler_builtins::"];
     let pre_index = rvs_build_impl_index(&callgraph);
     let pre_inferred: BTreeMap<DefPath, crate::capability::CapabilitySet> = {
         let mut m = BTreeMap::new();
@@ -95,7 +95,7 @@ pub(crate) fn rvs_run_infer_std_BIMPS(path: &Path, output: &Path) -> Result<(), 
     };
     let std_pre_inferred: BTreeMap<DefPath, crate::capability::CapabilitySet> = pre_inferred
         .iter()
-        .filter(|(k, _)| std_crates.iter().any(|p| k.rvs_as_str().starts_with(p)))
+        .filter(|(k, _)| rvs_is_std_like_def_path(k.rvs_as_str()))
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
     let mut alias_seed = seed.clone();
@@ -110,7 +110,7 @@ pub(crate) fn rvs_run_infer_std_BIMPS(path: &Path, output: &Path) -> Result<(), 
     let impl_index = rvs_build_impl_index(&callgraph);
     let std_inferred: BTreeMap<DefPath, crate::capability::CapabilitySet> = inferred
         .iter()
-        .filter(|(k, _)| std_crates.iter().any(|p| k.rvs_as_str().starts_with(p)))
+        .filter(|(k, _)| rvs_is_std_like_def_path(k.rvs_as_str()))
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
     let post_aliases = rvs_generate_trait_aliases(&std_inferred, &impl_index, &callgraph);
@@ -122,15 +122,12 @@ pub(crate) fn rvs_run_infer_std_BIMPS(path: &Path, output: &Path) -> Result<(), 
             !local_prefixes
                 .iter()
                 .any(|prefix| name.rvs_starts_with(prefix))
-                && std_crates
-                    .iter()
-                    .any(|prefix| name.rvs_as_str().starts_with(prefix))
+                && rvs_is_std_like_def_path(name.rvs_as_str())
         })
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
 
-    let unknown =
-        rvs_collect_std_unknown_callees(&callgraph, &inferred, &seed, std_crates, &local_prefixes);
+    let unknown = rvs_collect_std_unknown_callees(&callgraph, &inferred, &seed, &local_prefixes);
 
     if !unknown.is_empty() {
         return Err(rvs_format_unknown_callees(
@@ -162,14 +159,11 @@ fn rvs_collect_std_unknown_callees(
     callgraph: &crate::artifacts::FnGraph,
     inferred: &BTreeMap<DefPath, crate::capability::CapabilitySet>,
     seed: &CapsMap,
-    std_crates: &[&str],
     local_prefixes: &[DefPathPrefix],
 ) -> BTreeMap<DefPath, BTreeSet<DefPath>> {
     let mut unknown: BTreeMap<DefPath, BTreeSet<DefPath>> = BTreeMap::new();
     for (func, behavior) in callgraph.rvs_iter() {
-        let is_std = std_crates
-            .iter()
-            .any(|prefix| func.rvs_as_str().starts_with(prefix));
+        let is_std = rvs_is_std_like_def_path(func.rvs_as_str());
         let is_local = local_prefixes
             .iter()
             .any(|prefix| func.rvs_starts_with(prefix));
@@ -177,9 +171,7 @@ fn rvs_collect_std_unknown_callees(
             continue;
         }
         for callee in &behavior.calls {
-            let callee_is_emitted_std = std_crates
-                .iter()
-                .any(|prefix| callee.rvs_as_str().starts_with(prefix));
+            let callee_is_emitted_std = rvs_is_std_like_def_path(callee.rvs_as_str());
             if seed.rvs_lookup(callee.rvs_as_str()).is_some()
                 || (callee_is_emitted_std && inferred.contains_key(callee))
             {
@@ -488,13 +480,8 @@ mod tests {
             ),
         ]);
 
-        let unknown = rvs_collect_std_unknown_callees(
-            &callgraph,
-            &inferred,
-            &CapsMap::rvs_new(),
-            &["std::", "core::", "alloc::", "compiler_builtins::"],
-            &[],
-        );
+        let unknown =
+            rvs_collect_std_unknown_callees(&callgraph, &inferred, &CapsMap::rvs_new(), &[]);
         let output = format!("unknown={unknown:?}\n");
         rvs_snapshot_BIS(
             "test_20260704_collect_std_unknown_callees_reports_non_emitted_support_crate",
@@ -523,7 +510,6 @@ mod tests {
             &callgraph,
             &inferred,
             &CapsMap::rvs_new(),
-            &["std::", "core::", "alloc::", "compiler_builtins::"],
             &local_prefixes,
         );
         let output = format!("unknown={unknown:?}\n");
