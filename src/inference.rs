@@ -459,25 +459,29 @@ fn rvs_declared_caps_from_def_path(def_path: &DefPath) -> Option<CapabilitySet> 
     ParsedFunctionName::rvs_parse(def_path.rvs_as_str()).rvs_declared_caps()
 }
 
-pub(crate) fn rvs_infer_graph_M(graph: &mut FnGraph, seed: &capsmap::CapsMap) {
+pub(crate) fn rvs_infer_graph_M(
+    graph: &mut FnGraph,
+    seed: &capsmap::CapsMap,
+) -> BTreeMap<DefPath, CapabilitySet> {
     graph.nodes.retain(|_, node| !node.is_synthetic);
     let inferred = rvs_infer_caps(graph, seed);
     for (_, node) in graph.rvs_iter_mut_M() {
         node.rvs_clear_expected_public_caps_M();
     }
-    for (func, caps) in inferred {
-        if let Some(node) = graph.rvs_get_mut_M(&func) {
-            node.rvs_set_expected_public_caps_M(caps);
+    for (func, caps) in &inferred {
+        if let Some(node) = graph.rvs_get_mut_M(func) {
+            node.rvs_set_expected_public_caps_M(caps.clone());
         } else {
             let node = FnNode {
                 is_synthetic: true,
                 has_body: false,
-                expected_public_caps: Some(caps),
+                expected_public_caps: Some(caps.clone()),
                 ..FnNode::default()
             };
-            graph.rvs_insert_M(func, node);
+            graph.rvs_insert_M(func.clone(), node);
         }
     }
+    inferred
 }
 
 pub(crate) fn rvs_project_expected_local_names_M(
@@ -604,9 +608,18 @@ pub(crate) fn rvs_collect_local_contract_diffs_M(
     seed: &capsmap::CapsMap,
     local_crate_names: &BTreeSet<CrateName>,
 ) -> Vec<FnContractDiff> {
-    rvs_infer_graph_M(graph, seed);
+    rvs_collect_local_contract_diffs_with_inferred_M(graph, seed, local_crate_names).0
+}
+
+pub(crate) fn rvs_collect_local_contract_diffs_with_inferred_M(
+    graph: &mut FnGraph,
+    seed: &capsmap::CapsMap,
+    local_crate_names: &BTreeSet<CrateName>,
+) -> (Vec<FnContractDiff>, BTreeMap<DefPath, CapabilitySet>) {
+    let inferred = rvs_infer_graph_M(graph, seed);
     rvs_project_expected_local_names_M(graph, local_crate_names);
-    rvs_collect_contract_diffs(graph, local_crate_names)
+    let diffs = rvs_collect_contract_diffs(graph, local_crate_names);
+    (diffs, inferred)
 }
 
 pub(crate) fn rvs_summarize_contract_mismatches(
@@ -1440,6 +1453,44 @@ mod tests {
         );
 
         assert!(caps.is_some());
+    }
+
+    #[test]
+    fn test_20260710_infer_graph_returns_installed_caps_map() {
+        let mut run = rvs_make_behavior();
+        run.calls.insert(DefPath::from("std::fs::read_to_string"));
+        let mut graph = FnGraph::rvs_new();
+        graph.rvs_insert_M(DefPath::from("demo::rvs_run"), run);
+        let seed = capsmap::CapsMap::rvs_parse("std::fs::read_to_string=BI").unwrap();
+
+        let inferred = rvs_infer_graph_M(&mut graph, &seed);
+        let mut output = String::new();
+        for (path, caps) in &inferred {
+            let installed = graph
+                .rvs_get(path.rvs_as_str())
+                .and_then(|node| node.expected_public_caps.as_ref())
+                .expect("never: every inferred entry must be installed");
+            output.push_str(&format!(
+                "{path}: returned={} installed={} synthetic={}\n",
+                rvs_caps_to_string(caps),
+                rvs_caps_to_string(installed),
+                graph
+                    .rvs_get(path.rvs_as_str())
+                    .is_some_and(|node| node.is_synthetic),
+            ));
+            assert_eq!(installed, caps);
+        }
+        rvs_snapshot_BIS(
+            "test_20260710_infer_graph_returns_installed_caps_map",
+            &output,
+        );
+
+        assert_eq!(inferred.len(), 2);
+        assert!(
+            graph
+                .rvs_get("std::fs::read_to_string")
+                .is_some_and(|node| node.is_synthetic)
+        );
     }
 
     #[test]

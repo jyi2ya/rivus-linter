@@ -211,6 +211,7 @@ impl FnGraph {
         self.nodes.is_empty()
     }
 
+    #[cfg(test)]
     pub(crate) fn rvs_expected_public_caps_map(&self) -> BTreeMap<DefPath, CapabilitySet> {
         self.nodes
             .iter()

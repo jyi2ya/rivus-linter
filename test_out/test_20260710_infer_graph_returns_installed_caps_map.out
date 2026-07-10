@@ -1,0 +1,2 @@
+demo::rvs_run: returned=BI installed=BI synthetic=false
+std::fs::read_to_string: returned=BI installed=BI synthetic=true

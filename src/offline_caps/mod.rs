@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use crate::artifacts::{FnGraph, FnNode};
@@ -7,7 +7,7 @@ use crate::capsmap::CapsMap;
 use crate::inference::{
     CallContractMismatchKind, CalleeCapsResolver, FnContractMismatchKind,
     rvs_collect_call_contract_mismatch, rvs_collect_enforced_contract_diffs,
-    rvs_collect_local_contract_diffs_M,
+    rvs_collect_local_contract_diffs_with_inferred_M,
 };
 use crate::symbols::{CrateName, DefPath};
 
@@ -136,11 +136,12 @@ pub(crate) fn rvs_check_offline_caps_M(
     local_crate_names: &BTreeSet<CrateName>,
 ) -> OfflineCapsReport {
     let mut report = OfflineCapsReport::default();
-    let diffs = rvs_collect_local_contract_diffs_M(graph, caps, local_crate_names);
+    let (diffs, inferred) =
+        rvs_collect_local_contract_diffs_with_inferred_M(graph, caps, local_crate_names);
     rvs_collect_contract_diagnostics_M(&mut report, graph, &diffs, local_crate_names);
     rvs_collect_suffix_diagnostics_M(&mut report, graph, local_crate_names);
     rvs_collect_static_ref_diagnostics_M(&mut report, graph, local_crate_names);
-    rvs_collect_call_diagnostics_M(&mut report, graph, caps, local_crate_names);
+    rvs_collect_call_diagnostics_M(&mut report, graph, caps, &inferred, local_crate_names);
     report.diagnostics.sort();
     report
 }
@@ -337,11 +338,11 @@ fn rvs_collect_call_diagnostics_M(
     report: &mut OfflineCapsReport,
     graph: &FnGraph,
     caps: &CapsMap,
+    inferred: &BTreeMap<DefPath, CapabilitySet>,
     local_crate_names: &BTreeSet<CrateName>,
 ) {
     let impl_index = crate::inference::rvs_build_impl_index(graph);
-    let inferred = graph.rvs_expected_public_caps_map();
-    let resolver = CalleeCapsResolver::rvs_new(graph, caps, &inferred, &impl_index);
+    let resolver = CalleeCapsResolver::rvs_new(graph, caps, inferred, &impl_index);
     for (caller, node) in graph.rvs_iter() {
         if !rvs_is_local_checked_fn(caller, node, local_crate_names) || !node.has_body {
             continue;
