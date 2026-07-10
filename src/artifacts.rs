@@ -108,8 +108,6 @@ impl FnNode {
     }
 }
 
-pub type FnBehavior = FnNode;
-
 fn rvs_is_false(value: &bool) -> bool {
     !*value
 }

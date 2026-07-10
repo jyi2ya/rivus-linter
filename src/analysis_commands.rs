@@ -2,9 +2,8 @@ use std::path::Path;
 
 use crate::artifacts::FnGraph;
 use crate::inference::{
-    FnContractDiff, rvs_build_graph_impl_index, rvs_caps_to_string,
-    rvs_collect_local_contract_diffs_M, rvs_contract_diff_is_enforced,
-    rvs_resolve_graph_impl_majority_caps_M,
+    FnContractDiff, rvs_build_impl_index, rvs_caps_to_string, rvs_collect_local_contract_diffs_M,
+    rvs_contract_diff_is_enforced, rvs_resolve_impl_majority_caps,
 };
 use crate::rename;
 use crate::symbols::{CrateName, DefPath};
@@ -99,7 +98,7 @@ pub(crate) fn rvs_run_why_BIMPS(function: &str, path: &Path) -> Result<(), Strin
     let (mut callgraph, seed) = rvs_load_callgraph_and_caps_for_function_BIMS(path, function)?;
     let diffs = rvs_collect_local_contract_diffs_M(&mut callgraph, &seed, &local_crate_names);
     let inferred = callgraph.rvs_expected_public_caps_map();
-    let impl_index = rvs_build_graph_impl_index(&callgraph);
+    let impl_index = rvs_build_impl_index(&callgraph);
 
     let Some(behavior) = callgraph.rvs_get(function) else {
         let candidates: Vec<&DefPath> = callgraph
@@ -181,12 +180,7 @@ pub(crate) fn rvs_run_why_BIMPS(function: &str, path: &Path) -> Result<(), Strin
                 .or_else(|| seed.rvs_lookup(callee.rvs_as_str()).cloned())
                 .or_else(|| {
                     if !callee.rvs_as_str().contains('@') {
-                        rvs_resolve_graph_impl_majority_caps_M(
-                            callee,
-                            &impl_index,
-                            &inferred,
-                            &callgraph,
-                        )
+                        rvs_resolve_impl_majority_caps(callee, &impl_index, &inferred, &callgraph)
                     } else {
                         None
                     }

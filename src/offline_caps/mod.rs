@@ -7,7 +7,7 @@ use crate::capsmap::CapsMap;
 use crate::inference::{
     CallContractMismatchKind, FnContractMismatchKind, rvs_collect_call_contract_mismatch,
     rvs_collect_enforced_contract_diffs, rvs_collect_local_contract_diffs_M,
-    rvs_resolve_graph_impl_majority_caps_M,
+    rvs_resolve_impl_majority_caps,
 };
 use crate::symbols::{CrateName, DefPath};
 
@@ -346,7 +346,7 @@ fn rvs_collect_call_diagnostics_M(
     caps: &CapsMap,
     local_crate_names: &BTreeSet<CrateName>,
 ) {
-    let impl_index = crate::inference::rvs_build_graph_impl_index(graph);
+    let impl_index = crate::inference::rvs_build_impl_index(graph);
     let inferred = graph.rvs_expected_public_caps_map();
     for (caller, node) in graph.rvs_iter() {
         if !rvs_is_local_checked_fn(caller, node, local_crate_names) || !node.has_body {
@@ -430,7 +430,7 @@ fn rvs_lookup_callee_caps(
             if callee.rvs_as_str().contains('@') {
                 None
             } else {
-                rvs_resolve_graph_impl_majority_caps_M(callee, impl_index, inferred, graph)
+                rvs_resolve_impl_majority_caps(callee, impl_index, inferred, graph)
             }
         })
 }
