@@ -176,6 +176,145 @@ pub(crate) fn rvs_build_impl_index(graph: &FnGraph) -> HashMap<String, Vec<DefPa
     idx
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CalleeCapsSource {
+    PortMethod,
+    ExactCapsMap,
+    BodylessImplWithSignature,
+    BodylessDeclaredCaps,
+    Inferred,
+    DeclaredCaps,
+    ImplMajority,
+}
+
+const PROPAGATION_TARGET_PRECEDENCE: &[CalleeCapsSource] = &[
+    CalleeCapsSource::PortMethod,
+    CalleeCapsSource::ExactCapsMap,
+    CalleeCapsSource::BodylessImplWithSignature,
+    CalleeCapsSource::BodylessDeclaredCaps,
+    CalleeCapsSource::Inferred,
+    CalleeCapsSource::DeclaredCaps,
+    CalleeCapsSource::ImplMajority,
+];
+
+const CONTRACT_CHECK_PRECEDENCE: &[CalleeCapsSource] = &[
+    CalleeCapsSource::PortMethod,
+    CalleeCapsSource::ExactCapsMap,
+    CalleeCapsSource::DeclaredCaps,
+    CalleeCapsSource::Inferred,
+    CalleeCapsSource::ImplMajority,
+];
+
+const EXPLANATION_VIEW_PRECEDENCE: &[CalleeCapsSource] = &[
+    CalleeCapsSource::Inferred,
+    CalleeCapsSource::ExactCapsMap,
+    CalleeCapsSource::ImplMajority,
+];
+
+#[derive(Debug)]
+pub(crate) struct CalleeCapsResolver<'a> {
+    graph: &'a FnGraph,
+    caps: &'a capsmap::CapsMap,
+    inferred: &'a BTreeMap<DefPath, CapabilitySet>,
+    impl_index: &'a HashMap<String, Vec<DefPath>>,
+}
+
+impl<'a> CalleeCapsResolver<'a> {
+    pub(crate) fn rvs_new(
+        graph: &'a FnGraph,
+        caps: &'a capsmap::CapsMap,
+        inferred: &'a BTreeMap<DefPath, CapabilitySet>,
+        impl_index: &'a HashMap<String, Vec<DefPath>>,
+    ) -> Self {
+        Self {
+            graph,
+            caps,
+            inferred,
+            impl_index,
+        }
+    }
+
+    pub(crate) fn rvs_for_propagation_target(&self, callee: &DefPath) -> Option<CapabilitySet> {
+        self.rvs_resolve(callee, PROPAGATION_TARGET_PRECEDENCE)
+    }
+
+    pub(crate) fn rvs_for_contract_check(&self, callee: &DefPath) -> Option<CapabilitySet> {
+        self.rvs_resolve(callee, CONTRACT_CHECK_PRECEDENCE)
+    }
+
+    pub(crate) fn rvs_for_explanation_view(&self, callee: &DefPath) -> Option<CapabilitySet> {
+        self.rvs_resolve(callee, EXPLANATION_VIEW_PRECEDENCE)
+    }
+
+    fn rvs_resolve(
+        &self,
+        callee: &DefPath,
+        precedence: &[CalleeCapsSource],
+    ) -> Option<CapabilitySet> {
+        precedence
+            .iter()
+            .find_map(|source| self.rvs_resolve_source(callee, *source))
+    }
+
+    fn rvs_resolve_source(
+        &self,
+        callee: &DefPath,
+        source: CalleeCapsSource,
+    ) -> Option<CapabilitySet> {
+        match source {
+            CalleeCapsSource::PortMethod => self
+                .graph
+                .rvs_get(callee.rvs_as_str())
+                .filter(|node| node.facts.is_port_method)
+                .map(|_| CapabilityPolicy::rvs_port_method_caps()),
+            CalleeCapsSource::ExactCapsMap => self.caps.rvs_lookup(callee.rvs_as_str()).cloned(),
+            CalleeCapsSource::BodylessImplWithSignature => {
+                self.rvs_bodyless_impl_caps_with_signature(callee)
+            }
+            CalleeCapsSource::BodylessDeclaredCaps => self
+                .graph
+                .rvs_get(callee.rvs_as_str())
+                .filter(|node| !node.has_body)
+                .and_then(|_| rvs_declared_caps_from_def_path(callee)),
+            CalleeCapsSource::Inferred => self.inferred.get(callee).cloned(),
+            CalleeCapsSource::DeclaredCaps => rvs_declared_caps_from_def_path(callee),
+            CalleeCapsSource::ImplMajority => {
+                if callee.rvs_as_str().contains('@') {
+                    None
+                } else {
+                    rvs_resolve_impl_majority_caps(
+                        callee,
+                        self.impl_index,
+                        self.inferred,
+                        self.graph,
+                    )
+                }
+            }
+        }
+    }
+
+    fn rvs_bodyless_impl_caps_with_signature(&self, callee: &DefPath) -> Option<CapabilitySet> {
+        if callee.rvs_as_str().contains('@')
+            || !self
+                .graph
+                .rvs_get(callee.rvs_as_str())
+                .is_some_and(|node| !node.has_body)
+        {
+            return None;
+        }
+        let mut caps =
+            rvs_resolve_impl_majority_caps(callee, self.impl_index, self.inferred, self.graph)?;
+        if let Some(signature_caps) = self.inferred.get(callee) {
+            for cap in signature_caps.rvs_iter() {
+                if !CapabilityPolicy::rvs_is_propagated_cap(cap) {
+                    caps.rvs_insert_M(cap);
+                }
+            }
+        }
+        Some(caps)
+    }
+}
+
 /// Infer capabilities from behavioral flags alone (no propagation).
 pub(crate) fn rvs_infer_signature_caps(behavior: &FnNode) -> CapabilitySet {
     CapabilityPolicy::rvs_signature_caps(behavior.facts)
@@ -277,9 +416,9 @@ pub(crate) fn rvs_infer_caps(
                 .get(func)
                 .cloned()
                 .unwrap_or_else(CapabilitySet::rvs_new);
+            let resolver = CalleeCapsResolver::rvs_new(graph, seed, &inferred, &impl_index);
             for callee in &behavior.calls {
-                let callee_caps =
-                    rvs_resolve_callee_caps(callee, graph, seed, &inferred, &impl_index);
+                let callee_caps = resolver.rvs_for_propagation_target(callee);
                 if let Some(cc) = callee_caps {
                     for cap in cc.rvs_iter() {
                         if !CapabilityPolicy::rvs_is_propagated_cap(cap) {
@@ -308,63 +447,13 @@ pub(crate) fn rvs_infer_caps(
         if seed.rvs_lookup(func.rvs_as_str()).is_some() {
             continue;
         }
-        if let Some(caps) = rvs_resolve_callee_caps(&func, graph, seed, &inferred, &impl_index) {
+        if let Some(caps) = CalleeCapsResolver::rvs_new(graph, seed, &inferred, &impl_index)
+            .rvs_for_propagation_target(&func)
+        {
             inferred.insert(func, caps);
         }
     }
     inferred
-}
-
-fn rvs_resolve_callee_caps(
-    callee: &DefPath,
-    graph: &FnGraph,
-    seed: &capsmap::CapsMap,
-    inferred: &BTreeMap<DefPath, CapabilitySet>,
-    impl_index: &HashMap<String, Vec<DefPath>>,
-) -> Option<CapabilitySet> {
-    if graph
-        .rvs_get(callee.rvs_as_str())
-        .is_some_and(|node| node.facts.is_port_method)
-    {
-        return Some(CapabilityPolicy::rvs_port_method_caps());
-    }
-    if let Some(caps) = seed.rvs_lookup(callee.rvs_as_str()) {
-        return Some(caps.clone());
-    }
-    if !callee.rvs_as_str().contains('@') {
-        let is_bodyless_decl = graph
-            .rvs_get(callee.rvs_as_str())
-            .is_some_and(|node| !node.has_body);
-        if is_bodyless_decl
-            && let Some(mut caps) =
-                rvs_resolve_impl_majority_caps(callee, impl_index, inferred, graph)
-        {
-            if let Some(signature_caps) = inferred.get(callee) {
-                for cap in signature_caps.rvs_iter() {
-                    if !CapabilityPolicy::rvs_is_propagated_cap(cap) {
-                        caps.rvs_insert_M(cap);
-                    }
-                }
-            }
-            return Some(caps);
-        }
-    }
-    let declared_caps = rvs_declared_caps_from_def_path(callee);
-    if graph
-        .rvs_get(callee.rvs_as_str())
-        .is_some_and(|node| !node.has_body)
-        && declared_caps.is_some()
-    {
-        return declared_caps;
-    }
-
-    inferred.get(callee).cloned().or(declared_caps).or_else(|| {
-        if !callee.rvs_as_str().contains('@') {
-            rvs_resolve_impl_majority_caps(callee, impl_index, inferred, graph)
-        } else {
-            None
-        }
-    })
 }
 
 fn rvs_declared_caps_from_def_path(def_path: &DefPath) -> Option<CapabilitySet> {
@@ -677,6 +766,7 @@ pub(crate) fn rvs_collect_direct_external_deps(
         .collect();
     let mut known: BTreeMap<DefPath, CapabilitySet> = BTreeMap::new();
     let mut unknown: BTreeMap<DefPath, BTreeSet<DefPath>> = BTreeMap::new();
+    let resolver = CalleeCapsResolver::rvs_new(graph, seed, inferred, impl_index);
     for (func, behavior) in graph.rvs_iter() {
         if !local_prefixes
             .iter()
@@ -694,7 +784,7 @@ pub(crate) fn rvs_collect_direct_external_deps(
             if seed.rvs_lookup(callee.rvs_as_str()).is_some() {
                 continue;
             }
-            if let Some(caps) = rvs_resolve_callee_caps(callee, graph, seed, inferred, impl_index) {
+            if let Some(caps) = resolver.rvs_for_propagation_target(callee) {
                 known.entry(callee.clone()).or_insert(caps);
             } else {
                 unknown
@@ -1099,14 +1189,10 @@ mod tests {
             ),
         ]);
 
-        let caps = rvs_resolve_callee_caps(
-            &DefPath::from("demo::Fetcher::rvs_fetch"),
-            &graph,
-            &capsmap::CapsMap::rvs_new(),
-            &inferred,
-            &impl_index,
-        )
-        .expect("bodyless declaration should resolve through impl aggregation");
+        let seed = capsmap::CapsMap::rvs_new();
+        let caps = CalleeCapsResolver::rvs_new(&graph, &seed, &inferred, &impl_index)
+            .rvs_for_propagation_target(&DefPath::from("demo::Fetcher::rvs_fetch"))
+            .expect("bodyless declaration should resolve through impl aggregation");
         let output = format!("caps={}\n", rvs_caps_to_string(&caps));
         rvs_snapshot_BIS(
             "test_20260704_resolve_callee_caps_prefers_impl_for_bodyless_decl",
@@ -1133,14 +1219,10 @@ mod tests {
             CapabilitySet::rvs_new(),
         )]);
 
-        let caps = rvs_resolve_callee_caps(
-            &DefPath::from("demo::Fetcher::rvs_fetch_BI"),
-            &graph,
-            &capsmap::CapsMap::rvs_new(),
-            &inferred,
-            &impl_index,
-        )
-        .expect("bodyless declaration should use its declared suffix when no impls exist");
+        let seed = capsmap::CapsMap::rvs_new();
+        let caps = CalleeCapsResolver::rvs_new(&graph, &seed, &inferred, &impl_index)
+            .rvs_for_propagation_target(&DefPath::from("demo::Fetcher::rvs_fetch_BI"))
+            .expect("bodyless declaration should use its declared suffix when no impls exist");
         let output = format!("caps={}\n", rvs_caps_to_string(&caps));
         rvs_snapshot_BIS(
             "test_20260704_resolve_callee_caps_uses_declared_suffix_for_bodyless_decl_without_impl",
@@ -1149,6 +1231,199 @@ mod tests {
 
         assert!(caps.rvs_contains(Capability::B));
         assert!(caps.rvs_contains(Capability::I));
+    }
+
+    #[test]
+    fn test_20260710_callee_caps_resolver_policy_table() {
+        #[derive(Debug)]
+        struct Case<'a> {
+            name: &'a str,
+            callee: &'a str,
+            propagation: Option<&'a str>,
+            contract: Option<&'a str>,
+            explanation: Option<&'a str>,
+        }
+
+        let mut graph = FnGraph::rvs_new();
+        let mut port = rvs_make_behavior();
+        port.has_body = false;
+        port.facts.is_port_method = true;
+        graph.rvs_insert_M(DefPath::from("demo::ApiClient::rvs_fetch_P"), port);
+
+        graph.rvs_insert_M(DefPath::from("demo::rvs_exact_S"), rvs_make_behavior());
+        graph.rvs_insert_M(DefPath::from("demo::rvs_mixed_AEIS"), rvs_make_behavior());
+
+        let mut bodyless = rvs_make_behavior();
+        bodyless.has_body = false;
+        graph.rvs_insert_M(DefPath::from("demo::Fetcher::rvs_fetch_A"), bodyless);
+        graph.rvs_insert_M(
+            DefPath::from("demo::DiskFetcher::rvs_fetch_A@demo::Fetcher"),
+            rvs_make_behavior(),
+        );
+
+        let mut synthetic = rvs_make_behavior();
+        synthetic.is_synthetic = true;
+        graph.rvs_insert_M(DefPath::from("demo::rvs_synthetic"), synthetic);
+        graph.rvs_insert_M(
+            DefPath::from("demo::Disk::rvs_read_BI@demo::Reader"),
+            rvs_make_behavior(),
+        );
+        graph.rvs_insert_M(
+            DefPath::from("demo::Disk::read@demo::Reader"),
+            rvs_make_behavior(),
+        );
+
+        let caps =
+            capsmap::CapsMap::rvs_parse("demo::ApiClient::rvs_fetch_P=BI\ndemo::rvs_exact_S=BI\n")
+                .unwrap();
+        let inferred = BTreeMap::from([
+            (
+                DefPath::from("demo::ApiClient::rvs_fetch_P"),
+                CapabilitySet::rvs_from_validated("S"),
+            ),
+            (
+                DefPath::from("demo::rvs_exact_S"),
+                CapabilitySet::rvs_from_validated("T"),
+            ),
+            (
+                DefPath::from("demo::rvs_mixed_AEIS"),
+                CapabilitySet::rvs_from_validated("T"),
+            ),
+            (
+                DefPath::from("demo::Fetcher::rvs_fetch_A"),
+                CapabilitySet::rvs_from_validated("AMU"),
+            ),
+            (
+                DefPath::from("demo::DiskFetcher::rvs_fetch_A@demo::Fetcher"),
+                CapabilitySet::rvs_from_validated("BI"),
+            ),
+            (
+                DefPath::from("demo::rvs_synthetic"),
+                CapabilitySet::rvs_from_validated("S"),
+            ),
+            (
+                DefPath::from("demo::Disk::rvs_read_BI@demo::Reader"),
+                CapabilitySet::rvs_from_validated("S"),
+            ),
+            (
+                DefPath::from("demo::Disk::read@demo::Reader"),
+                CapabilitySet::rvs_from_validated("BI"),
+            ),
+        ]);
+        let impl_index = rvs_build_impl_index(&graph);
+        let resolver = CalleeCapsResolver::rvs_new(&graph, &caps, &inferred, &impl_index);
+        let cases = [
+            Case {
+                name: "port_method",
+                callee: "demo::ApiClient::rvs_fetch_P",
+                propagation: Some("P"),
+                contract: Some("P"),
+                explanation: Some("S"),
+            },
+            Case {
+                name: "exact_capsmap_override",
+                callee: "demo::rvs_exact_S",
+                propagation: Some("BI"),
+                contract: Some("BI"),
+                explanation: Some("T"),
+            },
+            Case {
+                name: "mixed_unknown_declared_suffix",
+                callee: "demo::rvs_mixed_AEIS",
+                propagation: Some("T"),
+                contract: Some("AIS"),
+                explanation: Some("T"),
+            },
+            Case {
+                name: "unknown_only_suffix",
+                callee: "dep::rvs_external_E",
+                propagation: None,
+                contract: None,
+                explanation: None,
+            },
+            Case {
+                name: "bodyless_impl_merges_signature",
+                callee: "demo::Fetcher::rvs_fetch_A",
+                propagation: Some("ABIMU"),
+                contract: Some("A"),
+                explanation: Some("AMU"),
+            },
+            Case {
+                name: "synthetic_node",
+                callee: "demo::rvs_synthetic",
+                propagation: Some("S"),
+                contract: Some(""),
+                explanation: Some("S"),
+            },
+            Case {
+                name: "external_mixed_suffix",
+                callee: "dep::rvs_external_BX",
+                propagation: Some("B"),
+                contract: Some("B"),
+                explanation: None,
+            },
+            Case {
+                name: "impl_trait_path",
+                callee: "demo::Disk::rvs_read_BI@demo::Reader",
+                propagation: Some("S"),
+                contract: Some("BI"),
+                explanation: Some("S"),
+            },
+            Case {
+                name: "absent_impl_trait_path",
+                callee: "dep::Disk::rvs_read_BI@dep::Reader",
+                propagation: Some("BI"),
+                contract: Some("BI"),
+                explanation: None,
+            },
+            Case {
+                name: "trait_impl_majority_fallback",
+                callee: "demo::Reader::read",
+                propagation: Some("BI"),
+                contract: Some("BI"),
+                explanation: Some("BI"),
+            },
+        ];
+
+        let mut output = String::new();
+        for case in cases {
+            let callee = DefPath::from(case.callee);
+            let propagation = resolver.rvs_for_propagation_target(&callee);
+            let contract = resolver.rvs_for_contract_check(&callee);
+            let explanation = resolver.rvs_for_explanation_view(&callee);
+            let rendered = |value: &Option<CapabilitySet>| {
+                value
+                    .as_ref()
+                    .map(rvs_caps_to_string)
+                    .unwrap_or_else(|| "unknown".to_string())
+            };
+            output.push_str(&format!(
+                "{}: propagation={} contract={} explanation={}\n",
+                case.name,
+                rendered(&propagation),
+                rendered(&contract),
+                rendered(&explanation),
+            ));
+            assert_eq!(
+                propagation.as_ref().map(rvs_caps_to_string).as_deref(),
+                case.propagation,
+                "{} propagation policy",
+                case.name
+            );
+            assert_eq!(
+                contract.as_ref().map(rvs_caps_to_string).as_deref(),
+                case.contract,
+                "{} contract policy",
+                case.name
+            );
+            assert_eq!(
+                explanation.as_ref().map(rvs_caps_to_string).as_deref(),
+                case.explanation,
+                "{} explanation policy",
+                case.name
+            );
+        }
+        rvs_snapshot_BIS("test_20260710_callee_caps_resolver_policy_table", &output);
     }
 
     #[test]

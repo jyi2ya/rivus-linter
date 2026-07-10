@@ -1,13 +1,13 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fmt;
 
 use crate::artifacts::{FnGraph, FnNode};
-use crate::capability::{Capability, CapabilityPolicy, CapabilitySet, ParsedFunctionName};
+use crate::capability::{Capability, CapabilitySet, ParsedFunctionName};
 use crate::capsmap::CapsMap;
 use crate::inference::{
-    CallContractMismatchKind, FnContractMismatchKind, rvs_collect_call_contract_mismatch,
-    rvs_collect_enforced_contract_diffs, rvs_collect_local_contract_diffs_M,
-    rvs_resolve_impl_majority_caps,
+    CallContractMismatchKind, CalleeCapsResolver, FnContractMismatchKind,
+    rvs_collect_call_contract_mismatch, rvs_collect_enforced_contract_diffs,
+    rvs_collect_local_contract_diffs_M,
 };
 use crate::symbols::{CrateName, DefPath};
 
@@ -341,6 +341,7 @@ fn rvs_collect_call_diagnostics_M(
 ) {
     let impl_index = crate::inference::rvs_build_impl_index(graph);
     let inferred = graph.rvs_expected_public_caps_map();
+    let resolver = CalleeCapsResolver::rvs_new(graph, caps, &inferred, &impl_index);
     for (caller, node) in graph.rvs_iter() {
         if !rvs_is_local_checked_fn(caller, node, local_crate_names) || !node.has_body {
             continue;
@@ -353,7 +354,7 @@ fn rvs_collect_call_diagnostics_M(
             if rvs_is_test_harness_callee(callee) {
                 continue;
             }
-            let callee_caps = rvs_lookup_callee_caps(callee, graph, caps, &inferred, &impl_index);
+            let callee_caps = resolver.rvs_for_contract_check(callee);
             let Some(mismatch) = rvs_collect_call_contract_mismatch(
                 callee.rvs_as_str(),
                 None,
@@ -401,31 +402,6 @@ fn rvs_collect_call_diagnostics_M(
             }
         }
     }
-}
-
-fn rvs_lookup_callee_caps(
-    callee: &DefPath,
-    graph: &FnGraph,
-    caps: &CapsMap,
-    inferred: &BTreeMap<DefPath, CapabilitySet>,
-    impl_index: &std::collections::HashMap<String, Vec<DefPath>>,
-) -> Option<CapabilitySet> {
-    if let Some(node) = graph.rvs_get(callee.rvs_as_str())
-        && node.facts.is_port_method
-    {
-        return Some(CapabilityPolicy::rvs_port_method_caps());
-    }
-    caps.rvs_lookup(callee.rvs_as_str())
-        .cloned()
-        .or_else(|| rvs_declared_caps(callee))
-        .or_else(|| inferred.get(callee).cloned())
-        .or_else(|| {
-            if callee.rvs_as_str().contains('@') {
-                None
-            } else {
-                rvs_resolve_impl_majority_caps(callee, impl_index, inferred, graph)
-            }
-        })
 }
 
 fn rvs_is_local_checked_fn(
