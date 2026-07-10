@@ -34,7 +34,7 @@
 构建图时，只记录**事实**，不做规则裁决。
 
 - lint pass 负责从 HIR 收集节点和边
-- callgraph artifact 负责把这些节点持久化
+- callgraph artifact 负责把这些节点持久化；artifact 使用显式 schema version，读取时同时兼容当前版本之前没有 envelope 的旧图
 - 源码写回只使用 artifact 记录的路径基准；旧 artifact 没有基准时允许兼容解析，但多个候选都存在则拒绝猜测
 
 ## 推断过程

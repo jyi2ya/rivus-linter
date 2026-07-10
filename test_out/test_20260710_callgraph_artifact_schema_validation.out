@@ -1,0 +1,3 @@
+unknown: Err("unsupported callgraph schema version 2; expected 1")
+missing: Err("invalid callgraph artifact: schema_version must be an unsigned integer")
+string: Err("invalid callgraph artifact: schema_version must be an unsigned integer")

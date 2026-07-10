@@ -6,8 +6,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::artifacts::FnGraph;
-#[cfg(test)]
-use crate::callgraph_cache::rvs_reject_stale_callgraph_json;
 use crate::callgraph_cache::{
     rvs_is_std_like_def_path, rvs_merge_callgraph_dir_BIS, rvs_merge_std_like_callgraph_M,
     rvs_merge_std_like_callgraph_with_local_prefixes_M,
@@ -2450,9 +2448,7 @@ name = "throughput-bench"
 
     #[test]
     fn test_20260704_reject_stale_callgraph_without_has_body() {
-        let path = Path::new("target/rivus-callgraph/callgraph.json");
-        let result = rvs_reject_stale_callgraph_json(
-            path,
+        let result = crate::artifacts::rvs_parse_callgraph_json_S(
             r#"{
   "demo::rvs_trait_method_P": {
     "calls": [],

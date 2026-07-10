@@ -51,7 +51,6 @@ pub(crate) fn rvs_merge_callgraph_dir_BIS(cg_dir: &Path) -> Result<FnGraph, Stri
     for path in &json_paths {
         let json_str = std::fs::read_to_string(path)
             .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-        rvs_reject_stale_callgraph_json(path, &json_str)?;
         let partial = artifacts::rvs_parse_callgraph_json_S(&json_str)
             .map_err(|e| format!("{}: {e}", path.display()))?;
         merged.rvs_merge_from_M(partial);
@@ -69,21 +68,4 @@ pub(crate) fn rvs_merge_callgraph_dir_BIS(cg_dir: &Path) -> Result<FnGraph, Stri
         ));
     }
     Ok(merged)
-}
-
-pub(crate) fn rvs_reject_stale_callgraph_json(path: &Path, json: &str) -> Result<(), String> {
-    let entries: std::collections::BTreeMap<
-        String,
-        std::collections::BTreeMap<String, serde_json::Value>,
-    > = serde_json::from_str(json)
-        .map_err(|e| format!("invalid callgraph JSON in {}: {e}", path.display()))?;
-    for (def_path, node) in &entries {
-        if !node.contains_key("has_body") {
-            return Err(format!(
-                "stale callgraph JSON lacks has_body for {def_path}: {}; delete the stale cache or run cargo rivus infer-std for std cache",
-                path.display()
-            ));
-        }
-    }
-    Ok(())
 }

@@ -1,1 +1,1 @@
-Err("stale callgraph JSON lacks has_body for demo::rvs_trait_method_P: target/rivus-callgraph/callgraph.json; delete the stale cache or run cargo rivus infer-std for std cache")
+Err("stale callgraph JSON lacks has_body for demo::rvs_trait_method_P; delete the stale cache or run cargo rivus infer-std for std cache")

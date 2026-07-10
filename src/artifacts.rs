@@ -7,6 +7,20 @@ use serde::{Deserialize, Serialize};
 use crate::capability::{CapabilityFacts, CapabilitySet};
 use crate::symbols::{DefPath, FnName};
 
+pub(crate) const CALLGRAPH_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Debug, Serialize)]
+struct CallgraphArtifactRef<'a> {
+    schema_version: u32,
+    nodes: &'a FnGraph,
+}
+
+#[derive(Debug, Deserialize)]
+struct CallgraphArtifact {
+    schema_version: u32,
+    nodes: FnGraph,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct FnSource {
     pub file: PathBuf,
@@ -209,10 +223,50 @@ impl FnGraph {
     }
 }
 
-/// Parse serialized callgraph JSON into shared callgraph records.
+pub(crate) fn rvs_serialize_callgraph_json_S(graph: &FnGraph) -> Result<String, String> {
+    let artifact = CallgraphArtifactRef {
+        schema_version: CALLGRAPH_SCHEMA_VERSION,
+        nodes: graph,
+    };
+    serde_json::to_string(&artifact).map_err(|e| format!("cannot serialize callgraph JSON: {e}"))
+}
+
+/// Parse versioned or legacy callgraph JSON into shared callgraph records.
 pub fn rvs_parse_callgraph_json_S(json: &str) -> Result<FnGraph, String> {
-    let graph: FnGraph =
+    let value: serde_json::Value =
         serde_json::from_str(json).map_err(|e| format!("invalid callgraph JSON: {e}"))?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| "invalid callgraph JSON: root must be an object".to_string())?;
+    let graph = if object.contains_key("schema_version") || object.contains_key("nodes") {
+        let schema_version = object
+            .get("schema_version")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| {
+                "invalid callgraph artifact: schema_version must be an unsigned integer".to_string()
+            })?;
+        if schema_version != u64::from(CALLGRAPH_SCHEMA_VERSION) {
+            return Err(format!(
+                "unsupported callgraph schema version {schema_version}; expected {CALLGRAPH_SCHEMA_VERSION}"
+            ));
+        }
+        let artifact: CallgraphArtifact = serde_json::from_value(value)
+            .map_err(|e| format!("invalid callgraph artifact: {e}"))?;
+        debug_assert_eq!(artifact.schema_version, CALLGRAPH_SCHEMA_VERSION);
+        artifact.nodes
+    } else {
+        for (def_path, node) in object {
+            if node
+                .as_object()
+                .is_some_and(|fields| !fields.contains_key("has_body"))
+            {
+                return Err(format!(
+                    "stale callgraph JSON lacks has_body for {def_path}; delete the stale cache or run cargo rivus infer-std for std cache"
+                ));
+            }
+        }
+        serde_json::from_value(value).map_err(|e| format!("invalid callgraph JSON: {e}"))?
+    };
     for (path, node) in graph.rvs_iter() {
         if path.rvs_as_str().is_empty() {
             return Err("invalid callgraph JSON: function path is empty".into());
@@ -311,6 +365,49 @@ mod tests {
             .expect("should find rvs_write_BI");
         assert!(write_behavior.calls.contains("std::fs::write"));
         assert_eq!(result.rvs_values().count(), 2);
+    }
+
+    #[test]
+    fn test_20260710_callgraph_artifact_version_roundtrip() {
+        let mut graph = FnGraph::rvs_new();
+        graph.rvs_insert_M(DefPath::from("demo::rvs_run"), FnNode::default());
+
+        let json = rvs_serialize_callgraph_json_S(&graph).unwrap();
+        let parsed = rvs_parse_callgraph_json_S(&json).unwrap();
+        let output = format!(
+            "schema_version={CALLGRAPH_SCHEMA_VERSION}\ncontains_version={}\nnodes={}\n",
+            json.contains(r#""schema_version":1"#),
+            parsed.rvs_len(),
+        );
+        rvs_snapshot_BIS(
+            "test_20260710_callgraph_artifact_version_roundtrip",
+            &output,
+        );
+
+        assert!(json.contains(r#""nodes""#));
+        assert!(parsed.rvs_get("demo::rvs_run").is_some());
+    }
+
+    #[test]
+    fn test_20260710_callgraph_artifact_schema_validation() {
+        let cases = [
+            ("unknown", r#"{"schema_version":2,"nodes":{}}"#),
+            ("missing", r#"{"nodes":{}}"#),
+            ("string", r#"{"schema_version":"1","nodes":{}}"#),
+        ];
+        let mut output = String::new();
+        for (name, json) in cases {
+            let result = rvs_parse_callgraph_json_S(json);
+            output.push_str(&format!("{name}: {result:?}\n"));
+            assert!(result.is_err(), "{name}");
+        }
+        rvs_snapshot_BIS(
+            "test_20260710_callgraph_artifact_schema_validation",
+            &output,
+        );
+
+        assert!(output.contains("unsupported callgraph schema version 2"));
+        assert!(output.contains("schema_version must be an unsigned integer"));
     }
 
     #[test]

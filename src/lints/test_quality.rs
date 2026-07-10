@@ -127,39 +127,26 @@ fn rvs_write_callgraph_BIS<'tcx>(
 ) {
     if collect_callgraph {
         if !callgraph.rvs_is_empty() {
-            match serde_json::to_string(callgraph) {
-                Ok(json) => {
-                    let cg_dir = std::env::var_os("RIVUS_CALLGRAPH_DIR")
-                        .map(PathBuf::from)
-                        .unwrap_or_else(|| PathBuf::from("target/rivus-callgraph"));
-                    let crate_name = CrateName::rvs_from_manifest_name(
-                        cx.tcx.crate_name(rustc_span::def_id::LOCAL_CRATE).as_str(),
-                    );
-                    if let Err(e) = rvs_write_json_artifact_BIS(&cg_dir, &crate_name, &json) {
-                        eprintln!("warning: cannot write rivus callgraph artifact: {e}");
-                    }
-                }
-                Err(e) => eprintln!("warning: cannot serialize rivus callgraph artifact: {e}"),
+            let cg_dir = std::env::var_os("RIVUS_CALLGRAPH_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("target/rivus-callgraph"));
+            let crate_name = CrateName::rvs_from_manifest_name(
+                cx.tcx.crate_name(rustc_span::def_id::LOCAL_CRATE).as_str(),
+            );
+            if let Err(e) = rvs_write_callgraph_artifact_BIS(&cg_dir, &crate_name, callgraph) {
+                eprintln!("warning: cannot write rivus callgraph artifact: {e}");
             }
         }
     }
 }
 
-fn rvs_write_json_artifact_BIS(
+fn rvs_write_callgraph_artifact_BIS(
     artifact_dir: &Path,
     crate_name: &CrateName,
-    json: &str,
+    callgraph: &FnGraph,
 ) -> Result<PathBuf, String> {
-    if json.is_empty() {
-        return Err("artifact json must not be empty".into());
-    }
-    let value = serde_json::from_str::<serde_json::Value>(json)
-        .map_err(|e| format!("artifact json must be valid JSON: {e}"))?;
-    if !matches!(
-        value,
-        serde_json::Value::Array(_) | serde_json::Value::Object(_)
-    ) {
-        return Err("artifact json must be a JSON array or object".into());
+    if callgraph.rvs_is_empty() {
+        return Err("callgraph artifact must contain at least one node".into());
     }
     let crate_name_str = crate_name.rvs_as_str();
     if crate_name_str.is_empty()
@@ -171,6 +158,7 @@ fn rvs_write_json_artifact_BIS(
             "artifact crate name must be a non-empty path segment: {crate_name}"
         ));
     }
+    let json = crate::artifacts::rvs_serialize_callgraph_json_S(callgraph)?;
     std::fs::create_dir_all(artifact_dir)
         .map_err(|e| format!("cannot create {}: {e}", artifact_dir.display()))?;
     let final_path = artifact_dir.join(format!("{crate_name}-{}.json", std::process::id()));
@@ -193,7 +181,15 @@ fn rvs_write_json_artifact_BIS(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::artifacts::FnNode;
+    use crate::symbols::DefPath;
     use crate::test_support::rvs_snapshot_BIS;
+
+    fn rvs_test_callgraph() -> FnGraph {
+        let mut graph = FnGraph::rvs_new();
+        graph.rvs_insert_M(DefPath::from("demo::rvs_run"), FnNode::default());
+        graph
+    }
 
     #[test]
     fn test_20260703_has_test_output_false_when_dir_missing() {
@@ -299,7 +295,8 @@ mod tests {
             "rivus-artifact-write-{}-{unique}",
             std::process::id()
         ));
-        let path = rvs_write_json_artifact_BIS(&dir, &CrateName::from("demo"), "{}")
+        let graph = rvs_test_callgraph();
+        let path = rvs_write_callgraph_artifact_BIS(&dir, &CrateName::from("demo"), &graph)
             .expect("artifact write should succeed");
         let tmp_exists = dir
             .join(format!("demo-{}.json.tmp", std::process::id()))
@@ -336,57 +333,12 @@ mod tests {
             std::process::id()
         ));
 
-        let result = rvs_write_json_artifact_BIS(&dir, &CrateName::from("demo"), "");
+        let graph = FnGraph::rvs_new();
+        let result = rvs_write_callgraph_artifact_BIS(&dir, &CrateName::from("demo"), &graph);
         let dir_exists = dir.exists();
         let output = format!("result={result:?}\ndir_exists={dir_exists}\n");
         rvs_snapshot_BIS(
             "test_20260707_write_json_artifact_rejects_empty_json",
-            &output,
-        );
-
-        assert!(result.is_err());
-        assert!(!dir_exists);
-    }
-
-    #[test]
-    fn test_20260707_write_json_artifact_rejects_invalid_json() {
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("never: system clock should be after unix epoch for test temp dir")
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "rivus-artifact-invalid-json-{}-{unique}",
-            std::process::id()
-        ));
-
-        let result = rvs_write_json_artifact_BIS(&dir, &CrateName::from("demo"), "not json");
-        let dir_exists = dir.exists();
-        let output = format!("is_err={}\ndir_exists={dir_exists}\n", result.is_err());
-        rvs_snapshot_BIS(
-            "test_20260707_write_json_artifact_rejects_invalid_json",
-            &output,
-        );
-
-        assert!(result.is_err());
-        assert!(!dir_exists);
-    }
-
-    #[test]
-    fn test_20260707_write_json_artifact_rejects_scalar_json() {
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("never: system clock should be after unix epoch for test temp dir")
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "rivus-artifact-scalar-json-{}-{unique}",
-            std::process::id()
-        ));
-
-        let result = rvs_write_json_artifact_BIS(&dir, &CrateName::from("demo"), "1");
-        let dir_exists = dir.exists();
-        let output = format!("is_err={}\ndir_exists={dir_exists}\n", result.is_err());
-        rvs_snapshot_BIS(
-            "test_20260707_write_json_artifact_rejects_scalar_json",
             &output,
         );
 
@@ -405,8 +357,9 @@ mod tests {
             std::process::id()
         ));
 
-        let slash = rvs_write_json_artifact_BIS(&dir, &CrateName::from("bad/name"), "{}");
-        let empty = rvs_write_json_artifact_BIS(&dir, &CrateName::from(""), "{}");
+        let graph = rvs_test_callgraph();
+        let slash = rvs_write_callgraph_artifact_BIS(&dir, &CrateName::from("bad/name"), &graph);
+        let empty = rvs_write_callgraph_artifact_BIS(&dir, &CrateName::from(""), &graph);
         let dir_exists = dir.exists();
         let output = format!(
             "slash_is_err={}\nempty_is_err={}\ndir_exists={dir_exists}\n",
@@ -434,7 +387,8 @@ mod tests {
             std::process::id()
         ));
 
-        let result = rvs_write_json_artifact_BIS(&dir, &CrateName::from("bad\0name"), "{}");
+        let graph = rvs_test_callgraph();
+        let result = rvs_write_callgraph_artifact_BIS(&dir, &CrateName::from("bad\0name"), &graph);
         let dir_exists = dir.exists();
         let output = format!("is_err={}\ndir_exists={dir_exists}\n", result.is_err());
         rvs_snapshot_BIS(
@@ -463,7 +417,8 @@ mod tests {
         let predictable_tmp = dir.join(format!("demo-{}.json.tmp", std::process::id()));
         std::os::unix::fs::symlink(&victim, &predictable_tmp).unwrap();
 
-        let path = rvs_write_json_artifact_BIS(&dir, &CrateName::from("demo"), "{}")
+        let graph = rvs_test_callgraph();
+        let path = rvs_write_callgraph_artifact_BIS(&dir, &CrateName::from("demo"), &graph)
             .expect("artifact write should succeed through a retry temp path");
         let victim_content = std::fs::read_to_string(&victim).unwrap();
         let symlink_still_exists = std::fs::symlink_metadata(&predictable_tmp).is_ok();
@@ -493,7 +448,8 @@ mod tests {
         ));
         std::fs::create_dir_all(dir.join(format!("demo-{}.json", std::process::id()))).unwrap();
 
-        let result = rvs_write_json_artifact_BIS(&dir, &CrateName::from("demo"), "{}");
+        let graph = rvs_test_callgraph();
+        let result = rvs_write_callgraph_artifact_BIS(&dir, &CrateName::from("demo"), &graph);
         let tmp_exists = dir
             .join(format!("demo-{}.json.tmp", std::process::id()))
             .exists();
