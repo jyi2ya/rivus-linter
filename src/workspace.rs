@@ -560,18 +560,6 @@ pub(crate) fn rvs_write_capsmap_result_BIS(
     Ok(())
 }
 
-#[cfg(test)]
-fn rvs_capsmap_output_paths_overlap_BIS(left: &Path, right: &Path) -> Result<bool, String> {
-    debug_assert!(!left.as_os_str().is_empty(), "left path must not be empty");
-    debug_assert!(
-        !right.as_os_str().is_empty(),
-        "right path must not be empty"
-    );
-    let left = rvs_normalize_existing_ancestor_path_BIS(left)?;
-    let right = rvs_normalize_existing_ancestor_path_BIS(right)?;
-    Ok(left == right || left.starts_with(&right) || right.starts_with(&left))
-}
-
 pub(crate) fn rvs_preflight_capsmap_file_BIS(path: &Path, label: &str) -> Result<(), String> {
     let bytes = path.as_os_str().as_encoded_bytes();
     let separator = std::path::MAIN_SEPARATOR as u8;
@@ -675,70 +663,6 @@ fn rvs_write_capsmap_file_BIS(path: &Path, result: &str, label: &str) -> Result<
         ))
     })
     .map_err(|failure| rvs_render_atomic_write_failure(failure, path, "temp capsmap file", false))
-}
-
-#[cfg(test)]
-fn rvs_normalize_path_lexically(path: &Path) -> PathBuf {
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            std::path::Component::CurDir => {}
-            std::path::Component::ParentDir => match normalized.components().next_back() {
-                Some(std::path::Component::Normal(_)) => {
-                    normalized.pop();
-                }
-                Some(std::path::Component::ParentDir) | None if !normalized.has_root() => {
-                    normalized.push(component.as_os_str());
-                }
-                Some(
-                    std::path::Component::Prefix(_)
-                    | std::path::Component::RootDir
-                    | std::path::Component::CurDir,
-                )
-                | Some(std::path::Component::ParentDir)
-                | None => {}
-            },
-            std::path::Component::Prefix(_)
-            | std::path::Component::RootDir
-            | std::path::Component::Normal(_) => {
-                normalized.push(component.as_os_str());
-            }
-        }
-    }
-    normalized
-}
-
-#[cfg(test)]
-fn rvs_normalize_existing_ancestor_path_BIS(path: &Path) -> Result<PathBuf, String> {
-    debug_assert!(
-        !path.as_os_str().is_empty(),
-        "path identity input must not be empty"
-    );
-    let components: Vec<_> = path
-        .components()
-        .map(|component| component.as_os_str().to_os_string())
-        .collect();
-    for split in (0..=components.len()).rev() {
-        let prefix = components
-            .get(..split)
-            .unwrap_or(&[])
-            .iter()
-            .collect::<PathBuf>();
-        let canonical_prefix = if prefix.as_os_str().is_empty() {
-            std::env::current_dir().map_err(|e| format!("current dir invalid: {e}"))
-        } else {
-            prefix
-                .canonicalize()
-                .map_err(|e| format!("cannot canonicalize '{}': {e}", prefix.display()))
-        };
-        if let Ok(mut normalized) = canonical_prefix {
-            for component in components.get(split..).unwrap_or(&[]) {
-                normalized.push(component);
-            }
-            return Ok(rvs_normalize_path_lexically(&normalized));
-        }
-    }
-    Ok(rvs_normalize_path_lexically(path))
 }
 
 pub(crate) fn rvs_load_local_crate_prefixes_BIS(
@@ -1943,64 +1867,6 @@ name = "throughput-bench"
         assert!(result.is_err());
         assert!(!default_exists);
         std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn test_20260707_capsmap_output_paths_overlap_detects_equal_and_nested_paths() {
-        let equal = rvs_capsmap_output_paths_overlap_BIS(
-            Path::new("target/./caps"),
-            Path::new("target/caps"),
-        )
-        .unwrap();
-        let nested = rvs_capsmap_output_paths_overlap_BIS(
-            Path::new("target/rivus-std-capsmap.txt"),
-            Path::new("target/rivus-std-capsmap.txt/child"),
-        )
-        .unwrap();
-        let sibling = rvs_capsmap_output_paths_overlap_BIS(
-            Path::new("target/rivus-std-capsmap.txt"),
-            Path::new("target/rivus-deps-capsmap.txt"),
-        )
-        .unwrap();
-        let output = format!("equal={equal}\nnested={nested}\nsibling={sibling}\n");
-        rvs_snapshot_BIS(
-            "test_20260707_capsmap_output_paths_overlap_detects_equal_and_nested_paths",
-            &output,
-        );
-
-        assert!(equal);
-        assert!(nested);
-        assert!(!sibling);
-    }
-
-    #[test]
-    fn test_20260707_normalize_path_lexically_preserves_relative_parents() {
-        let normalized =
-            rvs_normalize_path_lexically(Path::new("/workspace/project/./caps/../target"));
-        let normalized_root_parent = rvs_normalize_path_lexically(Path::new(
-            "/../workspace/project/target/rivus-inferred-capsmap.txt",
-        ));
-        let normalized_leading_parents = rvs_normalize_path_lexically(Path::new("../../target"));
-        let normalized_past_relative_root = rvs_normalize_path_lexically(Path::new("a/../../b"));
-        let output = format!(
-            "normalized={}\nnormalized_root_parent={}\nnormalized_leading_parents={}\nnormalized_past_relative_root={}\n",
-            normalized.display(),
-            normalized_root_parent.display(),
-            normalized_leading_parents.display(),
-            normalized_past_relative_root.display()
-        );
-        rvs_snapshot_BIS(
-            "test_20260707_normalize_path_lexically_preserves_relative_parents",
-            &output,
-        );
-
-        assert_eq!(normalized, PathBuf::from("/workspace/project/target"));
-        assert_eq!(
-            normalized_root_parent,
-            PathBuf::from("/workspace/project/target/rivus-inferred-capsmap.txt")
-        );
-        assert_eq!(normalized_leading_parents, PathBuf::from("../../target"));
-        assert_eq!(normalized_past_relative_root, PathBuf::from("../b"));
     }
 
     #[cfg(unix)]
