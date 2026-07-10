@@ -1,0 +1,5 @@
+calls=alloc::rvs_source_call,core::rvs_target_call
+has_async=true
+is_synthetic=false
+has_filtered=false
+len=1

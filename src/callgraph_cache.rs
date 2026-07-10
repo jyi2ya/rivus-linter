@@ -14,15 +14,13 @@ pub(crate) fn rvs_merge_std_like_callgraph_with_local_prefixes_M(
     source: FnGraph,
     local_crate_names: &BTreeSet<CrateName>,
 ) {
-    let mut filtered = FnGraph::rvs_new();
     for (path, node) in source.nodes {
         if rvs_is_std_like_def_path(path.rvs_as_str())
             && !rvs_function_matches_local_prefix(path.rvs_as_str(), local_crate_names)
         {
-            filtered.rvs_insert_M(path, node);
+            target.rvs_merge_node_M(path, node);
         }
     }
-    target.rvs_merge_from_M(filtered);
 }
 
 pub(crate) fn rvs_is_std_like_def_path(function: &str) -> bool {

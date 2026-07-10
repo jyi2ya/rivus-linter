@@ -2284,6 +2284,53 @@ name = "throughput-bench"
     }
 
     #[test]
+    fn test_20260710_merge_std_like_callgraph_preserves_existing_node_merge() {
+        let mut target_node = crate::artifacts::FnNode::default();
+        target_node.calls.insert("core::rvs_target_call".into());
+        let mut target = FnGraph::rvs_new();
+        target.rvs_insert_M("std::rvs_shared".into(), target_node);
+
+        let mut source_node = crate::artifacts::FnNode::default();
+        source_node.calls.insert("alloc::rvs_source_call".into());
+        source_node.facts.has_async = true;
+        source_node.is_synthetic = true;
+        let mut source = FnGraph::rvs_new();
+        source.rvs_insert_M("std::rvs_shared".into(), source_node);
+        source.rvs_insert_M(
+            "demo::rvs_filtered".into(),
+            crate::artifacts::FnNode::default(),
+        );
+
+        rvs_merge_std_like_callgraph_M(&mut target, source);
+        let merged = target
+            .rvs_get("std::rvs_shared")
+            .expect("never: merged std node must exist");
+        let calls = merged
+            .calls
+            .iter()
+            .map(crate::symbols::DefPath::rvs_as_str)
+            .collect::<Vec<_>>()
+            .join(",");
+        let output = format!(
+            "calls={calls}\nhas_async={}\nis_synthetic={}\nhas_filtered={}\nlen={}\n",
+            merged.facts.has_async,
+            merged.is_synthetic,
+            target.rvs_get("demo::rvs_filtered").is_some(),
+            target.rvs_len(),
+        );
+        rvs_snapshot_BIS(
+            "test_20260710_merge_std_like_callgraph_preserves_existing_node_merge",
+            &output,
+        );
+
+        assert_eq!(merged.calls.len(), 2);
+        assert!(merged.facts.has_async);
+        assert!(!merged.is_synthetic);
+        assert!(target.rvs_get("demo::rvs_filtered").is_none());
+        assert_eq!(target.rvs_len(), 1);
+    }
+
+    #[test]
     fn test_20260705_merge_std_like_callgraph_skips_local_std_crate_nodes() {
         let mut target = FnGraph::rvs_new();
         target.rvs_insert_M("std::rvs_run".into(), crate::artifacts::FnNode::default());
