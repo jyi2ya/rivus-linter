@@ -40,8 +40,8 @@ pub(crate) fn rvs_collect_callgraph_for_item_M<'tcx>(
     let mut has_static_mut_ref = false;
     let mut has_thread_local_ref = false;
 
-    rvs_walk_closures(cx.tcx, body.value, |e| {
-        if let ExprKind::Path(ref q) = e.kind {
+    rvs_walk_closures(cx.tcx, body.value, |e| match &e.kind {
+        ExprKind::Path(q) => {
             if let rustc_hir::def::Res::Def(kind, did) = cx.qpath_res(q, e.hir_id) {
                 if let DefKind::Static { mutability, .. } = kind {
                     if rvs_static_is_thread_local(cx, did) {
@@ -54,9 +54,6 @@ pub(crate) fn rvs_collect_callgraph_for_item_M<'tcx>(
                 }
             }
         }
-    });
-
-    rvs_walk_closures(cx.tcx, body.value, |e| match &e.kind {
         ExprKind::Call(func, _) => {
             if let ExprKind::Path(ref q) = func.kind {
                 if let rustc_hir::def::Res::Def(k, did) = cx.qpath_res(q, func.hir_id) {
