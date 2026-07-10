@@ -38,12 +38,7 @@ pub(crate) fn rvs_run_infer_capsmap_BIMPS(path: &Path, output: &Path) -> Result<
     let resolved_output = rvs_resolve_output_path(&project_path, output);
     rvs_preflight_capsmap_file_BIS(&resolved_output, "deps capsmap")?;
 
-    let mut callgraph = rvs_collect_callgraph_BIMS(
-        &project_path,
-        false,
-        false,
-        vec![("RIVUS_CAPSMAP", abs_seed.into_os_string())],
-    )?;
+    let mut callgraph = rvs_collect_callgraph_BIMS(&project_path, false, false, vec![])?;
     rvs_scope_port_methods_M(&mut callgraph, &local_crate_prefixes);
 
     let inferred = rvs_infer_caps(&callgraph, &seed);
@@ -432,6 +427,31 @@ mod tests {
 
         assert!(result.is_err());
         assert!(!callgraph_exists);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260710_infer_capsmap_replaces_invalid_deps() {
+        let dir = rvs_make_temp_dir_BIS("infer-capsmap-invalid-old-deps");
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"infer-capsmap-invalid-old-deps\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::create_dir_all(dir.join("caps")).unwrap();
+        std::fs::write(dir.join("src/lib.rs"), "pub fn rvs_add() -> i32 { 1 }\n").unwrap();
+        std::fs::write(dir.join("caps/deps"), "broken=Z\n").unwrap();
+
+        let result = rvs_run_infer_capsmap_BIMPS(&dir, Path::new("caps/deps"));
+        assert!(
+            result.is_ok(),
+            "old deps output should be replaceable: {result:?}"
+        );
+        let deps = std::fs::read_to_string(dir.join("caps/deps")).unwrap();
+        let output = format!("result={result:?}\ndeps={deps:?}\n");
+        rvs_snapshot_BIS("test_20260710_infer_capsmap_replaces_invalid_deps", &output);
+
         std::fs::remove_dir_all(dir).unwrap();
     }
 
