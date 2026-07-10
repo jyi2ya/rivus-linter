@@ -540,15 +540,23 @@ fn rvs_run_fn_checks_MS<'tcx>(
     data: &mut FnCheckData<'_>,
 ) {
     let attrs = cx.tcx.hir_attrs(hir_id);
-    if let Some(mut info) = utils::FnInfo::rvs_extract(name) {
-        // Port trait methods get P capability automatically.
-        if is_port_method {
+    let mut info = utils::FnInfo::rvs_extract(name);
+    if is_port_method {
+        if let Some(info) = info.as_mut() {
             info.caps = crate::capability::CapabilityPolicy::rvs_port_method_caps();
         }
+    }
+    if info.is_some() || is_port_method {
+        let effective_caps = info
+            .as_ref()
+            .map(|info| info.caps.clone())
+            .unwrap_or_else(crate::capability::CapabilityPolicy::rvs_port_method_caps);
 
         let is_stub = stub_macro::rvs_check_fn_MS(cx, body, span);
         empty_fn::rvs_check_fn_MS(cx, body, span, has_body, is_stub);
-        missing_allow::rvs_check_fn_S(cx, hir_id, span, &info.raw_suffix);
+        if let Some(info) = info.as_ref() {
+            missing_allow::rvs_check_fn_S(cx, hir_id, span, &info.raw_suffix);
+        }
         dead_code::rvs_check_fn_S(cx, attrs, span);
 
         // Spawn, reflection, catch_unwind, error swallow detection
@@ -565,7 +573,8 @@ fn rvs_run_fn_checks_MS<'tcx>(
         }
 
         // Collect good fns for later untested-good-fn check
-        if crate::capability::CapabilityPolicy::rvs_is_good(&info.caps)
+        if info.is_some()
+            && crate::capability::CapabilityPolicy::rvs_is_good(&effective_caps)
             && data.should_emit_lints
             && !is_test
             && !utils::rvs_has_allow(attrs, "dead_code")
@@ -575,41 +584,15 @@ fn rvs_run_fn_checks_MS<'tcx>(
         }
 
         // Collect ok fns (ABMP subset, mock-testable) for untested-ok-fn check.
-        if crate::capability::CapabilityPolicy::rvs_is_ok(&info.caps)
+        if crate::capability::CapabilityPolicy::rvs_is_ok(&effective_caps)
             && data.should_emit_lints
             && !is_test
             && !is_trait_impl_method
+            && info.is_some()
             && !utils::rvs_has_allow(attrs, "dead_code")
             && !utils::rvs_has_allow(attrs, "unused")
         {
             data.ok_fns.push((name.to_string(), span));
-        }
-    } else {
-        if is_port_method {
-            let is_stub = stub_macro::rvs_check_fn_MS(cx, body, span);
-            empty_fn::rvs_check_fn_MS(cx, body, span, has_body, is_stub);
-            dead_code::rvs_check_fn_S(cx, attrs, span);
-            let port_caps = crate::capability::CapabilityPolicy::rvs_port_method_caps();
-            spawn::rvs_check_fn_MS(cx, body, is_test);
-            reflection::rvs_check_fn_MS(cx, body);
-            catch_unwind::rvs_check_fn_MS(cx, body);
-            error_swallow::rvs_check_fn_MS(cx, body);
-            if has_body && !is_stub {
-                debug_assert::rvs_check_fn_MS(cx, body);
-                borrowed_param::rvs_check_fn_params_S(cx, sig);
-                consumed_arg::rvs_check_fn_MS(cx, sig, name);
-                validate::rvs_check_fn_S(cx, name, sig);
-            }
-            if crate::capability::CapabilityPolicy::rvs_is_ok(&port_caps)
-                && data.should_emit_lints
-                && !is_test
-                && !is_trait_impl_method
-                && name.starts_with("rvs_")
-                && !utils::rvs_has_allow(attrs, "dead_code")
-                && !utils::rvs_has_allow(attrs, "unused")
-            {
-                data.ok_fns.push((name.to_string(), span));
-            }
         }
     }
     test_name_format::rvs_check_fn_S(cx, name, span, is_test);
