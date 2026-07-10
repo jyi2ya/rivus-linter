@@ -557,7 +557,6 @@ pub(crate) fn rvs_write_capsmap_result_BIS(
     output: &Path,
     label: &str,
 ) -> Result<(), String> {
-    rvs_preflight_capsmap_file_BIS(output, label)?;
     rvs_write_capsmap_file_BIS(output, result, label)?;
     println!("Written {label} to {}", output.display());
     Ok(())
@@ -658,11 +657,7 @@ pub(crate) fn rvs_preflight_capsmap_file_BIS(path: &Path, label: &str) -> Result
     Ok(())
 }
 
-pub(crate) fn rvs_write_capsmap_file_BIS(
-    path: &Path,
-    result: &str,
-    label: &str,
-) -> Result<(), String> {
+fn rvs_write_capsmap_file_BIS(path: &Path, result: &str, label: &str) -> Result<(), String> {
     rvs_preflight_capsmap_file_BIS(path, label)?;
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
