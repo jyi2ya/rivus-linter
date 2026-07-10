@@ -653,11 +653,11 @@ pub(crate) fn rvs_collect_local_contract_diffs_with_inferred_M(
     (diffs, inferred)
 }
 
-pub(crate) fn rvs_summarize_contract_mismatches(
-    diffs: &[FnContractDiff],
+pub(crate) fn rvs_summarize_contract_mismatch_items(
+    items: &[FnContractMismatch],
 ) -> BTreeMap<FnContractMismatchKind, usize> {
     let mut counts = BTreeMap::new();
-    for mismatch in rvs_collect_contract_mismatch_items(diffs) {
+    for mismatch in items {
         *counts.entry(mismatch.kind).or_default() += 1;
     }
     counts
@@ -1988,7 +1988,8 @@ mod tests {
                 expected_public_caps: Some(CapabilitySet::rvs_from_validated("AP")),
             },
         ];
-        let counts = rvs_summarize_contract_mismatches(&diffs);
+        let items = rvs_collect_contract_mismatch_items(&diffs);
+        let counts = rvs_summarize_contract_mismatch_items(&items);
         rvs_snapshot_BIS(
             "test_20260703_summarize_contract_mismatches",
             &format!("counts={counts:?}\n"),

@@ -9,7 +9,7 @@ use crate::cargo_targets::rvs_function_matches_local_prefix;
 use crate::inference::{
     FnContractDiff, FnContractMismatch, FnContractMismatchKind,
     rvs_collect_contract_mismatch_items, rvs_collect_enforced_contract_diffs,
-    rvs_collect_local_contract_diffs_M, rvs_summarize_contract_mismatches,
+    rvs_collect_local_contract_diffs_M, rvs_summarize_contract_mismatch_items,
 };
 use crate::symbols::CrateName;
 use crate::workspace::{
@@ -264,7 +264,7 @@ pub(crate) fn rvs_run_report_BIMPS(path: &Path) -> Result<(), String> {
     let reportable_diffs =
         rvs_collect_reportable_contract_diffs(&callgraph, &diffs, &local_crate_names);
     let mismatch_items = rvs_collect_contract_mismatch_items(&reportable_diffs);
-    let mismatch_summary = rvs_summarize_contract_mismatches(&reportable_diffs);
+    let mismatch_summary = rvs_summarize_contract_mismatch_items(&mismatch_items);
     let mismatch_output = rvs_format_contract_mismatch_summary(&mismatch_summary, &mismatch_items);
     print!("{report}");
     if !mismatch_output.is_empty() {
@@ -475,7 +475,7 @@ mod tests {
         );
         let output = format!(
             "filtered={filtered:?}\nsummary={:?}\n",
-            rvs_summarize_contract_mismatches(&filtered)
+            rvs_summarize_contract_mismatch_items(&rvs_collect_contract_mismatch_items(&filtered))
         );
         rvs_snapshot_BIS(
             "test_20260703_collect_reportable_contract_diffs_keeps_nested_main",
