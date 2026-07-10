@@ -23,6 +23,7 @@ use crate::cargo_targets::{
 use crate::cargo_targets::{
     rvs_detect_local_crate_prefixes_BIS, rvs_function_matches_local_prefix,
 };
+use crate::fs_guard::rvs_render_atomic_write_failure;
 use crate::symbols::CrateName;
 
 /// Resolve the capsmap path for the lint pass.
@@ -688,30 +689,7 @@ pub(crate) fn rvs_write_capsmap_file_BIS(
             attempt
         ))
     })
-    .map_err(|failure| match failure.kind {
-        crate::fs_guard::AtomicWriteFailureKind::Create { path, source } => {
-            format!("cannot create {}: {source}", path.display())
-        }
-        crate::fs_guard::AtomicWriteFailureKind::TooManyCollisions => format!(
-            "cannot create temp capsmap file for {}: too many collisions",
-            path.display()
-        ),
-        crate::fs_guard::AtomicWriteFailureKind::Write { path, source } => {
-            format!("cannot write {}: {source}", path.display())
-        }
-        crate::fs_guard::AtomicWriteFailureKind::Sync { path, source } => {
-            format!("cannot sync {}: {source}", path.display())
-        }
-        crate::fs_guard::AtomicWriteFailureKind::Rename {
-            temp_path,
-            final_path,
-            source,
-        } => format!(
-            "cannot rename {} to {}: {source}",
-            temp_path.display(),
-            final_path.display()
-        ),
-    })
+    .map_err(|failure| rvs_render_atomic_write_failure(failure, path, "temp capsmap file", false))
 }
 
 #[cfg(test)]

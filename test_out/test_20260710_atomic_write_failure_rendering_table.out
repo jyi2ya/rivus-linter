@@ -1,0 +1,16 @@
+[setup-open]
+cannot create '/workspace/.output.tmp': open failed
+[setup-collision]
+cannot create temp file for '/workspace/Cargo.toml': too many collisions
+[capsmap-collision]
+cannot create temp capsmap file for /workspace/caps/deps: too many collisions
+[artifact-collision]
+cannot create temp artifact for /workspace/target/rivus-callgraph/demo.json: too many collisions
+[write]
+cannot write /workspace/.output.tmp: write failed
+[sync-quoted]
+cannot sync '/workspace/.output.tmp': sync failed
+[rename]
+cannot rename /workspace/.output.tmp to /workspace/output: rename failed
+[rename-cleanup]
+cannot rename /workspace/.output.tmp to /workspace/output: rename failed; additionally cannot remove temp file: cleanup failed

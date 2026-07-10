@@ -3,11 +3,11 @@ use std::path::{Path, PathBuf};
 
 #[derive(Debug)]
 pub(crate) enum AtomicWriteFailureKind {
-    Create {
+    Open {
         path: PathBuf,
         source: std::io::Error,
     },
-    TooManyCollisions,
+    CreateExhausted,
     Write {
         path: PathBuf,
         source: std::io::Error,
@@ -27,6 +27,68 @@ pub(crate) enum AtomicWriteFailureKind {
 pub(crate) struct AtomicWriteFailure {
     pub(crate) kind: AtomicWriteFailureKind,
     pub(crate) cleanup_error: Option<std::io::Error>,
+}
+
+fn rvs_format_atomic_write_path(path: &Path, quote_paths: bool) -> String {
+    if quote_paths {
+        format!("'{}'", path.display())
+    } else {
+        path.display().to_string()
+    }
+}
+
+pub(crate) fn rvs_render_atomic_write_failure(
+    failure: AtomicWriteFailure,
+    final_path: &Path,
+    create_exhausted_noun: &str,
+    quote_paths: bool,
+) -> String {
+    debug_assert!(
+        !final_path.as_os_str().is_empty(),
+        "atomic write final path must not be empty"
+    );
+    debug_assert!(
+        !create_exhausted_noun.is_empty(),
+        "atomic write collision noun must not be empty"
+    );
+    let AtomicWriteFailure {
+        kind,
+        cleanup_error,
+    } = failure;
+    let message = match kind {
+        AtomicWriteFailureKind::Open { path, source } => format!(
+            "cannot create {}: {source}",
+            rvs_format_atomic_write_path(&path, quote_paths)
+        ),
+        AtomicWriteFailureKind::CreateExhausted => format!(
+            "cannot create {} for {}: too many collisions",
+            create_exhausted_noun,
+            rvs_format_atomic_write_path(final_path, quote_paths)
+        ),
+        AtomicWriteFailureKind::Write { path, source } => format!(
+            "cannot write {}: {source}",
+            rvs_format_atomic_write_path(&path, quote_paths)
+        ),
+        AtomicWriteFailureKind::Sync { path, source } => format!(
+            "cannot sync {}: {source}",
+            rvs_format_atomic_write_path(&path, quote_paths)
+        ),
+        AtomicWriteFailureKind::Rename {
+            temp_path,
+            final_path,
+            source,
+        } => format!(
+            "cannot rename {} to {}: {source}",
+            rvs_format_atomic_write_path(&temp_path, quote_paths),
+            rvs_format_atomic_write_path(&final_path, quote_paths)
+        ),
+    };
+    match cleanup_error {
+        Some(cleanup_error) => {
+            format!("{message}; additionally cannot remove temp file: {cleanup_error}")
+        }
+        None => message,
+    }
 }
 
 pub(crate) fn rvs_write_atomic_BIS(
@@ -52,7 +114,7 @@ pub(crate) fn rvs_write_atomic_BIS(
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(source) => {
                 return Err(AtomicWriteFailure {
-                    kind: AtomicWriteFailureKind::Create {
+                    kind: AtomicWriteFailureKind::Open {
                         path: candidate,
                         source,
                     },
@@ -64,7 +126,7 @@ pub(crate) fn rvs_write_atomic_BIS(
 
     let Some(temp_path) = temp_path else {
         return Err(AtomicWriteFailure {
-            kind: AtomicWriteFailureKind::TooManyCollisions,
+            kind: AtomicWriteFailureKind::CreateExhausted,
             cleanup_error: None,
         });
     };
@@ -114,5 +176,138 @@ pub(crate) fn rvs_validate_optional_dir_BIS(path: &Path, label: &str) -> Result<
             )),
         },
         Err(e) => Err(format!("cannot inspect {label} {}: {e}", path.display())),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::rvs_snapshot_BIS;
+
+    #[derive(Clone, Copy, Debug)]
+    enum AtomicWriteFailureCase {
+        Open,
+        CreateExhausted,
+        Write,
+        Sync,
+        Rename,
+    }
+
+    fn rvs_failure(case: AtomicWriteFailureCase, cleanup_error: bool) -> AtomicWriteFailure {
+        let kind = match case {
+            AtomicWriteFailureCase::Open => AtomicWriteFailureKind::Open {
+                path: PathBuf::from("/workspace/.output.tmp"),
+                source: std::io::Error::other("open failed"),
+            },
+            AtomicWriteFailureCase::CreateExhausted => AtomicWriteFailureKind::CreateExhausted,
+            AtomicWriteFailureCase::Write => AtomicWriteFailureKind::Write {
+                path: PathBuf::from("/workspace/.output.tmp"),
+                source: std::io::Error::other("write failed"),
+            },
+            AtomicWriteFailureCase::Sync => AtomicWriteFailureKind::Sync {
+                path: PathBuf::from("/workspace/.output.tmp"),
+                source: std::io::Error::other("sync failed"),
+            },
+            AtomicWriteFailureCase::Rename => AtomicWriteFailureKind::Rename {
+                temp_path: PathBuf::from("/workspace/.output.tmp"),
+                final_path: PathBuf::from("/workspace/output"),
+                source: std::io::Error::other("rename failed"),
+            },
+        };
+        AtomicWriteFailure {
+            kind,
+            cleanup_error: cleanup_error.then(|| std::io::Error::other("cleanup failed")),
+        }
+    }
+
+    #[test]
+    fn test_20260710_atomic_write_failure_rendering_table() {
+        let cases = [
+            (
+                "setup-open",
+                AtomicWriteFailureCase::Open,
+                "/workspace/Cargo.toml",
+                "temp file",
+                true,
+                false,
+            ),
+            (
+                "setup-collision",
+                AtomicWriteFailureCase::CreateExhausted,
+                "/workspace/Cargo.toml",
+                "temp file",
+                true,
+                false,
+            ),
+            (
+                "capsmap-collision",
+                AtomicWriteFailureCase::CreateExhausted,
+                "/workspace/caps/deps",
+                "temp capsmap file",
+                false,
+                false,
+            ),
+            (
+                "artifact-collision",
+                AtomicWriteFailureCase::CreateExhausted,
+                "/workspace/target/rivus-callgraph/demo.json",
+                "temp artifact",
+                false,
+                false,
+            ),
+            (
+                "write",
+                AtomicWriteFailureCase::Write,
+                "/workspace/output",
+                "temp file",
+                false,
+                false,
+            ),
+            (
+                "sync-quoted",
+                AtomicWriteFailureCase::Sync,
+                "/workspace/output",
+                "temp file",
+                true,
+                false,
+            ),
+            (
+                "rename",
+                AtomicWriteFailureCase::Rename,
+                "/workspace/output",
+                "temp file",
+                false,
+                false,
+            ),
+            (
+                "rename-cleanup",
+                AtomicWriteFailureCase::Rename,
+                "/workspace/output",
+                "temp file",
+                false,
+                true,
+            ),
+        ];
+        let mut output = String::new();
+        for (label, failure_case, final_path, noun, quote_paths, cleanup_error) in cases {
+            output.push_str(&format!(
+                "[{label}]\n{}\n",
+                rvs_render_atomic_write_failure(
+                    rvs_failure(failure_case, cleanup_error),
+                    Path::new(final_path),
+                    noun,
+                    quote_paths,
+                )
+            ));
+        }
+
+        rvs_snapshot_BIS(
+            "test_20260710_atomic_write_failure_rendering_table",
+            &output,
+        );
+        assert_eq!(
+            output,
+            include_str!("../test_out/test_20260710_atomic_write_failure_rendering_table.out")
+        );
     }
 }

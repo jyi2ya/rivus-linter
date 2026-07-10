@@ -2,6 +2,8 @@ use std::path::Path;
 
 use toml_edit::{DocumentMut, Item, Table};
 
+use crate::fs_guard::rvs_render_atomic_write_failure;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SetupFileRequirement {
     MustExist,
@@ -180,30 +182,7 @@ fn rvs_write_file_atomic_BIS(path: &Path, content: &str) -> Result<(), String> {
             attempt
         ))
     })
-    .map_err(|failure| match failure.kind {
-        crate::fs_guard::AtomicWriteFailureKind::Create { path, source } => {
-            format!("cannot create '{}': {source}", path.display())
-        }
-        crate::fs_guard::AtomicWriteFailureKind::TooManyCollisions => format!(
-            "cannot create temp file for '{}': too many collisions",
-            path.display()
-        ),
-        crate::fs_guard::AtomicWriteFailureKind::Write { path, source } => {
-            format!("cannot write '{}': {source}", path.display())
-        }
-        crate::fs_guard::AtomicWriteFailureKind::Sync { path, source } => {
-            format!("cannot sync '{}': {source}", path.display())
-        }
-        crate::fs_guard::AtomicWriteFailureKind::Rename {
-            temp_path,
-            final_path,
-            source,
-        } => format!(
-            "cannot rename '{}' to '{}': {source}",
-            temp_path.display(),
-            final_path.display()
-        ),
-    })
+    .map_err(|failure| rvs_render_atomic_write_failure(failure, path, "temp file", true))
 }
 
 #[cfg(test)]

@@ -9,6 +9,7 @@ use super::{
     RVS_DUPLICATE_TEST, RVS_MISSING_TEST_OUTPUT, RVS_UNTESTED_GOOD_FN, RVS_UNTESTED_OK_FN,
 };
 use crate::artifacts::FnGraph;
+use crate::fs_guard::rvs_render_atomic_write_failure;
 use crate::symbols::CrateName;
 
 /// `check_crate_post` — cross-cutting test quality checks and output writing.
@@ -184,36 +185,7 @@ fn rvs_write_json_artifact_BIS(
         }
     })
     .map_err(|failure| {
-        let message = match failure.kind {
-            crate::fs_guard::AtomicWriteFailureKind::Create { path, source } => {
-                format!("cannot create {}: {source}", path.display())
-            }
-            crate::fs_guard::AtomicWriteFailureKind::TooManyCollisions => format!(
-                "cannot create temp artifact for {}: too many collisions",
-                final_path.display()
-            ),
-            crate::fs_guard::AtomicWriteFailureKind::Write { path, source } => {
-                format!("cannot write {}: {source}", path.display())
-            }
-            crate::fs_guard::AtomicWriteFailureKind::Sync { path, source } => {
-                format!("cannot sync {}: {source}", path.display())
-            }
-            crate::fs_guard::AtomicWriteFailureKind::Rename {
-                temp_path,
-                final_path,
-                source,
-            } => format!(
-                "cannot rename {} to {}: {source}",
-                temp_path.display(),
-                final_path.display()
-            ),
-        };
-        match failure.cleanup_error {
-            Some(cleanup_error) => {
-                format!("{message}; additionally cannot remove temp file: {cleanup_error}")
-            }
-            None => message,
-        }
+        rvs_render_atomic_write_failure(failure, &final_path, "temp artifact", false)
     })?;
     Ok(final_path)
 }
