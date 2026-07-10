@@ -204,25 +204,21 @@ fn rvs_collect_auto_target_prefixes_for_targets_BIMS(
 ) -> Result<(), String> {
     if *include_test_example_bench && flags.autotests {
         let tests_dir = path.join("tests");
-        rvs_collect_rs_file_stems_BIMS(&tests_dir, prefixes)?;
-        rvs_collect_dir_target_names_BIMS(&tests_dir, prefixes)?;
+        rvs_collect_auto_target_names_BIMS(&tests_dir, prefixes)?;
     }
     if *include_test_example_bench && flags.autoexamples {
         let examples_dir = path.join("examples");
-        rvs_collect_rs_file_stems_BIMS(&examples_dir, prefixes)?;
-        rvs_collect_dir_target_names_BIMS(&examples_dir, prefixes)?;
+        rvs_collect_auto_target_names_BIMS(&examples_dir, prefixes)?;
     }
     if *include_test_example_bench && flags.autobenches {
         let benches_dir = path.join("benches");
-        rvs_collect_rs_file_stems_BIMS(&benches_dir, prefixes)?;
-        rvs_collect_dir_target_names_BIMS(&benches_dir, prefixes)?;
+        rvs_collect_auto_target_names_BIMS(&benches_dir, prefixes)?;
     }
     if !flags.autobins {
         return Ok(());
     }
     let bin_dir = path.join("src/bin");
-    rvs_collect_rs_file_stems_BIMS(&bin_dir, prefixes)?;
-    rvs_collect_dir_target_names_BIMS(&bin_dir, prefixes)?;
+    rvs_collect_auto_target_names_BIMS(&bin_dir, prefixes)?;
     Ok(())
 }
 
@@ -256,7 +252,7 @@ fn rvs_parse_auto_target_flags(document: &toml_edit::DocumentMut) -> AutoTargetF
     }
 }
 
-pub(crate) fn rvs_collect_rs_file_stems_BIMS(
+fn rvs_collect_auto_target_names_BIMS(
     dir: &Path,
     prefixes: &mut BTreeSet<CrateName>,
 ) -> Result<(), String> {
@@ -275,11 +271,8 @@ pub(crate) fn rvs_collect_rs_file_stems_BIMS(
         let file_type = entry
             .file_type()
             .map_err(|e| format!("cannot inspect {}: {e}", entry.path().display()))?;
-        if !file_type.is_file() {
-            continue;
-        }
         let path = entry.path();
-        if path.extension().is_some_and(|ext| ext == "rs") {
+        if file_type.is_file() && path.extension().is_some_and(|ext| ext == "rs") {
             let stem = path
                 .file_stem()
                 .ok_or_else(|| format!("auto target file has no stem: {}", path.display()))?
@@ -287,27 +280,6 @@ pub(crate) fn rvs_collect_rs_file_stems_BIMS(
                 .ok_or_else(|| format!("auto target file stem is not UTF-8: {}", path.display()))?;
             rvs_insert_manifest_crate_name_M(prefixes, "auto target file stem", stem)?;
         }
-    }
-    Ok(())
-}
-
-pub(crate) fn rvs_collect_dir_target_names_BIMS(
-    dir: &Path,
-    prefixes: &mut BTreeSet<CrateName>,
-) -> Result<(), String> {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => {
-            return Err(format!(
-                "cannot read auto target dir {}: {e}",
-                dir.display()
-            ));
-        }
-    };
-    for entry in entries {
-        let entry = entry.map_err(|e| format!("readdir error in {}: {e}", dir.display()))?;
-        let path = entry.path();
         if path.join("main.rs").is_file() {
             let entry_name = entry.file_name();
             let name = entry_name.to_str().ok_or_else(|| {

@@ -15,10 +15,9 @@ use crate::callgraph_cache::{
 use crate::capsmap::{self, CapsMap};
 #[cfg(test)]
 use crate::cargo_targets::{
-    rvs_collect_auto_target_prefixes_BIMS, rvs_collect_dir_target_names_BIMS,
-    rvs_collect_local_crate_prefixes, rvs_collect_local_crate_prefixes_for_targets,
-    rvs_collect_rs_file_stems_BIMS, rvs_detect_local_crate_prefixes_for_cargo_check_BIS,
-    rvs_insert_manifest_crate_name_M,
+    rvs_collect_auto_target_prefixes_BIMS, rvs_collect_local_crate_prefixes,
+    rvs_collect_local_crate_prefixes_for_targets,
+    rvs_detect_local_crate_prefixes_for_cargo_check_BIS, rvs_insert_manifest_crate_name_M,
 };
 use crate::cargo_targets::{
     rvs_detect_local_crate_prefixes_BIS, rvs_detect_local_crate_prefixes_for_function_query_BIS,
@@ -1044,10 +1043,6 @@ name = "throughput-bench"
         .unwrap();
         std::fs::create_dir_all(dir.join("tests/support")).unwrap();
 
-        let mut direct_prefixes = BTreeSet::new();
-        rvs_collect_rs_file_stems_BIMS(&dir.join("tests"), &mut direct_prefixes).unwrap();
-        rvs_collect_dir_target_names_BIMS(&dir.join("examples"), &mut direct_prefixes).unwrap();
-        rvs_collect_auto_target_prefixes_BIMS(&dir, &mut direct_prefixes).unwrap();
         let prefixes = rvs_detect_local_crate_prefixes_BIS(&dir).unwrap();
         let output = prefixes
             .iter()
