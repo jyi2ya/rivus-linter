@@ -688,14 +688,7 @@ fn rvs_canonical_local_file_BIS(
 fn rvs_invalidate_callgraph_cache_BIS(project_path: &Path) -> Result<(), String> {
     for dir_name in &["rivus-callgraph", "rivus-callgraph-std"] {
         let dir = project_path.join("target").join(dir_name);
-        match std::fs::symlink_metadata(&dir) {
-            Ok(metadata) if metadata.is_dir() => std::fs::remove_dir_all(&dir)
-                .map_err(|e| format!("cannot remove {}: {e}", dir.display()))?,
-            Ok(_) => std::fs::remove_file(&dir)
-                .map_err(|e| format!("cannot remove {}: {e}", dir.display()))?,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(format!("cannot inspect {}: {e}", dir.display())),
-        }
+        crate::workspace::rvs_clean_dir_BIS(&dir)?;
     }
     Ok(())
 }
