@@ -36,6 +36,7 @@
 - lint pass 负责从 HIR 收集节点和边
 - callgraph artifact 负责把这些节点持久化；artifact 使用显式 schema version，读取时同时兼容当前版本之前没有 envelope 的旧图
 - 源码写回只使用 artifact 记录的路径基准；旧 artifact 没有基准时允许兼容解析，但多个候选都存在则拒绝猜测
+- 同一命令已经确定本地 crate 边界后，后续报告和缓存过滤复用这一份边界快照，不在执行中途重新解释项目范围
 
 ## 测试覆盖
 

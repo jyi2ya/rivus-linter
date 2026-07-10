@@ -480,7 +480,7 @@ pub(crate) fn rvs_load_callgraph_and_caps_for_function_BIMS(
     let callgraph = if rvs_is_external_std_function_query_BIS(path, function)? {
         rvs_load_required_std_callgraph_cache_BIS(path)?
     } else {
-        rvs_collect_project_callgraph_with_optional_std_cache_BIMS(path, true)?
+        rvs_collect_project_callgraph_with_optional_std_cache_BIMS(path, true, None)?
     };
     let caps = rvs_load_project_caps_BIS(path)?;
     Ok((callgraph, caps))
@@ -502,8 +502,13 @@ fn rvs_is_local_function_query_BIS(path: &Path, function: &str) -> Result<bool, 
 pub(crate) fn rvs_collect_callgraph_and_caps_BIMS(
     path: &Path,
     with_tests: bool,
+    local_prefixes: Option<&BTreeSet<CrateName>>,
 ) -> Result<(FnGraph, capsmap::CapsMap), String> {
-    let callgraph = rvs_collect_project_callgraph_with_optional_std_cache_BIMS(path, with_tests)?;
+    let callgraph = rvs_collect_project_callgraph_with_optional_std_cache_BIMS(
+        path,
+        with_tests,
+        local_prefixes,
+    )?;
     let caps = rvs_load_project_caps_BIS(path)?;
     Ok((callgraph, caps))
 }
@@ -511,24 +516,31 @@ pub(crate) fn rvs_collect_callgraph_and_caps_BIMS(
 fn rvs_collect_project_callgraph_with_optional_std_cache_BIMS(
     path: &Path,
     with_tests: bool,
+    local_prefixes: Option<&BTreeSet<CrateName>>,
 ) -> Result<FnGraph, String> {
     let mut callgraph = rvs_collect_callgraph_BIMS(path, false, with_tests, vec![])?;
     let cg_std_dir = path.join("target").join("rivus-callgraph-std");
     if rvs_warn_optional_dir_BIS(&cg_std_dir, "std callgraph cache") {
-        let local_prefixes = match rvs_detect_local_crate_prefixes_BIS(path) {
-            Ok(prefixes) => prefixes,
-            Err(e) => {
-                eprintln!(
-                    "warning: cannot detect local crate prefixes for std cache filtering: {e}"
-                );
-                BTreeSet::new()
-            }
+        let detected_prefixes;
+        let local_prefixes = if let Some(prefixes) = local_prefixes {
+            prefixes
+        } else {
+            detected_prefixes = match rvs_detect_local_crate_prefixes_BIS(path) {
+                Ok(prefixes) => prefixes,
+                Err(e) => {
+                    eprintln!(
+                        "warning: cannot detect local crate prefixes for std cache filtering: {e}"
+                    );
+                    BTreeSet::new()
+                }
+            };
+            &detected_prefixes
         };
         match rvs_merge_callgraph_dir_BIS(&cg_std_dir) {
             Ok(std_graph) => rvs_merge_std_like_callgraph_with_local_prefixes_M(
                 &mut callgraph,
                 std_graph,
-                &local_prefixes,
+                local_prefixes,
             ),
             Err(e) => eprintln!("warning: ignoring stale std callgraph cache: {e}"),
         }

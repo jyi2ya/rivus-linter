@@ -257,7 +257,8 @@ fn rvs_collect_reportable_contract_diffs(
 pub(crate) fn rvs_run_report_BIMPS(path: &Path) -> Result<(), String> {
     rvs_ensure_cargo_project_BIS(path)?;
     let local_crate_names = rvs_load_local_crate_prefixes_BIS(path)?;
-    let (mut callgraph, caps) = rvs_collect_callgraph_and_caps_BIMS(path, true)?;
+    let (mut callgraph, caps) =
+        rvs_collect_callgraph_and_caps_BIMS(path, true, Some(&local_crate_names))?;
     let diffs = rvs_collect_local_contract_diffs_M(&mut callgraph, &caps, &local_crate_names);
     let report_entries = rvs_report_entries_from_callgraph(&callgraph, &local_crate_names)?;
     let report = rvs_build_report(&report_entries)?;
@@ -680,7 +681,8 @@ mod tests {
 
         let result = rvs_run_report_BIMPS(&dir);
         let local_crate_names = rvs_load_local_crate_prefixes_BIS(&dir).unwrap();
-        let (mut callgraph, caps) = rvs_collect_callgraph_and_caps_BIMS(&dir, true).unwrap();
+        let (mut callgraph, caps) =
+            rvs_collect_callgraph_and_caps_BIMS(&dir, true, Some(&local_crate_names)).unwrap();
         let _diffs = rvs_collect_local_contract_diffs_M(&mut callgraph, &caps, &local_crate_names);
         let report_entries = rvs_report_entries_from_callgraph(&callgraph, &local_crate_names);
         let async_lines = report_entries.as_ref().ok().and_then(|entries| {

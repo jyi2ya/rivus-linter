@@ -23,7 +23,7 @@ use crate::workspace::{
 /// Panics if the current executable path, current directory, or cargo cannot be resolved.
 pub(crate) fn rvs_run_annotate_BIMPS(path: &Path) -> Result<(), String> {
     let local_crate_names = rvs_detect_local_crate_prefixes_for_cargo_check_BIS(path, false)?;
-    let (mut callgraph, seed) = rvs_collect_callgraph_and_caps_BIMS(path, false)?;
+    let (mut callgraph, seed) = rvs_collect_callgraph_and_caps_BIMS(path, false, None)?;
     let diffs = rvs_collect_local_contract_diffs_M(&mut callgraph, &seed, &local_crate_names);
     let mut candidates = Vec::new();
     for diff in diffs {
