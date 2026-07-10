@@ -55,11 +55,21 @@ pub const CLIPPY_LINTS: &[(&str, &str)] = &[
 
 /// Inject clippy lint rules into a Cargo.toml string.
 /// Returns the new Cargo.toml string and the count of injected lints.
+#[cfg(test)]
 pub fn rvs_inject_clippy_lints_M(cargo_toml: &str) -> Result<(String, usize), String> {
     let mut doc: DocumentMut = cargo_toml
         .parse()
         .map_err(|e| format!("invalid TOML: {e}"))?;
 
+    let count = rvs_inject_clippy_lints_into_document_M(&mut doc)?;
+    if count == 0 {
+        return Ok((cargo_toml.to_string(), 0));
+    }
+
+    Ok((doc.to_string(), count))
+}
+
+fn rvs_inject_clippy_lints_into_document_M(doc: &mut DocumentMut) -> Result<usize, String> {
     let lints = doc.entry("lints").or_insert(Item::Table(Table::new()));
     let Some(lints_table) = lints.as_table_mut() else {
         return Err("[lints] must be a table".into());
@@ -79,12 +89,7 @@ pub fn rvs_inject_clippy_lints_M(cargo_toml: &str) -> Result<(String, usize), St
             count += 1;
         }
     }
-
-    if count == 0 {
-        return Ok((cargo_toml.to_string(), 0));
-    }
-
-    Ok((doc.to_string(), count))
+    Ok(count)
 }
 
 pub(crate) fn rvs_run_setup_BIMS(path: &Path) -> Result<(), String> {
@@ -96,20 +101,23 @@ pub(crate) fn rvs_run_setup_BIMS(path: &Path) -> Result<(), String> {
         &SetupFileRequirement::MustExist,
     )?;
     rvs_preflight_setup_file_BIS(&agents_md, "AGENTS.md", &SetupFileRequirement::Optional)?;
-    crate::workspace::rvs_load_local_crate_prefixes_BIS(path)?;
+    crate::workspace::rvs_ensure_cargo_project_BIS(path)?;
 
-    let content = std::fs::read_to_string(&cargo_toml_path)
-        .map_err(|e| format!("cannot read '{}': {e}", cargo_toml_path.display()))?;
-    content
-        .parse::<DocumentMut>()
-        .map_err(|e| format!("invalid TOML in '{}': {e}", cargo_toml_path.display()))?;
+    let project = crate::cargo_targets::rvs_load_cargo_project_model_BIS(path)?;
+    crate::cargo_targets::rvs_collect_local_crate_prefixes_from_model_BIS(path, &project, true)?;
+    let (content, mut document) = project.rvs_into_source_and_document();
 
-    let (new_content, count) = rvs_inject_clippy_lints_M(&content).map_err(|e| {
+    let count = rvs_inject_clippy_lints_into_document_M(&mut document).map_err(|e| {
         format!(
             "cannot inject clippy lints into '{}': {e}",
             cargo_toml_path.display()
         )
     })?;
+    let new_content = if count > 0 {
+        document.to_string()
+    } else {
+        content.clone()
+    };
 
     if count > 0 {
         rvs_write_file_atomic_BIS(&cargo_toml_path, &new_content)?;

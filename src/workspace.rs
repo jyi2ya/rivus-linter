@@ -21,7 +21,8 @@ use crate::cargo_targets::{
     rvs_insert_manifest_crate_name_M,
 };
 use crate::cargo_targets::{
-    rvs_detect_local_crate_prefixes_BIS, rvs_function_matches_local_prefix,
+    rvs_detect_local_crate_prefixes_BIS, rvs_detect_local_crate_prefixes_for_function_query_BIS,
+    rvs_function_matches_local_prefix,
 };
 use crate::fs_guard::rvs_render_atomic_write_failure;
 use crate::symbols::CrateName;
@@ -497,16 +498,8 @@ fn rvs_is_local_function_query_BIS(path: &Path, function: &str) -> Result<bool, 
     if !cargo_toml.is_file() {
         return Ok(false);
     }
-    let content = std::fs::read_to_string(&cargo_toml)
-        .map_err(|e| format!("cannot read '{}': {e}", cargo_toml.display()))?;
-    let doc = content
-        .parse::<toml_edit::DocumentMut>()
-        .map_err(|e| format!("invalid TOML in '{}': {e}", cargo_toml.display()))?;
-    if doc.get("package").is_none() {
-        return Ok(false);
-    }
-    rvs_load_local_crate_prefixes_BIS(path)
-        .map(|names| rvs_function_matches_local_prefix(function, &names))
+    rvs_detect_local_crate_prefixes_for_function_query_BIS(path)
+        .map(|names| names.is_some_and(|names| rvs_function_matches_local_prefix(function, &names)))
 }
 
 pub(crate) fn rvs_collect_callgraph_and_caps_BIMS(

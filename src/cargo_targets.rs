@@ -3,6 +3,26 @@ use std::path::Path;
 
 use crate::symbols::CrateName;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AutoTargetFlags {
+    autobins: bool,
+    autotests: bool,
+    autoexamples: bool,
+    autobenches: bool,
+}
+
+#[derive(Debug)]
+pub(crate) struct CargoProjectModel {
+    source: String,
+    document: toml_edit::DocumentMut,
+}
+
+impl CargoProjectModel {
+    pub(crate) fn rvs_into_source_and_document(self) -> (String, toml_edit::DocumentMut) {
+        (self.source, self.document)
+    }
+}
+
 pub(crate) fn rvs_function_matches_local_prefix(
     function: &str,
     local_crate_names: &BTreeSet<CrateName>,
@@ -17,42 +37,52 @@ pub(crate) fn rvs_collect_local_crate_prefixes(toml: &str) -> Result<BTreeSet<Cr
     rvs_collect_local_crate_prefixes_for_targets(toml, true)
 }
 
+#[cfg(test)]
 pub(crate) fn rvs_collect_local_crate_prefixes_for_targets(
     toml: &str,
     include_test_example_bench: bool,
 ) -> Result<BTreeSet<CrateName>, String> {
-    let doc: toml_edit::DocumentMut = toml.parse().map_err(|e| format!("invalid TOML: {e}"))?;
+    let model = rvs_parse_cargo_project_model(toml).map_err(|e| format!("invalid TOML: {e}"))?;
+    rvs_collect_manifest_crate_prefixes(&model.document, include_test_example_bench)
+}
 
+fn rvs_collect_manifest_crate_prefixes(
+    document: &toml_edit::DocumentMut,
+    include_test_example_bench: bool,
+) -> Result<BTreeSet<CrateName>, String> {
     let mut prefixes = BTreeSet::new();
-    if let Some(package_name) = doc
+    if let Some(package_name) = document
         .get("package")
         .and_then(|package| package.get("name"))
-        .and_then(|name| name.as_str())
+        .and_then(toml_edit::Item::as_str)
     {
         rvs_insert_manifest_crate_name_M(&mut prefixes, "[package].name", package_name)?;
     }
-    if let Some(lib_name) = doc
+    if let Some(lib_name) = document
         .get("lib")
         .and_then(|lib| lib.get("name"))
-        .and_then(|name| name.as_str())
+        .and_then(toml_edit::Item::as_str)
     {
         rvs_insert_manifest_crate_name_M(&mut prefixes, "[lib].name", lib_name)?;
     }
-    if let Some(bins) = doc.get("bin").and_then(toml_edit::Item::as_array_of_tables) {
+    if let Some(bins) = document
+        .get("bin")
+        .and_then(toml_edit::Item::as_array_of_tables)
+    {
         for bin in bins {
-            if let Some(name) = bin.get("name").and_then(|name| name.as_str()) {
+            if let Some(name) = bin.get("name").and_then(toml_edit::Item::as_str) {
                 rvs_insert_manifest_crate_name_M(&mut prefixes, "[[bin]].name", name)?;
             }
         }
     }
     if include_test_example_bench {
         for table_name in ["test", "example", "bench"] {
-            if let Some(targets) = doc
+            if let Some(targets) = document
                 .get(table_name)
                 .and_then(toml_edit::Item::as_array_of_tables)
             {
                 for target in targets {
-                    if let Some(name) = target.get("name").and_then(|name| name.as_str()) {
+                    if let Some(name) = target.get("name").and_then(toml_edit::Item::as_str) {
                         rvs_insert_manifest_crate_name_M(
                             &mut prefixes,
                             &format!("[[{table_name}]].name"),
@@ -107,18 +137,49 @@ fn rvs_detect_local_crate_prefixes_for_targets_BIS(
     path: &Path,
     include_test_example_bench: bool,
 ) -> Result<BTreeSet<CrateName>, String> {
+    let model = rvs_load_cargo_project_model_BIS(path)?;
+    rvs_collect_local_crate_prefixes_from_model_BIS(path, &model, include_test_example_bench)
+}
+
+pub(crate) fn rvs_load_cargo_project_model_BIS(path: &Path) -> Result<CargoProjectModel, String> {
     let cargo_toml = path.join("Cargo.toml");
     let content = std::fs::read_to_string(&cargo_toml)
         .map_err(|e| format!("cannot read {}: {e}", cargo_toml.display()))?;
+    rvs_parse_cargo_project_model(&content)
+        .map_err(|e| format!("{}: invalid TOML: {e}", cargo_toml.display()))
+}
+
+pub(crate) fn rvs_collect_local_crate_prefixes_from_model_BIS(
+    path: &Path,
+    model: &CargoProjectModel,
+    include_test_example_bench: bool,
+) -> Result<BTreeSet<CrateName>, String> {
+    let cargo_toml = path.join("Cargo.toml");
     let mut prefixes =
-        rvs_collect_local_crate_prefixes_for_targets(&content, include_test_example_bench)
+        rvs_collect_manifest_crate_prefixes(&model.document, include_test_example_bench)
             .map_err(|e| format!("{}: {e}", cargo_toml.display()))?;
+    let auto_target_flags = rvs_parse_auto_target_flags(&model.document);
     rvs_collect_auto_target_prefixes_for_targets_BIMS(
         path,
         &mut prefixes,
         &include_test_example_bench,
+        &auto_target_flags,
     )?;
     Ok(prefixes)
+}
+
+pub(crate) fn rvs_detect_local_crate_prefixes_for_function_query_BIS(
+    path: &Path,
+) -> Result<Option<BTreeSet<CrateName>>, String> {
+    let cargo_toml = path.join("Cargo.toml");
+    let content = std::fs::read_to_string(&cargo_toml)
+        .map_err(|e| format!("cannot read '{}': {e}", cargo_toml.display()))?;
+    let model = rvs_parse_cargo_project_model(&content)
+        .map_err(|e| format!("invalid TOML in '{}': {e}", cargo_toml.display()))?;
+    if model.document.get("package").is_none() {
+        return Ok(None);
+    }
+    rvs_collect_local_crate_prefixes_from_model_BIS(path, &model, true).map(Some)
 }
 
 #[cfg(test)]
@@ -126,15 +187,21 @@ pub(crate) fn rvs_collect_auto_target_prefixes_BIMS(
     path: &Path,
     prefixes: &mut BTreeSet<CrateName>,
 ) -> Result<(), String> {
-    rvs_collect_auto_target_prefixes_for_targets_BIMS(path, prefixes, &true)
+    let cargo_toml = path.join("Cargo.toml");
+    let content = std::fs::read_to_string(&cargo_toml)
+        .map_err(|e| format!("cannot read {}: {e}", cargo_toml.display()))?;
+    let model = rvs_parse_cargo_project_model(&content)
+        .map_err(|e| format!("{}: {e}", cargo_toml.display()))?;
+    let auto_target_flags = rvs_parse_auto_target_flags(&model.document);
+    rvs_collect_auto_target_prefixes_for_targets_BIMS(path, prefixes, &true, &auto_target_flags)
 }
 
 fn rvs_collect_auto_target_prefixes_for_targets_BIMS(
     path: &Path,
     prefixes: &mut BTreeSet<CrateName>,
     include_test_example_bench: &bool,
+    flags: &AutoTargetFlags,
 ) -> Result<(), String> {
-    let flags = rvs_collect_auto_target_flags_BIS(path)?;
     if *include_test_example_bench && flags.autotests {
         let tests_dir = path.join("tests");
         rvs_collect_rs_file_stems_BIMS(&tests_dir, prefixes)?;
@@ -159,49 +226,34 @@ fn rvs_collect_auto_target_prefixes_for_targets_BIMS(
     Ok(())
 }
 
-#[derive(Debug, Clone, Copy)]
-struct AutoTargetFlags {
-    autobins: bool,
-    autotests: bool,
-    autoexamples: bool,
-    autobenches: bool,
+fn rvs_parse_cargo_project_model(source: &str) -> Result<CargoProjectModel, toml_edit::TomlError> {
+    let document = source.parse::<toml_edit::DocumentMut>()?;
+    Ok(CargoProjectModel {
+        source: source.to_string(),
+        document,
+    })
 }
 
-fn rvs_collect_auto_target_flags_BIS(path: &Path) -> Result<AutoTargetFlags, String> {
-    let mut flags = AutoTargetFlags {
-        autobins: true,
-        autotests: true,
-        autoexamples: true,
-        autobenches: true,
-    };
-    let cargo_toml = path.join("Cargo.toml");
-    let content = std::fs::read_to_string(&cargo_toml)
-        .map_err(|e| format!("cannot read {}: {e}", cargo_toml.display()))?;
-    let doc = content
-        .parse::<toml_edit::DocumentMut>()
-        .map_err(|e| format!("{}: {e}", cargo_toml.display()))?;
-    let Some(package) = doc.get("package") else {
-        return Ok(flags);
-    };
-    if let Some(value) = package.get("autobins").and_then(toml_edit::Item::as_bool) {
-        flags.autobins = value;
+fn rvs_parse_auto_target_flags(document: &toml_edit::DocumentMut) -> AutoTargetFlags {
+    let package = document.get("package");
+    AutoTargetFlags {
+        autobins: package
+            .and_then(|item| item.get("autobins"))
+            .and_then(toml_edit::Item::as_bool)
+            .unwrap_or(true),
+        autotests: package
+            .and_then(|item| item.get("autotests"))
+            .and_then(toml_edit::Item::as_bool)
+            .unwrap_or(true),
+        autoexamples: package
+            .and_then(|item| item.get("autoexamples"))
+            .and_then(toml_edit::Item::as_bool)
+            .unwrap_or(true),
+        autobenches: package
+            .and_then(|item| item.get("autobenches"))
+            .and_then(toml_edit::Item::as_bool)
+            .unwrap_or(true),
     }
-    if let Some(value) = package.get("autotests").and_then(toml_edit::Item::as_bool) {
-        flags.autotests = value;
-    }
-    if let Some(value) = package
-        .get("autoexamples")
-        .and_then(toml_edit::Item::as_bool)
-    {
-        flags.autoexamples = value;
-    }
-    if let Some(value) = package
-        .get("autobenches")
-        .and_then(toml_edit::Item::as_bool)
-    {
-        flags.autobenches = value;
-    }
-    Ok(flags)
 }
 
 pub(crate) fn rvs_collect_rs_file_stems_BIMS(
