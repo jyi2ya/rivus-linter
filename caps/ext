@@ -42,6 +42,7 @@ rustc_middle::ty::Visibility::is_public=
 rustc_middle::ty::adt::AdtDef::did=
 rustc_middle::ty::assoc::AssocItem::container_id=
 rustc_middle::ty::context::TyCtxt::def_path=
+rustc_middle::ty::context::TyCtxt::emit_node_span_lint=S
 rustc_middle::ty::context::TyCtxt::get_diagnostic_item=
 rustc_middle::ty::sty::Ty::kind=
 rustc_middle::ty::trait_def::TraitImpls::blanket_impls=

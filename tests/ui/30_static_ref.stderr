@@ -1,16 +1,20 @@
-error: static ref requires {S} but fn has {} (missing S(SideEffect))
-  --> $DIR/tests/ui/30_static_ref.rs:6:5
+error: function touches static/thread-local state without declaring required caps; declared caps: pure; required caps from body facts: S; missing: S
+  --> $DIR/tests/ui/30_static_ref.rs:5:1
    |
-LL |     COUNTER
-   |     ^^^^^^^
+LL | / fn rvs_read_counter() -> u32 {
+LL | |     COUNTER
+LL | | }
+   | |_^
    |
    = note: `#[deny(rivus::rvs_static_ref)]` on by default
 
-error: reads static but suffix lacks S
-  --> $DIR/tests/ui/30_static_ref.rs:6:5
+error: 'rvs_read_counter' is missing capability marker missing_side_effect; expected name: rvs_read_counter_S; declared caps: pure; inferred caps: S
+  --> $DIR/tests/ui/30_static_ref.rs:5:1
    |
-LL |     COUNTER
-   |     ^^^^^^^
+LL | / fn rvs_read_counter() -> u32 {
+LL | |     COUNTER
+LL | | }
+   | |_^
    |
    = note: `-D rivus::rvs-missing-side-effect` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_side_effect)]`

@@ -2,7 +2,6 @@ use std::collections::BTreeSet;
 use std::env;
 use std::ffi::OsString;
 use std::fmt;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -756,58 +755,37 @@ pub(crate) fn rvs_write_capsmap_file_BIS(
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| "capsmap".into());
-    let mut tmp_path: Option<PathBuf> = None;
-    let write_result = (|| -> Result<(), String> {
-        let mut file = None;
-        for attempt in 0..100usize {
-            debug_assert!(attempt < 100, "temp filename retry bound");
-            let candidate = path.with_file_name(format!(
-                ".{file_name}.{}.{}.tmp",
-                std::process::id(),
-                attempt
-            ));
-            match std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&candidate)
-            {
-                Ok(opened) => {
-                    tmp_path = Some(candidate);
-                    file = Some(opened);
-                    break;
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                Err(e) => return Err(format!("cannot create {}: {e}", candidate.display())),
-            }
+    crate::fs_guard::rvs_write_atomic_BIS(path, result.as_bytes(), |attempt| {
+        path.with_file_name(format!(
+            ".{file_name}.{}.{}.tmp",
+            std::process::id(),
+            attempt
+        ))
+    })
+    .map_err(|failure| match failure.kind {
+        crate::fs_guard::AtomicWriteFailureKind::Create { path, source } => {
+            format!("cannot create {}: {source}", path.display())
         }
-        let mut file = file.ok_or_else(|| {
-            format!(
-                "cannot create temp capsmap file for {}: too many collisions",
-                path.display()
-            )
-        })?;
-        let tmp_path = tmp_path
-            .as_ref()
-            .expect("never: temp path set when temp file was opened");
-        file.write_all(result.as_bytes())
-            .map_err(|e| format!("cannot write {}: {e}", tmp_path.display()))?;
-        file.sync_all()
-            .map_err(|e| format!("cannot sync {}: {e}", tmp_path.display()))?;
-        drop(file);
-        std::fs::rename(tmp_path, path).map_err(|e| {
-            format!(
-                "cannot rename {} to {}: {e}",
-                tmp_path.display(),
-                path.display()
-            )
-        })?;
-        Ok(())
-    })();
-    if write_result.is_err()
-        && let Some(tmp_path) = &tmp_path
-        && let Err(_cleanup_error) = std::fs::remove_file(tmp_path)
-    {}
-    write_result
+        crate::fs_guard::AtomicWriteFailureKind::TooManyCollisions => format!(
+            "cannot create temp capsmap file for {}: too many collisions",
+            path.display()
+        ),
+        crate::fs_guard::AtomicWriteFailureKind::Write { path, source } => {
+            format!("cannot write {}: {source}", path.display())
+        }
+        crate::fs_guard::AtomicWriteFailureKind::Sync { path, source } => {
+            format!("cannot sync {}: {source}", path.display())
+        }
+        crate::fs_guard::AtomicWriteFailureKind::Rename {
+            temp_path,
+            final_path,
+            source,
+        } => format!(
+            "cannot rename {} to {}: {source}",
+            temp_path.display(),
+            final_path.display()
+        ),
+    })
 }
 
 #[cfg(test)]

@@ -1,4 +1,4 @@
-error: 'rvs_fetch_BI' should be named 'rvs_fetch_P'
+error: 'rvs_fetch_BI' should be named 'rvs_fetch_P'; expected name: rvs_fetch_P; declared caps: BI; inferred caps: P
   --> $DIR/tests/ui/165_contract_mismatch_required_port.rs:6:5
    |
 LL |     fn rvs_fetch_BI(&self) -> i32;

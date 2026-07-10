@@ -6,11 +6,13 @@ LL | fn rvs_read_file_BI() {}
    |
    = note: `#[deny(rivus::rvs_empty_fn)]` on by default
 
-error: {} → rvs_read_file_BI (02_call_violation::rvs_read_file_BI) ({B, I}) missing B(Blocking), I(IO)
-  --> $DIR/tests/ui/02_call_violation.rs:5:5
+error: caller lacks propagated capabilities required by callee; callee: 02_call_violation::rvs_read_file_BI; caller declared caps: pure; callee caps: BI; missing propagated caps: B, I
+  --> $DIR/tests/ui/02_call_violation.rs:4:1
    |
-LL |     rvs_read_file_BI(); // pure function (no caps) calling BI function
-   |     ^^^^^^^^^^^^^^^^^^
+LL | / fn rvs_pure() {
+LL | |     rvs_read_file_BI(); // pure function (no caps) calling BI function
+LL | | }
+   | |_^
    |
    = note: `#[deny(rivus::rvs_call_violation)]` on by default
 

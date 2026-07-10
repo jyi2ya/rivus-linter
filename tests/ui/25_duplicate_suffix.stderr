@@ -6,15 +6,6 @@ LL | pub fn rvs_add_MM() {}
    |
    = note: `#[deny(rivus::rvs_empty_fn)]` on by default
 
-error: duplicate 'M'
-  --> $DIR/tests/ui/25_duplicate_suffix.rs:3:1
-   |
-LL | pub fn rvs_add_MM() {}
-   | ^^^^^^^^^^^^^^^^^^^^^^
-   |
-   = note: `-D rivus::rvs-duplicate-suffix` implied by `-D warnings`
-   = help: to override `-D warnings` add `#[allow(rivus::rvs_duplicate_suffix)]`
-
 error: pub fn 'rvs_add_MM' missing /// doc comment
   --> $DIR/tests/ui/25_duplicate_suffix.rs:3:1
    |
@@ -23,6 +14,15 @@ LL | pub fn rvs_add_MM() {}
    |
    = note: `-D rivus::rvs-missing-doc` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_doc)]`
+
+error: suffix 'MM' repeats 'M'; remove duplicate capability letters
+  --> $DIR/tests/ui/25_duplicate_suffix.rs:3:1
+   |
+LL | pub fn rvs_add_MM() {}
+   | ^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-duplicate-suffix` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_duplicate_suffix)]`
 
 error: good fn 'rvs_add_MM' not called by any test
   --> $DIR/tests/ui/25_duplicate_suffix.rs:3:1

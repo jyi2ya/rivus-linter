@@ -1,14 +1,3 @@
-error: unsafe code but suffix lacks U
-  --> $DIR/tests/ui/49_infer_unsafe_fn.rs:3:1
-   |
-LL | / unsafe fn rvs_dangerous() {
-LL | |     let _ = 42;
-LL | | }
-   | |_^
-   |
-   = note: `-D rivus::rvs-missing-unsafe` implied by `-D warnings`
-   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_unsafe)]`
-
 error: unsafe fn missing /// # Safety
   --> $DIR/tests/ui/49_infer_unsafe_fn.rs:3:1
    |
@@ -19,6 +8,17 @@ LL | | }
    |
    = note: `-D rivus::rvs-missing-safety-doc` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_safety_doc)]`
+
+error: 'rvs_dangerous' is missing capability marker missing_unsafe; expected name: rvs_dangerous_U; declared caps: pure; inferred caps: U
+  --> $DIR/tests/ui/49_infer_unsafe_fn.rs:3:1
+   |
+LL | / unsafe fn rvs_dangerous() {
+LL | |     let _ = 42;
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-missing-unsafe` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_unsafe)]`
 
 error: good fn 'rvs_dangerous' not called by any test
   --> $DIR/tests/ui/49_infer_unsafe_fn.rs:3:1

@@ -6,17 +6,6 @@ LL | fn rvs_add() {}
    |
    = note: `#[deny(rivus::rvs_empty_fn)]` on by default
 
-error: async but suffix lacks A
-  --> $DIR/tests/ui/07_infer_async.rs:5:1
-   |
-LL | / pub async fn rvs_fetch() {
-LL | |     rvs_add();
-LL | | }
-   | |_^
-   |
-   = note: `-D rivus::rvs-missing-async` implied by `-D warnings`
-   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_async)]`
-
 error: pub fn 'rvs_fetch' missing /// doc comment
   --> $DIR/tests/ui/07_infer_async.rs:5:1
    |
@@ -27,6 +16,17 @@ LL | | }
    |
    = note: `-D rivus::rvs-missing-doc` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_doc)]`
+
+error: 'rvs_fetch' is missing capability marker missing_async; expected name: rvs_fetch_A; declared caps: pure; inferred caps: A
+  --> $DIR/tests/ui/07_infer_async.rs:5:1
+   |
+LL | / pub async fn rvs_fetch() {
+LL | |     rvs_add();
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-missing-async` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_async)]`
 
 error: good fn 'rvs_add' not called by any test
   --> $DIR/tests/ui/07_infer_async.rs:3:1

@@ -28,7 +28,7 @@ pub(crate) fn rvs_collect_callgraph_for_item_M<'tcx>(
     is_trait_impl: bool,
     is_test: bool,
     is_port_method: bool,
-) {
+) -> DefPath {
     let local_def_id = hir_id.owner.def_id;
     let def_id = local_def_id.to_def_id();
     let caller_path = DefPath::rvs_new(rvs_def_path(cx, def_id));
@@ -73,15 +73,6 @@ pub(crate) fn rvs_collect_callgraph_for_item_M<'tcx>(
                 calls.insert(DefPath::rvs_new(rvs_def_path(cx, did)));
             }
         }
-        ExprKind::AddrOf(_, _, inner) => {
-            if let ExprKind::Path(ref q) = inner.kind {
-                if let rustc_hir::def::Res::Def(k, did) = cx.qpath_res(q, inner.hir_id) {
-                    if matches!(k, DefKind::Fn | DefKind::AssocFn) {
-                        calls.insert(DefPath::rvs_new(rvs_def_path(cx, did)));
-                    }
-                }
-            }
-        }
         _ => {}
     });
 
@@ -102,7 +93,7 @@ pub(crate) fn rvs_collect_callgraph_for_item_M<'tcx>(
     let allows_dead_code = rvs_has_allow(attrs, "dead_code") || rvs_has_allow(attrs, "unused");
 
     callgraph.rvs_merge_node_M(
-        caller_path,
+        caller_path.clone(),
         FnNode {
             calls,
             facts,
@@ -118,6 +109,7 @@ pub(crate) fn rvs_collect_callgraph_for_item_M<'tcx>(
             expected_name: None,
         },
     );
+    caller_path
 }
 
 /// Collect callgraph entry from a signature alone (no body — e.g. trait method
@@ -130,7 +122,7 @@ pub(crate) fn rvs_collect_callgraph_for_signature_M(
     sig: &rustc_hir::FnSig<'_>,
     is_trait_impl: bool,
     is_port_method: bool,
-) {
+) -> DefPath {
     let local_def_id = hir_id.owner.def_id;
     let def_id = local_def_id.to_def_id();
     let caller_path = DefPath::rvs_new(rvs_def_path(cx, def_id));
@@ -154,7 +146,7 @@ pub(crate) fn rvs_collect_callgraph_for_signature_M(
     );
 
     callgraph.rvs_merge_node_M(
-        caller_path,
+        caller_path.clone(),
         FnNode {
             calls: BTreeSet::new(),
             facts,
@@ -170,6 +162,7 @@ pub(crate) fn rvs_collect_callgraph_for_signature_M(
             expected_name: None,
         },
     );
+    caller_path
 }
 
 fn rvs_fn_source(cx: &LateContext<'_>, ident: Ident) -> Option<FnSource> {

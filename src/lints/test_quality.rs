@@ -1,6 +1,5 @@
 use std::collections::{BTreeMap, HashSet};
 use std::ffi::OsStr;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use rustc_lint::{LateContext, LintContext};
@@ -174,63 +173,49 @@ fn rvs_write_json_artifact_BIS(
     std::fs::create_dir_all(artifact_dir)
         .map_err(|e| format!("cannot create {}: {e}", artifact_dir.display()))?;
     let final_path = artifact_dir.join(format!("{crate_name}-{}.json", std::process::id()));
-    let mut tmp_path = None;
-    let mut file = None;
-    for attempt in 0..100usize {
-        let candidate = if attempt == 0 {
+    crate::fs_guard::rvs_write_atomic_BIS(&final_path, json.as_bytes(), |attempt| {
+        if attempt == 0 {
             artifact_dir.join(format!("{crate_name}-{}.json.tmp", std::process::id()))
         } else {
             artifact_dir.join(format!(
                 "{crate_name}-{}.json.tmp.{attempt}",
                 std::process::id()
             ))
-        };
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&candidate)
-        {
-            Ok(opened) => {
-                tmp_path = Some(candidate);
-                file = Some(opened);
-                break;
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(e) => return Err(format!("cannot create {}: {e}", candidate.display())),
         }
-    }
-    let tmp_path = tmp_path.ok_or_else(|| {
-        format!(
-            "cannot create temp artifact for {}: too many collisions",
-            final_path.display()
-        )
-    })?;
-    let result = (|| -> Result<PathBuf, String> {
-        let mut file = file.expect("never: temp file handle set when temp path exists");
-        file.write_all(json.as_bytes())
-            .map_err(|e| format!("cannot write {}: {e}", tmp_path.display()))?;
-        file.sync_all()
-            .map_err(|e| format!("cannot sync {}: {e}", tmp_path.display()))?;
-        drop(file);
-        std::fs::rename(&tmp_path, &final_path).map_err(|e| {
-            format!(
-                "cannot rename {} to {}: {e}",
-                tmp_path.display(),
-                final_path.display()
-            )
-        })?;
-        Ok(final_path)
-    })();
-    if result.is_err() {
-        let cleanup = match std::fs::remove_file(&tmp_path) {
-            Ok(()) => String::new(),
-            Err(cleanup_error) => {
-                format!("; additionally cannot remove temp file: {cleanup_error}")
+    })
+    .map_err(|failure| {
+        let message = match failure.kind {
+            crate::fs_guard::AtomicWriteFailureKind::Create { path, source } => {
+                format!("cannot create {}: {source}", path.display())
             }
+            crate::fs_guard::AtomicWriteFailureKind::TooManyCollisions => format!(
+                "cannot create temp artifact for {}: too many collisions",
+                final_path.display()
+            ),
+            crate::fs_guard::AtomicWriteFailureKind::Write { path, source } => {
+                format!("cannot write {}: {source}", path.display())
+            }
+            crate::fs_guard::AtomicWriteFailureKind::Sync { path, source } => {
+                format!("cannot sync {}: {source}", path.display())
+            }
+            crate::fs_guard::AtomicWriteFailureKind::Rename {
+                temp_path,
+                final_path,
+                source,
+            } => format!(
+                "cannot rename {} to {}: {source}",
+                temp_path.display(),
+                final_path.display()
+            ),
         };
-        return result.map_err(|e| e + &cleanup);
-    }
-    result
+        match failure.cleanup_error {
+            Some(cleanup_error) => {
+                format!("{message}; additionally cannot remove temp file: {cleanup_error}")
+            }
+            None => message,
+        }
+    })?;
+    Ok(final_path)
 }
 
 #[cfg(test)]

@@ -7,7 +7,7 @@ LL | struct Foo;
    = note: `-D rivus::rvs-missing-debug-derive` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_debug_derive)]`
 
-error: &mut param but suffix lacks M
+error: 'rvs_modify' is missing capability marker missing_mutable; expected name: rvs_modify_M; declared caps: pure; inferred caps: M
   --> $DIR/tests/ui/51_infer_mut_self.rs:5:5
    |
 LL | /     fn rvs_modify(&mut self) {

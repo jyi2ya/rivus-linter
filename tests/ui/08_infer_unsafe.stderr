@@ -22,18 +22,6 @@ LL | fn rvs_add() {}
    |
    = note: `#[deny(rivus::rvs_empty_fn)]` on by default
 
-error: unsafe code but suffix lacks U
-  --> $DIR/tests/ui/08_infer_unsafe.rs:5:1
-   |
-LL | / pub unsafe fn rvs_raw_ptr(x: *const u8) -> u8 {
-LL | |     rvs_add();
-LL | |     *x
-LL | | }
-   | |_^
-   |
-   = note: `-D rivus::rvs-missing-unsafe` implied by `-D warnings`
-   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_unsafe)]`
-
 error: pub fn 'rvs_raw_ptr' missing /// doc comment
   --> $DIR/tests/ui/08_infer_unsafe.rs:5:1
    |
@@ -57,6 +45,18 @@ LL | | }
    |
    = note: `-D rivus::rvs-missing-safety-doc` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_safety_doc)]`
+
+error: 'rvs_raw_ptr' is missing capability marker missing_unsafe; expected name: rvs_raw_ptr_U; declared caps: pure; inferred caps: U
+  --> $DIR/tests/ui/08_infer_unsafe.rs:5:1
+   |
+LL | / pub unsafe fn rvs_raw_ptr(x: *const u8) -> u8 {
+LL | |     rvs_add();
+LL | |     *x
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-missing-unsafe` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_unsafe)]`
 
 error: good fn 'rvs_add' not called by any test
   --> $DIR/tests/ui/08_infer_unsafe.rs:3:1

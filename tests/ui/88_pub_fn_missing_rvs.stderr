@@ -1,4 +1,4 @@
-error: 'bad_pub_fn' missing rvs_ prefix
+error: 'bad_pub_fn' is missing the rvs_ prefix; expected name: rvs_bad_pub_fn; declared caps: unknown; inferred caps: pure
   --> $DIR/tests/ui/88_pub_fn_missing_rvs.rs:3:1
    |
 LL | pub fn bad_pub_fn() {}

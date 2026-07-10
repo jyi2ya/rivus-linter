@@ -1,15 +1,19 @@
-error: {} → rvs_a_ABI (153_calls_in_struct_rest::rvs_a_ABI) ({A, B, I}) missing B(Blocking), I(IO)
-  --> $DIR/tests/ui/153_calls_in_struct_rest.rs:19:22
+error: caller lacks propagated capabilities required by callee; callee: 153_calls_in_struct_rest::rvs_a_ABI; caller declared caps: pure; callee caps: ABI; missing propagated caps: B, I
+  --> $DIR/tests/ui/153_calls_in_struct_rest.rs:18:1
    |
-LL |     let _ = Foo { x: rvs_a_ABI(), ..rvs_b_ABI() };
-   |                      ^^^^^^^^^^^
+LL | / fn rvs_outer() {
+LL | |     let _ = Foo { x: rvs_a_ABI(), ..rvs_b_ABI() };
+LL | | }
+   | |_^
    |
    = note: `#[deny(rivus::rvs_call_violation)]` on by default
 
-error: {} → rvs_b_ABI (153_calls_in_struct_rest::rvs_b_ABI) ({A, B, I}) missing B(Blocking), I(IO)
-  --> $DIR/tests/ui/153_calls_in_struct_rest.rs:19:37
+error: caller lacks propagated capabilities required by callee; callee: 153_calls_in_struct_rest::rvs_b_ABI; caller declared caps: pure; callee caps: ABI; missing propagated caps: B, I
+  --> $DIR/tests/ui/153_calls_in_struct_rest.rs:18:1
    |
-LL |     let _ = Foo { x: rvs_a_ABI(), ..rvs_b_ABI() };
-   |                                     ^^^^^^^^^^^
+LL | / fn rvs_outer() {
+LL | |     let _ = Foo { x: rvs_a_ABI(), ..rvs_b_ABI() };
+LL | | }
+   | |_^
 
 error: aborting due to 2 previous errors

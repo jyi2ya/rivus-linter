@@ -9,9 +9,10 @@ use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::artifacts::FnSource;
+use crate::artifacts::{FnGraph, FnSource};
 use crate::capability::rvs_parse_function;
-use crate::symbols::FnName;
+use crate::cargo_targets::rvs_function_matches_local_prefix;
+use crate::symbols::{DefPath, FnName};
 
 #[cfg(test)]
 use crate::symbols::RelativeFnPath;
@@ -31,7 +32,6 @@ struct FunctionNode {
     relative_path: RelativeFnPath,
     source: FnSource,
     position: FilePosition,
-    is_rvs_prefixed: bool,
     is_in_trait_impl: bool,
 }
 
@@ -39,6 +39,115 @@ struct FunctionNode {
 pub(crate) struct RenameStats {
     pub(crate) matched_functions: usize,
     pub(crate) files_changed: usize,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SourceRenameCandidate {
+    pub(crate) def_path: DefPath,
+    pub(crate) target_name: FnName,
+}
+
+impl SourceRenameCandidate {
+    pub(crate) fn rvs_new(def_path: DefPath, target_name: FnName) -> Self {
+        Self {
+            def_path,
+            target_name,
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct SourceRenamePlan {
+    pub(crate) rename_map: HashMap<FnSource, FnName>,
+    pub(crate) skipped_without_source: usize,
+}
+
+pub(crate) fn rvs_normalize_source_for_project_BIS(
+    source: &FnSource,
+    project_path: &Path,
+) -> Result<FnSource, String> {
+    let mut candidates = Vec::new();
+    if source.file.is_absolute() {
+        candidates.push(source.file.clone());
+    } else {
+        candidates.push(project_path.join(&source.file));
+        if let Some(parent) = project_path.parent() {
+            candidates.push(parent.join(&source.file));
+        }
+    }
+    let mut error_count = 0usize;
+    let mut file = None;
+    for candidate in candidates {
+        match candidate.canonicalize() {
+            Ok(resolved) => {
+                file = Some(resolved);
+                break;
+            }
+            Err(_) => error_count += 1,
+        }
+    }
+    let Some(file) = file else {
+        return Err(format!(
+            "cannot canonicalize source '{}' from {error_count} candidate path(s)",
+            source.file.display(),
+        ));
+    };
+    Ok(FnSource::rvs_new(file, source.name_start, source.name_end))
+}
+
+pub(crate) fn rvs_build_source_rename_plan_BIS(
+    graph: &FnGraph,
+    project_path: &Path,
+    candidates: impl IntoIterator<Item = SourceRenameCandidate>,
+    label: &str,
+) -> Result<SourceRenamePlan, String> {
+    let mut plan = SourceRenamePlan::default();
+    for candidate in candidates {
+        let Some(node) = graph.rvs_get(candidate.def_path.rvs_as_str()) else {
+            plan.skipped_without_source = rvs_checked_rename_count(
+                plan.skipped_without_source,
+                1,
+                "source-less rename skip count",
+            )?;
+            eprintln!(
+                "warning: skipping {label} candidate '{}' because callgraph metadata is missing",
+                candidate.def_path.rvs_as_str()
+            );
+            continue;
+        };
+        let sources: Vec<_> = node.sources.iter().cloned().collect();
+        if sources.is_empty() {
+            plan.skipped_without_source = rvs_checked_rename_count(
+                plan.skipped_without_source,
+                1,
+                "source-less rename skip count",
+            )?;
+            eprintln!(
+                "warning: skipping {label} candidate '{}' because it has no real source location metadata",
+                candidate.def_path.rvs_as_str()
+            );
+            continue;
+        }
+        for source in sources {
+            let source = rvs_normalize_source_for_project_BIS(&source, project_path)?;
+            if let Some(existing_target_name) = plan.rename_map.get(&source) {
+                if existing_target_name != &candidate.target_name {
+                    return Err(format!(
+                        "{label} candidate source '{}:{}..{}' has conflicting target names ('{}' vs '{}')",
+                        source.file.display(),
+                        source.name_start,
+                        source.name_end,
+                        existing_target_name,
+                        candidate.target_name
+                    ));
+                }
+                continue;
+            }
+            plan.rename_map
+                .insert(source, candidate.target_name.clone());
+        }
+    }
+    Ok(plan)
 }
 
 /// Loads the rust-analyzer workspace at `canonical_path` and returns the
@@ -171,7 +280,6 @@ fn rvs_find_functions_BIMS(
                 continue;
             }
 
-            let is_rvs_prefixed = name.rvs_as_str().starts_with("rvs_");
             let is_in_trait_impl = trait_impl_ranges
                 .iter()
                 .any(|r| r.contains_range(node.navigation_range));
@@ -197,7 +305,6 @@ fn rvs_find_functions_BIMS(
                     file_id,
                     offset: node.navigation_range.start(),
                 },
-                is_rvs_prefixed,
                 is_in_trait_impl,
             });
         }
@@ -460,63 +567,44 @@ pub fn rvs_strip_BIS(path: &Path) -> Result<(), String> {
     rvs_require_directory_BIS(path)?;
     debug_assert!(path.is_dir(), "path must be a directory");
 
-    let canonical_path = path
-        .canonicalize()
-        .map_err(|e| format!("cannot canonicalize '{}': {e}", path.display()))?;
-
-    // 1. Load workspace
-    let (analysis, vfs, _local_files) = rvs_load_workspace_BIS(&canonical_path)?;
-
-    // 2. Find all functions
-    let functions = rvs_find_functions_BIMS(&analysis, &vfs, &_local_files, &canonical_path);
-
-    // 3. Build rename_map from rvs_-prefixed functions keyed by exact source location.
-    let mut rename_map: HashMap<FnSource, FnName> = HashMap::new();
-    for func in &functions {
-        if !func.is_rvs_prefixed
-            || func.is_in_trait_impl
-            || rvs_is_extra_cargo_target_source(&func.source.file, &canonical_path)
+    let local_crate_names = crate::workspace::rvs_load_local_crate_prefixes_BIS(path)?;
+    let callgraph = crate::workspace::rvs_collect_callgraph_BIMS(path, false, false, vec![])?;
+    let mut candidates = Vec::new();
+    for (def_path, node) in callgraph.rvs_iter() {
+        if node.is_trait_impl
+            || !rvs_function_matches_local_prefix(def_path.rvs_as_str(), &local_crate_names)
         {
             continue;
         }
-        if let Some(new_name) = rvs_compute_strip_name(func.name.rvs_as_str())
+        let current_name = def_path.rvs_fn_name();
+        if let Some(new_name) = rvs_compute_strip_name(current_name.rvs_as_str())
             && !new_name.is_empty()
-            && new_name != func.name.rvs_as_str()
+            && new_name != current_name.rvs_as_str()
         {
-            rename_map.insert(func.source.clone(), FnName::rvs_new(new_name));
+            candidates.push(SourceRenameCandidate::rvs_new(
+                def_path.clone(),
+                FnName::rvs_new(new_name),
+            ));
         }
     }
 
+    let plan = rvs_build_source_rename_plan_BIS(&callgraph, path, candidates, "strip")?;
+    let rename_map = plan.rename_map;
+
     if rename_map.is_empty() {
-        println!("No rvs_ functions found to strip.");
+        if plan.skipped_without_source > 0 {
+            println!(
+                "No functions to strip (skipped {} candidate(s) without source metadata).",
+                plan.skipped_without_source
+            );
+            return Ok(());
+        }
+        println!("No functions to strip.");
         return Ok(());
     }
 
-    // 4. Apply semantic renames via rust-analyzer
-    let stats = match rvs_apply_source_renames_BIS(
-        &analysis,
-        &vfs,
-        &functions,
-        &rename_map,
-        &canonical_path,
-    ) {
-        Ok(stats) => stats,
-        Err(e) => {
-            if let Err(invalidate_error) = rvs_invalidate_callgraph_cache_BIS(path) {
-                return Err(format!(
-                    "{e}; additionally failed to invalidate callgraph cache: {invalidate_error}"
-                ));
-            }
-            return Err(e);
-        }
-    };
+    let stats = rvs_apply_ra_source_renames_BIS(path, &rename_map)?;
 
-    // 5. Invalidate cached callgraph (function names changed, old cache is stale)
-    if stats.files_changed > 0 {
-        rvs_invalidate_callgraph_cache_BIS(path)?;
-    }
-
-    // 6. Print summary
     println!(
         "Strip complete: renamed {} function(s) in {} file(s).",
         stats.matched_functions, stats.files_changed

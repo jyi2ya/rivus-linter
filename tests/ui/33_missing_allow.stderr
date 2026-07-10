@@ -15,7 +15,7 @@ LL | fn rvs_foo_BAR() {}
    = note: `-D rivus::rvs-missing-allow` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_allow)]`
 
-error: suffix not alphabetical
+error: suffix 'BAR' should be alphabetically ordered; suggested suffix order: ABR
   --> $DIR/tests/ui/33_missing_allow.rs:1:1
    |
 LL | fn rvs_foo_BAR() {}
@@ -24,7 +24,7 @@ LL | fn rvs_foo_BAR() {}
    = note: `-D rivus::rvs-non-alphabetical-suffix` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_non_alphabetical_suffix)]`
 
-error: unknown letters: R
+error: suffix 'BAR' contains unknown letters: R; known letters are A, B, I, M, P, S, T, U
   --> $DIR/tests/ui/33_missing_allow.rs:1:1
    |
 LL | fn rvs_foo_BAR() {}

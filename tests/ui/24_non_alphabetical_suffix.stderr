@@ -15,17 +15,6 @@ LL | pub fn rvs_add() {}
    = note: `-D rivus::rvs-missing-doc` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_doc)]`
 
-error: suffix not alphabetical
-  --> $DIR/tests/ui/24_non_alphabetical_suffix.rs:5:1
-   |
-LL | / pub fn rvs_foo_MI() {
-LL | |     rvs_add();
-LL | | }
-   | |_^
-   |
-   = note: `-D rivus::rvs-non-alphabetical-suffix` implied by `-D warnings`
-   = help: to override `-D warnings` add `#[allow(rivus::rvs_non_alphabetical_suffix)]`
-
 error: pub fn 'rvs_foo_MI' missing /// doc comment
   --> $DIR/tests/ui/24_non_alphabetical_suffix.rs:5:1
    |
@@ -34,7 +23,7 @@ LL | |     rvs_add();
 LL | | }
    | |_^
 
-error: suffix not alphabetical
+error: pub fn 'rvs_foo_MA' missing /// doc comment
   --> $DIR/tests/ui/24_non_alphabetical_suffix.rs:9:1
    |
 LL | / pub fn rvs_foo_MA() {
@@ -42,10 +31,21 @@ LL | |     rvs_add();
 LL | | }
    | |_^
 
-error: pub fn 'rvs_foo_MA' missing /// doc comment
+error: suffix 'MA' should be alphabetically ordered; suggested suffix order: AM
   --> $DIR/tests/ui/24_non_alphabetical_suffix.rs:9:1
    |
 LL | / pub fn rvs_foo_MA() {
+LL | |     rvs_add();
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-non-alphabetical-suffix` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_non_alphabetical_suffix)]`
+
+error: suffix 'MI' should be alphabetically ordered; suggested suffix order: IM
+  --> $DIR/tests/ui/24_non_alphabetical_suffix.rs:5:1
+   |
+LL | / pub fn rvs_foo_MI() {
 LL | |     rvs_add();
 LL | | }
    | |_^

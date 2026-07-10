@@ -7,15 +7,6 @@ LL | struct Svc;
    = note: `-D rivus::rvs-missing-debug-derive` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_debug_derive)]`
 
-error: 'bad_method' missing rvs_ prefix
-  --> $DIR/tests/ui/54_non_rvs_fn_in_impl.rs:6:5
-   |
-LL |     fn bad_method(&self) {}
-   |     ^^^^^^^^^^^^^^^^^^^^^^^
-   |
-   = note: `-D rivus::rvs-non-rvs-fn` implied by `-D warnings`
-   = help: to override `-D warnings` add `#[allow(rivus::rvs_non_rvs_fn)]`
-
 error: empty function body
   --> $DIR/tests/ui/54_non_rvs_fn_in_impl.rs:7:5
    |
@@ -23,6 +14,15 @@ LL |     fn rvs_good_method_M(&mut self) {}
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
    = note: `#[deny(rivus::rvs_empty_fn)]` on by default
+
+error: 'bad_method' is missing the rvs_ prefix; expected name: rvs_bad_method; declared caps: unknown; inferred caps: pure
+  --> $DIR/tests/ui/54_non_rvs_fn_in_impl.rs:6:5
+   |
+LL |     fn bad_method(&self) {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-non-rvs-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_non_rvs_fn)]`
 
 error: good fn 'rvs_good_method_M' not called by any test
   --> $DIR/tests/ui/54_non_rvs_fn_in_impl.rs:7:5

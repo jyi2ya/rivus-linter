@@ -1,14 +1,3 @@
-error: &mut param but suffix lacks M
-  --> $DIR/tests/ui/20_infer_mutable.rs:3:1
-   |
-LL | / pub fn rvs_add(x: &mut i32) {
-LL | |     *x += 1;
-LL | | }
-   | |_^
-   |
-   = note: `-D rivus::rvs-missing-mutable` implied by `-D warnings`
-   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_mutable)]`
-
 error: pub fn 'rvs_add' missing /// doc comment
   --> $DIR/tests/ui/20_infer_mutable.rs:3:1
    |
@@ -19,6 +8,17 @@ LL | | }
    |
    = note: `-D rivus::rvs-missing-doc` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_doc)]`
+
+error: 'rvs_add' is missing capability marker missing_mutable; expected name: rvs_add_M; declared caps: pure; inferred caps: M
+  --> $DIR/tests/ui/20_infer_mutable.rs:3:1
+   |
+LL | / pub fn rvs_add(x: &mut i32) {
+LL | |     *x += 1;
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-missing-mutable` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_mutable)]`
 
 error: good fn 'rvs_add' not called by any test
   --> $DIR/tests/ui/20_infer_mutable.rs:3:1

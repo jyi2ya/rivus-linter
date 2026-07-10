@@ -44,14 +44,14 @@
 
 ## `cargo rivus check [OPTIONS] [ARGS]`
 
-基于 rustc-driver 的 HIR 分析。编译项目并在编译过程中检查 `rvs_` 函数的调用链能力合规性。
+基于 rustc-driver 的 HIR 分析。第一阶段运行非能力 HIR lint，第二阶段收集全项目函数图，并由统一的离线能力引擎检查命名契约、后缀、静态状态和调用链合规性。
 
 ```bash
 cargo rivus check                    # 使用项目 caps/（若存在）
 cargo rivus check -- --features foo  # 传递额外 cargo check 参数
 ```
 
-注意：capsmap 只从项目 `caps/` 目录加载。CLI 不再支持 `-m/--capsmap`，也不再读取或生成 `target/rivus-std-capsmap.txt`、`target/rivus-inferred-capsmap.txt`、`target/rivus-deps-capsmap.txt`、`target/rivus-effective-capsmap/`。若项目存在 `caps/`，该路径通过 `RIVUS_CAPSMAP` 传给 lint 驱动层；否则 lint 使用空 capsmap。caps 目录使用统一的层级加载器（`CapsMap::rvs_load_dir_BIS`），按 `std → deps → seed → suppress → ext → 其余字母序` 的固定顺序合并。
+注意：capsmap 只从项目 `caps/` 目录加载。CLI 不再支持 `-m/--capsmap`，也不再读取或生成 `target/rivus-std-capsmap.txt`、`target/rivus-inferred-capsmap.txt`、`target/rivus-deps-capsmap.txt`、`target/rivus-effective-capsmap/`。目录不存在时统一能力引擎使用空 capsmap。caps 目录使用统一的层级加载器（`CapsMap::rvs_load_dir_BIS`），按 `std → deps → seed → suppress → ext → 其余字母序` 的固定顺序合并。
 
 
 注意：`check` 默认编译 `--tests`（含测试代码），因此 `#[test]` 函数也会被分析。`infer-capsmap` 和 `infer-std` 不编译测试代码。
@@ -64,7 +64,7 @@ cargo rivus check -- --features foo  # 传递额外 cargo check 参数
 
 对 `path` 指定的 Cargo 项目运行 `cargo check`，统计编译过程中发现的所有 `rvs_` 函数的能力分布，输出各能力标记的函数数量和行数占比。`good`（能力集合是 `{A,B,M}` 的子集，包括纯函数）和 `ok`（能力集合是 `{A,B,M,P}` 的子集）应尽量占比高。
 
-报告末尾还会尝试基于 fresh callgraph 追加 `Contract Mismatches` 和 `Sample Mismatches`，用于汇总函数名与推断公开契约不一致的情况。这个附加段需要额外执行一次 callgraph 收集；如果项目已有 deny-level lint 导致第二次收集失败，主能力报告仍会输出，并打印 `contract mismatch report unavailable` warning。
+能力分布和末尾的 `Contract Mismatches` / `Sample Mismatches` 都来自同一次 fresh callgraph 收集；callgraph 构建失败时 report 整体失败。
 
 `PATH` 最好直接指向目标 Cargo 项目的根目录；如果它不是包含 `Cargo.toml` 的项目根目录，命令会失败。
 

@@ -158,23 +158,6 @@ pub(crate) fn rvs_collect_call_contract_mismatch(
     })
 }
 
-pub(crate) fn rvs_collect_named_call_contract_mismatch(
-    def_path: &str,
-    src_path: Option<&str>,
-    caps: &CapabilitySet,
-    callee_caps: &CapabilitySet,
-) -> Option<CallContractMismatch> {
-    if callee_caps.rvs_is_empty() || CapabilityPolicy::rvs_can_call(caps, callee_caps) {
-        return None;
-    }
-    Some(CallContractMismatch {
-        callee_display: rvs_make_callee_display(def_path, src_path),
-        kind: CallContractMismatchKind::MissingCapabilities,
-        callee_caps: Some(callee_caps.clone()),
-        missing_caps: CapabilityPolicy::rvs_missing_for(caps, callee_caps),
-    })
-}
-
 /// Build a "method@trait_path" → set-of-keys index from callgraph keys.
 pub(crate) fn rvs_build_impl_index(
     callgraph: &BTreeMap<DefPath, FnBehavior>,
@@ -595,6 +578,7 @@ pub(crate) fn rvs_collect_contract_mismatch_items(
     items
 }
 
+#[cfg(test)]
 pub(crate) fn rvs_collect_single_local_contract_diff_M(
     def_path: DefPath,
     node: FnNode,
@@ -608,6 +592,7 @@ pub(crate) fn rvs_collect_single_local_contract_diff_M(
         .expect("never: single local contract diff should always exist")
 }
 
+#[cfg(test)]
 pub(crate) fn rvs_collect_signature_contract_diff_from_facts_M(
     def_path: DefPath,
     facts: crate::capability::CapabilityFacts,

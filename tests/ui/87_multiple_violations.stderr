@@ -6,25 +6,30 @@ LL | fn rvs_inner_ABI() {}
    |
    = note: `#[deny(rivus::rvs_empty_fn)]` on by default
 
-error: {} → rvs_inner_ABI (87_multiple_violations::rvs_inner_ABI) ({A, B, I}) missing B(Blocking), I(IO)
-  --> $DIR/tests/ui/87_multiple_violations.rs:5:5
-   |
-LL |     rvs_inner_ABI();
-   |     ^^^^^^^^^^^^^^^
-   |
-   = note: `#[deny(rivus::rvs_call_violation)]` on by default
-
 error: empty function body
   --> $DIR/tests/ui/87_multiple_violations.rs:7:1
    |
 LL | fn rvs_pure_M() {}
    | ^^^^^^^^^^^^^^^^^^
 
-error: {} → rvs_inner_ABI (87_multiple_violations::rvs_inner_ABI) ({A, B, I}) missing B(Blocking), I(IO)
-  --> $DIR/tests/ui/87_multiple_violations.rs:9:5
+error: caller lacks propagated capabilities required by callee; callee: 87_multiple_violations::rvs_inner_ABI; caller declared caps: pure; callee caps: ABI; missing propagated caps: B, I
+  --> $DIR/tests/ui/87_multiple_violations.rs:8:1
    |
-LL |     rvs_inner_ABI();
-   |     ^^^^^^^^^^^^^^^
+LL | / fn rvs_caller() {
+LL | |     rvs_inner_ABI();
+LL | |     rvs_pure_M();
+LL | | }
+   | |_^
+   |
+   = note: `#[deny(rivus::rvs_call_violation)]` on by default
+
+error: caller lacks propagated capabilities required by callee; callee: 87_multiple_violations::rvs_inner_ABI; caller declared caps: pure; callee caps: ABI; missing propagated caps: B, I
+  --> $DIR/tests/ui/87_multiple_violations.rs:4:1
+   |
+LL | / fn rvs_outer() {
+LL | |     rvs_inner_ABI();
+LL | | }
+   | |_^
 
 error: good fn 'rvs_outer' not called by any test
   --> $DIR/tests/ui/87_multiple_violations.rs:4:1

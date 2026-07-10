@@ -1,9 +1,41 @@
-error: {} → std::fs::read_to_string ({B, I, S}) missing B(Blocking), I(IO), S(SideEffect)
-  --> $DIR/tests/ui/157_violation_in_macro.rs:5:35
+error: caller lacks propagated capabilities required by callee; callee: std::fs::read_to_string; caller declared caps: pure; callee caps: BIS; missing propagated caps: B, I, S
+  --> $DIR/tests/ui/157_violation_in_macro.rs:4:1
    |
-LL |     let _ = format!("calling {}", std::fs::read_to_string("x").unwrap());
-   |                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+LL | / fn rvs_pure_fn() {
+LL | |     let _ = format!("calling {}", std::fs::read_to_string("x").unwrap());
+LL | | }
+   | |_^
    |
    = note: `#[deny(rivus::rvs_call_violation)]` on by default
 
-error: aborting due to 1 previous error
+error: 'rvs_pure_fn' is missing capability marker missing_blocking; expected name: rvs_pure_fn_BIS; declared caps: pure; inferred caps: BIS
+  --> $DIR/tests/ui/157_violation_in_macro.rs:4:1
+   |
+LL | / fn rvs_pure_fn() {
+LL | |     let _ = format!("calling {}", std::fs::read_to_string("x").unwrap());
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-contract-mismatch` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_contract_mismatch)]`
+
+error: 'rvs_pure_fn' is missing capability marker missing_io; expected name: rvs_pure_fn_BIS; declared caps: pure; inferred caps: BIS
+  --> $DIR/tests/ui/157_violation_in_macro.rs:4:1
+   |
+LL | / fn rvs_pure_fn() {
+LL | |     let _ = format!("calling {}", std::fs::read_to_string("x").unwrap());
+LL | | }
+   | |_^
+
+error: 'rvs_pure_fn' is missing capability marker missing_side_effect; expected name: rvs_pure_fn_BIS; declared caps: pure; inferred caps: BIS
+  --> $DIR/tests/ui/157_violation_in_macro.rs:4:1
+   |
+LL | / fn rvs_pure_fn() {
+LL | |     let _ = format!("calling {}", std::fs::read_to_string("x").unwrap());
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-missing-side-effect` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_side_effect)]`
+
+error: aborting due to 4 previous errors

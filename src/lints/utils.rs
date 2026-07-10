@@ -2,12 +2,12 @@ use std::collections::{BTreeSet, HashSet};
 
 use rustc_hir::{
     self, Block, Body, Expr, ExprKind, GenericArg, HirId, ImplItem, ImplItemImplKind, Mutability,
-    QPath, TyKind, attrs::AttributeKind, def::Res, def_id::DefId,
+    QPath, TyKind, attrs::AttributeKind, def_id::DefId,
 };
 use rustc_lint::LateContext;
-use rustc_span::{Span, Symbol};
+use rustc_span::Symbol;
 
-use crate::capability::{Capability, CapabilitySet, rvs_extract_raw_suffix, rvs_parse_function};
+use crate::capability::{CapabilitySet, rvs_extract_raw_suffix, rvs_parse_function};
 
 // ─── Constants ───────────────────────────────────────────────────────────
 
@@ -453,48 +453,6 @@ fn rvs_collect_all_idents_M(e: &Expr<'_>, out: &mut BTreeSet<String>) {
         ExprKind::Use(x, _) => rvs_collect_all_idents_M(x, out),
         _ => {}
     }
-}
-
-pub(crate) fn rvs_scan_static_refs_M<'tcx>(
-    cx: &LateContext<'tcx>,
-    body: &Body<'tcx>,
-) -> Vec<(Span, CapabilitySet, bool)> {
-    let mut refs = Vec::new();
-    rvs_walk_closures(cx.tcx, body.value, |e| {
-        if let ExprKind::Path(ref q) = e.kind {
-            if let Res::Def(kind, did) = cx.qpath_res(q, e.hir_id) {
-                match kind {
-                    rustc_hir::def::DefKind::Static {
-                        mutability: Mutability::Mut,
-                        ..
-                    } => {
-                        let mut required = CapabilitySet::rvs_new();
-                        required.rvs_insert_M(Capability::S);
-                        required.rvs_insert_M(Capability::U);
-                        let is_thread_local = rvs_static_is_thread_local(cx, did);
-                        if is_thread_local {
-                            required.rvs_insert_M(Capability::T);
-                        }
-                        refs.push((e.span, required, is_thread_local));
-                    }
-                    rustc_hir::def::DefKind::Static {
-                        mutability: Mutability::Not,
-                        ..
-                    } => {
-                        let mut cs = CapabilitySet::rvs_new();
-                        cs.rvs_insert_M(Capability::S);
-                        let is_thread_local = rvs_static_is_thread_local(cx, did);
-                        if is_thread_local {
-                            cs.rvs_insert_M(Capability::T);
-                        }
-                        refs.push((e.span, cs, is_thread_local));
-                    }
-                    _ => {}
-                }
-            }
-        }
-    });
-    refs
 }
 
 pub(crate) fn rvs_static_is_thread_local(cx: &LateContext<'_>, did: DefId) -> bool {
@@ -968,7 +926,6 @@ mod tests {
             rvs_expr_from_debug_assert_macro(_expr);
             rvs_scan_debug_asserts_M(_tcx, _body);
             rvs_collect_all_idents_M(_expr, &mut set);
-            rvs_scan_static_refs_M(_cx, _body);
             rvs_static_is_thread_local(_cx, _def_id);
             rvs_collect_test_call_names_M(_tcx, _body, &mut names);
             rvs_count_effective_lines_M(_cx, _body);

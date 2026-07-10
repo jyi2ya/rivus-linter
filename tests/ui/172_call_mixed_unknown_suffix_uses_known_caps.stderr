@@ -1,8 +1,10 @@
-error: {} → rvs_send_AEIS (172_call_mixed_unknown_suffix_uses_known_caps::rvs_send_AEIS) ({A, I, S}) missing I(IO), S(SideEffect)
-  --> $DIR/tests/ui/172_call_mixed_unknown_suffix_uses_known_caps.rs:12:5
+error: caller lacks propagated capabilities required by callee; callee: 172_call_mixed_unknown_suffix_uses_known_caps::rvs_send_AEIS; caller declared caps: pure; callee caps: AIS; missing propagated caps: I, S
+  --> $DIR/tests/ui/172_call_mixed_unknown_suffix_uses_known_caps.rs:11:1
    |
-LL |     rvs_send_AEIS();
-   |     ^^^^^^^^^^^^^^^
+LL | / fn rvs_outer() {
+LL | |     rvs_send_AEIS();
+LL | | }
+   | |_^
    |
    = note: `#[deny(rivus::rvs_call_violation)]` on by default
 

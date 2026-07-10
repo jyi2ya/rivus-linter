@@ -1,8 +1,11 @@
-error: {} → rvs_fetch_BI (161_inherent_client_method_uses_suffix_not_p::HttpClient::rvs_fetch_BI) ({B, I}) missing B(Blocking), I(IO)
-  --> $DIR/tests/ui/161_inherent_client_method_uses_suffix_not_p.rs:18:5
+error: caller lacks propagated capabilities required by callee; callee: 161_inherent_client_method_uses_suffix_not_p::HttpClient::rvs_fetch_BI; caller declared caps: pure; callee caps: BI; missing propagated caps: B, I
+  --> $DIR/tests/ui/161_inherent_client_method_uses_suffix_not_p.rs:16:1
    |
-LL |     client.rvs_fetch_BI();
-   |     ^^^^^^^^^^^^^^^^^^^^^
+LL | / fn rvs_run() {
+LL | |     let client = HttpClient;
+LL | |     client.rvs_fetch_BI();
+LL | | }
+   | |_^
    |
    = note: `#[deny(rivus::rvs_call_violation)]` on by default
 

@@ -1,12 +1,7 @@
-Offline Caps Check: 0 error(s), 2 warning(s)
+Offline Caps Check: 0 error(s), 1 warning(s)
 ------------------------------------------------------------
 warning[missing_rvs_prefix]: demo::read_cache
   'read_cache' is missing the rvs_ prefix
-  expected name: rvs_read_cache_S
-  declared caps: unknown
-  inferred caps: S
-warning[missing_side_effect]: demo::read_cache
-  'read_cache' is missing capability marker missing_side_effect
   expected name: rvs_read_cache_S
   declared caps: unknown
   inferred caps: S

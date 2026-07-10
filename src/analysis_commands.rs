@@ -1,14 +1,13 @@
-use std::collections::HashMap;
 use std::path::Path;
 
-use crate::artifacts::{FnGraph, FnSource};
+use crate::artifacts::FnGraph;
 use crate::inference::{
     FnContractDiff, rvs_build_graph_impl_index, rvs_caps_to_string,
     rvs_collect_local_contract_diffs_M, rvs_contract_diff_is_enforced,
     rvs_resolve_graph_impl_majority_caps_M,
 };
 use crate::rename;
-use crate::symbols::{CrateName, DefPath, FnName};
+use crate::symbols::{CrateName, DefPath};
 
 use crate::cargo_targets::{
     rvs_detect_local_crate_prefixes_for_cargo_check_BIS, rvs_function_matches_local_prefix,
@@ -20,21 +19,6 @@ use crate::workspace::{
     rvs_load_callgraph_and_caps_for_function_BIMS, rvs_load_local_crate_prefixes_BIS,
 };
 
-fn rvs_normalize_source_for_project_BIS(
-    source: &FnSource,
-    project_path: &Path,
-) -> Result<FnSource, String> {
-    let file = if source.file.is_absolute() {
-        source.file.clone()
-    } else {
-        project_path.join(&source.file)
-    };
-    let file = file
-        .canonicalize()
-        .map_err(|e| format!("cannot canonicalize source '{}': {e}", file.display()))?;
-    Ok(FnSource::rvs_new(file, source.name_start, source.name_end))
-}
-
 /// # Panics
 ///
 /// Panics if the current executable path, current directory, or cargo cannot be resolved.
@@ -42,8 +26,7 @@ pub(crate) fn rvs_run_annotate_BIMPS(path: &Path) -> Result<(), String> {
     let local_crate_names = rvs_detect_local_crate_prefixes_for_cargo_check_BIS(path, false)?;
     let (mut callgraph, seed) = rvs_collect_callgraph_and_caps_BIMS(path, false)?;
     let diffs = rvs_collect_local_contract_diffs_M(&mut callgraph, &seed, &local_crate_names);
-    let mut rename_map: HashMap<FnSource, FnName> = HashMap::new();
-    let mut skipped_without_source = 0usize;
+    let mut candidates = Vec::new();
     for diff in diffs {
         let Some(expected_name) = diff.expected_name.as_ref() else {
             continue;
@@ -51,46 +34,19 @@ pub(crate) fn rvs_run_annotate_BIMPS(path: &Path) -> Result<(), String> {
         if !diff.rvs_has_name_mismatch() || expected_name == &diff.actual_name {
             continue;
         }
-        let Some(node) = callgraph.rvs_get(diff.def_path.rvs_as_str()) else {
-            skipped_without_source += 1;
-            eprintln!(
-                "warning: skipping annotate candidate '{}' because callgraph metadata is missing",
-                diff.def_path.rvs_as_str()
-            );
-            continue;
-        };
-        let sources: Vec<_> = node.sources.iter().cloned().collect();
-        if sources.is_empty() {
-            skipped_without_source += 1;
-            eprintln!(
-                "warning: skipping annotate candidate '{}' because it has no real source location metadata",
-                diff.def_path.rvs_as_str()
-            );
-            continue;
-        }
-        for source in sources {
-            let source = rvs_normalize_source_for_project_BIS(&source, path)?;
-            if let Some(existing_expected_name) = rename_map.get(&source) {
-                if existing_expected_name != expected_name {
-                    return Err(format!(
-                        "annotate candidate source '{}:{}..{}' has conflicting expected names ('{}' vs '{}')",
-                        source.file.display(),
-                        source.name_start,
-                        source.name_end,
-                        existing_expected_name,
-                        expected_name
-                    ));
-                }
-                continue;
-            }
-            rename_map.insert(source, expected_name.clone());
-        }
+        candidates.push(rename::SourceRenameCandidate::rvs_new(
+            diff.def_path,
+            expected_name.clone(),
+        ));
     }
+    let plan = rename::rvs_build_source_rename_plan_BIS(&callgraph, path, candidates, "annotate")?;
+    let rename_map = plan.rename_map;
 
     if rename_map.is_empty() {
-        if skipped_without_source > 0 {
+        if plan.skipped_without_source > 0 {
             println!(
-                "No functions to annotate (skipped {skipped_without_source} candidate(s) without source metadata)."
+                "No functions to annotate (skipped {} candidate(s) without source metadata).",
+                plan.skipped_without_source
             );
             return Ok(());
         }
@@ -358,6 +314,10 @@ fn rvs_format_enforced_contract_diff_summary(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+
+    use crate::artifacts::FnSource;
+    use crate::symbols::FnName;
     use crate::test_support::{rvs_make_temp_dir_BIS, rvs_snapshot_BIS};
 
     #[test]
@@ -396,7 +356,7 @@ mod tests {
         std::fs::write(dir.join("src/lib.rs"), "fn parse() {}\n").unwrap();
         let source = FnSource::rvs_new(std::path::PathBuf::from("src/lib.rs"), 3, 8);
 
-        let normalized = rvs_normalize_source_for_project_BIS(&source, &dir).unwrap();
+        let normalized = rename::rvs_normalize_source_for_project_BIS(&source, &dir).unwrap();
         rvs_snapshot_BIS(
             "test_20260706_normalize_source_for_project",
             &format!(
@@ -418,7 +378,7 @@ mod tests {
         let dir = rvs_make_temp_dir_BIS("normalize-source-missing");
         let source = FnSource::rvs_new(std::path::PathBuf::from("src/missing.rs"), 3, 8);
 
-        let result = rvs_normalize_source_for_project_BIS(&source, &dir);
+        let result = rename::rvs_normalize_source_for_project_BIS(&source, &dir);
         let output = format!("{result:?}\n").replace(&dir.to_string_lossy().into_owned(), "$TMP");
         rvs_snapshot_BIS(
             "test_20260706_normalize_source_reports_missing_file",

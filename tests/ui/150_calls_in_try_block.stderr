@@ -1,8 +1,12 @@
-error: {} → rvs_inner_ABI (150_calls_in_try_block::rvs_inner_ABI) ({A, B, I}) missing B(Blocking), I(IO)
-  --> $DIR/tests/ui/150_calls_in_try_block.rs:11:9
+error: caller lacks propagated capabilities required by callee; callee: 150_calls_in_try_block::rvs_inner_ABI; caller declared caps: pure; callee caps: ABI; missing propagated caps: B, I
+  --> $DIR/tests/ui/150_calls_in_try_block.rs:9:1
    |
-LL |         rvs_inner_ABI();
-   |         ^^^^^^^^^^^^^^^
+LL | / fn rvs_outer() {
+LL | |     let _: Result<(), ()> = try {
+LL | |         rvs_inner_ABI();
+LL | |     };
+LL | | }
+   | |_^
    |
    = note: `#[deny(rivus::rvs_call_violation)]` on by default
 

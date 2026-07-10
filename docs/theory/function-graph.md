@@ -48,9 +48,9 @@
 
 ## 差异
 
-annotate、why、report 不再各自发明一套解释，而是基于同一张图做不同视图。普通 lint pass 仍在 rustc 回调内做签名级检查和直接调用边检查；需要整图推断的视图由命令层加载 callgraph 后计算。
+能力诊断、annotate、why、report 不再各自发明一套解释，而是基于同一张图做不同视图。lint pass 只从 HIR 收集能力事实；能力契约、后缀、静态状态和调用边诊断统一由离线能力引擎计算。直接 rustc/UI 模式使用当前 crate 的内存图，`cargo rivus check` 使用合并后的全项目图。
 
-- **lint**：检查签名事实、命名契约和直接调用边
+- **lint**：收集事实，并把统一能力引擎的当前 crate 诊断映射为 rustc lint
 - **annotate**：把期望名字写回源码
 - **why**：展示节点能力和边上的来源
-- **report**：主报告仍从 lint pass 写出的 report artifact 聚合能力分布；附加的 contract mismatch 摘要基于 fresh function graph 计算
+- **report**：从 fresh function graph 的 report metadata 聚合能力分布和 contract mismatch 摘要

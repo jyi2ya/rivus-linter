@@ -1,16 +1,20 @@
-error: static ref requires {S, U} but fn has {S} (missing U(Unsafe))
-  --> $DIR/tests/ui/175_static_mut_requires_unsafe_suffix.rs:6:14
+error: function touches static/thread-local state without declaring required caps; declared caps: S; required caps from body facts: SU; missing: U
+  --> $DIR/tests/ui/175_static_mut_requires_unsafe_suffix.rs:5:1
    |
-LL |     unsafe { COUNTER }
-   |              ^^^^^^^
+LL | / fn rvs_read_counter_S() -> u32 {
+LL | |     unsafe { COUNTER }
+LL | | }
+   | |_^
    |
    = note: `#[deny(rivus::rvs_static_ref)]` on by default
 
-error: static mut access but suffix lacks U
-  --> $DIR/tests/ui/175_static_mut_requires_unsafe_suffix.rs:6:14
+error: 'rvs_read_counter_S' is missing capability marker missing_unsafe; expected name: rvs_read_counter_SU; declared caps: S; inferred caps: SU
+  --> $DIR/tests/ui/175_static_mut_requires_unsafe_suffix.rs:5:1
    |
-LL |     unsafe { COUNTER }
-   |              ^^^^^^^
+LL | / fn rvs_read_counter_S() -> u32 {
+LL | |     unsafe { COUNTER }
+LL | | }
+   | |_^
    |
    = note: `-D rivus::rvs-missing-unsafe` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_unsafe)]`

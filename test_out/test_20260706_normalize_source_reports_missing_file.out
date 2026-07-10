@@ -1,1 +1,1 @@
-Err("cannot canonicalize source '$TMP/src/missing.rs': No such file or directory (os error 2)")
+Err("cannot canonicalize source 'src/missing.rs' from 2 candidate path(s)")

@@ -1,4 +1,4 @@
-error: unknown letters: E
+error: suffix 'E' contains unknown letters: E; known letters are A, B, I, M, P, S, T, U
   --> $DIR/tests/ui/92_unknown_suffix_e_only.rs:3:1
    |
 LL | / fn rvs_render_art_E() -> String {
