@@ -7,7 +7,7 @@ use rustc_hir::{
 use rustc_lint::LateContext;
 use rustc_span::Symbol;
 
-use crate::capability::{CapabilitySet, rvs_extract_raw_suffix, rvs_parse_function};
+use crate::capability::{CapabilitySet, ParsedFunctionName};
 
 // ─── Constants ───────────────────────────────────────────────────────────
 
@@ -151,24 +151,14 @@ pub(crate) struct FnInfo {
 }
 
 impl FnInfo {
-    pub(crate) fn rvs_extract_signature(name: &str, _sig: &rustc_hir::FnSig<'_>) -> Option<Self> {
-        let (_, caps) = rvs_parse_function(name)?;
+    pub(crate) fn rvs_extract(name: &str) -> Option<Self> {
+        let parsed = ParsedFunctionName::rvs_parse(name);
+        if !parsed.rvs_has_rvs_prefix() {
+            return None;
+        }
         Some(Self {
-            caps,
-            raw_suffix: rvs_extract_raw_suffix(name),
-        })
-    }
-
-    pub(crate) fn rvs_extract<'tcx>(
-        name: &str,
-        _sig: &rustc_hir::FnSig<'_>,
-        _body: &Body<'tcx>,
-        _tcx: rustc_middle::ty::TyCtxt<'tcx>,
-    ) -> Option<Self> {
-        let (_, caps) = rvs_parse_function(name)?;
-        Some(Self {
-            caps,
-            raw_suffix: rvs_extract_raw_suffix(name),
+            caps: parsed.rvs_known_caps().clone(),
+            raw_suffix: parsed.rvs_raw_suffix().unwrap_or("").to_string(),
         })
     }
 }
@@ -917,8 +907,7 @@ mod tests {
             rvs_has_any_doc(_attrs);
             rvs_has_debug_derive(_cx, _def_id);
             rvs_is_pub_impl_item(_cx, _impl_item);
-            FnInfo::rvs_extract_signature("rvs_helper", _sig);
-            FnInfo::rvs_extract("rvs_helper", _sig, _body, _tcx);
+            FnInfo::rvs_extract("rvs_helper");
             rvs_has_mutable_params(_sig);
             rvs_scan_stub(_tcx, _body);
             rvs_is_empty_body(_body);

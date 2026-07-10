@@ -3,6 +3,8 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::capability::rvs_function_name_segment;
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct CrateName(String);
@@ -138,7 +140,7 @@ impl DefPath {
 
     /// Return the last function-name segment of the def-path.
     pub fn rvs_fn_name(&self) -> FnName {
-        rvs_path_fn_name(&self.0)
+        FnName::rvs_new(rvs_function_name_segment(&self.0))
     }
 
     /// Return whether this def-path belongs to the given crate prefix.
@@ -206,13 +208,8 @@ impl RelativeFnPath {
 
     /// Return the last function-name segment of the relative path.
     pub fn rvs_fn_name(&self) -> FnName {
-        rvs_path_fn_name(&self.0)
+        FnName::rvs_new(rvs_function_name_segment(&self.0))
     }
-}
-
-fn rvs_path_fn_name(path: &str) -> FnName {
-    let method_path = path.split_once('@').map_or(path, |(method, _)| method);
-    FnName::rvs_new(method_path.rsplit("::").next().unwrap_or(method_path))
 }
 
 impl fmt::Display for RelativeFnPath {
@@ -352,7 +349,7 @@ mod tests {
         rvs_snapshot_BIS("test_20260703_fn_name_ignores_trait_impl_suffix", &output);
 
         assert_eq!(
-            rvs_path_fn_name("demo::Adapter::rvs_fetch_BI@demo::Client").rvs_as_str(),
+            rvs_function_name_segment("demo::Adapter::rvs_fetch_BI@demo::Client"),
             "rvs_fetch_BI"
         );
         assert_eq!(def_path.rvs_fn_name().rvs_as_str(), "rvs_fetch_BI");

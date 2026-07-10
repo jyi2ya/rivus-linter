@@ -1,8 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use crate::artifacts::{FnGraph, FnNode};
-use crate::capability::{Capability, CapabilityPolicy, CapabilitySet};
-use crate::capability::{rvs_extract_raw_suffix, rvs_parse_function};
+use crate::capability::{
+    Capability, CapabilityPolicy, CapabilitySet, ParsedFunctionName, rvs_parse_function,
+};
 use crate::capsmap;
 use crate::symbols::{CrateName, DefPath, FnName};
 
@@ -367,16 +368,7 @@ fn rvs_resolve_callee_caps(
 }
 
 fn rvs_declared_caps_from_def_path(def_path: &DefPath) -> Option<CapabilitySet> {
-    let fn_name = def_path.rvs_fn_name();
-    let raw_suffix = rvs_extract_raw_suffix(fn_name.rvs_as_str());
-    let has_unknown_suffix = raw_suffix
-        .chars()
-        .any(|letter| Capability::rvs_from_char(letter).is_none());
-    let caps = rvs_parse_function(fn_name.rvs_as_str()).map(|(_, caps)| caps)?;
-    if has_unknown_suffix && caps.rvs_is_empty() {
-        return None;
-    }
-    Some(caps)
+    ParsedFunctionName::rvs_parse(def_path.rvs_as_str()).rvs_declared_caps()
 }
 
 pub(crate) fn rvs_infer_graph_M(graph: &mut FnGraph, seed: &capsmap::CapsMap) {

@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use crate::artifacts::{FnGraph, FnNode};
-use crate::capability::{self, Capability, CapabilityPolicy, CapabilitySet};
+use crate::capability::{Capability, CapabilityPolicy, CapabilitySet, ParsedFunctionName};
 use crate::capsmap::CapsMap;
 use crate::inference::{
     CallContractMismatchKind, FnContractMismatchKind, rvs_collect_call_contract_mismatch,
@@ -241,17 +241,14 @@ fn rvs_collect_suffix_diagnostics_M(
         if !rvs_is_local_checked_fn(def_path, node, local_crate_names) {
             continue;
         }
-        let fn_name = def_path.rvs_fn_name();
-        let raw_suffix = capability::rvs_extract_raw_suffix(fn_name.rvs_as_str());
-        if raw_suffix.is_empty() {
+        let parsed = ParsedFunctionName::rvs_parse(def_path.rvs_as_str());
+        let Some(raw_suffix) = parsed.rvs_raw_suffix() else {
             continue;
-        }
-        let sorted = {
-            let mut chars: Vec<char> = raw_suffix.chars().collect();
-            chars.sort_unstable();
-            chars.into_iter().collect::<String>()
         };
-        if raw_suffix != sorted {
+        if !parsed.rvs_suffix_is_canonical() {
+            let sorted = parsed
+                .rvs_canonical_suffix()
+                .expect("never: raw suffix has a canonical form");
             report.diagnostics.push(OfflineCapsDiagnostic {
                 severity: OfflineCapsSeverity::Warning,
                 kind: OfflineCapsKind::NonAlphabeticalSuffix,
@@ -260,20 +257,16 @@ fn rvs_collect_suffix_diagnostics_M(
                 details: vec![format!("suggested suffix order: {sorted}")],
             });
         }
-        let mut seen = BTreeSet::new();
-        for letter in raw_suffix.chars() {
-            if !seen.insert(letter) {
-                report.diagnostics.push(OfflineCapsDiagnostic {
-                    severity: OfflineCapsSeverity::Warning,
-                    kind: OfflineCapsKind::DuplicateSuffix,
-                    function: def_path.clone(),
-                    message: format!("suffix '{raw_suffix}' repeats '{letter}'"),
-                    details: vec!["remove duplicate capability letters".to_string()],
-                });
-                break;
-            }
+        if let Some(letter) = parsed.rvs_duplicate_suffix_letters().first() {
+            report.diagnostics.push(OfflineCapsDiagnostic {
+                severity: OfflineCapsSeverity::Warning,
+                kind: OfflineCapsKind::DuplicateSuffix,
+                function: def_path.clone(),
+                message: format!("suffix '{raw_suffix}' repeats '{letter}'"),
+                details: vec!["remove duplicate capability letters".to_string()],
+            });
         }
-        let unknown = capability::rvs_extract_unknown_suffix_letters(&raw_suffix);
+        let unknown = parsed.rvs_unknown_suffix_letters();
         if !unknown.is_empty() {
             report.diagnostics.push(OfflineCapsDiagnostic {
                 severity: OfflineCapsSeverity::Warning,
@@ -478,16 +471,7 @@ fn rvs_is_test_harness_callee(callee: &DefPath) -> bool {
 }
 
 fn rvs_declared_caps(def_path: &DefPath) -> Option<CapabilitySet> {
-    let fn_name = def_path.rvs_fn_name();
-    let raw_suffix = capability::rvs_extract_raw_suffix(fn_name.rvs_as_str());
-    let has_unknown_suffix = raw_suffix
-        .chars()
-        .any(|letter| Capability::rvs_from_char(letter).is_none());
-    let (_, caps) = capability::rvs_parse_function(fn_name.rvs_as_str())?;
-    if has_unknown_suffix && caps.rvs_is_empty() {
-        return None;
-    }
-    Some(caps)
+    ParsedFunctionName::rvs_parse(def_path.rvs_as_str()).rvs_declared_caps()
 }
 
 fn rvs_format_optional_caps(caps: Option<&CapabilitySet>) -> String {

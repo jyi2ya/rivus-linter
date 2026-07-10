@@ -70,7 +70,136 @@ impl fmt::Display for Capability {
     }
 }
 
+#[cfg(test)]
 const VALID_SUFFIX_CHARS: &[char] = &['A', 'B', 'I', 'M', 'P', 'S', 'T', 'U'];
+
+/// Return the function segment before any trait-implementation suffix.
+pub(crate) fn rvs_function_name_segment(name: &str) -> &str {
+    let method_path = name.split_once('@').map_or(name, |(method, _)| method);
+    method_path.rsplit("::").next().unwrap_or(method_path)
+}
+
+/// Canonical semantic view of a function name or def-path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ParsedFunctionName<'a> {
+    segment: &'a str,
+    base_name: &'a str,
+    has_rvs_prefix: bool,
+    raw_suffix: Option<&'a str>,
+    known_caps: CapabilitySet,
+    unknown_suffix_letters: Vec<char>,
+    duplicate_suffix_letters: Vec<char>,
+    suffix_is_canonical: bool,
+}
+
+impl<'a> ParsedFunctionName<'a> {
+    /// Parse a bare function name or full def-path once into all naming facts.
+    pub(crate) fn rvs_parse(name: &'a str) -> Self {
+        let segment = rvs_function_name_segment(name);
+        let Some(rest) = segment.strip_prefix("rvs_") else {
+            return Self {
+                segment,
+                base_name: segment,
+                has_rvs_prefix: false,
+                raw_suffix: None,
+                known_caps: CapabilitySet::rvs_new(),
+                unknown_suffix_letters: Vec::new(),
+                duplicate_suffix_letters: Vec::new(),
+                suffix_is_canonical: true,
+            };
+        };
+
+        let (base_name, raw_suffix) = rest.rfind('_').map_or((rest, None), |pos| {
+            let potential_suffix = rest.get(pos + 1..).unwrap_or("");
+            if !potential_suffix.is_empty()
+                && potential_suffix.chars().all(|c| c.is_ascii_uppercase())
+            {
+                (rest.get(..pos).unwrap_or(""), Some(potential_suffix))
+            } else {
+                (rest, None)
+            }
+        });
+        let known_caps = raw_suffix
+            .map(CapabilitySet::rvs_from_str_allow_unknown)
+            .unwrap_or_else(CapabilitySet::rvs_new);
+        let mut seen = BTreeSet::new();
+        let mut seen_unknown = BTreeSet::new();
+        let mut seen_duplicates = BTreeSet::new();
+        let mut unknown_suffix_letters = Vec::new();
+        let mut duplicate_suffix_letters = Vec::new();
+        for letter in raw_suffix.unwrap_or("").chars() {
+            if !seen.insert(letter) && seen_duplicates.insert(letter) {
+                duplicate_suffix_letters.push(letter);
+            }
+            if Capability::rvs_from_char(letter).is_none() && seen_unknown.insert(letter) {
+                unknown_suffix_letters.push(letter);
+            }
+        }
+        let suffix_is_canonical = raw_suffix.is_none_or(|suffix| {
+            suffix
+                .as_bytes()
+                .windows(2)
+                .all(|letters| matches!(letters, [left, right] if left <= right))
+        });
+
+        Self {
+            segment,
+            base_name,
+            has_rvs_prefix: true,
+            raw_suffix,
+            known_caps,
+            unknown_suffix_letters,
+            duplicate_suffix_letters,
+            suffix_is_canonical,
+        }
+    }
+
+    pub(crate) fn rvs_base_name(&self) -> &'a str {
+        self.base_name
+    }
+
+    pub(crate) fn rvs_has_rvs_prefix(&self) -> bool {
+        self.has_rvs_prefix
+    }
+
+    pub(crate) fn rvs_raw_suffix(&self) -> Option<&'a str> {
+        self.raw_suffix
+    }
+
+    pub(crate) fn rvs_known_caps(&self) -> &CapabilitySet {
+        &self.known_caps
+    }
+
+    pub(crate) fn rvs_unknown_suffix_letters(&self) -> &[char] {
+        &self.unknown_suffix_letters
+    }
+
+    pub(crate) fn rvs_duplicate_suffix_letters(&self) -> &[char] {
+        &self.duplicate_suffix_letters
+    }
+
+    pub(crate) fn rvs_suffix_is_canonical(&self) -> bool {
+        self.suffix_is_canonical
+    }
+
+    pub(crate) fn rvs_canonical_suffix(&self) -> Option<String> {
+        self.raw_suffix.map(|suffix| {
+            let mut letters: Vec<char> = suffix.chars().collect();
+            letters.sort_unstable();
+            letters.into_iter().collect()
+        })
+    }
+
+    /// Preserve the historical rule that an unknown-only suffix is undeclared.
+    pub(crate) fn rvs_declared_caps(&self) -> Option<CapabilitySet> {
+        if !self.has_rvs_prefix
+            || (!self.unknown_suffix_letters.is_empty() && self.known_caps.rvs_is_empty())
+        {
+            return None;
+        }
+        Some(self.known_caps.clone())
+    }
+}
 
 /// 一组能力，如同一面旗——旗上画的，便是这函数的本事。
 /// 旗上没画的，便是它干不了的。
@@ -275,7 +404,7 @@ impl CapabilitySet {
 
     /// 从后缀字符串中萃取已知能力字母，忽略未知字母。
     /// 用于处理后缀含非标准字母（如 E）的情况。
-    pub fn rvs_from_str_allow_unknown(suffix: &str) -> Self {
+    fn rvs_from_str_allow_unknown(suffix: &str) -> Self {
         let mut set = BTreeSet::new();
         for c in suffix.chars() {
             if let Some(cap) = Capability::rvs_from_char(c) {
@@ -344,65 +473,11 @@ pub enum CapabilityParseError {
 /// 例：rvs_add               → 基名 add，能力 {}
 /// 例：CapsMap::rvs_parse  → 基名 parse，能力 {}
 pub fn rvs_parse_function(name: &str) -> Option<(&str, CapabilitySet)> {
-    if name.is_empty() {
+    let parsed = ParsedFunctionName::rvs_parse(name);
+    if !parsed.rvs_has_rvs_prefix() {
         return None;
     }
-    let (base, raw_suffix) = rvs_split_rvs_name(name)?;
-    let caps = raw_suffix
-        .map(CapabilitySet::rvs_from_str_allow_unknown)
-        .unwrap_or_else(CapabilitySet::rvs_new);
-    Some((base, caps))
-}
-
-/// 拆解单个片段：去掉 rvs_ 前缀后，萃取能力后缀。
-///
-/// 后缀必须全是大写字母。若所有字母都是合法能力字母（ABIMPSTU），
-/// 直接萃取。若含未知大写字母（如 E），仍萃取已知部分，
-/// 由调用方负责报告未知字母警告。
-#[cfg(test)]
-fn rvs_parse_segment(name: &str) -> Option<(&str, CapabilitySet)> {
-    rvs_parse_function(name)
-}
-
-fn rvs_split_rvs_name(name: &str) -> Option<(&str, Option<&str>)> {
-    let segment = rvs_function_name_segment(name);
-    let rest = segment.strip_prefix("rvs_")?;
-    let Some(pos) = rest.rfind('_') else {
-        return Some((rest, None));
-    };
-    let potential_suffix = rest.get(pos + 1..).unwrap_or("");
-    let base = rest.get(..pos).unwrap_or("");
-    if !potential_suffix.is_empty() && potential_suffix.chars().all(|c| c.is_ascii_uppercase()) {
-        return Some((base, Some(potential_suffix)));
-    }
-    Some((rest, None))
-}
-
-fn rvs_function_name_segment(name: &str) -> &str {
-    let method_path = name.split_once('@').map_or(name, |(method, _)| method);
-    method_path.rsplit("::").next().unwrap_or(method_path)
-}
-
-/// 从 rvs_ 函数名中萃取原始后缀字符串（未排序、未去重）。
-/// 用于检查命名规范（C4 字母序、C5 重复字母、未知字母）。
-/// 后缀必须全是大写字母才视为有效。
-pub fn rvs_extract_raw_suffix(name: &str) -> String {
-    rvs_split_rvs_name(name)
-        .and_then(|(_, suffix)| suffix)
-        .unwrap_or("")
-        .to_string()
-}
-
-/// 从原始后缀中萃取未知（非 ABIMPSTU）的大写字母，按出现顺序去重。
-pub fn rvs_extract_unknown_suffix_letters(raw_suffix: &str) -> Vec<char> {
-    let mut seen = BTreeSet::new();
-    let mut result = Vec::new();
-    for c in raw_suffix.chars() {
-        if c.is_ascii_uppercase() && !VALID_SUFFIX_CHARS.contains(&c) && seen.insert(c) {
-            result.push(c);
-        }
-    }
-    result
+    Some((parsed.rvs_base_name(), parsed.rvs_known_caps().clone()))
 }
 
 #[cfg(test)]
@@ -663,43 +738,79 @@ mod tests {
     #[test]
     fn test_20260709_split_and_suffix_table() {
         let trait_impl = "demo::Adapter::rvs_fetch_BI@demo::ApiClient";
-        assert_eq!(rvs_function_name_segment(trait_impl), "rvs_fetch_BI");
-        assert_eq!(rvs_split_rvs_name(trait_impl), Some(("fetch", Some("BI"))));
-        assert_eq!(rvs_split_rvs_name("demo::plain_BI"), None);
+        let parsed = ParsedFunctionName::rvs_parse(trait_impl);
+        assert_eq!(parsed.segment, "rvs_fetch_BI");
+        assert_eq!(parsed.rvs_base_name(), "fetch");
+        assert_eq!(parsed.rvs_raw_suffix(), Some("BI"));
+        assert!(!ParsedFunctionName::rvs_parse("demo::plain_BI").rvs_has_rvs_prefix());
 
-        let segment = rvs_parse_segment("rvs_write_db_ABI1").unwrap();
-        assert_eq!(segment.0, "write_db_ABI1");
-        assert!(segment.1.rvs_is_empty());
+        let invalid_suffix = ParsedFunctionName::rvs_parse("rvs_write_db_ABI1");
+        assert_eq!(invalid_suffix.rvs_base_name(), "write_db_ABI1");
+        assert!(invalid_suffix.rvs_known_caps().rvs_is_empty());
 
         let raw_cases = [
-            ("rvs_write_db_ABI", "ABI"),
-            ("rvs_add", ""),
-            ("foo_bar", ""),
-            ("rvs_foo_MBA", "MBA"),
-            ("rvs_foo_BEIMS", "BEIMS"),
-            ("rvs_bar_E", "E"),
-            ("rvs_baz_AEIS", "AEIS"),
-            ("rvs_dep::module::rvs_fetch_BI@rvs_dep::ApiClient", "BI"),
-            ("rvs_dep::module::plain_BI", ""),
+            ("rvs_write_db_ABI", Some("ABI")),
+            ("rvs_add", None),
+            ("foo_bar", None),
+            ("rvs_foo_MBA", Some("MBA")),
+            ("rvs_foo_BEIMS", Some("BEIMS")),
+            ("rvs_bar_E", Some("E")),
+            ("rvs_baz_AEIS", Some("AEIS")),
+            (
+                "rvs_dep::module::rvs_fetch_BI@rvs_dep::ApiClient",
+                Some("BI"),
+            ),
+            ("rvs_dep::module::plain_BI", None),
         ];
         for (input, expected) in raw_cases {
-            assert_eq!(rvs_extract_raw_suffix(input), expected, "{input}");
-        }
-
-        let unknown_cases = [
-            ("BEIMS", vec!['E']),
-            ("AEIS", vec!['E']),
-            ("E", vec!['E']),
-            ("ABMS", Vec::new()),
-            ("", Vec::new()),
-        ];
-        for (raw_suffix, expected) in unknown_cases {
             assert_eq!(
-                rvs_extract_unknown_suffix_letters(raw_suffix),
+                ParsedFunctionName::rvs_parse(input).rvs_raw_suffix(),
                 expected,
-                "{raw_suffix}"
+                "{input}"
             );
         }
+    }
+
+    #[test]
+    fn test_20260710_parsed_function_name_edge_cases() {
+        let cases = [
+            ("no_prefix", "demo::plain_BI"),
+            ("no_suffix", "rvs_add"),
+            ("bare_rvs", "rvs_"),
+            ("unknown_only", "rvs_render_E"),
+            ("mixed_unknown", "rvs_send_AEIS"),
+            ("duplicate", "rvs_copy_AABI"),
+            ("non_canonical", "rvs_copy_MBA"),
+            ("trait_impl", "demo::Adapter::rvs_fetch_BI@demo::ApiClient"),
+            ("invalid_suffix", "rvs_write_ABi"),
+        ];
+        let mut output = String::new();
+        for (label, input) in cases {
+            let parsed = ParsedFunctionName::rvs_parse(input);
+            let known = rvs_caps_letters(parsed.rvs_known_caps());
+            let unknown: String = parsed.rvs_unknown_suffix_letters().iter().collect();
+            let duplicates: String = parsed.rvs_duplicate_suffix_letters().iter().collect();
+            let declared = parsed
+                .rvs_declared_caps()
+                .as_ref()
+                .map(rvs_caps_letters)
+                .unwrap_or_else(|| "none".to_string());
+            output.push_str(&format!(
+                "{label}: segment={} base={} prefix={} raw={} known={known} unknown={unknown} duplicates={duplicates} canonical={} sorted={} declared={declared}\n",
+                parsed.segment,
+                parsed.rvs_base_name(),
+                parsed.rvs_has_rvs_prefix(),
+                parsed.rvs_raw_suffix().unwrap_or("none"),
+                parsed.rvs_suffix_is_canonical(),
+                parsed.rvs_canonical_suffix().as_deref().unwrap_or("none"),
+            ));
+        }
+        rvs_snapshot_BIS("test_20260710_parsed_function_name_edge_cases", &output);
+
+        assert_eq!(
+            output,
+            include_str!("../test_out/test_20260710_parsed_function_name_edge_cases.out")
+        );
     }
 
     #[test]

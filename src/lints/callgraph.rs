@@ -82,7 +82,7 @@ pub(crate) fn rvs_collect_callgraph_for_item_M<'tcx>(
     let report_caps = if is_port_method {
         Some("P".to_string())
     } else {
-        FnInfo::rvs_extract(ident.name.as_str(), sig, body, cx.tcx)
+        FnInfo::rvs_extract(ident.name.as_str())
             .map(|info| info.caps.rvs_iter().map(|cap| cap.rvs_as_char()).collect())
     };
     let report_line_count = if report_caps.is_some() {

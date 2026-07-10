@@ -540,7 +540,7 @@ fn rvs_run_fn_checks_MS<'tcx>(
     data: &mut FnCheckData<'_>,
 ) {
     let attrs = cx.tcx.hir_attrs(hir_id);
-    if let Some(mut info) = utils::FnInfo::rvs_extract(name, sig, body, cx.tcx) {
+    if let Some(mut info) = utils::FnInfo::rvs_extract(name) {
         // Port trait methods get P capability automatically.
         if is_port_method {
             info.caps = crate::capability::CapabilityPolicy::rvs_port_method_caps();
@@ -866,7 +866,7 @@ fn rvs_check_trait_item_MS<'tcx>(
         TraitItemKind::Fn(sig, TraitFn::Required(_)) => {
             if data.should_emit_lints {
                 let name = trait_item.ident.name.as_str();
-                if let Some(info) = utils::FnInfo::rvs_extract_signature(name, sig) {
+                if let Some(info) = utils::FnInfo::rvs_extract(name) {
                     missing_allow::rvs_check_fn_S(
                         cx,
                         trait_item.hir_id(),
