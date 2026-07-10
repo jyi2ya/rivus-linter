@@ -7,7 +7,7 @@ use rustc_hir::{
 use rustc_lint::LateContext;
 use rustc_span::{Span, Symbol};
 
-use crate::capability::{CapabilitySet, ParsedFunctionName};
+use crate::capability::{CapabilitySet, ParsedFunctionName, rvs_function_name_segment};
 
 // ─── Constants ───────────────────────────────────────────────────────────
 
@@ -455,18 +455,21 @@ pub(crate) fn rvs_static_is_thread_local(cx: &LateContext<'_>, did: DefId) -> bo
 }
 
 pub(crate) fn rvs_collect_test_call_names_M<'tcx>(
-    tcx: rustc_middle::ty::TyCtxt<'tcx>,
+    cx: &LateContext<'tcx>,
     body: &Body<'tcx>,
     out: &mut HashSet<String>,
 ) {
-    rvs_walk_closures(tcx, body.value, |e| {
-        if let ExprKind::Call(func, _) = &e.kind {
-            if let ExprKind::Path(ref q) = func.kind {
-                if let Some(name) = rvs_plast(q) {
-                    if name.starts_with("rvs_") {
-                        out.insert(name);
-                    }
-                }
+    rvs_walk_closures(cx.tcx, body.value, |e| {
+        if matches!(e.kind, ExprKind::Call(..))
+            && let Some(observation) = rvs_resolve_call(cx, e)
+        {
+            let path = match &observation.target {
+                CallTarget::Resolved { def_path, .. } => def_path,
+                CallTarget::UnresolvedPath { path } => path,
+            };
+            let name = rvs_function_name_segment(path);
+            if name.starts_with("rvs_") {
+                out.insert(name.to_string());
             }
         }
         if let ExprKind::MethodCall(p, ..) = &e.kind {
@@ -973,7 +976,7 @@ mod tests {
             rvs_scan_debug_asserts_M(_tcx, _body);
             rvs_collect_all_idents_M(_expr, &mut set);
             rvs_static_is_thread_local(_cx, _def_id);
-            rvs_collect_test_call_names_M(_tcx, _body, &mut names);
+            rvs_collect_test_call_names_M(_cx, _body, &mut names);
             rvs_count_effective_lines_M(_cx, _body);
             rvs_root_body_expr(_tcx, _body);
             rvs_line_has_effective_code_M("let x = 1;", &mut in_comment);

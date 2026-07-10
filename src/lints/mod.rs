@@ -640,7 +640,7 @@ fn rvs_check_item_MS<'tcx>(
                         .entry(name.to_string())
                         .or_default()
                         .push(item.span);
-                    utils::rvs_collect_test_call_names_M(cx.tcx, body, test_call_names);
+                    utils::rvs_collect_test_call_names_M(cx, body, test_call_names);
                 }
                 let vis = cx.tcx.visibility(item.owner_id.def_id);
                 let is_pub = vis.is_public();
@@ -766,7 +766,7 @@ fn rvs_check_impl_item_MS<'tcx>(
                     .entry(name.to_string())
                     .or_default()
                     .push(impl_item.span);
-                utils::rvs_collect_test_call_names_M(cx.tcx, body, test_call_names);
+                utils::rvs_collect_test_call_names_M(cx, body, test_call_names);
             }
             if !is_test && is_pub && !is_trait_impl {
                 missing_doc::rvs_check_fn_S(cx, name, impl_item.span, attrs, true);
