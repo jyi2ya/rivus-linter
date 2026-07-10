@@ -452,84 +452,18 @@ fn rvs_callgraph_collection_env(
     env_vars
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CachedCallgraphMode {
-    ProjectRequired,
-    StdOnlyAllowed,
-}
-
-fn rvs_load_or_collect_callgraph_BIMS(
-    path: &Path,
-    mode: CachedCallgraphMode,
-) -> Result<FnGraph, String> {
-    rvs_load_or_collect_callgraph_with_collector_BIMS(path, mode, |project_path| {
-        rvs_collect_callgraph_BIMS(project_path, false, true, vec![])
-    })
-}
-
-fn rvs_load_or_collect_callgraph_with_collector_BIMS(
-    path: &Path,
-    mode: CachedCallgraphMode,
-    collect_fresh_BIMS: impl FnOnce(&Path) -> Result<FnGraph, String>,
-) -> Result<FnGraph, String> {
-    let cg_dir = path.join("target").join("rivus-callgraph");
+fn rvs_load_required_std_callgraph_cache_BIS(path: &Path) -> Result<FnGraph, String> {
     let cg_std_dir = path.join("target").join("rivus-callgraph-std");
-
-    if mode == CachedCallgraphMode::StdOnlyAllowed {
-        if rvs_validate_optional_dir_BIS(&cg_std_dir, "std callgraph cache")? {
-            let cg = rvs_merge_callgraph_dir_BIS(&cg_std_dir)
-                .map_err(|e| format!("{e}; run cargo rivus infer-std first"))?;
-            let mut std_only = FnGraph::rvs_new();
-            rvs_merge_std_like_callgraph_M(&mut std_only, cg);
-            if !std_only.rvs_is_empty() {
-                return Ok(std_only);
-            }
-        }
-        return Err("std callgraph cache not found; run cargo rivus infer-std first".into());
-    }
-
-    let local_prefixes = match rvs_detect_local_crate_prefixes_BIS(path) {
-        Ok(prefixes) => prefixes,
-        Err(e) => {
-            eprintln!("warning: cannot detect local crate prefixes for std cache filtering: {e}");
-            BTreeSet::new()
-        }
-    };
-    if cg_dir.is_dir() {
-        match rvs_merge_callgraph_dir_BIS(&cg_dir) {
-            Ok(project) if !project.rvs_is_empty() => {
-                let mut merged = project;
-                if rvs_warn_optional_dir_BIS(&cg_std_dir, "std callgraph cache") {
-                    match rvs_merge_callgraph_dir_BIS(&cg_std_dir) {
-                        Ok(cg) => rvs_merge_std_like_callgraph_with_local_prefixes_M(
-                            &mut merged,
-                            cg,
-                            &local_prefixes,
-                        ),
-                        Err(e) => eprintln!("warning: ignoring stale std callgraph cache: {e}"),
-                    }
-                }
-                return Ok(merged);
-            }
-            Ok(_) => {}
-            Err(e) => {
-                eprintln!("warning: ignoring stale project callgraph cache: {e}");
-            }
+    if rvs_validate_optional_dir_BIS(&cg_std_dir, "std callgraph cache")? {
+        let cg = rvs_merge_callgraph_dir_BIS(&cg_std_dir)
+            .map_err(|e| format!("{e}; run cargo rivus infer-std first"))?;
+        let mut std_only = FnGraph::rvs_new();
+        rvs_merge_std_like_callgraph_M(&mut std_only, cg);
+        if !std_only.rvs_is_empty() {
+            return Ok(std_only);
         }
     }
-    eprintln!("(no cached project callgraph found, collecting fresh...)");
-    let mut collected = collect_fresh_BIMS(path)?;
-    if rvs_warn_optional_dir_BIS(&cg_std_dir, "std callgraph cache") {
-        match rvs_merge_callgraph_dir_BIS(&cg_std_dir) {
-            Ok(cg) => rvs_merge_std_like_callgraph_with_local_prefixes_M(
-                &mut collected,
-                cg,
-                &local_prefixes,
-            ),
-            Err(e) => eprintln!("warning: ignoring stale std callgraph cache: {e}"),
-        }
-    }
-    Ok(collected)
+    Err("std callgraph cache not found; run cargo rivus infer-std first".into())
 }
 
 pub(crate) fn rvs_load_project_caps_BIS(path: &Path) -> Result<capsmap::CapsMap, String> {
@@ -544,9 +478,8 @@ pub(crate) fn rvs_load_callgraph_and_caps_for_function_BIMS(
     path: &Path,
     function: &str,
 ) -> Result<(FnGraph, capsmap::CapsMap), String> {
-    let mode = rvs_cached_callgraph_mode_for_function_BIS(path, function)?;
-    let callgraph = if mode == CachedCallgraphMode::StdOnlyAllowed {
-        rvs_load_or_collect_callgraph_BIMS(path, mode)?
+    let callgraph = if rvs_is_external_std_function_query_BIS(path, function)? {
+        rvs_load_required_std_callgraph_cache_BIS(path)?
     } else {
         rvs_collect_project_callgraph_with_optional_std_cache_BIMS(path, true)?
     };
@@ -554,15 +487,8 @@ pub(crate) fn rvs_load_callgraph_and_caps_for_function_BIMS(
     Ok((callgraph, caps))
 }
 
-fn rvs_cached_callgraph_mode_for_function_BIS(
-    path: &Path,
-    function: &str,
-) -> Result<CachedCallgraphMode, String> {
-    if rvs_is_std_like_def_path(function) && !rvs_is_local_function_query_BIS(path, function)? {
-        Ok(CachedCallgraphMode::StdOnlyAllowed)
-    } else {
-        Ok(CachedCallgraphMode::ProjectRequired)
-    }
+fn rvs_is_external_std_function_query_BIS(path: &Path, function: &str) -> Result<bool, String> {
+    Ok(rvs_is_std_like_def_path(function) && !rvs_is_local_function_query_BIS(path, function)?)
 }
 
 fn rvs_is_local_function_query_BIS(path: &Path, function: &str) -> Result<bool, String> {
@@ -2246,141 +2172,6 @@ name = "throughput-bench"
     }
 
     #[test]
-    fn test_20260703_load_callgraph_and_caps_includes_deps() {
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("never: system clock should be after unix epoch for test temp dir")
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "rivus-workspace-load-callgraph-{}-{unique}",
-            std::process::id()
-        ));
-        if dir.exists() {
-            std::fs::remove_dir_all(&dir).unwrap();
-        }
-        std::fs::create_dir_all(dir.join("target/rivus-callgraph")).unwrap();
-        std::fs::create_dir_all(dir.join("caps")).unwrap();
-        std::fs::write(
-            dir.join("target/rivus-callgraph/callgraph.json"),
-            r#"{
-  "demo::rvs_run": {
-    "calls": ["std::thread::spawn"],
-    "has_body": true,
-    "has_async": false,
-    "is_unsafe_fn": false,
-    "has_mut_param": false,
-    "has_static_ref": false,
-    "has_static_mut_ref": false,
-    "has_thread_local_ref": false,
-    "is_trait_impl": false,
-    "is_test": false
-  }
-}
-"#,
-        )
-        .unwrap();
-        std::fs::write(dir.join("caps/deps"), "std::thread::spawn=B\n").unwrap();
-
-        let callgraph = rvs_load_or_collect_callgraph_with_collector_BIMS(
-            &dir,
-            CachedCallgraphMode::ProjectRequired,
-            |_| Err("collector should not run when cache is valid".to_string()),
-        )
-        .unwrap();
-        let caps = rvs_load_project_caps_BIS(&dir).unwrap();
-        let output = format!(
-            "calls={}\nhas_deps={}\n",
-            callgraph.rvs_len(),
-            caps.rvs_lookup("std::thread::spawn").is_some()
-        );
-        rvs_snapshot_BIS(
-            "test_20260703_load_callgraph_and_caps_includes_deps",
-            &output,
-        );
-
-        assert_eq!(callgraph.rvs_len(), 1);
-        assert!(caps.rvs_lookup("std::thread::spawn").is_some());
-
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn test_20260704_project_cache_filters_local_nodes_from_std_cache() {
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("never: system clock should be after unix epoch for test temp dir")
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "rivus-workspace-merge-callgraph-{}-{unique}",
-            std::process::id()
-        ));
-        if dir.exists() {
-            std::fs::remove_dir_all(&dir).unwrap();
-        }
-        std::fs::create_dir_all(dir.join("target/rivus-callgraph")).unwrap();
-        std::fs::create_dir_all(dir.join("target/rivus-callgraph-std")).unwrap();
-        std::fs::write(
-            dir.join("target/rivus-callgraph/callgraph.json"),
-            r#"{
-  "demo::rvs_run": {
-    "calls": ["demo::rvs_local"],
-    "has_body": true,
-    "has_async": true,
-    "is_unsafe_fn": false,
-    "has_mut_param": false,
-    "has_static_ref": false,
-    "has_static_mut_ref": false,
-    "has_thread_local_ref": false,
-    "is_trait_impl": false,
-    "is_test": false
-  }
-}
-"#,
-        )
-        .unwrap();
-        std::fs::write(
-            dir.join("target/rivus-callgraph-std/callgraph.json"),
-            r#"{
-  "demo::rvs_run": {
-    "calls": ["std::fs::read_to_string"],
-    "has_body": true,
-    "has_async": false,
-    "is_unsafe_fn": false,
-    "has_mut_param": true,
-    "has_static_ref": false,
-    "has_static_mut_ref": false,
-    "has_thread_local_ref": false,
-    "is_trait_impl": false,
-    "is_test": false
-  }
-}
-"#,
-        )
-        .unwrap();
-
-        let callgraph =
-            rvs_load_or_collect_callgraph_BIMS(&dir, CachedCallgraphMode::ProjectRequired).unwrap();
-        let node = callgraph
-            .rvs_get("demo::rvs_run")
-            .expect("merged callgraph should keep duplicate node");
-        let output = format!(
-            "calls={:?}\nhas_async={}\nhas_mut_param={}\n",
-            node.calls, node.facts.has_async, node.facts.has_mut_param,
-        );
-        rvs_snapshot_BIS(
-            "test_20260704_project_cache_filters_local_nodes_from_std_cache",
-            &output,
-        );
-
-        assert_eq!(node.calls.len(), 1);
-        assert!(node.calls.contains("demo::rvs_local"));
-        assert!(node.facts.has_async);
-        assert!(!node.facts.has_mut_param);
-
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
     fn test_20260704_load_std_only_cached_callgraph() {
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -2414,8 +2205,7 @@ name = "throughput-bench"
         )
         .unwrap();
 
-        let callgraph =
-            rvs_load_or_collect_callgraph_BIMS(&dir, CachedCallgraphMode::StdOnlyAllowed).unwrap();
+        let callgraph = rvs_load_required_std_callgraph_cache_BIS(&dir).unwrap();
         let has_std = callgraph.rvs_get("std::fs::rvs_read_BI").is_some();
         rvs_snapshot_BIS(
             "test_20260704_load_std_only_cached_callgraph",
@@ -2429,158 +2219,10 @@ name = "throughput-bench"
     }
 
     #[test]
-    fn test_20260704_project_required_merges_std_like_cache_after_fresh_collection() {
-        let dir = rvs_make_workspace_temp_dir_BIS("std-only-project-required");
-        std::fs::create_dir_all(dir.join("target/rivus-callgraph-std")).unwrap();
-        std::fs::write(
-            dir.join("target/rivus-callgraph-std/callgraph.json"),
-            r#"{
-  "std::fs::rvs_read_BI": {
-    "calls": [],
-    "has_body": true,
-    "has_async": false,
-    "is_unsafe_fn": false,
-    "has_mut_param": false,
-    "has_static_ref": false,
-    "has_static_mut_ref": false,
-    "has_thread_local_ref": false,
-    "is_trait_impl": false,
-    "is_test": false
-  }
-}
-"#,
-        )
-        .unwrap();
-
-        let result = rvs_load_or_collect_callgraph_with_collector_BIMS(
-            &dir,
-            CachedCallgraphMode::ProjectRequired,
-            |_path| {
-                let mut graph = FnGraph::rvs_new();
-                graph.rvs_insert_M(
-                    crate::symbols::DefPath::from("demo::rvs_fresh"),
-                    crate::artifacts::FnNode::default(),
-                );
-                Ok(graph)
-            },
-        );
-        let output = format!("{result:?}\n").replace(&dir.to_string_lossy().into_owned(), "$TMP");
-        rvs_snapshot_BIS(
-            "test_20260704_project_required_merges_std_like_cache_after_fresh_collection",
-            &output,
-        );
-
-        assert!(result.is_ok());
-        assert!(
-            result
-                .as_ref()
-                .is_ok_and(|graph| graph.rvs_get("demo::rvs_fresh").is_some())
-        );
-        assert!(output.contains("demo::rvs_fresh"));
-
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn test_20260704_project_required_ignores_empty_project_cache_with_std_cache() {
-        let dir = rvs_make_workspace_temp_dir_BIS("empty-project-cache-std");
-        std::fs::create_dir_all(dir.join("target/rivus-callgraph")).unwrap();
-        std::fs::create_dir_all(dir.join("target/rivus-callgraph-std")).unwrap();
-        std::fs::write(
-            dir.join("target/rivus-callgraph-std/callgraph.json"),
-            r#"{
-  "std::fs::rvs_read_BI": {
-    "calls": [],
-    "has_body": true,
-    "has_async": false,
-    "is_unsafe_fn": false,
-    "has_mut_param": false,
-    "has_static_ref": false,
-    "has_static_mut_ref": false,
-    "has_thread_local_ref": false,
-    "is_trait_impl": false,
-    "is_test": false
-  }
-}
-"#,
-        )
-        .unwrap();
-
-        let result = rvs_load_or_collect_callgraph_with_collector_BIMS(
-            &dir,
-            CachedCallgraphMode::ProjectRequired,
-            |_path| {
-                let mut graph = FnGraph::rvs_new();
-                graph.rvs_insert_M(
-                    crate::symbols::DefPath::from("demo::rvs_fresh"),
-                    crate::artifacts::FnNode::default(),
-                );
-                Ok(graph)
-            },
-        );
-        let output = format!("{result:?}\n").replace(&dir.to_string_lossy().into_owned(), "$TMP");
-        rvs_snapshot_BIS(
-            "test_20260704_project_required_ignores_empty_project_cache_with_std_cache",
-            &output,
-        );
-
-        assert!(result.is_ok());
-        assert!(
-            result
-                .as_ref()
-                .is_ok_and(|graph| graph.rvs_get("demo::rvs_fresh").is_some())
-        );
-
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn test_20260706_project_required_ignores_wrong_type_std_callgraph_cache() {
-        let dir = rvs_make_workspace_temp_dir_BIS("project-cache-wrong-type-std");
-        std::fs::create_dir_all(dir.join("target/rivus-callgraph")).unwrap();
-        std::fs::write(dir.join("target/rivus-callgraph-std"), "stale").unwrap();
-        std::fs::write(
-            dir.join("target/rivus-callgraph/project.json"),
-            r#"{
-  "demo::rvs_run": {
-    "calls": [],
-    "has_body": true,
-    "has_async": false,
-    "is_unsafe_fn": false,
-    "has_mut_param": false,
-    "has_static_ref": false,
-    "has_static_mut_ref": false,
-    "has_thread_local_ref": false,
-    "is_trait_impl": false,
-    "is_test": false
-  }
-}
-"#,
-        )
-        .unwrap();
-
-        let result = rvs_load_or_collect_callgraph_with_collector_BIMS(
-            &dir,
-            CachedCallgraphMode::ProjectRequired,
-            |_path| Err("collector should not run".into()),
-        );
-        let has_project = result
-            .as_ref()
-            .is_ok_and(|graph| graph.rvs_get("demo::rvs_run").is_some());
-        rvs_snapshot_BIS(
-            "test_20260706_project_required_ignores_wrong_type_std_callgraph_cache",
-            &format!("has_project={has_project}\n"),
-        );
-
-        assert!(has_project);
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
     fn test_20260704_std_only_mode_requires_std_cache() {
         let dir = rvs_make_workspace_temp_dir_BIS("std-only-missing-cache");
 
-        let result = rvs_load_or_collect_callgraph_BIMS(&dir, CachedCallgraphMode::StdOnlyAllowed);
+        let result = rvs_load_required_std_callgraph_cache_BIS(&dir);
         let output = format!("{result:?}\n");
         rvs_snapshot_BIS("test_20260704_std_only_mode_requires_std_cache", &output);
 
@@ -2596,7 +2238,7 @@ name = "throughput-bench"
         std::fs::create_dir_all(dir.join("target")).unwrap();
         std::fs::write(dir.join("target/rivus-callgraph-std"), "stale").unwrap();
 
-        let result = rvs_load_or_collect_callgraph_BIMS(&dir, CachedCallgraphMode::StdOnlyAllowed);
+        let result = rvs_load_required_std_callgraph_cache_BIS(&dir);
         let output = format!("{result:?}\n").replace(&dir.to_string_lossy().into_owned(), "$TMP");
         rvs_snapshot_BIS(
             "test_20260706_std_only_rejects_callgraph_cache_file_path",
@@ -2632,7 +2274,7 @@ name = "throughput-bench"
         )
         .unwrap();
 
-        let result = rvs_load_or_collect_callgraph_BIMS(&dir, CachedCallgraphMode::StdOnlyAllowed);
+        let result = rvs_load_required_std_callgraph_cache_BIS(&dir);
         let output = format!("{result:?}\n");
         rvs_snapshot_BIS(
             "test_20260704_std_only_mode_ignores_project_cache_without_std_cache",
@@ -2641,58 +2283,6 @@ name = "throughput-bench"
 
         assert!(result.is_err());
         assert!(output.contains("run cargo rivus infer-std first"));
-
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn test_20260704_project_cache_stale_schema_falls_back_to_collection() {
-        let dir = rvs_make_workspace_temp_dir_BIS("stale-project-cache-fallback");
-        std::fs::create_dir_all(dir.join("target/rivus-callgraph")).unwrap();
-        std::fs::write(
-            dir.join("target/rivus-callgraph/callgraph.json"),
-            r#"{
-  "demo::rvs_run": {
-    "calls": [],
-    "has_async": false,
-    "is_unsafe_fn": false,
-    "has_mut_param": false,
-    "has_static_ref": false,
-    "has_static_mut_ref": false,
-    "has_thread_local_ref": false,
-    "is_trait_impl": false,
-    "is_test": false
-  }
-}
-"#,
-        )
-        .unwrap();
-
-        let result = rvs_load_or_collect_callgraph_with_collector_BIMS(
-            &dir,
-            CachedCallgraphMode::ProjectRequired,
-            |_path| {
-                let mut graph = FnGraph::rvs_new();
-                graph.rvs_insert_M(
-                    crate::symbols::DefPath::from("demo::rvs_fresh"),
-                    crate::artifacts::FnNode::default(),
-                );
-                Ok(graph)
-            },
-        );
-        let output = format!("{result:?}\n").replace(&dir.to_string_lossy().into_owned(), "$TMP");
-        rvs_snapshot_BIS(
-            "test_20260704_project_cache_stale_schema_falls_back_to_collection",
-            &output,
-        );
-
-        assert!(result.is_ok());
-        assert!(
-            result
-                .as_ref()
-                .is_ok_and(|graph| graph.rvs_get("demo::rvs_fresh").is_some())
-        );
-        assert!(!output.contains("stale callgraph JSON lacks has_body"));
 
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -2717,7 +2307,7 @@ name = "throughput-bench"
     }
 
     #[test]
-    fn test_20260705_std_like_query_matching_local_crate_uses_project_mode() {
+    fn test_20260710_std_like_query_matching_local_crate_uses_project_collection() {
         let dir = rvs_make_workspace_temp_dir_BIS("std-like-local-crate");
         std::fs::write(
             dir.join("Cargo.toml"),
@@ -2726,20 +2316,21 @@ name = "throughput-bench"
         .unwrap();
         let local_names = rvs_load_local_crate_prefixes_BIS(&dir).unwrap();
         let matches_local = rvs_function_matches_local_prefix("std::rvs_run", &local_names);
-        let local_mode = rvs_cached_callgraph_mode_for_function_BIS(&dir, "std::rvs_run").unwrap();
-        let real_std_mode =
-            rvs_cached_callgraph_mode_for_function_BIS(&dir, "core::mem::drop").unwrap();
+        let local_uses_std_cache =
+            rvs_is_external_std_function_query_BIS(&dir, "std::rvs_run").unwrap();
+        let real_std_uses_std_cache =
+            rvs_is_external_std_function_query_BIS(&dir, "core::mem::drop").unwrap();
         let output = format!(
-            "matches_local={matches_local}\nlocal_mode={local_mode:?}\nreal_std_mode={real_std_mode:?}\n",
+            "matches_local={matches_local}\nlocal_uses_std_cache={local_uses_std_cache}\nreal_std_uses_std_cache={real_std_uses_std_cache}\n",
         );
         rvs_snapshot_BIS(
-            "test_20260705_std_like_query_matching_local_crate_uses_project_mode",
+            "test_20260710_std_like_query_matching_local_crate_uses_project_collection",
             &output,
         );
 
         assert!(matches_local);
-        assert_eq!(local_mode, CachedCallgraphMode::ProjectRequired);
-        assert_eq!(real_std_mode, CachedCallgraphMode::StdOnlyAllowed);
+        assert!(!local_uses_std_cache);
+        assert!(real_std_uses_std_cache);
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -2748,7 +2339,7 @@ name = "throughput-bench"
         let dir = rvs_make_workspace_temp_dir_BIS("std-like-invalid-cargo-toml");
         std::fs::write(dir.join("Cargo.toml"), "[package\nname = \"std\"\n").unwrap();
 
-        let result = rvs_cached_callgraph_mode_for_function_BIS(&dir, "std::rvs_run");
+        let result = rvs_is_external_std_function_query_BIS(&dir, "std::rvs_run");
         rvs_snapshot_BIS(
             "test_20260706_std_like_query_mode_reports_invalid_cargo_toml",
             &format!("{result:?}\n").replace(&dir.to_string_lossy().into_owned(), "$TMP"),
