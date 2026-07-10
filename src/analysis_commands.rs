@@ -12,8 +12,6 @@ use crate::symbols::{CrateName, DefPath};
 use crate::cargo_targets::{
     rvs_detect_local_crate_prefixes_for_cargo_check_BIS, rvs_function_matches_local_prefix,
 };
-#[cfg(test)]
-use crate::symbols::RelativeFnPath;
 use crate::workspace::{
     rvs_collect_callgraph_and_caps_BIMS, rvs_ensure_cargo_project_BIS,
     rvs_load_callgraph_and_caps_for_function_BIMS, rvs_load_local_crate_prefixes_BIS,
@@ -795,11 +793,15 @@ path = "src/main.rs"
         let cargo_toml = "[package]\nname = \"annotate-unmatched-demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n";
         std::fs::write(dir.join("Cargo.toml"), cargo_toml).unwrap();
         std::fs::create_dir_all(dir.join("src")).unwrap();
-        std::fs::write(dir.join("src/lib.rs"), "pub fn existing() -> i32 { 1 }\n").unwrap();
-        let rename_map =
-            HashMap::from([(RelativeFnPath::from("missing"), FnName::from("rvs_missing"))]);
-        let result = rename::rvs_apply_ra_renames_BIS(&dir, &rename_map);
-        let output = format!("{result:?}\n");
+        let source_path = dir.join("src/lib.rs");
+        std::fs::write(&source_path, "pub fn existing() -> i32 { 1 }\n").unwrap();
+        let canonical_source = source_path.canonicalize().unwrap();
+        let rename_map = HashMap::from([(
+            FnSource::rvs_new(canonical_source, 0, 1),
+            FnName::from("rvs_missing"),
+        )]);
+        let result = rename::rvs_apply_ra_source_renames_BIS(&dir, &rename_map);
+        let output = format!("{result:?}\n").replace(&dir.to_string_lossy().into_owned(), "$TMP");
         rvs_snapshot_BIS(
             "test_20260704_annotate_errors_when_candidates_match_no_symbols",
             &output,
@@ -817,14 +819,23 @@ path = "src/main.rs"
         let cargo_toml = "[package]\nname = \"annotate-partial-demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n";
         std::fs::write(dir.join("Cargo.toml"), cargo_toml).unwrap();
         std::fs::create_dir_all(dir.join("src")).unwrap();
-        std::fs::write(dir.join("src/lib.rs"), "pub fn parse() -> i32 { 1 }\n").unwrap();
+        let source_path = dir.join("src/lib.rs");
+        std::fs::write(&source_path, "pub fn parse() -> i32 { 1 }\n").unwrap();
+        let canonical_source = source_path.canonicalize().unwrap();
         let rename_map = HashMap::from([
-            (RelativeFnPath::from("parse"), FnName::from("rvs_parse")),
-            (RelativeFnPath::from("missing"), FnName::from("rvs_missing")),
+            (
+                FnSource::rvs_new(canonical_source.clone(), 7, 12),
+                FnName::from("rvs_parse"),
+            ),
+            (
+                FnSource::rvs_new(canonical_source, 0, 1),
+                FnName::from("rvs_missing"),
+            ),
         ]);
-        let result = rename::rvs_apply_ra_renames_BIS(&dir, &rename_map);
-        let source = std::fs::read_to_string(dir.join("src/lib.rs")).unwrap();
-        let output = format!("{result:?}\n{source}");
+        let result = rename::rvs_apply_ra_source_renames_BIS(&dir, &rename_map);
+        let source = std::fs::read_to_string(&source_path).unwrap();
+        let output =
+            format!("{result:?}\n{source}").replace(&dir.to_string_lossy().into_owned(), "$TMP");
         rvs_snapshot_BIS("test_20260704_annotate_errors_on_partial_rename", &output);
 
         assert!(result.is_err());

@@ -4,8 +4,6 @@
 //! find all function definitions, and perform semantic renames
 //! that correctly update all references (including trait impls, macros, etc.).
 
-#[cfg(test)]
-use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -14,8 +12,6 @@ use crate::capability::rvs_parse_function;
 use crate::cargo_targets::rvs_function_matches_local_prefix;
 use crate::symbols::{DefPath, FnName};
 
-#[cfg(test)]
-use crate::symbols::RelativeFnPath;
 use ra_ap_ide::{
     Analysis, AnalysisHost, FilePosition, FileStructureConfig, Indel, RenameConfig, SourceChange,
     StructureNodeKind,
@@ -28,8 +24,6 @@ use ra_ap_project_model::{CargoConfig, RustLibSource};
 #[derive(Debug)]
 struct FunctionNode {
     name: FnName,
-    #[cfg(test)]
-    relative_path: RelativeFnPath,
     source: FnSource,
     position: FilePosition,
     is_in_trait_impl: bool,
@@ -216,9 +210,6 @@ fn rvs_find_functions_BIMS(
     canonical_path: &Path,
 ) -> Vec<FunctionNode> {
     let mut functions: Vec<FunctionNode> = Vec::new();
-    #[cfg(test)]
-    let target_roots = rvs_collect_target_root_files_BIS(canonical_path);
-
     for (file_id, vfs_path) in vfs.iter() {
         let raw_path = match vfs_path.as_path() {
             Some(p) => p,
@@ -283,19 +274,11 @@ fn rvs_find_functions_BIMS(
             let is_in_trait_impl = trait_impl_ranges
                 .iter()
                 .any(|r| r.contains_range(node.navigation_range));
-            #[cfg(test)]
-            let relative_path = {
-                let file_prefix = rvs_file_module_prefix(canonical_path, abs_path, &target_roots);
-                rvs_relative_function_path(&nodes, node, &file_prefix)
-            };
-
             let Ok(source_file) = abs_path.canonicalize() else {
                 continue;
             };
             functions.push(FunctionNode {
                 name,
-                #[cfg(test)]
-                relative_path,
                 source: FnSource::rvs_new(
                     source_file,
                     u32::from(node.navigation_range.start()),
@@ -373,72 +356,6 @@ fn rvs_apply_source_renames_BIS(
     })
 }
 
-#[cfg(test)]
-/// Performs semantic renames using rust-analyzer for each entry in `rename_map`.
-/// Keys are local relative paths like `parse`, `cli::main`, or `Type::method`.
-/// Returns the number of files changed.
-fn rvs_apply_renames_BIS(
-    analysis: &Analysis,
-    vfs: &ra_ap_vfs::Vfs,
-    functions: &[FunctionNode],
-    rename_map: &HashMap<RelativeFnPath, FnName>,
-    canonical_path: &Path,
-) -> Result<RenameStats, String> {
-    rvs_preflight_rename_matches(rename_map, functions)?;
-    let mut file_edits: HashMap<PathBuf, Vec<Indel>> = HashMap::new();
-    let mut matched_functions = 0usize;
-
-    let rename_config = RenameConfig {
-        prefer_no_std: false,
-        prefer_prelude: true,
-        prefer_absolute: false,
-        show_conflicts: false,
-    };
-
-    for (relative_path, new_name) in rename_map {
-        let func = functions
-            .iter()
-            .find(|func| &func.relative_path == relative_path)
-            .expect("never: rename preflight guarantees exactly one matching function");
-        match analysis.rename(func.position, new_name.rvs_as_str(), &rename_config) {
-            Ok(Ok(source_change)) => {
-                let edits =
-                    rvs_collect_edits_BIMS(&source_change, vfs, &mut file_edits, canonical_path)?;
-                if edits == 0 {
-                    return Err(format!(
-                        "rust-analyzer produced no edits for '{}' -> '{}'",
-                        func.name, new_name
-                    ));
-                }
-                matched_functions = rvs_checked_rename_count(
-                    matched_functions,
-                    1,
-                    "matched rename function count",
-                )?;
-            }
-            Ok(Err(e)) => {
-                return Err(format!(
-                    "rust-analyzer cannot rename '{}' -> '{}': {e}",
-                    func.name, new_name
-                ));
-            }
-            Err(e) => {
-                return Err(format!(
-                    "rust-analyzer rename failed for '{}': {e}",
-                    func.name
-                ));
-            }
-        }
-    }
-
-    let files_changed = rvs_write_collected_edits_BIS(file_edits, canonical_path)?;
-
-    Ok(RenameStats {
-        matched_functions,
-        files_changed,
-    })
-}
-
 fn rvs_write_collected_edits_BIS(
     file_edits: HashMap<PathBuf, Vec<Indel>>,
     canonical_path: &Path,
@@ -493,35 +410,6 @@ fn rvs_require_local_real_file_BIS(file_path: &Path, canonical_path: &Path) -> R
             file_path.display(),
             real_path.display()
         ));
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-fn rvs_preflight_rename_matches(
-    rename_map: &HashMap<RelativeFnPath, FnName>,
-    functions: &[FunctionNode],
-) -> Result<(), String> {
-    for key in rename_map.keys() {
-        let matches = functions
-            .iter()
-            .filter(|func| &func.relative_path == key)
-            .count();
-        match matches {
-            1 => {}
-            0 => {
-                return Err(format!(
-                    "rename candidate '{}' did not match any rust-analyzer symbol",
-                    key.rvs_as_str()
-                ));
-            }
-            _ => {
-                return Err(format!(
-                    "rename candidate '{}' matched {matches} rust-analyzer symbols",
-                    key.rvs_as_str()
-                ));
-            }
-        }
     }
     Ok(())
 }
@@ -610,55 +498,6 @@ pub fn rvs_strip_BIS(path: &Path) -> Result<(), String> {
         stats.matched_functions, stats.files_changed
     );
     Ok(())
-}
-
-/// Applies rust-analyzer semantic renames for non-trait-impl functions using
-/// the provided rename map keyed by local relative path.
-///
-/// Returns the number of files changed.
-#[cfg(test)]
-pub fn rvs_apply_ra_renames_BIS(
-    path: &Path,
-    rename_map: &HashMap<RelativeFnPath, FnName>,
-) -> Result<RenameStats, String> {
-    rvs_require_directory_BIS(path)?;
-    let canonical_path = path
-        .canonicalize()
-        .map_err(|e| format!("cannot canonicalize '{}': {e}", path.display()))?;
-
-    // 1. Load workspace
-    let (analysis, vfs, _local_files) = rvs_load_workspace_BIS(&canonical_path)?;
-
-    // 2. Find all functions, then filter: skip trait impl methods
-    let all_functions = rvs_find_functions_BIMS(&analysis, &vfs, &_local_files, &canonical_path);
-    let eligible: Vec<FunctionNode> = all_functions
-        .into_iter()
-        .filter(|f| {
-            !f.is_in_trait_impl
-                && !rvs_is_extra_cargo_target_source(&f.source.file, &canonical_path)
-        })
-        .collect();
-
-    // 3. Apply semantic renames
-    let stats = match rvs_apply_renames_BIS(&analysis, &vfs, &eligible, rename_map, &canonical_path)
-    {
-        Ok(stats) => stats,
-        Err(e) => {
-            if let Err(invalidate_error) = rvs_invalidate_callgraph_cache_BIS(path) {
-                return Err(format!(
-                    "{e}; additionally failed to invalidate callgraph cache: {invalidate_error}"
-                ));
-            }
-            return Err(e);
-        }
-    };
-
-    // 4. Invalidate cached callgraph (function names changed, old cache is stale)
-    if stats.files_changed > 0 {
-        rvs_invalidate_callgraph_cache_BIS(path)?;
-    }
-
-    Ok(stats)
 }
 
 /// Applies rust-analyzer semantic renames for annotate candidates keyed by exact source location.
@@ -785,246 +624,6 @@ fn rvs_validate_and_dedup_edits(
     Ok(deduped)
 }
 
-#[cfg(test)]
-fn rvs_relative_function_path(
-    nodes: &[ra_ap_ide::StructureNode],
-    node: &ra_ap_ide::StructureNode,
-    file_prefix: &[String],
-) -> RelativeFnPath {
-    let mut segments = vec![node.label.clone()];
-    let mut parent = node.parent;
-    while let Some(index) = parent {
-        let current = nodes
-            .get(index)
-            .expect("never: structure node parent index should point into the same file outline");
-        match current.kind {
-            StructureNodeKind::SymbolKind(SymbolKind::Module)
-            | StructureNodeKind::SymbolKind(SymbolKind::Trait)
-            | StructureNodeKind::SymbolKind(SymbolKind::Impl) => {
-                segments.push(rvs_normalize_structure_segment(&current.label));
-            }
-            _ => {}
-        }
-        parent = current.parent;
-    }
-    segments.reverse();
-    let relative = segments.join("::");
-    if file_prefix.is_empty() {
-        return RelativeFnPath::rvs_new(relative);
-    }
-    let prefix = file_prefix.join("::");
-    RelativeFnPath::rvs_new(format!("{prefix}::{relative}"))
-}
-
-#[cfg(test)]
-fn rvs_file_module_prefix(
-    workspace_root: &Path,
-    file_path: &Path,
-    target_roots: &BTreeSet<PathBuf>,
-) -> Vec<String> {
-    if target_roots.contains(file_path) {
-        return Vec::new();
-    }
-    if let Some(prefix) = rvs_target_relative_module_prefix(file_path, target_roots) {
-        return prefix;
-    }
-    let src_dir = workspace_root.join("src");
-    let Ok(relative) = file_path.strip_prefix(&src_dir) else {
-        return Vec::new();
-    };
-    let mut components: Vec<String> = relative
-        .components()
-        .filter_map(|component| match component {
-            std::path::Component::Normal(part) => Some(part.to_string_lossy().into_owned()),
-            _ => None,
-        })
-        .collect();
-    let Some(last) = components.pop() else {
-        return Vec::new();
-    };
-    let stem = Path::new(&last)
-        .file_stem()
-        .map(|value| value.to_string_lossy().into_owned())
-        .unwrap_or(last);
-    match stem.as_str() {
-        "lib" | "main" => {}
-        "mod" => {}
-        _ => components.push(stem),
-    }
-    components
-}
-
-#[cfg(test)]
-fn rvs_target_relative_module_prefix(
-    file_path: &Path,
-    target_roots: &BTreeSet<PathBuf>,
-) -> Option<Vec<String>> {
-    let mut best_root_dir: Option<&Path> = None;
-    for root in target_roots {
-        let Some(root_dir) = root.parent() else {
-            continue;
-        };
-        if file_path.strip_prefix(root_dir).is_err() {
-            continue;
-        };
-        if best_root_dir
-            .is_none_or(|best| root_dir.components().count() > best.components().count())
-        {
-            best_root_dir = Some(root_dir);
-        }
-    }
-    let root_dir = best_root_dir?;
-    let Ok(relative) = file_path.strip_prefix(root_dir) else {
-        return None;
-    };
-    let mut components: Vec<String> = relative
-        .components()
-        .filter_map(|component| match component {
-            std::path::Component::Normal(part) => Some(part.to_string_lossy().into_owned()),
-            _ => None,
-        })
-        .collect();
-    let last = components.pop()?;
-    let stem = Path::new(&last)
-        .file_stem()
-        .map(|value| value.to_string_lossy().into_owned())
-        .unwrap_or(last);
-    match stem.as_str() {
-        "lib" | "main" | "mod" => {}
-        _ => components.push(stem),
-    }
-    Some(components)
-}
-
-#[cfg(test)]
-fn rvs_collect_target_root_files_BIS(workspace_root: &Path) -> BTreeSet<PathBuf> {
-    let mut roots = BTreeSet::new();
-    rvs_insert_existing_target_root_BMS(&mut roots, workspace_root.join("src/lib.rs"));
-    rvs_insert_existing_target_root_BMS(&mut roots, workspace_root.join("src/main.rs"));
-    let bin_dir = workspace_root.join("src/bin");
-    if let Ok(entries) = std::fs::read_dir(&bin_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().is_some_and(|ext| ext == "rs") {
-                rvs_insert_existing_target_root_BMS(&mut roots, path);
-            } else if path.is_dir() {
-                rvs_insert_existing_target_root_BMS(&mut roots, path.join("main.rs"));
-            }
-        }
-    }
-    for dir_name in ["tests", "examples", "benches"] {
-        rvs_collect_auto_target_roots_BIMS(&workspace_root.join(dir_name), &mut roots);
-    }
-    let cargo_toml = workspace_root.join("Cargo.toml");
-    let Ok(content) = std::fs::read_to_string(&cargo_toml) else {
-        return roots;
-    };
-    let Ok(doc) = content.parse::<toml_edit::DocumentMut>() else {
-        return roots;
-    };
-    if let Some(path) = doc
-        .get("lib")
-        .and_then(|item| item.get("path"))
-        .and_then(toml_edit::Item::as_str)
-    {
-        rvs_insert_existing_target_root_BMS(&mut roots, workspace_root.join(path));
-    }
-    if let Some(bins) = doc.get("bin").and_then(toml_edit::Item::as_array_of_tables) {
-        for bin in bins {
-            if let Some(path) = bin.get("path").and_then(toml_edit::Item::as_str) {
-                rvs_insert_existing_target_root_BMS(&mut roots, workspace_root.join(path));
-            }
-        }
-    }
-    for table_name in ["test", "example", "bench"] {
-        if let Some(targets) = doc
-            .get(table_name)
-            .and_then(toml_edit::Item::as_array_of_tables)
-        {
-            for target in targets {
-                if let Some(path) = target.get("path").and_then(toml_edit::Item::as_str) {
-                    rvs_insert_existing_target_root_BMS(&mut roots, workspace_root.join(path));
-                }
-            }
-        }
-    }
-    roots
-}
-
-#[cfg(test)]
-fn rvs_collect_auto_target_roots_BIMS(dir: &Path, roots: &mut BTreeSet<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().is_some_and(|ext| ext == "rs") {
-            rvs_insert_existing_target_root_BMS(roots, path);
-        } else if path.is_dir() {
-            rvs_insert_existing_target_root_BMS(roots, path.join("main.rs"));
-        }
-    }
-}
-
-#[cfg(test)]
-fn rvs_insert_existing_target_root_BMS(roots: &mut BTreeSet<PathBuf>, path: PathBuf) {
-    if path.is_file() {
-        roots.insert(path);
-    }
-}
-
-#[cfg(test)]
-fn rvs_normalize_structure_segment(label: &str) -> String {
-    let Some(mut rest) = label.strip_prefix("impl") else {
-        return label.to_string();
-    };
-    rest = rest.trim_start();
-    if rest.contains(" for ") {
-        return label.to_string();
-    }
-    if rest.starts_with('<') {
-        let mut depth = 0usize;
-        let mut split_at = None;
-        for (index, ch) in rest.char_indices() {
-            match ch {
-                '<' => depth += 1,
-                '>' => {
-                    depth = depth.saturating_sub(1);
-                    if depth == 0 {
-                        split_at = Some(index + ch.len_utf8());
-                        break;
-                    }
-                }
-                _ => {}
-            }
-        }
-        if let Some(index) = split_at {
-            rest = rest.get(index..).unwrap_or("").trim_start();
-        }
-    }
-    let raw_type_name = rest
-        .split_whitespace()
-        .next()
-        .unwrap_or(rest)
-        .split('<')
-        .next()
-        .unwrap_or(rest)
-        .trim();
-    let type_name = raw_type_name
-        .strip_prefix("crate::")
-        .or_else(|| raw_type_name.strip_prefix("self::"))
-        .unwrap_or(raw_type_name);
-    if type_name.is_empty() {
-        label.to_string()
-    } else {
-        type_name
-            .rsplit("::")
-            .next()
-            .unwrap_or(type_name)
-            .to_string()
-    }
-}
-
 /// Computes the new name for a strip operation.
 ///
 /// Given a function name like `rvs_write_db_ABI`, returns `write_db`.
@@ -1080,7 +679,7 @@ fn rvs_require_directory_BIS(path: &Path) -> Result<(), String> {
 mod tests {
     use super::*;
     use crate::test_support::{rvs_make_temp_dir_BIS, rvs_snapshot_BIS};
-    use ra_ap_ide::{StructureNode, TextRange, TextSize};
+    use ra_ap_ide::{TextRange, TextSize};
 
     #[test]
     fn test_20260709_extra_cargo_target_source_filter() {
@@ -1428,200 +1027,6 @@ mod tests {
     }
 
     #[test]
-    fn test_20260702_relative_function_path_nested_module() {
-        let empty_range = TextRange::empty(TextSize::from(0));
-        let nodes = vec![
-            StructureNode {
-                parent: None,
-                label: "cli".into(),
-                navigation_range: empty_range,
-                node_range: empty_range,
-                kind: StructureNodeKind::SymbolKind(SymbolKind::Module),
-                detail: None,
-                deprecated: false,
-            },
-            StructureNode {
-                parent: Some(0),
-                label: "main".into(),
-                navigation_range: empty_range,
-                node_range: empty_range,
-                kind: StructureNodeKind::SymbolKind(SymbolKind::Function),
-                detail: None,
-                deprecated: false,
-            },
-        ];
-        let relative_path = rvs_relative_function_path(&nodes, &nodes[1], &[]);
-        rvs_snapshot_BIS(
-            "test_20260702_relative_function_path_nested_module",
-            relative_path.rvs_as_str(),
-        );
-        assert_eq!(relative_path, RelativeFnPath::from("cli::main"));
-    }
-
-    #[test]
-    fn test_20260705_relative_function_path_keeps_file_prefix_for_same_name() {
-        let empty_range = TextRange::empty(TextSize::from(0));
-        let nodes = vec![StructureNode {
-            parent: None,
-            label: "api".into(),
-            navigation_range: empty_range,
-            node_range: empty_range,
-            kind: StructureNodeKind::SymbolKind(SymbolKind::Function),
-            detail: None,
-            deprecated: false,
-        }];
-        let relative_path = rvs_relative_function_path(&nodes, &nodes[0], &["api".to_string()]);
-        rvs_snapshot_BIS(
-            "test_20260705_relative_function_path_keeps_file_prefix_for_same_name",
-            relative_path.rvs_as_str(),
-        );
-        assert_eq!(relative_path, RelativeFnPath::from("api::api"));
-    }
-
-    #[test]
-    fn test_20260704_normalize_inherent_impl_segment() {
-        let inherent = rvs_normalize_structure_segment("impl User");
-        let generic_impl = rvs_normalize_structure_segment("impl<T> User<T>");
-        let generic_type = rvs_normalize_structure_segment("impl User<T>");
-        let qualified = rvs_normalize_structure_segment("impl<T> crate::models::User<T>");
-        let trait_impl = rvs_normalize_structure_segment("impl ApiClient for User");
-        let module = rvs_normalize_structure_segment("api");
-        let output = format!(
-            "inherent={inherent}\ngeneric_impl={generic_impl}\ngeneric_type={generic_type}\nqualified={qualified}\ntrait_impl={trait_impl}\nmodule={module}\n",
-        );
-        rvs_snapshot_BIS("test_20260704_normalize_inherent_impl_segment", &output);
-
-        assert_eq!(inherent, "User");
-        assert_eq!(generic_impl, "User");
-        assert_eq!(generic_type, "User");
-        assert_eq!(qualified, "User");
-        assert_eq!(trait_impl, "impl ApiClient for User");
-        assert_eq!(module, "api");
-    }
-
-    #[test]
-    fn test_20260704_file_module_prefix() {
-        let root = Path::new("/workspace/project");
-        let mut target_roots = BTreeSet::new();
-        target_roots.insert(PathBuf::from("/workspace/project/src/lib.rs"));
-        target_roots.insert(PathBuf::from("/workspace/project/src/bin/tool.rs"));
-        target_roots.insert(PathBuf::from("/workspace/project/src/bin/server/main.rs"));
-        target_roots.insert(PathBuf::from("/workspace/project/src/main.rs"));
-        target_roots.insert(PathBuf::from("/workspace/project/src/server/main.rs"));
-        target_roots.insert(PathBuf::from("/workspace/project/custom/main.rs"));
-        let lib = rvs_file_module_prefix(
-            root,
-            Path::new("/workspace/project/src/lib.rs"),
-            &target_roots,
-        );
-        let bin = rvs_file_module_prefix(
-            root,
-            Path::new("/workspace/project/src/bin/tool.rs"),
-            &target_roots,
-        );
-        let bin_helper = rvs_file_module_prefix(
-            root,
-            Path::new("/workspace/project/src/bin/server/helper.rs"),
-            &target_roots,
-        );
-        let custom_helper = rvs_file_module_prefix(
-            root,
-            Path::new("/workspace/project/custom/helper.rs"),
-            &target_roots,
-        );
-        let src_server_helper = rvs_file_module_prefix(
-            root,
-            Path::new("/workspace/project/src/server/helper.rs"),
-            &target_roots,
-        );
-        let direct_helper = rvs_target_relative_module_prefix(
-            Path::new("/workspace/project/custom/helper.rs"),
-            &target_roots,
-        )
-        .unwrap();
-        let flat = rvs_file_module_prefix(
-            root,
-            Path::new("/workspace/project/src/api.rs"),
-            &target_roots,
-        );
-        let nested = rvs_file_module_prefix(
-            root,
-            Path::new("/workspace/project/src/api/client.rs"),
-            &target_roots,
-        );
-        let mod_rs = rvs_file_module_prefix(
-            root,
-            Path::new("/workspace/project/src/api/mod.rs"),
-            &target_roots,
-        );
-        let output = format!(
-            "lib={lib:?}\nbin={bin:?}\nbin_helper={bin_helper:?}\ncustom_helper={custom_helper:?}\nsrc_server_helper={src_server_helper:?}\ndirect_helper={direct_helper:?}\nflat={flat:?}\nnested={nested:?}\nmod={mod_rs:?}\n",
-        );
-        rvs_snapshot_BIS("test_20260704_file_module_prefix", &output);
-
-        assert!(lib.is_empty());
-        assert!(bin.is_empty());
-        assert_eq!(bin_helper, vec!["helper"]);
-        assert_eq!(custom_helper, vec!["helper"]);
-        assert_eq!(src_server_helper, vec!["helper"]);
-        assert_eq!(direct_helper, vec!["helper"]);
-        assert_eq!(flat, vec!["api"]);
-        assert_eq!(nested, vec!["api", "client"]);
-        assert_eq!(mod_rs, vec!["api"]);
-    }
-
-    #[test]
-    fn test_20260705_collect_target_root_files_includes_auto_and_manifest_targets() {
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("never: system clock should be after unix epoch for test temp dir")
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!(
-            "rivus-rename-target-roots-{}-{unique}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(root.join("examples/nested")).unwrap();
-        std::fs::create_dir_all(root.join("examples/support")).unwrap();
-        std::fs::create_dir_all(root.join("tests")).unwrap();
-        std::fs::create_dir_all(root.join("custom")).unwrap();
-        std::fs::write(root.join("examples/tool.rs"), "fn main() {}\n").unwrap();
-        std::fs::write(root.join("examples/nested/main.rs"), "fn main() {}\n").unwrap();
-        std::fs::write(root.join("tests/ui.rs"), "fn main() {}\n").unwrap();
-        std::fs::write(root.join("custom/special.rs"), "fn main() {}\n").unwrap();
-        std::fs::write(
-            root.join("Cargo.toml"),
-            "[[example]]\nname = \"special\"\npath = \"custom/special.rs\"\n\n[[test]]\nname = \"missing\"\npath = \"missing/generated.rs\"\n",
-        )
-        .unwrap();
-
-        let mut direct = BTreeSet::new();
-        rvs_collect_auto_target_roots_BIMS(&root.join("examples"), &mut direct);
-        let roots = rvs_collect_target_root_files_BIS(&root);
-        let output = format!(
-            "has_tool={}\nhas_nested={}\nhas_support_main={}\nhas_ui={}\nhas_special={}\nhas_missing_manifest={}\n",
-            roots.contains(&root.join("examples/tool.rs")),
-            roots.contains(&root.join("examples/nested/main.rs")),
-            roots.contains(&root.join("examples/support/main.rs")),
-            roots.contains(&root.join("tests/ui.rs")),
-            roots.contains(&root.join("custom/special.rs")),
-            roots.contains(&root.join("missing/generated.rs")),
-        );
-        rvs_snapshot_BIS(
-            "test_20260705_collect_target_root_files_includes_auto_and_manifest_targets",
-            &output,
-        );
-
-        assert!(direct.contains(&root.join("examples/tool.rs")));
-        assert!(roots.contains(&root.join("examples/tool.rs")));
-        assert!(roots.contains(&root.join("examples/nested/main.rs")));
-        assert!(!roots.contains(&root.join("examples/support/main.rs")));
-        assert!(roots.contains(&root.join("tests/ui.rs")));
-        assert!(roots.contains(&root.join("custom/special.rs")));
-        assert!(!roots.contains(&root.join("missing/generated.rs")));
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
     #[expect(
         unreachable_code,
         reason = "coverage-only unreachable branch keeps helper names visible to rivus test-call collection"
@@ -1631,21 +1036,15 @@ mod tests {
             let _source_change: &SourceChange = unreachable!();
             let _vfs: &ra_ap_vfs::Vfs = unreachable!();
             let _file_edits: &mut std::collections::HashMap<PathBuf, Vec<Indel>> = unreachable!();
-            let _rename_map: &HashMap<RelativeFnPath, FnName> = unreachable!();
             let _source_rename_map: &HashMap<FnSource, FnName> = unreachable!();
             let _functions: &[FunctionNode] = unreachable!();
             let _workspace_root: &Path = unreachable!();
             let _ = rvs_collect_edits_BIMS(_source_change, _vfs, _file_edits, _workspace_root);
-            let _ = rvs_preflight_rename_matches(_rename_map, _functions);
             let _ = rvs_preflight_source_rename_matches(_source_rename_map, _functions);
             let _file_path: &Path = unreachable!();
             let _text: &str = unreachable!();
             let _edits: Vec<Indel> = unreachable!();
             let _ = rvs_validate_and_dedup_edits(_file_path, _text, _edits);
-            let mut _target_roots: BTreeSet<PathBuf> = unreachable!();
-            let _ = rvs_collect_target_root_files_BIS(_workspace_root);
-            let _ = rvs_file_module_prefix(_workspace_root, _file_path, &_target_roots);
-            rvs_insert_existing_target_root_BMS(&mut _target_roots, _file_path.to_path_buf());
         }
     }
 }

@@ -1,1 +1,1 @@
-Err("rename candidate 'missing' did not match any rust-analyzer symbol")
+Err("rename candidate '$TMP/src/lib.rs:0..1' did not match any rust-analyzer symbol")
