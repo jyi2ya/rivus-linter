@@ -476,12 +476,10 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n");
-        std::fs::create_dir_all("test_out").unwrap();
-        std::fs::write(
-            "test_out/test_20260708_load_dir_layers_rejects_path_escape.out",
-            format!("{summary}\n").replace(&absolute, "$ABS"),
-        )
-        .unwrap();
+        rvs_snapshot_BIS(
+            "test_20260708_load_dir_layers_rejects_path_escape",
+            &format!("{summary}\n").replace(&absolute, "$ABS"),
+        );
 
         assert!(
             results
@@ -503,12 +501,10 @@ mod tests {
 
         let cm = CapsMap::rvs_load_dir_layers_BIS(&dir, &["suppress", "seed"]).unwrap();
         let caps = cm.rvs_lookup("func").unwrap();
-        std::fs::create_dir_all("test_out").unwrap();
-        std::fs::write(
-            "test_out/test_20260706_load_dir_layers_uses_global_precedence.out",
-            format!("caps={}\n", crate::inference::rvs_caps_to_string(caps)),
-        )
-        .unwrap();
+        rvs_snapshot_BIS(
+            "test_20260706_load_dir_layers_uses_global_precedence",
+            &format!("caps={}\n", crate::inference::rvs_caps_to_string(caps)),
+        );
 
         assert!(caps.rvs_is_empty());
         std::fs::remove_dir_all(&dir).unwrap();
@@ -576,12 +572,10 @@ mod tests {
             CapsMap::rvs_load_dir_layers_BIS(&path, &["seed"]).is_err(),
             CapsMap::rvs_load_dir_excluding_BIS(&path, &["deps"]).is_err(),
         ];
-        std::fs::create_dir_all("test_out").unwrap();
-        std::fs::write(
-            "test_out/test_20260706_load_dir_rejects_caps_file_path.out",
-            format!("results={results:?}\n"),
-        )
-        .unwrap();
+        rvs_snapshot_BIS(
+            "test_20260706_load_dir_rejects_caps_file_path",
+            &format!("results={results:?}\n"),
+        );
 
         assert_eq!(results, [true, true, true]);
         std::fs::remove_file(&path).unwrap();
@@ -598,12 +592,10 @@ mod tests {
             CapsMap::rvs_load_dir_layers_BIS(&path, &["seed"]).is_err(),
             CapsMap::rvs_load_dir_excluding_BIS(&path, &["deps"]).is_err(),
         ];
-        std::fs::create_dir_all("test_out").unwrap();
-        std::fs::write(
-            "test_out/test_20260706_load_dir_rejects_broken_caps_symlink.out",
-            format!("results={results:?}\n"),
-        )
-        .unwrap();
+        rvs_snapshot_BIS(
+            "test_20260706_load_dir_rejects_broken_caps_symlink",
+            &format!("results={results:?}\n"),
+        );
 
         assert_eq!(results, [true, true, true]);
         std::fs::remove_file(&path).unwrap();
@@ -620,13 +612,11 @@ mod tests {
 
         let layered = CapsMap::rvs_load_dir_layers_BIS(&dir, &["seed"]);
         let full = CapsMap::rvs_load_dir_BIS(&dir);
-        std::fs::create_dir_all("test_out").unwrap();
-        std::fs::write(
-            "test_out/test_20260706_load_dir_layers_rejects_layer_directory.out",
-            format!("layered={layered:?}\nfull={full:?}\n")
+        rvs_snapshot_BIS(
+            "test_20260706_load_dir_layers_rejects_layer_directory",
+            &format!("layered={layered:?}\nfull={full:?}\n")
                 .replace(&dir.to_string_lossy().into_owned(), "$TMP"),
-        )
-        .unwrap();
+        );
 
         assert!(layered.is_err());
         assert!(full.is_err());
@@ -638,12 +628,10 @@ mod tests {
         let path = std::env::temp_dir().join("test_20260706_require_caps_dir_rejects_file_path");
         std::fs::write(&path, "func=S\n").unwrap();
         let result = rvs_require_caps_dir_BIS(&path);
-        std::fs::create_dir_all("test_out").unwrap();
-        std::fs::write(
-            "test_out/test_20260706_require_caps_dir_rejects_file_path.out",
-            format!("{result:?}\n").replace(&path.to_string_lossy().into_owned(), "$TMP"),
-        )
-        .unwrap();
+        rvs_snapshot_BIS(
+            "test_20260706_require_caps_dir_rejects_file_path",
+            &format!("{result:?}\n").replace(&path.to_string_lossy().into_owned(), "$TMP"),
+        );
 
         assert!(result.is_err());
         std::fs::remove_file(&path).unwrap();
@@ -653,12 +641,10 @@ mod tests {
     fn test_20260705_capsmap_file_parse_error_includes_path() {
         let result = rvs_parse_caps_file("caps/seed", "broken=E");
         let message = result.unwrap_err().to_string();
-        std::fs::create_dir_all("test_out").unwrap();
-        std::fs::write(
-            "test_out/test_20260705_capsmap_file_parse_error_includes_path.out",
-            format!("{message}\n"),
-        )
-        .unwrap();
+        rvs_snapshot_BIS(
+            "test_20260705_capsmap_file_parse_error_includes_path",
+            &format!("{message}\n"),
+        );
         assert!(message.contains("caps/seed"));
         assert!(message.contains("line 1"));
     }

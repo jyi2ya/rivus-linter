@@ -1,0 +1,22 @@
+None=false
+Some("")=false
+Some("0")=false
+Some("true")=false
+Some("01")=false
+Some("1")=true
+equal=true
+snapshot mismatch for `test_out/example.out`
+first difference at character 6 (line 2, column 1)
+--- expected ---
+alpha
+beta
+
+--- actual ---
+alpha
+zeta
+
+--- expected (escaped) ---
+"alpha\nbeta\n"
+--- actual (escaped) ---
+"alpha\nzeta\n"
+update intentionally with: RUSTC_BLESS=1 cargo test example

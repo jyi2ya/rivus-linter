@@ -3,6 +3,7 @@
     reason = "rvs_ functions use uppercase capability suffixes"
 )]
 
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -37,7 +38,11 @@ fn rvs_normalize_stderr_S(raw: &str) -> String {
 }
 
 fn rvs_run_one_test_BIS(fixture: &Path, stderr_path: &Path) -> Result<(), String> {
-    let bless = std::env::var("RUSTC_BLESS").is_ok() || std::env::args().any(|a| a == "--bless");
+    let bless = std::env::var_os("RUSTC_BLESS")
+        .as_deref()
+        .and_then(OsStr::to_str)
+        == Some("1")
+        || std::env::args().any(|argument| argument == "--bless");
     let driver = rvs_driver_path_BIS();
     if !driver.exists() {
         return Err(format!("cargo-rivus not found at {:?}", driver));
