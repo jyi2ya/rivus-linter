@@ -6,8 +6,8 @@ use crate::capsmap::CapsMap;
 use crate::cargo_targets::rvs_detect_local_crate_prefixes_for_cargo_check_BIS;
 use crate::inference::{
     rvs_build_impl_index, rvs_collect_direct_external_deps, rvs_format_capsmap,
-    rvs_format_unknown_callees, rvs_generate_trait_aliases, rvs_infer_caps,
-    rvs_infer_signature_caps, rvs_scope_port_methods_M,
+    rvs_format_unknown_callees, rvs_generate_trait_aliases, rvs_infer_caps, rvs_initial_caps,
+    rvs_scope_port_methods_M,
 };
 use crate::symbols::{CapsMapKey, CrateName, DefPath, DefPathPrefix};
 use crate::workspace::{
@@ -89,17 +89,7 @@ pub(crate) fn rvs_run_infer_std_BIMPS(path: &Path, output: &Path) -> Result<(), 
     rvs_scope_port_methods_M(&mut callgraph, &local_crate_names);
 
     let pre_index = rvs_build_impl_index(&callgraph);
-    let pre_inferred: BTreeMap<DefPath, crate::capability::CapabilitySet> = {
-        let mut m = BTreeMap::new();
-        for (func, behavior) in callgraph.rvs_iter() {
-            if let Some(caps) = seed.rvs_lookup(func.rvs_as_str()) {
-                m.insert(func.clone(), caps.clone());
-            } else {
-                m.insert(func.clone(), rvs_infer_signature_caps(behavior));
-            }
-        }
-        m
-    };
+    let pre_inferred = rvs_initial_caps(&callgraph, &seed);
     let std_pre_inferred: BTreeMap<DefPath, crate::capability::CapabilitySet> = pre_inferred
         .iter()
         .filter(|(k, _)| rvs_is_std_like_def_path(k.rvs_as_str()))

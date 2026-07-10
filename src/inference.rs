@@ -376,17 +376,7 @@ pub(crate) fn rvs_infer_caps(
     graph: &FnGraph,
     seed: &capsmap::CapsMap,
 ) -> BTreeMap<DefPath, CapabilitySet> {
-    let mut inferred: BTreeMap<DefPath, CapabilitySet> = BTreeMap::new();
-
-    for (func, behavior) in graph.rvs_iter() {
-        if behavior.facts.is_port_method {
-            inferred.insert(func.clone(), CapabilityPolicy::rvs_port_method_caps());
-        } else if let Some(caps) = seed.rvs_lookup(func.rvs_as_str()) {
-            inferred.insert(func.clone(), caps.clone());
-        } else {
-            inferred.insert(func.clone(), rvs_infer_signature_caps(behavior));
-        }
-    }
+    let mut inferred = rvs_initial_caps(graph, seed);
     for (_, behavior) in graph.rvs_iter() {
         for callee in &behavior.calls {
             if !inferred.contains_key(callee)
@@ -453,6 +443,25 @@ pub(crate) fn rvs_infer_caps(
         }
     }
     inferred
+}
+
+pub(crate) fn rvs_initial_caps(
+    graph: &FnGraph,
+    seed: &capsmap::CapsMap,
+) -> BTreeMap<DefPath, CapabilitySet> {
+    graph
+        .rvs_iter()
+        .map(|(func, behavior)| {
+            let caps = if behavior.facts.is_port_method {
+                CapabilityPolicy::rvs_port_method_caps()
+            } else if let Some(caps) = seed.rvs_lookup(func.rvs_as_str()) {
+                caps.clone()
+            } else {
+                rvs_infer_signature_caps(behavior)
+            };
+            (func.clone(), caps)
+        })
+        .collect()
 }
 
 pub(crate) fn rvs_scope_port_methods_M(
@@ -2832,5 +2841,34 @@ mod tests {
             inferred.get(&DefPath::from("app::rvs_run_BI")),
             Some(&CapabilitySet::rvs_from_str("BI").unwrap())
         );
+    }
+
+    #[test]
+    fn test_20260710_initial_caps_precedence_table() {
+        let mut port = rvs_make_behavior();
+        port.facts.is_port_method = true;
+        port.facts.has_async = true;
+        let mut seeded = rvs_make_behavior();
+        seeded.facts.has_async = true;
+        let mut signature = rvs_make_behavior();
+        signature.facts.has_async = true;
+        signature.facts.has_mut_param = true;
+        let mut graph = FnGraph::rvs_new();
+        graph.rvs_insert_M(DefPath::from("app::ApiClient::fetch"), port);
+        graph.rvs_insert_M(DefPath::from("app::rvs_seeded_S"), seeded);
+        graph.rvs_insert_M(DefPath::from("app::rvs_signature_AM"), signature);
+        let seed =
+            capsmap::CapsMap::rvs_parse("app::ApiClient::fetch=BI\napp::rvs_seeded_S=S").unwrap();
+
+        let initial = rvs_initial_caps(&graph, &seed);
+        let mut output = initial
+            .iter()
+            .map(|(path, caps)| format!("{path}={}", rvs_caps_to_string(caps)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        output.push('\n');
+        rvs_snapshot_BIS("test_20260710_initial_caps_precedence_table", &output);
+
+        assert_eq!(initial.len(), 3);
     }
 }
