@@ -1,11 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use crate::capsmap;
 use crate::capsmap::CapsMap;
 use crate::cargo_targets::rvs_detect_local_crate_prefixes_for_cargo_check_BIS;
 use crate::inference::{
-    rvs_build_impl_index, rvs_caps_to_string, rvs_collect_direct_external_deps, rvs_format_capsmap,
+    rvs_build_impl_index, rvs_collect_direct_external_deps, rvs_format_capsmap,
     rvs_format_unknown_callees, rvs_generate_trait_aliases, rvs_infer_caps,
     rvs_infer_signature_caps,
 };
@@ -101,13 +100,11 @@ pub(crate) fn rvs_run_infer_std_BIMPS(path: &Path, output: &Path) -> Result<(), 
         .collect();
     let mut alias_seed = seed.clone();
     let pre_aliases = rvs_generate_trait_aliases(&std_pre_inferred, &pre_index, &callgraph);
-    for (k, v) in &pre_aliases {
-        let caps_str = rvs_caps_to_string(v);
-        let line = format!("{}={caps_str}", CapsMapKey::from(k.clone()));
-        let tmp = capsmap::CapsMap::rvs_parse(&line)
-            .map_err(|e| format!("cannot parse generated trait alias caps '{line}': {e}"))?;
-        alias_seed.rvs_extend_from_M(tmp);
-    }
+    alias_seed.rvs_extend_entries_M(
+        pre_aliases
+            .into_iter()
+            .map(|(key, caps)| (CapsMapKey::from(key), caps)),
+    );
 
     let mut inferred = rvs_infer_caps(&callgraph, &alias_seed);
     let impl_index = rvs_build_impl_index(&callgraph);

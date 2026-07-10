@@ -47,6 +47,13 @@ pub enum CapsMapError {
 /// 这是整个系统中唯一的层级定义——所有调用者都引用这一个常量。
 const LAYER_ORDER: &[&str] = &["std", "deps", "seed", "suppress", "ext"];
 
+#[derive(Debug, Clone, Copy)]
+enum CapsDirSelection<'a> {
+    All,
+    Include(&'a [&'a str]),
+    Exclude(&'a [&'a str]),
+}
+
 impl CapsMap {
     /// 构造一个空的能力映射表。
     pub fn rvs_new() -> Self {
@@ -91,11 +98,24 @@ impl CapsMap {
         self.entries.get(name)
     }
 
+    /// Insert one typed exact-key entry, replacing any existing value.
+    pub(crate) fn rvs_insert_M(&mut self, key: CapsMapKey, caps: CapabilitySet) {
+        self.entries.insert(key, caps);
+    }
+
+    /// Extend from typed exact-key entries, with later entries taking precedence.
+    pub(crate) fn rvs_extend_entries_M(
+        &mut self,
+        entries: impl IntoIterator<Item = (CapsMapKey, CapabilitySet)>,
+    ) {
+        for (key, caps) in entries {
+            self.rvs_insert_M(key, caps);
+        }
+    }
+
     /// 合并另一个 capsmap，后者覆盖前者。
     pub(crate) fn rvs_extend_from_M(&mut self, other: Self) {
-        for (key, caps) in other.entries {
-            self.entries.insert(key, caps);
-        }
+        self.rvs_extend_entries_M(other.entries);
     }
 
     #[cfg(test)]
@@ -115,70 +135,19 @@ impl CapsMap {
     /// 层级顺序：std → deps → seed → suppress → ext → 其余按字母序。
     /// 后加载的覆盖先加载的同名条目。
     pub fn rvs_load_dir_BIS(dir: &Path) -> Result<Self, CapsMapError> {
-        let mut result = Self::rvs_new();
-        if !rvs_caps_dir_exists_BIS(dir)? {
-            return Ok(result);
-        }
-        rvs_require_caps_dir_BIS(dir)?;
-        let mut files = rvs_collect_caps_dir_files_BIS(dir, &[])?;
-        rvs_sort_by_layer_M(&mut files);
-        for path in &files {
-            let content = std::fs::read_to_string(path).map_err(|e| CapsMapError::FileRead {
-                path: path.display().to_string(),
-                error: e.to_string(),
-            })?;
-            let partial = rvs_parse_caps_file(&path.display().to_string(), &content)?;
-            result.rvs_extend_from_M(partial);
-        }
-        Ok(result)
+        rvs_load_caps_dir_BIS(dir, CapsDirSelection::All)
     }
 
     /// 加载目录中指定的层级子集。
     /// 例如 `&["seed", "suppress"]` 只加载这两个文件。
     pub fn rvs_load_dir_layers_BIS(dir: &Path, layers: &[&str]) -> Result<Self, CapsMapError> {
-        let mut result = Self::rvs_new();
-        if !rvs_caps_dir_exists_BIS(dir)? {
-            return Ok(result);
-        }
-        rvs_require_caps_dir_BIS(dir)?;
-        let mut files: Vec<PathBuf> = layers
-            .iter()
-            .map(|layer| rvs_caps_layer_file_path(dir, layer))
-            .collect::<Result<_, _>>()?;
-        rvs_sort_by_layer_M(&mut files);
-        for path in files {
-            if !rvs_optional_caps_layer_file_BIS(&path)? {
-                continue;
-            }
-            let content = std::fs::read_to_string(&path).map_err(|e| CapsMapError::FileRead {
-                path: path.display().to_string(),
-                error: e.to_string(),
-            })?;
-            let partial = rvs_parse_caps_file(&path.display().to_string(), &content)?;
-            result.rvs_extend_from_M(partial);
-        }
-        Ok(result)
+        rvs_load_caps_dir_BIS(dir, CapsDirSelection::Include(layers))
     }
 
     /// 加载目录中除指定层级外的所有文件。
     /// 例如 `&["deps"]` 加载 std/seed/suppress/ext 但不加载 deps。
     pub fn rvs_load_dir_excluding_BIS(dir: &Path, exclude: &[&str]) -> Result<Self, CapsMapError> {
-        let mut result = Self::rvs_new();
-        if !rvs_caps_dir_exists_BIS(dir)? {
-            return Ok(result);
-        }
-        rvs_require_caps_dir_BIS(dir)?;
-        let mut files = rvs_collect_caps_dir_files_BIS(dir, exclude)?;
-        rvs_sort_by_layer_M(&mut files);
-        for path in &files {
-            let content = std::fs::read_to_string(path).map_err(|e| CapsMapError::FileRead {
-                path: path.display().to_string(),
-                error: e.to_string(),
-            })?;
-            let partial = rvs_parse_caps_file(&path.display().to_string(), &content)?;
-            result.rvs_extend_from_M(partial);
-        }
-        Ok(result)
+        rvs_load_caps_dir_BIS(dir, CapsDirSelection::Exclude(exclude))
     }
 
     /// 统一加载入口：只接受 caps 目录。
@@ -191,6 +160,33 @@ impl CapsMap {
             })
         }
     }
+}
+
+fn rvs_load_caps_dir_BIS(
+    dir: &Path,
+    selection: CapsDirSelection<'_>,
+) -> Result<CapsMap, CapsMapError> {
+    let mut result = CapsMap::rvs_new();
+    if !rvs_caps_dir_exists_BIS(dir)? {
+        return Ok(result);
+    }
+    rvs_require_caps_dir_BIS(dir)?;
+    let mut files = rvs_collect_selected_caps_dir_files_BIS(dir, selection)?;
+    rvs_sort_by_layer_M(&mut files);
+    for path in files {
+        if matches!(selection, CapsDirSelection::Include(_))
+            && !rvs_optional_caps_layer_file_BIS(&path)?
+        {
+            continue;
+        }
+        let content = std::fs::read_to_string(&path).map_err(|e| CapsMapError::FileRead {
+            path: path.display().to_string(),
+            error: e.to_string(),
+        })?;
+        let partial = rvs_parse_caps_file(&path.display().to_string(), &content)?;
+        result.rvs_extend_from_M(partial);
+    }
+    Ok(result)
 }
 
 fn rvs_parse_caps_file(path: &str, content: &str) -> Result<CapsMap, CapsMapError> {
@@ -207,6 +203,20 @@ fn rvs_caps_layer_file_path(dir: &Path, layer: &str) -> Result<PathBuf, CapsMapE
         _ => Err(CapsMapError::InvalidLayerName {
             layer: layer.to_string(),
         }),
+    }
+}
+
+fn rvs_collect_selected_caps_dir_files_BIS(
+    dir: &Path,
+    selection: CapsDirSelection<'_>,
+) -> Result<Vec<PathBuf>, CapsMapError> {
+    match selection {
+        CapsDirSelection::All => rvs_collect_caps_dir_files_BIS(dir, &[]),
+        CapsDirSelection::Include(layers) => layers
+            .iter()
+            .map(|layer| rvs_caps_layer_file_path(dir, layer))
+            .collect(),
+        CapsDirSelection::Exclude(exclude) => rvs_collect_caps_dir_files_BIS(dir, exclude),
     }
 }
 
@@ -327,7 +337,7 @@ fn rvs_sort_by_layer_M(files: &mut [std::path::PathBuf]) {
 mod tests {
     use super::*;
     use crate::capability::Capability;
-    use crate::test_support::rvs_snapshot_BIS;
+    use crate::test_support::{rvs_make_temp_dir_BIS, rvs_snapshot_BIS};
 
     #[test]
     fn test_20260709_capsmap_parse_and_lookup_table() {
@@ -502,6 +512,59 @@ mod tests {
 
         assert!(caps.rvs_is_empty());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260710_capsmap_selection_preserves_global_precedence_table() {
+        let dir = rvs_make_temp_dir_BIS("capsmap-selection-precedence");
+        for (name, caps) in [
+            ("std", "A"),
+            ("deps", "B"),
+            ("seed", "I"),
+            ("suppress", "M"),
+            ("ext", "P"),
+            ("alpha", "S"),
+            ("zeta", "U"),
+        ] {
+            std::fs::write(dir.join(name), format!("winner={caps}\n")).unwrap();
+        }
+
+        let cases = [
+            ("all", CapsMap::rvs_load_dir_BIS(&dir).unwrap(), "U"),
+            (
+                "include_shuffled",
+                CapsMap::rvs_load_dir_layers_BIS(&dir, &["zeta", "std", "ext"]).unwrap(),
+                "U",
+            ),
+            (
+                "include_layers_shuffled",
+                CapsMap::rvs_load_dir_layers_BIS(&dir, &["suppress", "seed"]).unwrap(),
+                "M",
+            ),
+            (
+                "exclude_zeta",
+                CapsMap::rvs_load_dir_excluding_BIS(&dir, &["zeta"]).unwrap(),
+                "S",
+            ),
+            (
+                "exclude_additional",
+                CapsMap::rvs_load_dir_excluding_BIS(&dir, &["alpha", "zeta"]).unwrap(),
+                "P",
+            ),
+        ];
+        let mut output = String::new();
+        for (name, capsmap, expected) in cases {
+            let actual =
+                crate::inference::rvs_caps_to_string(capsmap.rvs_lookup("winner").unwrap());
+            output.push_str(&format!("{name}={actual}\n"));
+            assert_eq!(actual, expected, "{name}");
+        }
+        rvs_snapshot_BIS(
+            "test_20260710_capsmap_selection_preserves_global_precedence_table",
+            &output,
+        );
+
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
