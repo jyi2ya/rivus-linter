@@ -1,0 +1,23 @@
+error: good fn 'rvs_compute' not called by any test
+  --> $DIR/tests/ui/183_untested_good_not_ok.rs:6:1
+   |
+LL | / fn rvs_compute() -> i32 {
+LL | |     1
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
+
+error: ok fn 'rvs_port_P' not called by any test
+  --> $DIR/tests/ui/183_untested_good_not_ok.rs:10:1
+   |
+LL | / fn rvs_port_P() -> i32 {
+LL | |     2
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-untested-ok-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_ok_fn)]`
+
+error: aborting due to 2 previous errors

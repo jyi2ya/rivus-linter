@@ -28,23 +28,4 @@ LL | |     rvs_dep_Z()
 LL | | }
    | |_^
 
-error: ok fn 'rvs_dep_Z' not called by any test
-  --> $DIR/tests/ui/174_local_unknown_suffix_no_unknown_callee.rs:3:1
-   |
-LL | / fn rvs_dep_Z() -> i32 {
-LL | |     1
-LL | | }
-   | |_^
-   |
-   = note: `-D rivus::rvs-untested-ok-fn` implied by `-D warnings`
-   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_ok_fn)]`
-
-error: ok fn 'rvs_call_dep' not called by any test
-  --> $DIR/tests/ui/174_local_unknown_suffix_no_unknown_callee.rs:7:1
-   |
-LL | / fn rvs_call_dep() -> i32 {
-LL | |     rvs_dep_Z()
-LL | | }
-   | |_^
-
-error: aborting due to 5 previous errors
+error: aborting due to 3 previous errors

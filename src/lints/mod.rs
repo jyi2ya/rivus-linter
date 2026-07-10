@@ -572,9 +572,11 @@ fn rvs_run_fn_checks_MS<'tcx>(
             validate::rvs_check_fn_S(cx, name, sig);
         }
 
+        let is_good = crate::capability::CapabilityPolicy::rvs_is_good(&effective_caps);
+
         // Collect good fns for later untested-good-fn check
         if info.is_some()
-            && crate::capability::CapabilityPolicy::rvs_is_good(&effective_caps)
+            && is_good
             && data.should_emit_lints
             && !is_test
             && !utils::rvs_has_allow(attrs, "dead_code")
@@ -585,6 +587,7 @@ fn rvs_run_fn_checks_MS<'tcx>(
 
         // Collect ok fns (ABMP subset, mock-testable) for untested-ok-fn check.
         if crate::capability::CapabilityPolicy::rvs_is_ok(&effective_caps)
+            && !is_good
             && data.should_emit_lints
             && !is_test
             && !is_trait_impl_method

@@ -36,15 +36,4 @@ LL | | }
    = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
 
-error: ok fn 'rvs_run' not called by any test
-  --> $DIR/tests/ui/181_catch_unwind_method_name.rs:9:1
-   |
-LL | / fn rvs_run() {
-LL | |     Guard.catch_unwind();
-LL | | }
-   | |_^
-   |
-   = note: `-D rivus::rvs-untested-ok-fn` implied by `-D warnings`
-   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_ok_fn)]`
-
-error: aborting due to 5 previous errors
+error: aborting due to 4 previous errors
