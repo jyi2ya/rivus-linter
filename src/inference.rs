@@ -455,6 +455,27 @@ pub(crate) fn rvs_infer_caps(
     inferred
 }
 
+pub(crate) fn rvs_scope_port_methods_M(
+    graph: &mut FnGraph,
+    local_crate_names: &BTreeSet<CrateName>,
+) {
+    for (def_path, node) in graph.rvs_iter_mut_M() {
+        if node.facts.is_port_method
+            && !local_crate_names
+                .iter()
+                .any(|name| def_path.rvs_starts_with(&name.rvs_prefix()))
+        {
+            node.facts.is_port_method = false;
+        }
+    }
+    debug_assert!(graph.rvs_iter().all(|(def_path, node)| {
+        !node.facts.is_port_method
+            || local_crate_names
+                .iter()
+                .any(|name| def_path.rvs_starts_with(&name.rvs_prefix()))
+    }));
+}
+
 fn rvs_declared_caps_from_def_path(def_path: &DefPath) -> Option<CapabilitySet> {
     ParsedFunctionName::rvs_parse(def_path.rvs_as_str()).rvs_declared_caps()
 }
@@ -616,6 +637,7 @@ pub(crate) fn rvs_collect_local_contract_diffs_with_inferred_M(
     seed: &capsmap::CapsMap,
     local_crate_names: &BTreeSet<CrateName>,
 ) -> (Vec<FnContractDiff>, BTreeMap<DefPath, CapabilitySet>) {
+    rvs_scope_port_methods_M(graph, local_crate_names);
     let inferred = rvs_infer_graph_M(graph, seed);
     rvs_project_expected_local_names_M(graph, local_crate_names);
     let diffs = rvs_collect_contract_diffs(graph, local_crate_names);
@@ -2745,5 +2767,70 @@ mod tests {
             &graph,
         );
         assert_eq!(majority, Some(CapabilitySet::rvs_from_validated("BI")));
+    }
+
+    #[test]
+    fn test_20260710_port_scope_keeps_local_and_clears_external() {
+        let mut local = rvs_make_behavior();
+        local.facts.is_port_method = true;
+        let mut dependency = rvs_make_behavior();
+        dependency.facts.is_port_method = true;
+        let mut std_method = rvs_make_behavior();
+        std_method.facts.is_port_method = true;
+        let mut graph = FnGraph::rvs_new();
+        graph.rvs_insert_M(DefPath::from("app::ApiClient::rvs_fetch_P"), local);
+        graph.rvs_insert_M(DefPath::from("dependency::HttpClient::fetch"), dependency);
+        graph.rvs_insert_M(DefPath::from("std::internal::CacheClient::get"), std_method);
+
+        rvs_scope_port_methods_M(&mut graph, &BTreeSet::from([CrateName::from("app")]));
+
+        let mut output = String::new();
+        for (path, node) in graph.rvs_iter() {
+            output.push_str(&format!("{path}: port={}\n", node.facts.is_port_method));
+        }
+        rvs_snapshot_BIS(
+            "test_20260710_port_scope_keeps_local_and_clears_external",
+            &output,
+        );
+        assert!(
+            graph
+                .rvs_get("app::ApiClient::rvs_fetch_P")
+                .is_some_and(|node| node.facts.is_port_method)
+        );
+        assert!(
+            graph
+                .rvs_get("dependency::HttpClient::fetch")
+                .is_some_and(|node| !node.facts.is_port_method)
+        );
+        assert!(
+            graph
+                .rvs_get("std::internal::CacheClient::get")
+                .is_some_and(|node| !node.facts.is_port_method)
+        );
+    }
+
+    #[test]
+    fn test_20260710_external_port_fact_uses_capsmap_after_scoping() {
+        let external_path = DefPath::from("dependency::HttpClient::fetch");
+        let mut external = rvs_make_behavior();
+        external.facts.is_port_method = true;
+        let mut caller = rvs_make_behavior();
+        caller.calls.insert(external_path.clone());
+        let mut graph = FnGraph::rvs_new();
+        graph.rvs_insert_M(DefPath::from("app::rvs_run_BI"), caller);
+        graph.rvs_insert_M(external_path.clone(), external);
+        let seed = capsmap::CapsMap::rvs_parse("dependency::HttpClient::fetch=BI").unwrap();
+
+        rvs_scope_port_methods_M(&mut graph, &BTreeSet::from([CrateName::from("app")]));
+        let inferred = rvs_infer_caps(&graph, &seed);
+
+        assert_eq!(
+            inferred.get(&external_path),
+            Some(&CapabilitySet::rvs_from_str("BI").unwrap())
+        );
+        assert_eq!(
+            inferred.get(&DefPath::from("app::rvs_run_BI")),
+            Some(&CapabilitySet::rvs_from_str("BI").unwrap())
+        );
     }
 }

@@ -1,0 +1,3 @@
+app::ApiClient::rvs_fetch_P: port=true
+dependency::HttpClient::fetch: port=false
+std::internal::CacheClient::get: port=false

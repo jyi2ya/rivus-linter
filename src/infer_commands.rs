@@ -7,9 +7,9 @@ use crate::cargo_targets::rvs_detect_local_crate_prefixes_for_cargo_check_BIS;
 use crate::inference::{
     rvs_build_impl_index, rvs_collect_direct_external_deps, rvs_format_capsmap,
     rvs_format_unknown_callees, rvs_generate_trait_aliases, rvs_infer_caps,
-    rvs_infer_signature_caps,
+    rvs_infer_signature_caps, rvs_scope_port_methods_M,
 };
-use crate::symbols::{CapsMapKey, DefPath, DefPathPrefix};
+use crate::symbols::{CapsMapKey, CrateName, DefPath, DefPathPrefix};
 use crate::workspace::{
     rvs_collect_callgraph_BIMS, rvs_ensure_cargo_project_BIS, rvs_preflight_capsmap_file_BIS,
     rvs_validate_optional_capsmap_dir_BIS, rvs_write_capsmap_result_BIS,
@@ -38,12 +38,13 @@ pub(crate) fn rvs_run_infer_capsmap_BIMPS(path: &Path, output: &Path) -> Result<
     let resolved_output = rvs_resolve_output_path(&project_path, output);
     rvs_preflight_capsmap_file_BIS(&resolved_output, "deps capsmap")?;
 
-    let callgraph = rvs_collect_callgraph_BIMS(
+    let mut callgraph = rvs_collect_callgraph_BIMS(
         &project_path,
         false,
         false,
         vec![("RIVUS_CAPSMAP", abs_seed.into_os_string())],
     )?;
+    rvs_scope_port_methods_M(&mut callgraph, &local_crate_prefixes);
 
     let inferred = rvs_infer_caps(&callgraph, &seed);
 
@@ -73,13 +74,19 @@ pub(crate) fn rvs_run_infer_std_BIMPS(path: &Path, output: &Path) -> Result<(), 
     let project_path = path
         .canonicalize()
         .map_err(|e| format!("cannot canonicalize '{}': {e}", path.display()))?;
-    let local_prefixes = rvs_infer_std_local_prefixes_BIS(&project_path)?;
+    let local_crate_names =
+        rvs_detect_local_crate_prefixes_for_cargo_check_BIS(&project_path, false)?;
+    let local_prefixes: Vec<DefPathPrefix> = local_crate_names
+        .iter()
+        .map(CrateName::rvs_prefix)
+        .collect();
 
     let caps_dir = project_path.join("caps");
     rvs_validate_optional_capsmap_dir_BIS(&caps_dir)?;
     let seed = CapsMap::rvs_load_dir_layers_BIS(&caps_dir, &["seed", "suppress"])
         .map_err(|e| format!("caps: {e}"))?;
-    let callgraph = rvs_collect_callgraph_BIMS(&project_path, true, false, vec![])?;
+    let mut callgraph = rvs_collect_callgraph_BIMS(&project_path, true, false, vec![])?;
+    rvs_scope_port_methods_M(&mut callgraph, &local_crate_names);
 
     let pre_index = rvs_build_impl_index(&callgraph);
     let pre_inferred: BTreeMap<DefPath, crate::capability::CapabilitySet> = {
@@ -148,11 +155,6 @@ fn rvs_resolve_output_path(project_path: &Path, output_path: &Path) -> PathBuf {
     } else {
         project_path.join(output_path)
     }
-}
-
-fn rvs_infer_std_local_prefixes_BIS(project_path: &Path) -> Result<Vec<DefPathPrefix>, String> {
-    rvs_detect_local_crate_prefixes_for_cargo_check_BIS(project_path, false)
-        .map(|prefixes| prefixes.into_iter().map(|name| name.rvs_prefix()).collect())
 }
 
 fn rvs_collect_std_unknown_callees(
@@ -266,7 +268,12 @@ mod tests {
         std::fs::create_dir_all(dir.join("tests")).unwrap();
         std::fs::write(dir.join("tests/alloc.rs"), "fn main() {}\n").unwrap();
 
-        let prefixes = rvs_infer_std_local_prefixes_BIS(&dir).unwrap();
+        let prefixes: Vec<DefPathPrefix> =
+            rvs_detect_local_crate_prefixes_for_cargo_check_BIS(&dir, false)
+                .unwrap()
+                .into_iter()
+                .map(|name| name.rvs_prefix())
+                .collect();
         let output = prefixes
             .iter()
             .map(crate::symbols::DefPathPrefix::rvs_as_str)
