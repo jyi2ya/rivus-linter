@@ -2494,6 +2494,59 @@ name = "throughput-bench"
     }
 
     #[test]
+    fn test_20260710_callgraph_artifact_write_failure_fails_cargo_BIS() {
+        let dir = rvs_make_workspace_temp_dir_BIS("callgraph-artifact-write-failure");
+        let project = dir.join("project");
+        std::fs::create_dir_all(project.join("src")).unwrap();
+        std::fs::write(
+            project.join("Cargo.toml"),
+            "[package]\nname = \"callgraph-write-failure\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            project.join("src/lib.rs"),
+            "pub fn rvs_value() -> u32 { 1 }\n",
+        )
+        .unwrap();
+        let artifact_path = dir.join("artifact-path-is-a-file");
+        std::fs::write(&artifact_path, "blocker\n").unwrap();
+
+        let output = Command::new(rvs_cargo_command_from_env_BS())
+            .arg("check")
+            .arg("--quiet")
+            .current_dir(&project)
+            .env_remove("RUSTC")
+            .env_remove("RUSTC_WRAPPER")
+            .env_remove("RUSTC_WORKSPACE_WRAPPER")
+            .env("RUSTC_WRAPPER", rvs_current_wrapper_exe_BIS().unwrap())
+            .env("RIVUS_ENABLED", "1")
+            .env("RIVUS_CALLGRAPH", "1")
+            .env("RIVUS_CALLGRAPH_DIR", &artifact_path)
+            .env("CARGO_TARGET_DIR", dir.join("target"))
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let has_error = stderr.contains("error: cannot write rivus callgraph artifact:");
+        let has_old_warning = stderr.contains("warning: cannot write rivus callgraph artifact:");
+        let mentions_artifact_path = stderr.contains(&artifact_path.to_string_lossy().into_owned());
+        let snapshot = format!(
+            "success={}\nhas_error={has_error}\nhas_old_warning={has_old_warning}\nmentions_artifact_path={mentions_artifact_path}\n",
+            output.status.success()
+        );
+
+        assert!(!output.status.success(), "{snapshot}");
+        assert!(has_error, "{snapshot}");
+        assert!(!has_old_warning, "{snapshot}");
+        assert!(mentions_artifact_path, "{snapshot}");
+        rvs_snapshot_BIS(
+            "test_20260710_callgraph_artifact_write_failure_fails_cargo_BIS",
+            &snapshot,
+        );
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn test_20260703_cargo_check_error_exit_code() {
         let output = format!(
             "message={}\nexit={}\n",

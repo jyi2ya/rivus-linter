@@ -134,7 +134,9 @@ fn rvs_write_callgraph_BIS<'tcx>(
                 cx.tcx.crate_name(rustc_span::def_id::LOCAL_CRATE).as_str(),
             );
             if let Err(e) = rvs_write_callgraph_artifact_BIS(&cg_dir, &crate_name, callgraph) {
-                eprintln!("warning: cannot write rivus callgraph artifact: {e}");
+                cx.tcx
+                    .dcx()
+                    .err(format!("cannot write rivus callgraph artifact: {e}"));
             }
         }
     }
