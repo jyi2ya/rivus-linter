@@ -123,22 +123,8 @@ pub(crate) fn rvs_collect_callgraph_for_signature_M(
     let caller_path = DefPath::rvs_new(rvs_def_path(cx, def_id));
     let sources = rvs_fn_source(cx, ident).into_iter().collect();
 
-    let facts = CapabilityFacts::rvs_from_signature(
-        sig,
-        sig.decl.inputs.iter().any(|t| {
-            matches!(
-                t.kind,
-                rustc_hir::TyKind::Ref(
-                    _,
-                    rustc_hir::MutTy {
-                        mutbl: Mutability::Mut,
-                        ..
-                    }
-                )
-            )
-        }),
-        is_port_method,
-    );
+    let facts =
+        CapabilityFacts::rvs_from_signature(sig, rvs_has_mutable_params(sig), is_port_method);
 
     callgraph.rvs_merge_node_M(
         caller_path.clone(),
