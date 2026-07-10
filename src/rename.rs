@@ -19,6 +19,7 @@ use ra_ap_ide::{
 use ra_ap_ide_db::SymbolKind;
 use ra_ap_load_cargo::{LoadCargoConfig, ProcMacroServerChoice, load_workspace_at};
 use ra_ap_project_model::{CargoConfig, RustLibSource};
+use ra_ap_vfs::FileId;
 
 /// Represents a function/method found via rust-analyzer's file structure.
 #[derive(Debug)]
@@ -27,6 +28,12 @@ struct FunctionNode {
     source: FnSource,
     position: FilePosition,
     is_in_trait_impl: bool,
+}
+
+#[derive(Debug)]
+struct LocalVfsFile {
+    file_id: FileId,
+    path: PathBuf,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -145,10 +152,10 @@ pub(crate) fn rvs_build_source_rename_plan_BIS(
 }
 
 /// Loads the rust-analyzer workspace at `canonical_path` and returns the
-/// analysis handle, VFS, and a list of local `.rs` file paths.
+/// analysis handle, VFS, and local `.rs` files with their VFS identities.
 fn rvs_load_workspace_BIS(
     canonical_path: &Path,
-) -> Result<(Analysis, ra_ap_vfs::Vfs, Vec<PathBuf>), String> {
+) -> Result<(Analysis, ra_ap_vfs::Vfs, Vec<LocalVfsFile>), String> {
     let cargo_config = CargoConfig {
         sysroot: Some(RustLibSource::Discover),
         set_test: true,
@@ -169,8 +176,8 @@ fn rvs_load_workspace_BIS(
     let host = AnalysisHost::with_database(db);
     let analysis = host.analysis();
 
-    let mut local_files: Vec<PathBuf> = Vec::new();
-    for (_file_id, vfs_path) in vfs.iter() {
+    let mut local_files: Vec<LocalVfsFile> = Vec::new();
+    for (file_id, vfs_path) in vfs.iter() {
         let raw_path = match vfs_path.as_path() {
             Some(p) => p,
             None => continue,
@@ -179,10 +186,10 @@ fn rvs_load_workspace_BIS(
         if !abs_path.to_string_lossy().ends_with(".rs") {
             continue;
         }
-        if !rvs_is_local_file_BIS(abs_path, canonical_path) {
+        let Some(path) = rvs_canonical_local_file_BIS(abs_path, canonical_path) else {
             continue;
-        }
-        local_files.push(abs_path.to_path_buf());
+        };
+        local_files.push(LocalVfsFile { file_id, path });
     }
 
     Ok((analysis, vfs, local_files))
@@ -203,36 +210,18 @@ fn rvs_is_extra_cargo_target_source(file_path: &Path, canonical_path: &Path) -> 
 
 /// Finds all function/method definitions in local files and returns
 /// a list of [`FunctionNode`]s with name, position, and context flags.
-fn rvs_find_functions_BIMS(
-    analysis: &Analysis,
-    vfs: &ra_ap_vfs::Vfs,
-    _local_files: &[PathBuf],
-    canonical_path: &Path,
-) -> Vec<FunctionNode> {
+fn rvs_find_functions_BIMS(analysis: &Analysis, local_files: &[LocalVfsFile]) -> Vec<FunctionNode> {
     let mut functions: Vec<FunctionNode> = Vec::new();
-    for (file_id, vfs_path) in vfs.iter() {
-        let raw_path = match vfs_path.as_path() {
-            Some(p) => p,
-            None => continue,
-        }
-        .as_ref();
-        let abs_path: &Path = raw_path;
-        if !abs_path.to_string_lossy().ends_with(".rs") {
-            continue;
-        }
-        if !rvs_is_local_file_BIS(abs_path, canonical_path) {
-            continue;
-        }
-
+    for local_file in local_files {
         let structure_config = FileStructureConfig {
             exclude_locals: true,
         };
-        let nodes = match analysis.file_structure(&structure_config, file_id) {
+        let nodes = match analysis.file_structure(&structure_config, local_file.file_id) {
             Ok(nodes) => nodes,
             Err(_) => continue,
         };
 
-        let source = match std::fs::read_to_string(abs_path) {
+        let source = match std::fs::read_to_string(&local_file.path) {
             Ok(s) => s,
             Err(_) => continue,
         };
@@ -274,18 +263,15 @@ fn rvs_find_functions_BIMS(
             let is_in_trait_impl = trait_impl_ranges
                 .iter()
                 .any(|r| r.contains_range(node.navigation_range));
-            let Ok(source_file) = abs_path.canonicalize() else {
-                continue;
-            };
             functions.push(FunctionNode {
                 name,
                 source: FnSource::rvs_new(
-                    source_file,
+                    local_file.path.clone(),
                     u32::from(node.navigation_range.start()),
                     u32::from(node.navigation_range.end()),
                 ),
                 position: FilePosition {
-                    file_id,
+                    file_id: local_file.file_id,
                     offset: node.navigation_range.start(),
                 },
                 is_in_trait_impl,
@@ -513,8 +499,8 @@ pub fn rvs_apply_ra_source_renames_BIS(
         .canonicalize()
         .map_err(|e| format!("cannot canonicalize '{}': {e}", path.display()))?;
 
-    let (analysis, vfs, _local_files) = rvs_load_workspace_BIS(&canonical_path)?;
-    let all_functions = rvs_find_functions_BIMS(&analysis, &vfs, &_local_files, &canonical_path);
+    let (analysis, vfs, local_files) = rvs_load_workspace_BIS(&canonical_path)?;
+    let all_functions = rvs_find_functions_BIMS(&analysis, &local_files);
     let eligible: Vec<FunctionNode> = all_functions
         .into_iter()
         .filter(|f| {
@@ -640,13 +626,22 @@ fn rvs_compute_strip_name(name: &str) -> Option<String> {
 /// Checks whether `file_path` is a local file (under `workspace_root`),
 /// not a dependency or standard library file.
 fn rvs_is_local_file_BIS(file_path: &Path, workspace_root: &Path) -> bool {
-    let Ok(real_root) = workspace_root.canonicalize() else {
-        return false;
-    };
+    rvs_canonical_local_file_BIS(file_path, workspace_root).is_some()
+}
+
+fn rvs_canonical_local_file_BIS(
+    file_path: &Path,
+    canonical_workspace_root: &Path,
+) -> Option<PathBuf> {
     let Ok(real_file) = file_path.canonicalize() else {
-        return false;
+        return None;
     };
-    real_file.starts_with(&real_root) && !real_file.starts_with(real_root.join("target"))
+    if !real_file.starts_with(canonical_workspace_root)
+        || real_file.starts_with(canonical_workspace_root.join("target"))
+    {
+        return None;
+    }
+    Some(real_file)
 }
 
 /// Removes cached callgraph directories after a rename operation.
