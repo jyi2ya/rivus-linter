@@ -26,6 +26,7 @@ pub(crate) const SPAWN_FUNCTIONS: &[&str] = &[
 ];
 
 pub(crate) const REFLECTION_PATHS: &[&str] = &[
+    "core::any::type_name",
     "std::any::type_name",
     "std::any::type_id",
     "core::any::Any::type_id",

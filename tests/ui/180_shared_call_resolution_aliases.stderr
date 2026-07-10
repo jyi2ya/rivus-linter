@@ -8,13 +8,19 @@ LL |     launch(|| {});
    = help: to override `-D warnings` add `#[allow(rivus::rvs_spawn_warning)]`
 
 error: reflection — use trait dispatch instead
+  --> $DIR/tests/ui/180_shared_call_resolution_aliases.rs:8:13
+   |
+LL |     let _ = reflected_name::<u8>();
+   |             ^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-reflection-usage` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_reflection_usage)]`
+
+error: reflection — use trait dispatch instead
   --> $DIR/tests/ui/180_shared_call_resolution_aliases.rs:10:13
    |
 LL |     let _ = value.type_id();
    |             ^^^^^^^^^^^^^^^
-   |
-   = note: `-D rivus::rvs-reflection-usage` implied by `-D warnings`
-   = help: to override `-D warnings` add `#[allow(rivus::rvs_reflection_usage)]`
 
 error: pub fn 'rvs_run_ABIMS' missing /// doc comment
   --> $DIR/tests/ui/180_shared_call_resolution_aliases.rs:6:1
@@ -30,4 +36,4 @@ LL | | }
    = note: `-D rivus::rvs-missing-doc` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_doc)]`
 
-error: aborting due to 3 previous errors
+error: aborting due to 4 previous errors

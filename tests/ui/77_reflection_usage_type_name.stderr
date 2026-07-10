@@ -1,34 +1,10 @@
-error: pub fn 'rvs_process' missing /// doc comment
-  --> $DIR/tests/ui/77_reflection_usage_type_name.rs:3:1
+error: reflection — use trait dispatch instead
+  --> $DIR/tests/ui/77_reflection_usage_type_name.rs:11:5
    |
-LL | / pub fn rvs_process() -> String {
-LL | |     std::any::type_name::<i32>().to_string()
-LL | | }
-   | |_^
+LL |     std::any::type_name::<i32>().to_string()
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
-   = note: `-D rivus::rvs-missing-doc` implied by `-D warnings`
-   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_doc)]`
+   = note: `-D rivus::rvs-reflection-usage` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_reflection_usage)]`
 
-error: good fn 'rvs_process' not called by any test
-  --> $DIR/tests/ui/77_reflection_usage_type_name.rs:3:1
-   |
-LL | / pub fn rvs_process() -> String {
-LL | |     std::any::type_name::<i32>().to_string()
-LL | | }
-   | |_^
-   |
-   = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
-   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
-
-error: ok fn 'rvs_process' not called by any test
-  --> $DIR/tests/ui/77_reflection_usage_type_name.rs:3:1
-   |
-LL | / pub fn rvs_process() -> String {
-LL | |     std::any::type_name::<i32>().to_string()
-LL | | }
-   | |_^
-   |
-   = note: `-D rivus::rvs-untested-ok-fn` implied by `-D warnings`
-   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_ok_fn)]`
-
-error: aborting due to 3 previous errors
+error: aborting due to 1 previous error
