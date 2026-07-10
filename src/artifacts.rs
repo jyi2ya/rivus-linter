@@ -38,8 +38,6 @@ pub struct FnNode {
     #[serde(default)]
     pub sources: BTreeSet<FnSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub report_caps: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub report_line_count: Option<usize>,
     #[serde(default, skip_serializing_if = "rvs_is_false")]
     pub allows_dead_code: bool,
@@ -60,7 +58,6 @@ impl Default for FnNode {
             is_trait_impl: false,
             is_test: false,
             sources: BTreeSet::new(),
-            report_caps: None,
             report_line_count: None,
             allows_dead_code: false,
             is_synthetic: false,
@@ -85,7 +82,6 @@ impl FnNode {
         self.is_trait_impl |= other.is_trait_impl;
         self.is_test |= other.is_test;
         self.sources.extend(other.sources.iter().cloned());
-        self.report_caps = self.report_caps.clone().or(other.report_caps.clone());
         self.report_line_count = self.report_line_count.or(other.report_line_count);
         self.allows_dead_code |= other.allows_dead_code;
         self.is_synthetic = self.is_synthetic && other.is_synthetic;
@@ -245,6 +241,7 @@ mod tests {
             },
             "my_crate::rvs_write_BI": {
                 "calls": ["std::fs::write"],
+                "report_caps": "BI",
                 "has_body": true,
                 "has_async": false,
                                 "is_unsafe_fn": false,
@@ -259,6 +256,12 @@ mod tests {
         let output = format!("{result:?}");
         rvs_snapshot_BIS("test_20260609_parse_callgraph_valid_json", &output);
         assert_eq!(result.rvs_len(), 2);
+        assert!(
+            !serde_json::to_string(&result)
+                .unwrap()
+                .contains("report_caps"),
+            "legacy report_caps should be accepted but not reserialized"
+        );
 
         let add_behavior = result
             .rvs_get("my_crate::rvs_add")

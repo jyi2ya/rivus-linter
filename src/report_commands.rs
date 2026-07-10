@@ -4,7 +4,7 @@ use std::fmt;
 use std::path::Path;
 
 use crate::artifacts::FnGraph;
-use crate::capability::{Capability, CapabilityPolicy, CapabilitySet};
+use crate::capability::{Capability, CapabilityPolicy, CapabilitySet, ParsedFunctionName};
 use crate::cargo_targets::rvs_function_matches_local_prefix;
 use crate::inference::{
     FnContractDiff, FnContractMismatch, FnContractMismatchKind,
@@ -199,14 +199,16 @@ fn rvs_report_entries_from_callgraph(
         if node.is_trait_impl && !node.facts.is_port_method {
             continue;
         }
-        let Some(line_count) = node.report_line_count else {
+        let parsed = ParsedFunctionName::rvs_parse(def_path.rvs_as_str());
+        let capabilities = if node.facts.is_port_method {
+            CapabilityPolicy::rvs_port_method_caps()
+        } else if parsed.rvs_has_rvs_prefix() {
+            parsed.rvs_known_caps().clone()
+        } else {
             continue;
         };
-        let capabilities = match node.report_caps.as_deref() {
-            Some("") | None => CapabilitySet::rvs_new(),
-            Some(caps) => CapabilitySet::rvs_from_str(caps).map_err(|e| {
-                format!("callgraph report caps for {def_path} are invalid ('{caps}'): {e}")
-            })?,
+        let Some(line_count) = node.report_line_count else {
+            continue;
         };
         if line_count == 0 {
             return Err(format!(
@@ -515,7 +517,6 @@ mod tests {
             DefPath::from("demo::Worker::rvs_run_A@demo::Runnable"),
             FnNode {
                 is_trait_impl: true,
-                report_caps: Some("A".to_string()),
                 report_line_count: Some(10),
                 ..FnNode::default()
             },
@@ -523,14 +524,12 @@ mod tests {
         graph.rvs_insert_M(
             DefPath::from("demo::rvs_plain_B"),
             FnNode {
-                report_caps: Some("B".to_string()),
                 report_line_count: Some(3),
                 ..FnNode::default()
             },
         );
         let mut port_impl = FnNode {
             is_trait_impl: true,
-            report_caps: Some("P".to_string()),
             report_line_count: Some(4),
             ..FnNode::default()
         };
@@ -564,6 +563,53 @@ mod tests {
                 .iter()
                 .any(|entry| entry.capabilities == CapabilitySet::rvs_from_validated("A"))
         );
+    }
+
+    #[test]
+    fn test_20260710_report_entries_derive_caps_from_names_and_port_facts() {
+        let mut graph = FnGraph::rvs_new();
+        for (path, line_count) in [
+            ("demo::rvs_mixed_AEIS", 5),
+            ("demo::rvs_unknown_E", 6),
+            ("demo::plain_BI", 7),
+        ] {
+            graph.rvs_insert_M(
+                DefPath::from(path),
+                FnNode {
+                    report_line_count: Some(line_count),
+                    ..FnNode::default()
+                },
+            );
+        }
+        let mut port = FnNode {
+            report_line_count: Some(8),
+            ..FnNode::default()
+        };
+        port.facts.is_port_method = true;
+        graph.rvs_insert_M(DefPath::from("demo::Repo::plain_AB@demo::Client"), port);
+
+        let entries = rvs_report_entries_from_callgraph(
+            &graph,
+            &std::collections::BTreeSet::from([CrateName::from("demo")]),
+        )
+        .unwrap();
+        let output = format!("{entries:?}\n");
+        rvs_snapshot_BIS(
+            "test_20260710_report_entries_derive_caps_from_names_and_port_facts",
+            &output,
+        );
+
+        assert_eq!(entries.len(), 3);
+        assert!(entries.iter().any(|entry| {
+            entry.line_count == 5 && entry.capabilities == CapabilitySet::rvs_from_validated("AIS")
+        }));
+        assert!(entries.iter().any(|entry| {
+            entry.line_count == 6 && entry.capabilities == CapabilitySet::rvs_new()
+        }));
+        assert!(entries.iter().any(|entry| {
+            entry.line_count == 8 && entry.capabilities == CapabilitySet::rvs_from_validated("P")
+        }));
+        assert!(!entries.iter().any(|entry| entry.line_count == 7));
     }
 
     #[test]

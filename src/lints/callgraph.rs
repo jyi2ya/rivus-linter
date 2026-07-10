@@ -7,11 +7,11 @@ use rustc_lint::LateContext;
 use rustc_span::{FileName, Ident};
 
 use super::utils::{
-    FnInfo, rvs_count_effective_lines_M, rvs_def_path, rvs_has_allow, rvs_has_mutable_params,
+    rvs_count_effective_lines_M, rvs_def_path, rvs_has_allow, rvs_has_mutable_params,
     rvs_static_is_thread_local, rvs_walk_closures,
 };
 use crate::artifacts::{FnGraph, FnNode, FnSource};
-use crate::capability::CapabilityFacts;
+use crate::capability::{CapabilityFacts, ParsedFunctionName};
 use crate::symbols::DefPath;
 
 #[expect(
@@ -79,13 +79,9 @@ pub(crate) fn rvs_collect_callgraph_for_item_M<'tcx>(
     let facts =
         CapabilityFacts::rvs_from_signature(sig, rvs_has_mutable_params(sig), is_port_method)
             .rvs_with_static_refs(has_static_ref, has_static_mut_ref, has_thread_local_ref);
-    let report_caps = if is_port_method {
-        Some("P".to_string())
-    } else {
-        FnInfo::rvs_extract(ident.name.as_str())
-            .map(|info| info.caps.rvs_iter().map(|cap| cap.rvs_as_char()).collect())
-    };
-    let report_line_count = if report_caps.is_some() {
+    let is_reportable =
+        is_port_method || ParsedFunctionName::rvs_parse(ident.name.as_str()).rvs_has_rvs_prefix();
+    let report_line_count = if is_reportable {
         Some(rvs_count_effective_lines_M(cx, body))
     } else {
         None
@@ -101,7 +97,6 @@ pub(crate) fn rvs_collect_callgraph_for_item_M<'tcx>(
             is_trait_impl,
             is_test,
             sources,
-            report_caps,
             report_line_count,
             allows_dead_code,
             is_synthetic: false,
@@ -154,7 +149,6 @@ pub(crate) fn rvs_collect_callgraph_for_signature_M(
             is_trait_impl,
             is_test: false,
             sources,
-            report_caps: None,
             report_line_count: None,
             allows_dead_code: false,
             is_synthetic: false,
