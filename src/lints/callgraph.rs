@@ -7,8 +7,8 @@ use rustc_lint::LateContext;
 use rustc_span::{FileName, Ident};
 
 use super::utils::{
-    rvs_count_effective_lines_M, rvs_def_path, rvs_has_allow, rvs_has_mutable_params,
-    rvs_static_is_thread_local, rvs_walk_closures,
+    CallTarget, rvs_count_effective_lines_M, rvs_def_path, rvs_has_allow, rvs_has_mutable_params,
+    rvs_resolve_call, rvs_static_is_thread_local, rvs_walk_closures,
 };
 use crate::artifacts::{FnGraph, FnNode, FnSource};
 use crate::capability::{CapabilityFacts, ParsedFunctionName};
@@ -54,20 +54,14 @@ pub(crate) fn rvs_collect_callgraph_for_item_M<'tcx>(
                 }
             }
         }
-        ExprKind::Call(func, _) => {
-            if let ExprKind::Path(ref q) = func.kind {
-                if let rustc_hir::def::Res::Def(k, did) = cx.qpath_res(q, func.hir_id) {
-                    if matches!(k, DefKind::Fn | DefKind::AssocFn) {
-                        calls.insert(DefPath::rvs_new(rvs_def_path(cx, did)));
-                    }
-                }
-            }
-        }
-        ExprKind::MethodCall(..) => {
-            let owner = e.hir_id.owner.def_id;
-            let tck = cx.tcx.typeck(owner);
-            if let Some(did) = tck.type_dependent_def_id(e.hir_id) {
-                calls.insert(DefPath::rvs_new(rvs_def_path(cx, did)));
+        ExprKind::Call(..) | ExprKind::MethodCall(..) => {
+            if let Some(observation) = rvs_resolve_call(cx, e)
+                && let CallTarget::Resolved {
+                    def_path,
+                    def_kind: DefKind::Fn | DefKind::AssocFn,
+                } = observation.target
+            {
+                calls.insert(DefPath::rvs_new(def_path));
             }
         }
         _ => {}

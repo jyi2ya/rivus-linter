@@ -2,10 +2,10 @@ use std::collections::{BTreeSet, HashSet};
 
 use rustc_hir::{
     self, Block, Body, Expr, ExprKind, GenericArg, HirId, ImplItem, ImplItemImplKind, Mutability,
-    QPath, TyKind, attrs::AttributeKind, def_id::DefId,
+    QPath, TyKind, attrs::AttributeKind, def::DefKind, def_id::DefId,
 };
 use rustc_lint::LateContext;
-use rustc_span::Symbol;
+use rustc_span::{Span, Symbol};
 
 use crate::capability::{CapabilitySet, ParsedFunctionName};
 
@@ -703,6 +703,63 @@ pub(crate) fn rvs_walk_closures<'tcx, F: FnMut(&'tcx Expr<'tcx>)>(
 ) {
     let resolver = |bid: rustc_hir::BodyId| -> Option<&'tcx Body<'tcx>> { Some(tcx.hir_body(bid)) };
     rvs_walk_expr_M(e, &mut f, &resolver, 0);
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CallSyntax {
+    Function,
+    Method,
+}
+
+#[derive(Debug)]
+pub(crate) enum CallTarget {
+    Resolved { def_path: String, def_kind: DefKind },
+    UnresolvedPath { path: String },
+}
+
+#[derive(Debug)]
+pub(crate) struct CallObservation {
+    pub syntax: CallSyntax,
+    pub target: CallTarget,
+    pub span: Span,
+}
+
+pub(crate) fn rvs_resolve_call(cx: &LateContext<'_>, expr: &Expr<'_>) -> Option<CallObservation> {
+    match &expr.kind {
+        ExprKind::Call(func, _) => {
+            let ExprKind::Path(qpath) = &func.kind else {
+                return None;
+            };
+            let target = match cx.qpath_res(qpath, func.hir_id) {
+                rustc_hir::def::Res::Def(def_kind, def_id) => CallTarget::Resolved {
+                    def_path: rvs_def_path(cx, def_id),
+                    def_kind,
+                },
+                _ => CallTarget::UnresolvedPath {
+                    path: rvs_qp(qpath),
+                },
+            };
+            Some(CallObservation {
+                syntax: CallSyntax::Function,
+                target,
+                span: expr.span,
+            })
+        }
+        ExprKind::MethodCall(..) => {
+            let owner = expr.hir_id.owner.def_id;
+            let typeck = cx.tcx.typeck(owner);
+            let def_id = typeck.type_dependent_def_id(expr.hir_id)?;
+            Some(CallObservation {
+                syntax: CallSyntax::Method,
+                target: CallTarget::Resolved {
+                    def_path: rvs_def_path(cx, def_id),
+                    def_kind: cx.tcx.def_kind(def_id),
+                },
+                span: expr.span,
+            })
+        }
+        _ => None,
+    }
 }
 
 // ─── Path helpers ────────────────────────────────────────────────────────
