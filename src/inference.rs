@@ -437,7 +437,6 @@ pub(crate) fn rvs_infer_caps(
             break;
         }
     }
-    let impl_index = rvs_build_impl_index(graph);
     let bodyless_paths: Vec<DefPath> = graph
         .rvs_iter()
         .filter(|(_, behavior)| !behavior.has_body)
