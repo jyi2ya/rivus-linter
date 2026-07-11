@@ -473,6 +473,7 @@ fn rvs_emit_offline_caps_diagnostics_S(
     report: &crate::offline_caps::OfflineCapsReport,
     spans: &BTreeMap<DefPath, (rustc_hir::HirId, Span)>,
 ) {
+    use crate::inference::FnContractMismatchKind;
     use crate::offline_caps::OfflineCapsKind;
 
     for diagnostic in &report.diagnostics {
@@ -481,17 +482,19 @@ fn rvs_emit_offline_caps_diagnostics_S(
         };
         let lint = match diagnostic.kind {
             OfflineCapsKind::CallViolation => RVS_CALL_VIOLATION,
+            OfflineCapsKind::Contract(kind) => match kind {
+                FnContractMismatchKind::MissingAsync => RVS_MISSING_ASYNC,
+                FnContractMismatchKind::MissingBlocking
+                | FnContractMismatchKind::MissingIo
+                | FnContractMismatchKind::MissingPort
+                | FnContractMismatchKind::NameMismatch => RVS_CONTRACT_MISMATCH,
+                FnContractMismatchKind::MissingMutable => RVS_MISSING_MUTABLE,
+                FnContractMismatchKind::MissingRvsPrefix => RVS_NON_RVS_FN,
+                FnContractMismatchKind::MissingSideEffect => RVS_MISSING_SIDE_EFFECT,
+                FnContractMismatchKind::MissingThreadLocal => RVS_MISSING_THREAD_LOCAL,
+                FnContractMismatchKind::MissingUnsafe => RVS_MISSING_UNSAFE,
+            },
             OfflineCapsKind::DuplicateSuffix => RVS_DUPLICATE_SUFFIX,
-            OfflineCapsKind::MissingAsync => RVS_MISSING_ASYNC,
-            OfflineCapsKind::MissingBlocking
-            | OfflineCapsKind::MissingIo
-            | OfflineCapsKind::MissingPort
-            | OfflineCapsKind::NameMismatch => RVS_CONTRACT_MISMATCH,
-            OfflineCapsKind::MissingMutable => RVS_MISSING_MUTABLE,
-            OfflineCapsKind::MissingRvsPrefix => RVS_NON_RVS_FN,
-            OfflineCapsKind::MissingSideEffect => RVS_MISSING_SIDE_EFFECT,
-            OfflineCapsKind::MissingThreadLocal => RVS_MISSING_THREAD_LOCAL,
-            OfflineCapsKind::MissingUnsafe => RVS_MISSING_UNSAFE,
             OfflineCapsKind::NonAlphabeticalSuffix => RVS_NON_ALPHABETICAL_SUFFIX,
             OfflineCapsKind::StaticRefRequiresCaps => RVS_STATIC_REF,
             OfflineCapsKind::UnknownCallee => RVS_UNKNOWN_CALLEE,

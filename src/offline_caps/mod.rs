@@ -20,17 +20,8 @@ pub(crate) enum OfflineCapsSeverity {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum OfflineCapsKind {
     CallViolation,
+    Contract(FnContractMismatchKind),
     DuplicateSuffix,
-    MissingAsync,
-    MissingBlocking,
-    MissingIo,
-    MissingMutable,
-    MissingPort,
-    MissingRvsPrefix,
-    MissingSideEffect,
-    MissingThreadLocal,
-    MissingUnsafe,
-    NameMismatch,
     NonAlphabeticalSuffix,
     StaticRefRequiresCaps,
     UnknownCallee,
@@ -41,17 +32,8 @@ impl OfflineCapsKind {
     pub(crate) fn rvs_as_str(self) -> &'static str {
         match self {
             Self::CallViolation => "call_violation",
+            Self::Contract(kind) => kind.rvs_as_str(),
             Self::DuplicateSuffix => "duplicate_suffix",
-            Self::MissingAsync => "missing_async",
-            Self::MissingBlocking => "missing_blocking",
-            Self::MissingIo => "missing_io",
-            Self::MissingMutable => "missing_mutable",
-            Self::MissingPort => "missing_port",
-            Self::MissingRvsPrefix => "missing_rvs_prefix",
-            Self::MissingSideEffect => "missing_side_effect",
-            Self::MissingThreadLocal => "missing_thread_local",
-            Self::MissingUnsafe => "missing_unsafe",
-            Self::NameMismatch => "name_mismatch",
             Self::NonAlphabeticalSuffix => "non_alphabetical_suffix",
             Self::StaticRefRequiresCaps => "static_ref_requires_caps",
             Self::UnknownCallee => "unknown_callee",
@@ -146,21 +128,6 @@ pub(crate) fn rvs_check_offline_caps_M(
     report
 }
 
-fn rvs_contract_kind(kind: FnContractMismatchKind) -> OfflineCapsKind {
-    match kind {
-        FnContractMismatchKind::MissingRvsPrefix => OfflineCapsKind::MissingRvsPrefix,
-        FnContractMismatchKind::NameMismatch => OfflineCapsKind::NameMismatch,
-        FnContractMismatchKind::MissingAsync => OfflineCapsKind::MissingAsync,
-        FnContractMismatchKind::MissingBlocking => OfflineCapsKind::MissingBlocking,
-        FnContractMismatchKind::MissingIo => OfflineCapsKind::MissingIo,
-        FnContractMismatchKind::MissingMutable => OfflineCapsKind::MissingMutable,
-        FnContractMismatchKind::MissingPort => OfflineCapsKind::MissingPort,
-        FnContractMismatchKind::MissingSideEffect => OfflineCapsKind::MissingSideEffect,
-        FnContractMismatchKind::MissingThreadLocal => OfflineCapsKind::MissingThreadLocal,
-        FnContractMismatchKind::MissingUnsafe => OfflineCapsKind::MissingUnsafe,
-    }
-}
-
 fn rvs_collect_contract_diagnostics_M(
     report: &mut OfflineCapsReport,
     graph: &FnGraph,
@@ -224,7 +191,7 @@ fn rvs_collect_contract_diagnostics_M(
             };
             report.diagnostics.push(OfflineCapsDiagnostic {
                 severity: OfflineCapsSeverity::Warning,
-                kind: rvs_contract_kind(kind),
+                kind: OfflineCapsKind::Contract(kind),
                 function: diff.def_path.clone(),
                 message,
                 details,
