@@ -1,2 +1,2 @@
-demo::rvs_run: returned=BI installed=BI synthetic=false
-std::fs::read_to_string: returned=BI installed=BI synthetic=true
+demo::rvs_run: inferred=BI synthetic=false graph_contains=true
+std::fs::read_to_string: inferred=BI synthetic=true graph_contains=false

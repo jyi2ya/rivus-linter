@@ -21,6 +21,7 @@ pub(crate) struct PreparedLocalAnalysis {
     pub(crate) diffs: Vec<FnContractDiff>,
     pub(crate) inferred: BTreeMap<DefPath, CapabilitySet>,
     pub(crate) impl_index: HashMap<String, Vec<DefPath>>,
+    pub(crate) synthetic_paths: BTreeSet<DefPath>,
 }
 
 impl PreparedLocalAnalysis {
@@ -30,14 +31,20 @@ impl PreparedLocalAnalysis {
         local_crate_names: &BTreeSet<CrateName>,
     ) -> Self {
         rvs_scope_port_methods_M(graph, local_crate_names);
-        let inferred = rvs_infer_graph_M(graph, seed);
-        rvs_project_expected_local_names_M(graph, local_crate_names);
-        let diffs = rvs_collect_contract_diffs(graph, local_crate_names);
+        let inferred = rvs_infer_caps(graph, seed);
+        let synthetic_paths = inferred
+            .keys()
+            .filter(|path| graph.rvs_get(path.rvs_as_str()).is_none())
+            .cloned()
+            .collect();
+        let expected_names = rvs_project_expected_local_names(graph, &inferred, local_crate_names);
+        let diffs = rvs_collect_contract_diffs(&inferred, &expected_names, local_crate_names);
         let impl_index = rvs_build_impl_index(graph);
         Self {
             diffs,
             inferred,
             impl_index,
+            synthetic_paths,
         }
     }
 
@@ -523,35 +530,11 @@ fn rvs_declared_caps_from_def_path(def_path: &DefPath) -> Option<CapabilitySet> 
     ParsedFunctionName::rvs_parse(def_path.rvs_as_str()).rvs_declared_caps()
 }
 
-pub(crate) fn rvs_infer_graph_M(
-    graph: &mut FnGraph,
-    seed: &capsmap::CapsMap,
-) -> BTreeMap<DefPath, CapabilitySet> {
-    graph.nodes.retain(|_, node| !node.is_synthetic);
-    let inferred = rvs_infer_caps(graph, seed);
-    for (_, node) in graph.rvs_iter_mut_M() {
-        node.rvs_clear_expected_public_caps_M();
-    }
-    for (func, caps) in &inferred {
-        if let Some(node) = graph.rvs_get_mut_M(func) {
-            node.rvs_set_expected_public_caps_M(caps.clone());
-        } else {
-            let node = FnNode {
-                is_synthetic: true,
-                has_body: false,
-                expected_public_caps: Some(caps.clone()),
-                ..FnNode::default()
-            };
-            graph.rvs_insert_M(func.clone(), node);
-        }
-    }
-    inferred
-}
-
-pub(crate) fn rvs_project_expected_local_names_M(
-    graph: &mut FnGraph,
+pub(crate) fn rvs_project_expected_local_names(
+    graph: &FnGraph,
+    inferred: &BTreeMap<DefPath, CapabilitySet>,
     local_crate_names: &BTreeSet<CrateName>,
-) {
+) -> BTreeMap<DefPath, FnName> {
     let local_prefixes: Vec<_> = local_crate_names
         .iter()
         .map(CrateName::rvs_prefix)
@@ -560,10 +543,9 @@ pub(crate) fn rvs_project_expected_local_names_M(
         .iter()
         .map(|prefix| prefix.rvs_join_name(&FnName::rvs_new("main")))
         .collect();
-
-    for (full_path, node) in graph.rvs_iter_mut_M() {
-        node.rvs_clear_expected_name_M();
-        let Some(caps) = node.expected_public_caps.as_ref() else {
+    let mut expected_names = BTreeMap::new();
+    for (full_path, node) in graph.rvs_iter() {
+        let Some(caps) = inferred.get(full_path) else {
             continue;
         };
         let Some(relative_path) = local_prefixes
@@ -573,11 +555,7 @@ pub(crate) fn rvs_project_expected_local_names_M(
             continue;
         };
         let short_name = relative_path.rvs_fn_name();
-        if root_main_paths.contains(full_path)
-            || node.is_test
-            || node.is_trait_impl
-            || node.is_synthetic
-        {
+        if root_main_paths.contains(full_path) || node.is_test || node.is_trait_impl {
             continue;
         }
         let caps_str = rvs_caps_to_string(caps);
@@ -587,8 +565,9 @@ pub(crate) fn rvs_project_expected_local_names_M(
         } else {
             FnName::rvs_new(format!("rvs_{base_name}_{caps_str}"))
         };
-        node.rvs_set_expected_name_M(expected_name);
+        expected_names.insert(full_path.clone(), expected_name);
     }
+    expected_names
 }
 
 fn rvs_contract_base_name<'a>(name: &'a str, expected_caps: &str) -> &'a str {
@@ -622,7 +601,7 @@ pub(crate) fn rvs_contract_diff_is_enforced(
     let Some(node) = graph.rvs_get(diff.def_path.rvs_as_str()) else {
         return false;
     };
-    !node.is_test && !node.is_trait_impl && !node.is_synthetic
+    !node.is_test && !node.is_trait_impl
 }
 
 pub(crate) fn rvs_collect_enforced_contract_diffs(
@@ -638,7 +617,8 @@ pub(crate) fn rvs_collect_enforced_contract_diffs(
 }
 
 pub(crate) fn rvs_collect_contract_diffs(
-    graph: &FnGraph,
+    inferred: &BTreeMap<DefPath, CapabilitySet>,
+    expected_names: &BTreeMap<DefPath, FnName>,
     local_crate_names: &BTreeSet<CrateName>,
 ) -> Vec<FnContractDiff> {
     let local_prefixes: Vec<_> = local_crate_names
@@ -646,7 +626,7 @@ pub(crate) fn rvs_collect_contract_diffs(
         .map(CrateName::rvs_prefix)
         .collect();
     let mut diffs = Vec::new();
-    for (def_path, node) in graph.rvs_iter() {
+    for (def_path, expected_public_caps) in inferred {
         if !local_prefixes
             .iter()
             .any(|prefix| def_path.rvs_starts_with(prefix))
@@ -659,9 +639,9 @@ pub(crate) fn rvs_collect_contract_diffs(
         diffs.push(FnContractDiff {
             def_path: def_path.clone(),
             actual_name,
-            expected_name: node.expected_name.clone(),
+            expected_name: expected_names.get(def_path).cloned(),
             declared_public_caps,
-            expected_public_caps: node.expected_public_caps.clone(),
+            expected_public_caps: Some(expected_public_caps.clone()),
         });
     }
     diffs
@@ -733,9 +713,6 @@ pub(crate) fn rvs_collect_signature_contract_diff_from_facts_M(
             sources: BTreeSet::new(),
             report_line_count: None,
             allows_dead_code: false,
-            is_synthetic: false,
-            expected_public_caps: None,
-            expected_name: None,
         },
         local_crate_names,
     )
@@ -879,9 +856,6 @@ mod tests {
             sources: BTreeSet::new(),
             report_line_count: None,
             allows_dead_code: false,
-            is_synthetic: false,
-            expected_public_caps: None,
-            expected_name: None,
         }
     }
 
@@ -909,10 +883,12 @@ mod tests {
             .map(rvs_caps_to_string)
             .unwrap_or_default();
         let output = format!(
-            "diffs={}\ninferred={}\nimpl_keys={}\nrun_caps={run_caps}\n",
+            "diffs={}\ninferred={}\nimpl_keys={}\nsynthetic={}\ngraph_nodes={}\nrun_caps={run_caps}\n",
             analysis.diffs.len(),
             analysis.inferred.len(),
             analysis.impl_index.len(),
+            analysis.synthetic_paths.len(),
+            graph.rvs_len(),
         );
         rvs_snapshot_BIS(
             "test_20260711_prepare_local_analysis_builds_shared_derivatives",
@@ -922,6 +898,11 @@ mod tests {
         assert_eq!(run_caps, "BI");
         assert_eq!(analysis.diffs.len(), 2);
         assert_eq!(analysis.impl_index.len(), 1);
+        assert_eq!(
+            analysis.synthetic_paths,
+            BTreeSet::from([DefPath::from("dep::read")])
+        );
+        assert_eq!(graph.rvs_len(), 2);
     }
 
     fn rvs_infer_caps_case_M(
@@ -1364,9 +1345,7 @@ mod tests {
             rvs_make_behavior(),
         );
 
-        let mut synthetic = rvs_make_behavior();
-        synthetic.is_synthetic = true;
-        graph.rvs_insert_M(DefPath::from("demo::rvs_synthetic"), synthetic);
+        graph.rvs_insert_M(DefPath::from("demo::rvs_synthetic"), rvs_make_behavior());
         graph.rvs_insert_M(
             DefPath::from("demo::Disk::rvs_read_BI@demo::Reader"),
             rvs_make_behavior(),
@@ -1535,17 +1514,19 @@ mod tests {
         graph.rvs_insert_M(DefPath::from("demo::rvs_run"), rvs_make_behavior());
         let seed = capsmap::CapsMap::rvs_new();
 
-        rvs_infer_graph_M(&mut graph, &seed);
-
-        let caps = graph
-            .rvs_get("demo::rvs_run")
-            .and_then(|node| node.expected_public_caps.clone());
+        let analysis = PreparedLocalAnalysis::rvs_prepare_M(
+            &mut graph,
+            &seed,
+            &BTreeSet::from([CrateName::from("demo")]),
+        );
+        let caps = analysis.inferred.get(&DefPath::from("demo::rvs_run"));
         rvs_snapshot_BIS(
             "test_20260703_infer_graph_sets_node_caps",
             &format!("caps={caps:?}\n"),
         );
 
         assert!(caps.is_some());
+        assert!(analysis.synthetic_paths.is_empty());
     }
 
     #[test]
@@ -1556,34 +1537,32 @@ mod tests {
         graph.rvs_insert_M(DefPath::from("demo::rvs_run"), run);
         let seed = capsmap::CapsMap::rvs_parse("std::fs::read_to_string=BI").unwrap();
 
-        let inferred = rvs_infer_graph_M(&mut graph, &seed);
+        let analysis = PreparedLocalAnalysis::rvs_prepare_M(
+            &mut graph,
+            &seed,
+            &BTreeSet::from([CrateName::from("demo")]),
+        );
         let mut output = String::new();
-        for (path, caps) in &inferred {
-            let installed = graph
-                .rvs_get(path.rvs_as_str())
-                .and_then(|node| node.expected_public_caps.as_ref())
-                .expect("never: every inferred entry must be installed");
+        for (path, caps) in &analysis.inferred {
             output.push_str(&format!(
-                "{path}: returned={} installed={} synthetic={}\n",
+                "{path}: inferred={} synthetic={} graph_contains={}\n",
                 rvs_caps_to_string(caps),
-                rvs_caps_to_string(installed),
-                graph
-                    .rvs_get(path.rvs_as_str())
-                    .is_some_and(|node| node.is_synthetic),
+                analysis.synthetic_paths.contains(path),
+                graph.rvs_get(path.rvs_as_str()).is_some(),
             ));
-            assert_eq!(installed, caps);
         }
         rvs_snapshot_BIS(
             "test_20260710_infer_graph_returns_installed_caps_map",
             &output,
         );
 
-        assert_eq!(inferred.len(), 2);
+        assert_eq!(analysis.inferred.len(), 2);
         assert!(
-            graph
-                .rvs_get("std::fs::read_to_string")
-                .is_some_and(|node| node.is_synthetic)
+            analysis
+                .synthetic_paths
+                .contains(&DefPath::from("std::fs::read_to_string"))
         );
+        assert!(graph.rvs_get("std::fs::read_to_string").is_none());
     }
 
     #[test]
@@ -1593,21 +1572,35 @@ mod tests {
         run.calls.insert(DefPath::from("std::fs::read_to_string"));
         graph.rvs_insert_M(DefPath::from("demo::rvs_run"), run);
         let seed = capsmap::CapsMap::rvs_parse("std::fs::read_to_string=BI").unwrap();
-        rvs_infer_graph_M(&mut graph, &seed);
-        assert!(graph.rvs_get("std::fs::read_to_string").is_some());
+        let first = PreparedLocalAnalysis::rvs_prepare_M(
+            &mut graph,
+            &seed,
+            &BTreeSet::from([CrateName::from("demo")]),
+        );
+        assert!(
+            first
+                .synthetic_paths
+                .contains(&DefPath::from("std::fs::read_to_string"))
+        );
 
         graph
             .rvs_get_mut_M(&DefPath::from("demo::rvs_run"))
             .expect("demo node should exist")
             .calls
             .clear();
-        rvs_infer_graph_M(&mut graph, &capsmap::CapsMap::rvs_new());
+        let second = PreparedLocalAnalysis::rvs_prepare_M(
+            &mut graph,
+            &capsmap::CapsMap::rvs_new(),
+            &BTreeSet::from([CrateName::from("demo")]),
+        );
 
-        let has_synthetic = graph.rvs_get("std::fs::read_to_string").is_some();
-        let run_caps = graph
-            .rvs_get("demo::rvs_run")
-            .and_then(|node| node.expected_public_caps.clone())
-            .expect("demo node should keep expected caps");
+        let has_synthetic = second
+            .synthetic_paths
+            .contains(&DefPath::from("std::fs::read_to_string"));
+        let run_caps = second
+            .inferred
+            .get(&DefPath::from("demo::rvs_run"))
+            .expect("demo node should keep inferred caps");
         let output = format!(
             "has_synthetic={has_synthetic}\nrun_caps={}\n",
             rvs_caps_to_string(&run_caps),
@@ -1624,15 +1617,20 @@ mod tests {
     #[test]
     fn test_20260703_project_expected_local_names_sets_expected_name() {
         let mut graph = FnGraph::rvs_new();
-        let mut node = rvs_make_behavior();
-        node.rvs_set_expected_public_caps_M(CapabilitySet::rvs_from_validated("BI"));
-        graph.rvs_insert_M(DefPath::from("demo::parse"), node);
+        graph.rvs_insert_M(DefPath::from("demo::parse"), rvs_make_behavior());
+        let inferred = BTreeMap::from([(
+            DefPath::from("demo::parse"),
+            CapabilitySet::rvs_from_validated("BI"),
+        )]);
 
-        rvs_project_expected_local_names_M(&mut graph, &BTreeSet::from([CrateName::from("demo")]));
+        let expected_names = rvs_project_expected_local_names(
+            &graph,
+            &inferred,
+            &BTreeSet::from([CrateName::from("demo")]),
+        );
 
-        let expected_name = graph
-            .rvs_get("demo::parse")
-            .and_then(|node| node.expected_name.as_ref())
+        let expected_name = expected_names
+            .get(&DefPath::from("demo::parse"))
             .map(FnName::rvs_as_str)
             .unwrap_or("");
         rvs_snapshot_BIS(
@@ -1646,15 +1644,18 @@ mod tests {
     #[test]
     fn test_20260704_project_expected_local_names_preserves_pure_suffix_like_name() {
         let mut graph = FnGraph::rvs_new();
-        let mut node = rvs_make_behavior();
-        node.rvs_set_expected_public_caps_M(CapabilitySet::rvs_new());
-        graph.rvs_insert_M(DefPath::from("demo::parse_BI"), node);
+        graph.rvs_insert_M(DefPath::from("demo::parse_BI"), rvs_make_behavior());
+        let inferred =
+            BTreeMap::from([(DefPath::from("demo::parse_BI"), CapabilitySet::rvs_new())]);
 
-        rvs_project_expected_local_names_M(&mut graph, &BTreeSet::from([CrateName::from("demo")]));
+        let expected_names = rvs_project_expected_local_names(
+            &graph,
+            &inferred,
+            &BTreeSet::from([CrateName::from("demo")]),
+        );
 
-        let expected_name = graph
-            .rvs_get("demo::parse_BI")
-            .and_then(|node| node.expected_name.as_ref())
+        let expected_name = expected_names
+            .get(&DefPath::from("demo::parse_BI"))
             .map(FnName::rvs_as_str)
             .unwrap_or("");
         rvs_snapshot_BIS(
@@ -1697,9 +1698,7 @@ mod tests {
     fn test_20260704_project_expected_local_names_flags_non_lowercase_names() {
         let mut graph = FnGraph::rvs_new();
         for name in ["demo::Foo", "demo::_helper"] {
-            let mut node = rvs_make_behavior();
-            node.rvs_set_expected_public_caps_M(CapabilitySet::rvs_new());
-            graph.rvs_insert_M(DefPath::from(name), node);
+            graph.rvs_insert_M(DefPath::from(name), rvs_make_behavior());
         }
 
         let diffs = rvs_collect_local_contract_diffs_M(
@@ -1759,9 +1758,6 @@ mod tests {
                 sources: BTreeSet::new(),
                 report_line_count: None,
                 allows_dead_code: false,
-                is_synthetic: false,
-                expected_public_caps: None,
-                expected_name: None,
             },
         );
 
@@ -1800,9 +1796,6 @@ mod tests {
                 sources: BTreeSet::new(),
                 report_line_count: None,
                 allows_dead_code: false,
-                is_synthetic: false,
-                expected_public_caps: None,
-                expected_name: None,
             },
         );
         graph.rvs_insert_M(
@@ -1837,13 +1830,14 @@ mod tests {
 
     #[test]
     fn test_20260703_collect_contract_diffs_reports_name_and_caps_mismatch() {
-        let mut graph = FnGraph::rvs_new();
-        let mut node = rvs_make_behavior();
-        node.rvs_set_expected_public_caps_M(CapabilitySet::rvs_from_validated("P"));
-        node.rvs_set_expected_name_M(FnName::from("rvs_fetch_P"));
-        graph.rvs_insert_M(DefPath::from("demo::rvs_fetch_ABI"), node);
-
-        let diffs = rvs_collect_contract_diffs(&graph, &BTreeSet::from([CrateName::from("demo")]));
+        let path = DefPath::from("demo::rvs_fetch_ABI");
+        let inferred = BTreeMap::from([(path.clone(), CapabilitySet::rvs_from_validated("P"))]);
+        let expected_names = BTreeMap::from([(path, FnName::from("rvs_fetch_P"))]);
+        let diffs = rvs_collect_contract_diffs(
+            &inferred,
+            &expected_names,
+            &BTreeSet::from([CrateName::from("demo")]),
+        );
         let diff = diffs.first().expect("expected one contract diff");
         rvs_snapshot_BIS(
             "test_20260703_collect_contract_diffs_reports_name_and_caps_mismatch",
@@ -1864,15 +1858,13 @@ mod tests {
 
     #[test]
     fn test_20260703_collect_contract_diffs_reads_trait_impl_method_name() {
-        let mut graph = FnGraph::rvs_new();
-        let mut node = rvs_make_behavior();
-        node.rvs_set_expected_public_caps_M(CapabilitySet::rvs_from_validated("P"));
-        graph.rvs_insert_M(
-            DefPath::from("demo::Adapter::rvs_fetch_BI@demo::Client"),
-            node,
+        let path = DefPath::from("demo::Adapter::rvs_fetch_BI@demo::Client");
+        let inferred = BTreeMap::from([(path, CapabilitySet::rvs_from_validated("P"))]);
+        let diffs = rvs_collect_contract_diffs(
+            &inferred,
+            &BTreeMap::new(),
+            &BTreeSet::from([CrateName::from("demo")]),
         );
-
-        let diffs = rvs_collect_contract_diffs(&graph, &BTreeSet::from([CrateName::from("demo")]));
         let diff = diffs.first().expect("expected trait impl contract diff");
         rvs_snapshot_BIS(
             "test_20260703_collect_contract_diffs_reads_trait_impl_method_name",
@@ -1892,15 +1884,21 @@ mod tests {
         graph.rvs_insert_M(DefPath::from("demo::parse"), rvs_make_behavior());
         let seed = capsmap::CapsMap::rvs_new();
 
-        let diffs = rvs_collect_local_contract_diffs_M(
+        let analysis = PreparedLocalAnalysis::rvs_prepare_M(
             &mut graph,
             &seed,
             &BTreeSet::from([CrateName::from("demo")]),
         );
-        let diff = diffs.first().expect("expected one local contract diff");
+        let diff = analysis
+            .diffs
+            .first()
+            .expect("expected one local contract diff");
         rvs_snapshot_BIS(
             "test_20260703_collect_local_contract_diffs_populates_expected_fields",
-            &format!("diff={diff:?}\nnode={:?}\n", graph.rvs_get("demo::parse")),
+            &format!(
+                "diff={diff:?}\ninferred={:?}\n",
+                analysis.inferred.get(&DefPath::from("demo::parse"))
+            ),
         );
 
         assert_eq!(
@@ -1908,16 +1906,11 @@ mod tests {
             Some("rvs_parse")
         );
         assert_eq!(
-            graph
-                .rvs_get("demo::parse")
-                .and_then(|node| node.expected_name.as_ref())
-                .map(FnName::rvs_as_str),
+            diff.expected_name.as_ref().map(FnName::rvs_as_str),
             Some("rvs_parse")
         );
         assert_eq!(
-            graph
-                .rvs_get("demo::parse")
-                .and_then(|node| node.expected_public_caps.as_ref()),
+            analysis.inferred.get(&DefPath::from("demo::parse")),
             Some(&CapabilitySet::rvs_new())
         );
     }
@@ -1928,11 +1921,12 @@ mod tests {
         let mut caller = rvs_make_behavior();
         caller.calls.insert(DefPath::from("demo::rvs_generated_BI"));
         graph.rvs_insert_M(DefPath::from("demo::rvs_run"), caller);
-        let diffs = rvs_collect_local_contract_diffs_M(
+        let analysis = PreparedLocalAnalysis::rvs_prepare_M(
             &mut graph,
             &capsmap::CapsMap::rvs_parse("demo::rvs_generated_BI=BI").unwrap(),
             &BTreeSet::from([CrateName::from("demo")]),
         );
+        let diffs = &analysis.diffs;
         let enforced = rvs_collect_enforced_contract_diffs(
             &graph,
             &diffs,
@@ -1942,19 +1936,19 @@ mod tests {
             .iter()
             .find(|diff| diff.def_path.rvs_as_str() == "demo::rvs_generated_BI")
             .expect("synthetic local callee should have a raw diff");
-        let synthetic = graph
-            .rvs_get("demo::rvs_generated_BI")
-            .expect("seeded local callee should be represented for why output");
+        let synthetic_path = DefPath::from("demo::rvs_generated_BI");
+        let synthetic = analysis.synthetic_paths.contains(&synthetic_path);
         rvs_snapshot_BIS(
             "test_20260703_enforced_contract_diffs_skip_synthetic_nodes",
             &format!(
                 "synthetic={}\nraw={}\nenforced={enforced:?}\n",
-                synthetic.is_synthetic,
+                synthetic,
                 diffs.len(),
             ),
         );
 
-        assert!(synthetic.is_synthetic);
+        assert!(synthetic);
+        assert!(graph.rvs_get("demo::rvs_generated_BI").is_none());
         assert!(!rvs_contract_diff_is_enforced(
             &graph,
             synthetic_diff,
@@ -1982,9 +1976,6 @@ mod tests {
             sources: BTreeSet::new(),
             report_line_count: None,
             allows_dead_code: false,
-            is_synthetic: false,
-            expected_public_caps: None,
-            expected_name: None,
         };
         let diff = rvs_collect_single_local_contract_diff_M(
             DefPath::from("demo::rvs_fetch_P"),

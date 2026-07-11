@@ -381,9 +381,6 @@ fn rvs_is_local_checked_fn(
     {
         return false;
     }
-    if node.is_synthetic {
-        return false;
-    }
     if node.is_test {
         return false;
     }

@@ -1,2 +1,2 @@
 diff=FnContractDiff { def_path: DefPath("demo::parse"), actual_name: FnName("parse"), expected_name: Some(FnName("rvs_parse")), declared_public_caps: None, expected_public_caps: Some(CapabilitySet({})) }
-node=Some(FnNode { calls: {}, facts: CapabilityFacts { has_async: false, is_unsafe_fn: false, has_mut_param: false, has_static_ref: false, has_static_mut_ref: false, has_thread_local_ref: false, is_port_method: false }, has_body: true, is_trait_impl: false, is_test: false, sources: {}, report_line_count: None, allows_dead_code: false, is_synthetic: false, expected_public_caps: Some(CapabilitySet({})), expected_name: Some(FnName("rvs_parse")) })
+inferred=Some(CapabilitySet({}))

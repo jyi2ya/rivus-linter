@@ -72,9 +72,6 @@ pub(crate) fn rvs_collect_callgraph_for_item_M<'tcx>(
             sources,
             report_line_count,
             allows_dead_code,
-            is_synthetic: false,
-            expected_public_caps: None,
-            expected_name: None,
         },
     );
     caller_path
@@ -110,9 +107,6 @@ pub(crate) fn rvs_collect_callgraph_for_signature_M(
             sources,
             report_line_count: None,
             allows_dead_code: false,
-            is_synthetic: false,
-            expected_public_caps: None,
-            expected_name: None,
         },
     );
     caller_path

@@ -2305,7 +2305,6 @@ name = "throughput-bench"
         let mut source_node = crate::artifacts::FnNode::default();
         source_node.calls.insert("alloc::rvs_source_call".into());
         source_node.facts.has_async = true;
-        source_node.is_synthetic = true;
         let mut source = FnGraph::rvs_new();
         source.rvs_insert_M("std::rvs_shared".into(), source_node);
         source.rvs_insert_M(
@@ -2324,9 +2323,8 @@ name = "throughput-bench"
             .collect::<Vec<_>>()
             .join(",");
         let output = format!(
-            "calls={calls}\nhas_async={}\nis_synthetic={}\nhas_filtered={}\nlen={}\n",
+            "calls={calls}\nhas_async={}\nhas_filtered={}\nlen={}\n",
             merged.facts.has_async,
-            merged.is_synthetic,
             target.rvs_get("demo::rvs_filtered").is_some(),
             target.rvs_len(),
         );
@@ -2337,7 +2335,6 @@ name = "throughput-bench"
 
         assert_eq!(merged.calls.len(), 2);
         assert!(merged.facts.has_async);
-        assert!(!merged.is_synthetic);
         assert!(target.rvs_get("demo::rvs_filtered").is_none());
         assert_eq!(target.rvs_len(), 1);
     }

@@ -93,11 +93,15 @@ pub(crate) fn rvs_run_why_BIMPS(function: &str, path: &Path) -> Result<(), Strin
     let analysis = PreparedLocalAnalysis::rvs_prepare_M(&mut callgraph, &seed, &local_crate_names);
     let resolver = analysis.rvs_resolver(&callgraph, &seed);
 
-    let Some(behavior) = callgraph.rvs_get(function) else {
-        let candidates: Vec<&DefPath> = callgraph
+    let behavior = callgraph.rvs_get(function);
+    let is_synthetic = analysis.synthetic_paths.contains(&DefPath::from(function));
+    if behavior.is_none() && !is_synthetic {
+        let candidates: Vec<DefPath> = callgraph
             .rvs_keys()
+            .chain(analysis.synthetic_paths.iter())
             .filter(|k| k.rvs_contains(function))
             .take(10)
+            .cloned()
             .collect();
         if candidates.is_empty() {
             return Err(format!("function '{function}' not found in callgraph"));
@@ -106,7 +110,7 @@ pub(crate) fn rvs_run_why_BIMPS(function: &str, path: &Path) -> Result<(), Strin
         for c in &candidates {
             let caps_str = analysis
                 .inferred
-                .get(*c)
+                .get(c)
                 .map(|cs| {
                     let s = rvs_caps_to_string(cs);
                     if s.is_empty() {
@@ -121,7 +125,7 @@ pub(crate) fn rvs_run_why_BIMPS(function: &str, path: &Path) -> Result<(), Strin
         return Err(format!(
             "function '{function}' not found; see suggestions above"
         ));
-    };
+    }
 
     let own_caps = analysis.inferred.get(function);
     let caps_str = match own_caps {
@@ -151,19 +155,20 @@ pub(crate) fn rvs_run_why_BIMPS(function: &str, path: &Path) -> Result<(), Strin
     }
     println!();
 
+    if is_synthetic {
+        println!("  {}", rvs_callee_absence_message(false, true));
+        return Ok(());
+    }
+
+    let behavior = behavior.expect("never: non-synthetic function was found in callgraph");
+
     if !behavior.has_body {
-        println!(
-            "  {}",
-            rvs_callee_absence_message(false, behavior.is_synthetic)
-        );
+        println!("  {}", rvs_callee_absence_message(false, false));
         return Ok(());
     }
 
     if behavior.calls.is_empty() {
-        println!(
-            "  {}",
-            rvs_callee_absence_message(true, behavior.is_synthetic)
-        );
+        println!("  {}", rvs_callee_absence_message(true, false));
         return Ok(());
     }
 
@@ -462,11 +467,10 @@ mod tests {
     #[test]
     fn test_20260703_why_contract_summary_skips_root_main() {
         let mut graph = FnGraph::rvs_new();
-        let node = crate::artifacts::FnNode {
-            expected_public_caps: Some(crate::capability::CapabilitySet::rvs_from_validated("BI")),
-            ..crate::artifacts::FnNode::default()
-        };
-        graph.rvs_insert_M(DefPath::from("demo::main"), node);
+        graph.rvs_insert_M(
+            DefPath::from("demo::main"),
+            crate::artifacts::FnNode::default(),
+        );
         let diff = FnContractDiff {
             def_path: DefPath::from("demo::main"),
             actual_name: FnName::from("main"),

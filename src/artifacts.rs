@@ -4,8 +4,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::capability::{CapabilityFacts, CapabilitySet};
-use crate::symbols::{DefPath, FnName};
+use crate::capability::CapabilityFacts;
+use crate::symbols::DefPath;
 
 pub(crate) const CALLGRAPH_SCHEMA_VERSION: u32 = 1;
 
@@ -76,12 +76,6 @@ pub struct FnNode {
     pub report_line_count: Option<usize>,
     #[serde(default, skip_serializing_if = "rvs_is_false")]
     pub allows_dead_code: bool,
-    #[serde(skip)]
-    pub is_synthetic: bool,
-    #[serde(skip)]
-    pub expected_public_caps: Option<CapabilitySet>,
-    #[serde(skip)]
-    pub expected_name: Option<FnName>,
 }
 
 impl Default for FnNode {
@@ -95,9 +89,6 @@ impl Default for FnNode {
             sources: BTreeSet::new(),
             report_line_count: None,
             allows_dead_code: false,
-            is_synthetic: false,
-            expected_public_caps: None,
-            expected_name: None,
         }
     }
 }
@@ -119,23 +110,6 @@ impl FnNode {
         self.sources.extend(other.sources.iter().cloned());
         self.report_line_count = self.report_line_count.or(other.report_line_count);
         self.allows_dead_code |= other.allows_dead_code;
-        self.is_synthetic = self.is_synthetic && other.is_synthetic;
-    }
-
-    pub(crate) fn rvs_set_expected_public_caps_M(&mut self, caps: CapabilitySet) {
-        self.expected_public_caps = Some(caps);
-    }
-
-    pub(crate) fn rvs_clear_expected_public_caps_M(&mut self) {
-        self.expected_public_caps = None;
-    }
-
-    pub(crate) fn rvs_set_expected_name_M(&mut self, name: FnName) {
-        self.expected_name = Some(name);
-    }
-
-    pub(crate) fn rvs_clear_expected_name_M(&mut self) {
-        self.expected_name = None;
     }
 }
 
@@ -158,6 +132,7 @@ impl FnGraph {
         self.nodes.get(path)
     }
 
+    #[cfg(test)]
     pub(crate) fn rvs_get_mut_M(&mut self, path: &DefPath) -> Option<&mut FnNode> {
         self.nodes.get_mut(path)
     }
@@ -180,10 +155,6 @@ impl FnGraph {
     }
 
     #[cfg(test)]
-    pub(crate) fn rvs_contains_key(&self, path: &DefPath) -> bool {
-        self.nodes.contains_key(path)
-    }
-
     pub(crate) fn rvs_insert_M(&mut self, path: DefPath, node: FnNode) {
         self.nodes.insert(path, node);
     }
@@ -209,18 +180,6 @@ impl FnGraph {
 
     pub(crate) fn rvs_is_empty(&self) -> bool {
         self.nodes.is_empty()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn rvs_expected_public_caps_map(&self) -> BTreeMap<DefPath, CapabilitySet> {
-        self.nodes
-            .iter()
-            .filter_map(|(path, node)| {
-                node.expected_public_caps
-                    .clone()
-                    .map(|caps| (path.clone(), caps))
-            })
-            .collect()
     }
 }
 
@@ -412,57 +371,6 @@ mod tests {
     }
 
     #[test]
-    fn test_20260703_graph_mutation_helpers() {
-        let mut graph = FnGraph::rvs_new();
-        let path = DefPath::from("demo::rvs_run");
-        graph.rvs_insert_M(path.clone(), FnNode::default());
-        graph
-            .rvs_get_mut_M(&path)
-            .expect("graph should contain inserted node")
-            .rvs_set_expected_public_caps_M(CapabilitySet::rvs_new());
-        graph
-            .rvs_get_mut_M(&path)
-            .expect("graph should contain inserted node")
-            .rvs_set_expected_name_M(FnName::from("rvs_run"));
-        let inferred = graph.rvs_expected_public_caps_map();
-        let output = format!(
-            "contains={}\ninferred={}\nempty={}\nkeys={}\nname={}\n",
-            graph.rvs_contains_key(&path),
-            inferred.contains_key(&path),
-            graph.rvs_is_empty(),
-            graph.rvs_keys().count(),
-            graph
-                .rvs_get("demo::rvs_run")
-                .and_then(|node| node.expected_name.as_ref())
-                .map(FnName::rvs_as_str)
-                .unwrap_or("")
-        );
-        rvs_snapshot_BIS("test_20260703_graph_mutation_helpers", &output);
-
-        graph
-            .rvs_get_mut_M(&path)
-            .expect("graph should still contain inserted node")
-            .rvs_clear_expected_public_caps_M();
-        graph
-            .rvs_get_mut_M(&path)
-            .expect("graph should still contain inserted node")
-            .rvs_clear_expected_name_M();
-        let cleared = graph.rvs_expected_public_caps_map();
-
-        assert!(graph.rvs_contains_key(&path));
-        assert!(inferred.contains_key(&path));
-        assert!(!graph.rvs_is_empty());
-        assert_eq!(graph.rvs_keys().count(), 1);
-        assert!(!cleared.contains_key(&path));
-        assert!(
-            graph
-                .rvs_get("demo::rvs_run")
-                .and_then(|node| node.expected_name.as_ref())
-                .is_none()
-        );
-    }
-
-    #[test]
     fn test_20260703_graph_extend_and_merge_helpers() {
         let mut base = FnGraph::rvs_new();
         base.rvs_insert_M(DefPath::from("demo::rvs_a"), FnNode::default());
@@ -639,32 +547,6 @@ mod tests {
 
         assert_ne!(member_source, workspace_source);
         assert_eq!(sources.len(), 2);
-    }
-
-    #[test]
-    fn test_20260703_graph_iter_mut_helper() {
-        let mut graph = FnGraph::rvs_new();
-        graph.rvs_insert_M(DefPath::from("demo::rvs_a"), FnNode::default());
-        for (_, node) in graph.rvs_iter_mut_M() {
-            node.rvs_set_expected_name_M(FnName::from("rvs_a"));
-        }
-        let output = format!(
-            "name={}\n",
-            graph
-                .rvs_get("demo::rvs_a")
-                .and_then(|node| node.expected_name.as_ref())
-                .map(FnName::rvs_as_str)
-                .unwrap_or("")
-        );
-        rvs_snapshot_BIS("test_20260703_graph_iter_mut_helper", &output);
-
-        assert_eq!(
-            graph
-                .rvs_get("demo::rvs_a")
-                .and_then(|node| node.expected_name.as_ref())
-                .map(FnName::rvs_as_str),
-            Some("rvs_a")
-        );
     }
 
     #[test]
