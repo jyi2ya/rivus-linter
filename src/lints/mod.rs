@@ -28,7 +28,7 @@ pub use crate::artifacts::FnGraph;
 
 use body::{catch_unwind, debug_assert, empty_fn, error_swallow, reflection, spawn, stub_macro};
 use caps::callgraph;
-use ctx::FnCheckData;
+use ctx::{FnCheckData, FnSubject};
 use node::{
     banned_import, borrowed_param, catch_all_error, consumed_arg, dead_code, deny_warnings,
     deref_polymorphism, missing_allow, missing_debug_derive, missing_doc, missing_safety_doc,
@@ -512,55 +512,43 @@ fn rvs_emit_offline_caps_diagnostics_S(
 
 /// Dispatches to fn-level checks for free functions, inherent impl methods,
 /// and trait impl methods.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "lint dispatch needs full rustc callback context"
-)]
 fn rvs_run_fn_checks_MS<'tcx>(
     cx: &LateContext<'tcx>,
-    name: &str,
-    hir_id: rustc_hir::HirId,
-    span: Span,
-    sig: &rustc_hir::FnSig<'tcx>,
-    body: &rustc_hir::Body<'tcx>,
-    body_facts: &body::BodyFacts,
-    has_body: bool,
-    is_test: bool,
-    is_trait_impl_method: bool,
-    is_port_method: bool,
+    subject: &FnSubject<'_, 'tcx>,
     data: &mut FnCheckData<'_>,
 ) {
-    let attrs = cx.tcx.hir_attrs(hir_id);
+    let name = subject.rvs_name();
+    let attrs = cx.tcx.hir_attrs(subject.hir_id);
     let mut info = utils::FnInfo::rvs_extract(name);
-    if is_port_method {
+    if subject.is_port_method {
         if let Some(info) = info.as_mut() {
             info.caps = crate::capability::CapabilityPolicy::rvs_port_method_caps();
         }
     }
-    if info.is_some() || is_port_method {
+    if info.is_some() || subject.is_port_method {
         let effective_caps = info
             .as_ref()
             .map(|info| info.caps.clone())
             .unwrap_or_else(crate::capability::CapabilityPolicy::rvs_port_method_caps);
 
-        let is_stub = stub_macro::rvs_check_fn_S(cx, body_facts, span);
-        empty_fn::rvs_check_fn_MS(cx, body, span, has_body, is_stub);
+        let is_stub = stub_macro::rvs_check_fn_S(cx, subject.body_facts, subject.span);
+        empty_fn::rvs_check_fn_MS(cx, subject.body, subject.span, subject.has_body, is_stub);
         if let Some(info) = info.as_ref() {
-            missing_allow::rvs_check_fn_S(cx, hir_id, span, &info.raw_suffix);
+            missing_allow::rvs_check_fn_S(cx, subject.hir_id, subject.span, &info.raw_suffix);
         }
-        dead_code::rvs_check_fn_S(cx, attrs, span);
+        dead_code::rvs_check_fn_S(cx, attrs, subject.span);
 
         // Spawn, reflection, catch_unwind, error swallow detection
-        spawn::rvs_check_fn_S(cx, body_facts, is_test);
-        reflection::rvs_check_fn_S(cx, body_facts);
-        catch_unwind::rvs_check_fn_S(cx, body_facts);
-        error_swallow::rvs_check_fn_S(cx, body_facts);
+        spawn::rvs_check_fn_S(cx, subject.body_facts, subject.is_test);
+        reflection::rvs_check_fn_S(cx, subject.body_facts);
+        catch_unwind::rvs_check_fn_S(cx, subject.body_facts);
+        error_swallow::rvs_check_fn_S(cx, subject.body_facts);
 
-        if has_body && !is_stub {
-            debug_assert::rvs_check_fn_MS(cx, body, body_facts);
-            borrowed_param::rvs_check_fn_params_S(cx, sig);
-            consumed_arg::rvs_check_fn_MS(cx, sig, name);
-            validate::rvs_check_fn_S(cx, name, sig);
+        if subject.has_body && !is_stub {
+            debug_assert::rvs_check_fn_MS(cx, subject.body, subject.body_facts);
+            borrowed_param::rvs_check_fn_params_S(cx, subject.sig);
+            consumed_arg::rvs_check_fn_MS(cx, subject.sig, name);
+            validate::rvs_check_fn_S(cx, name, subject.sig);
         }
 
         let is_good = crate::capability::CapabilityPolicy::rvs_is_good(&effective_caps);
@@ -569,27 +557,27 @@ fn rvs_run_fn_checks_MS<'tcx>(
         if info.is_some()
             && is_good
             && data.should_emit_lints
-            && !is_test
+            && !subject.is_test
             && !utils::rvs_has_allow(attrs, "dead_code")
             && !utils::rvs_has_allow(attrs, "unused")
         {
-            data.good_fns.push((name.to_string(), span));
+            data.good_fns.push((name.to_string(), subject.span));
         }
 
         // Collect ok fns (ABMP subset, mock-testable) for untested-ok-fn check.
         if crate::capability::CapabilityPolicy::rvs_is_ok(&effective_caps)
             && !is_good
             && data.should_emit_lints
-            && !is_test
-            && !is_trait_impl_method
+            && !subject.is_test
+            && !subject.is_trait_impl
             && info.is_some()
             && !utils::rvs_has_allow(attrs, "dead_code")
             && !utils::rvs_has_allow(attrs, "unused")
         {
-            data.ok_fns.push((name.to_string(), span));
+            data.ok_fns.push((name.to_string(), subject.span));
         }
     }
-    test_name_format::rvs_check_fn_S(cx, name, span, is_test);
+    test_name_format::rvs_check_fn_S(cx, name, subject.span, subject.is_test);
 }
 
 /// Check free-fn / struct / enum / use / impl items.
@@ -616,21 +604,20 @@ fn rvs_check_item_MS<'tcx>(
             let body_facts = body::rvs_collect_body_facts_M(cx, body);
             let attrs = cx.tcx.hir_attrs(item.hir_id());
             let is_test = utils::rvs_has_attr(attrs, "test") || test_fn_names.contains(name);
+            let subject = FnSubject {
+                ident: *ident,
+                hir_id: item.hir_id(),
+                span: item.span,
+                sig,
+                body,
+                body_facts: &body_facts,
+                has_body: *has_body,
+                is_test,
+                is_trait_impl: false,
+                is_port_method: false,
+            };
             if data.should_emit_lints {
-                rvs_run_fn_checks_MS(
-                    cx,
-                    name,
-                    item.hir_id(),
-                    item.span,
-                    sig,
-                    body,
-                    &body_facts,
-                    *has_body,
-                    is_test,
-                    false,
-                    false,
-                    data,
-                );
+                rvs_run_fn_checks_MS(cx, &subject, data);
                 if is_test {
                     test_names
                         .entry(name.to_string())
@@ -650,18 +637,8 @@ fn rvs_check_item_MS<'tcx>(
                 todo_comment::rvs_check_fn_S(cx, item.span);
             }
             if data.collect_caps_facts {
-                let def_path = callgraph::rvs_collect_callgraph_for_item_M(
-                    data.callgraph,
-                    cx,
-                    item.hir_id(),
-                    *ident,
-                    sig,
-                    body,
-                    &body_facts,
-                    false,
-                    is_test,
-                    false,
-                );
+                let def_path =
+                    callgraph::rvs_collect_callgraph_for_item_M(data.callgraph, cx, &subject);
                 data.diagnostic_spans
                     .insert(def_path, (item.hir_id(), item.span));
             }
@@ -742,24 +719,23 @@ fn rvs_check_impl_item_MS<'tcx>(
         let attrs = cx.tcx.hir_attrs(impl_item.hir_id());
         let is_test = utils::rvs_has_attr(attrs, "test") || test_fn_names.contains(name);
         let is_pub = utils::rvs_is_pub_impl_item(cx, impl_item);
+        let subject = FnSubject {
+            ident: impl_item.ident,
+            hir_id: impl_item.hir_id(),
+            span: impl_item.span,
+            sig,
+            body,
+            body_facts: &body_facts,
+            has_body: true,
+            is_test,
+            is_trait_impl,
+            is_port_method,
+        };
         // Port trait methods are checked (with P capability auto-assigned),
         // even though other trait impl methods are skipped.
         let should_check_fn = data.should_emit_lints && (!is_trait_impl || is_port_method);
         if should_check_fn {
-            rvs_run_fn_checks_MS(
-                cx,
-                name,
-                impl_item.hir_id(),
-                impl_item.span,
-                sig,
-                body,
-                &body_facts,
-                true,
-                is_test,
-                is_trait_impl,
-                is_port_method,
-                data,
-            );
+            rvs_run_fn_checks_MS(cx, &subject, data);
             if is_test {
                 test_names
                     .entry(name.to_string())
@@ -780,18 +756,8 @@ fn rvs_check_impl_item_MS<'tcx>(
             }
         }
         if data.collect_caps_facts {
-            let def_path = callgraph::rvs_collect_callgraph_for_item_M(
-                data.callgraph,
-                cx,
-                impl_item.hir_id(),
-                impl_item.ident,
-                sig,
-                body,
-                &body_facts,
-                is_trait_impl,
-                is_test,
-                is_port_method,
-            );
+            let def_path =
+                callgraph::rvs_collect_callgraph_for_item_M(data.callgraph, cx, &subject);
             data.diagnostic_spans
                 .insert(def_path, (impl_item.hir_id(), impl_item.span));
         }
@@ -813,38 +779,26 @@ fn rvs_check_trait_item_MS<'tcx>(
 
     match &trait_item.kind {
         TraitItemKind::Fn(sig, TraitFn::Provided(body_id)) => {
-            let name = trait_item.ident.name.as_str();
             let body = cx.tcx.hir_body(*body_id);
             let body_facts = body::rvs_collect_body_facts_M(cx, body);
+            let subject = FnSubject {
+                ident: trait_item.ident,
+                hir_id: trait_item.hir_id(),
+                span: trait_item.span,
+                sig,
+                body,
+                body_facts: &body_facts,
+                has_body: true,
+                is_test: false,
+                is_trait_impl: false,
+                is_port_method: is_port_trait,
+            };
             if data.should_emit_lints {
-                rvs_run_fn_checks_MS(
-                    cx,
-                    name,
-                    trait_item.hir_id(),
-                    trait_item.span,
-                    sig,
-                    body,
-                    &body_facts,
-                    true,
-                    false,
-                    false,
-                    is_port_trait,
-                    data,
-                );
+                rvs_run_fn_checks_MS(cx, &subject, data);
             }
             if data.collect_caps_facts {
-                let def_path = callgraph::rvs_collect_callgraph_for_item_M(
-                    data.callgraph,
-                    cx,
-                    trait_item.hir_id(),
-                    trait_item.ident,
-                    sig,
-                    body,
-                    &body_facts,
-                    false,
-                    false,
-                    is_port_trait,
-                );
+                let def_path =
+                    callgraph::rvs_collect_callgraph_for_item_M(data.callgraph, cx, &subject);
                 data.diagnostic_spans
                     .insert(def_path, (trait_item.hir_id(), trait_item.span));
             }

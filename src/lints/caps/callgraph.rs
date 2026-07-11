@@ -2,11 +2,11 @@ use std::collections::BTreeSet;
 
 use std::path::PathBuf;
 
-use rustc_hir::{Body, HirId};
+use rustc_hir::HirId;
 use rustc_lint::LateContext;
 use rustc_span::{FileName, Ident};
 
-use super::super::body::BodyFacts;
+use super::super::ctx::FnSubject;
 use super::super::utils::{
     CallTarget, rvs_count_effective_lines_M, rvs_def_path, rvs_has_allow, rvs_has_mutable_params,
 };
@@ -14,29 +14,19 @@ use crate::artifacts::{FnGraph, FnNode, FnSource};
 use crate::capability::{CapabilityFacts, ParsedFunctionName};
 use crate::symbols::DefPath;
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "callgraph collection needs full fn metadata to avoid extra wrapper structs"
-)]
 pub(crate) fn rvs_collect_callgraph_for_item_M<'tcx>(
     callgraph: &mut FnGraph,
     cx: &LateContext<'tcx>,
-    hir_id: HirId,
-    ident: Ident,
-    sig: &rustc_hir::FnSig<'tcx>,
-    body: &Body<'tcx>,
-    body_facts: &BodyFacts,
-    is_trait_impl: bool,
-    is_test: bool,
-    is_port_method: bool,
+    subject: &FnSubject<'_, 'tcx>,
 ) -> DefPath {
-    let local_def_id = hir_id.owner.def_id;
+    let local_def_id = subject.hir_id.owner.def_id;
     let def_id = local_def_id.to_def_id();
     let caller_path = DefPath::rvs_new(rvs_def_path(cx, def_id));
-    let sources = rvs_fn_source(cx, ident).into_iter().collect();
-    let attrs = cx.tcx.hir_attrs(hir_id);
+    let sources = rvs_fn_source(cx, subject.ident).into_iter().collect();
+    let attrs = cx.tcx.hir_attrs(subject.hir_id);
 
-    let calls: BTreeSet<DefPath> = body_facts
+    let calls: BTreeSet<DefPath> = subject
+        .body_facts
         .calls
         .iter()
         .filter_map(|observation| {
@@ -52,17 +42,20 @@ pub(crate) fn rvs_collect_callgraph_for_item_M<'tcx>(
         })
         .collect();
 
-    let facts =
-        CapabilityFacts::rvs_from_signature(sig, rvs_has_mutable_params(sig), is_port_method)
-            .rvs_with_static_refs(
-                body_facts.has_static_ref,
-                body_facts.has_static_mut_ref,
-                body_facts.has_thread_local_ref,
-            );
-    let is_reportable =
-        is_port_method || ParsedFunctionName::rvs_parse(ident.name.as_str()).rvs_has_rvs_prefix();
+    let facts = CapabilityFacts::rvs_from_signature(
+        subject.sig,
+        rvs_has_mutable_params(subject.sig),
+        subject.is_port_method,
+    )
+    .rvs_with_static_refs(
+        subject.body_facts.has_static_ref,
+        subject.body_facts.has_static_mut_ref,
+        subject.body_facts.has_thread_local_ref,
+    );
+    let is_reportable = subject.is_port_method
+        || ParsedFunctionName::rvs_parse(subject.rvs_name()).rvs_has_rvs_prefix();
     let report_line_count = if is_reportable {
-        Some(rvs_count_effective_lines_M(cx, body))
+        Some(rvs_count_effective_lines_M(cx, subject.body))
     } else {
         None
     };
@@ -74,8 +67,8 @@ pub(crate) fn rvs_collect_callgraph_for_item_M<'tcx>(
             calls,
             facts,
             has_body: true,
-            is_trait_impl,
-            is_test,
+            is_trait_impl: subject.is_trait_impl,
+            is_test: subject.is_test,
             sources,
             report_line_count,
             allows_dead_code,
@@ -176,20 +169,8 @@ mod tests {
             let _hir_id: HirId = unreachable!();
             let _ident: Ident = unreachable!();
             let _sig: &rustc_hir::FnSig<'_> = unreachable!();
-            let _body: &Body<'_> = unreachable!();
-            let _body_facts: &BodyFacts = unreachable!();
-            rvs_collect_callgraph_for_item_M(
-                _callgraph,
-                _cx,
-                _hir_id,
-                _ident,
-                _sig,
-                _body,
-                _body_facts,
-                false,
-                false,
-                false,
-            );
+            let _subject: &FnSubject<'_, '_> = unreachable!();
+            rvs_collect_callgraph_for_item_M(_callgraph, _cx, _subject);
             rvs_collect_callgraph_for_signature_M(
                 _callgraph, _cx, _hir_id, _ident, _sig, false, false,
             );
