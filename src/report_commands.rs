@@ -12,10 +12,7 @@ use crate::inference::{
     rvs_summarize_contract_mismatch_items,
 };
 use crate::symbols::CrateName;
-use crate::workspace::{
-    rvs_collect_callgraph_and_caps_BIMS, rvs_ensure_cargo_project_BIS,
-    rvs_load_local_crate_prefixes_BIS,
-};
+use crate::workspace::{rvs_collect_callgraph_and_caps_BIMS, rvs_load_local_crate_prefixes_BIS};
 
 #[derive(Debug, Clone, Default)]
 struct CapStats {
@@ -253,7 +250,6 @@ fn rvs_collect_reportable_contract_diffs(
 ///
 /// Panics if the current executable path, current directory, or cargo cannot be resolved.
 pub(crate) fn rvs_run_report_BIMPS(path: &Path) -> Result<(), String> {
-    rvs_ensure_cargo_project_BIS(path)?;
     let local_crate_names = rvs_load_local_crate_prefixes_BIS(path)?;
     let (mut callgraph, caps) =
         rvs_collect_callgraph_and_caps_BIMS(path, true, Some(&local_crate_names))?;
