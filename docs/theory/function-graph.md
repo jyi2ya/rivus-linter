@@ -50,6 +50,8 @@
 
 body collector 必须进入 closure、async block 等嵌套 body，否则嵌套代码中的调用和行为会漏报。进入嵌套 body 是统一 body 遍历设施的职责，不属于任一具体 lint。callgraph、测试调用识别和 body lint 必须消费同一份调用观察，但可以按各自语义选择 canonical target、源码方法名或 unresolved path。方法解析失败时仍保留独立的 unresolved-method 观察，不能让语法级检查和测试覆盖因类型解析缺失而消失。
 
+普通 HIR 表达式的直接子节点关系只维护一份。block/loop 和 closure 属于带上下文的边界：block 负责 statement、let-else 和尾表达式，closure 通过独立 body 解析并增加嵌套深度，不能被普通子节点遍历扁平化。
+
 free function、impl method 和带默认实现的 trait method 共享同一条 body-bearing 处理流水线；各函数来源只提供测试、文档和 Port 等策略差异。无函数体的 required trait method 只投影签名事实，不能用空 body facts 伪装成已观察的函数体。
 
 ## 测试覆盖

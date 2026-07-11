@@ -256,27 +256,20 @@ fn rvs_expr_from_debug_assert_macro(e: &Expr<'_>) -> bool {
     rvs_span_has_bang_macro(e.span, &names)
 }
 
-pub(crate) fn rvs_collect_all_idents_M(e: &Expr<'_>, out: &mut BTreeSet<String>) {
+fn rvs_for_each_expr_child_M<'tcx>(e: &'tcx Expr<'tcx>, f: &mut impl FnMut(&'tcx Expr<'tcx>)) {
     match &e.kind {
-        ExprKind::Path(q) => {
-            if let Some(n) = rvs_plast(q) {
-                out.insert(n);
-            }
-        }
-        ExprKind::Array(a) | ExprKind::Tup(a) => {
-            a.iter().for_each(|x| rvs_collect_all_idents_M(x, out));
-        }
+        ExprKind::Array(a) | ExprKind::Tup(a) => a.iter().for_each(&mut *f),
         ExprKind::Call(fn_, a) => {
-            rvs_collect_all_idents_M(fn_, out);
-            a.iter().for_each(|x| rvs_collect_all_idents_M(x, out));
+            f(fn_);
+            a.iter().for_each(&mut *f);
         }
         ExprKind::MethodCall(_, r, a, _) => {
-            rvs_collect_all_idents_M(r, out);
-            a.iter().for_each(|x| rvs_collect_all_idents_M(x, out));
+            f(r);
+            a.iter().for_each(&mut *f);
         }
-        ExprKind::Binary(_, l, r) | ExprKind::AssignOp(_, l, r) => {
-            rvs_collect_all_idents_M(l, out);
-            rvs_collect_all_idents_M(r, out);
+        ExprKind::Binary(_, l, r) | ExprKind::AssignOp(_, l, r) | ExprKind::Assign(l, r, _) => {
+            f(l);
+            f(r);
         }
         ExprKind::Unary(_, x)
         | ExprKind::Cast(x, _)
@@ -285,61 +278,83 @@ pub(crate) fn rvs_collect_all_idents_M(e: &Expr<'_>, out: &mut BTreeSet<String>)
         | ExprKind::Index(x, _, _)
         | ExprKind::AddrOf(_, _, x)
         | ExprKind::Repeat(x, _)
-        | ExprKind::Yield(x, _) => rvs_collect_all_idents_M(x, out),
-        ExprKind::Let(l) => rvs_collect_all_idents_M(&l.init, out),
+        | ExprKind::Yield(x, _)
+        | ExprKind::DropTemps(x)
+        | ExprKind::Become(x)
+        | ExprKind::Use(x, _) => f(x),
+        ExprKind::Let(l) => f(&l.init),
         ExprKind::If(c, t, el) => {
-            rvs_collect_all_idents_M(c, out);
-            rvs_collect_all_idents_M(t, out);
+            f(c);
+            f(t);
             if let Some(e) = el {
-                rvs_collect_all_idents_M(e, out);
+                f(e);
             }
         }
         ExprKind::Match(s, arms, _) => {
-            rvs_collect_all_idents_M(s, out);
+            f(s);
             for arm in *arms {
                 if let Some(guard) = arm.guard {
-                    rvs_collect_all_idents_M(guard, out);
+                    f(guard);
                 }
-                rvs_collect_all_idents_M(&arm.body, out);
+                f(&arm.body);
             }
         }
-        ExprKind::Block(b, _) | ExprKind::Loop(b, ..) => {
-            for s in b.stmts {
-                match &s.kind {
-                    rustc_hir::StmtKind::Expr(e) | rustc_hir::StmtKind::Semi(e) => {
-                        rvs_collect_all_idents_M(e, out);
-                    }
-                    rustc_hir::StmtKind::Let(l) => {
-                        if let Some(i) = l.init {
-                            rvs_collect_all_idents_M(i, out);
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            if let Some(e) = b.expr {
-                rvs_collect_all_idents_M(e, out);
-            }
-        }
-        ExprKind::Assign(l, r, _) => {
-            rvs_collect_all_idents_M(l, out);
-            rvs_collect_all_idents_M(r, out);
-        }
-        ExprKind::Break(_, Some(x)) | ExprKind::Ret(Some(x)) => {
-            rvs_collect_all_idents_M(&**x, out);
-        }
+        ExprKind::Break(_, Some(x)) | ExprKind::Ret(Some(x)) => f(x),
         ExprKind::Struct(_, fld, rest) => {
             for fl in *fld {
-                rvs_collect_all_idents_M(&fl.expr, out);
+                f(&fl.expr);
             }
             if let rustc_hir::StructTailExpr::Base(r) = rest {
-                rvs_collect_all_idents_M(r, out);
+                f(r);
             }
         }
-        ExprKind::DropTemps(x) => rvs_collect_all_idents_M(x, out),
-        ExprKind::Become(x) => rvs_collect_all_idents_M(x, out),
-        ExprKind::Use(x, _) => rvs_collect_all_idents_M(x, out),
+        ExprKind::InlineAsm(asm) => asm.operands.iter().for_each(|(op, _)| match op {
+            rustc_hir::InlineAsmOperand::In { expr, .. }
+            | rustc_hir::InlineAsmOperand::Out {
+                expr: Some(expr), ..
+            } => f(expr),
+            _ => {}
+        }),
         _ => {}
+    }
+}
+
+pub(crate) fn rvs_collect_all_idents_M(e: &Expr<'_>, out: &mut BTreeSet<String>) {
+    if let ExprKind::Path(q) = &e.kind
+        && let Some(name) = rvs_plast(q)
+    {
+        out.insert(name);
+    }
+    match &e.kind {
+        ExprKind::Block(block, _) | ExprKind::Loop(block, ..) => {
+            rvs_collect_block_idents_M(block, out);
+        }
+        ExprKind::Closure(_) => {}
+        _ => rvs_for_each_expr_child_M(e, &mut |child| {
+            rvs_collect_all_idents_M(child, out);
+        }),
+    }
+}
+
+fn rvs_collect_block_idents_M(block: &Block<'_>, out: &mut BTreeSet<String>) {
+    for statement in block.stmts {
+        match &statement.kind {
+            rustc_hir::StmtKind::Expr(expr) | rustc_hir::StmtKind::Semi(expr) => {
+                rvs_collect_all_idents_M(expr, out);
+            }
+            rustc_hir::StmtKind::Let(local) => {
+                if let Some(initializer) = local.init {
+                    rvs_collect_all_idents_M(initializer, out);
+                }
+                if let Some(else_block) = local.els {
+                    rvs_collect_block_idents_M(else_block, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    if let Some(expr) = block.expr {
+        rvs_collect_all_idents_M(expr, out);
     }
 }
 
@@ -461,81 +476,17 @@ fn rvs_walk_expr_M<'tcx, F: FnMut(&'tcx Expr<'tcx>, u32)>(
     }
     f(e, depth);
     match &e.kind {
-        ExprKind::Array(a) | ExprKind::Tup(a) => a
-            .iter()
-            .for_each(|x| rvs_walk_expr_M(x, f, resolve_body, depth)),
-        ExprKind::Call(fn_, a) => {
-            rvs_walk_expr_M(fn_, f, resolve_body, depth);
-            a.iter()
-                .for_each(|x| rvs_walk_expr_M(x, f, resolve_body, depth));
-        }
-        ExprKind::MethodCall(_, r, a, _) => {
-            rvs_walk_expr_M(r, f, resolve_body, depth);
-            a.iter()
-                .for_each(|x| rvs_walk_expr_M(x, f, resolve_body, depth));
-        }
-        ExprKind::Binary(_, l, r) | ExprKind::AssignOp(_, l, r) => {
-            rvs_walk_expr_M(l, f, resolve_body, depth);
-            rvs_walk_expr_M(r, f, resolve_body, depth);
-        }
-        ExprKind::Unary(_, x)
-        | ExprKind::Cast(x, _)
-        | ExprKind::Type(x, _)
-        | ExprKind::Field(x, _)
-        | ExprKind::Index(x, _, _)
-        | ExprKind::AddrOf(_, _, x)
-        | ExprKind::Repeat(x, _)
-        | ExprKind::Yield(x, _) => rvs_walk_expr_M(x, f, resolve_body, depth),
-        ExprKind::Let(l) => rvs_walk_expr_M(&l.init, f, resolve_body, depth),
-        ExprKind::If(c, t, el) => {
-            rvs_walk_expr_M(c, f, resolve_body, depth);
-            rvs_walk_expr_M(t, f, resolve_body, depth);
-            if let Some(e) = el {
-                rvs_walk_expr_M(e, f, resolve_body, depth);
-            }
-        }
-        ExprKind::Match(s, arms, _) => {
-            rvs_walk_expr_M(s, f, resolve_body, depth);
-            for arm in *arms {
-                if let Some(guard) = arm.guard {
-                    rvs_walk_expr_M(guard, f, resolve_body, depth);
-                }
-                rvs_walk_expr_M(&arm.body, f, resolve_body, depth);
-            }
-        }
         ExprKind::Loop(b, ..) | ExprKind::Block(b, _) => {
             rvs_walk_block_M(b, f, resolve_body, depth)
-        }
-        ExprKind::Assign(l, r, _) => {
-            rvs_walk_expr_M(l, f, resolve_body, depth);
-            rvs_walk_expr_M(r, f, resolve_body, depth);
-        }
-        ExprKind::Break(_, Some(x)) | ExprKind::Ret(Some(x)) => {
-            rvs_walk_expr_M(&**x, f, resolve_body, depth)
-        }
-        ExprKind::Struct(_, fld, rest) => {
-            fld.iter()
-                .for_each(|fl| rvs_walk_expr_M(&fl.expr, f, resolve_body, depth));
-            if let rustc_hir::StructTailExpr::Base(r) = rest {
-                rvs_walk_expr_M(r, f, resolve_body, depth);
-            }
         }
         ExprKind::Closure(closure) => {
             if let Some(body) = resolve_body(closure.body) {
                 rvs_walk_expr_M(body.value, f, resolve_body, depth + 1);
             }
         }
-        ExprKind::InlineAsm(asm) => asm.operands.iter().for_each(|(op, _)| match op {
-            rustc_hir::InlineAsmOperand::In { expr, .. }
-            | rustc_hir::InlineAsmOperand::Out {
-                expr: Some(expr), ..
-            } => rvs_walk_expr_M(expr, f, resolve_body, depth),
-            _ => {}
+        _ => rvs_for_each_expr_child_M(e, &mut |child| {
+            rvs_walk_expr_M(child, f, resolve_body, depth);
         }),
-        ExprKind::DropTemps(x) => rvs_walk_expr_M(x, f, resolve_body, depth),
-        ExprKind::Become(x) => rvs_walk_expr_M(x, f, resolve_body, depth),
-        ExprKind::Use(x, _) => rvs_walk_expr_M(x, f, resolve_body, depth),
-        _ => {}
     }
 }
 
