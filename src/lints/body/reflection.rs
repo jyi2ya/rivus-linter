@@ -17,6 +17,7 @@ pub(crate) fn rvs_check_fn_S<'tcx>(cx: &LateContext<'tcx>, facts: &BodyFacts) {
                     | rustc_hir::def::DefKind::Variant,
             } => def_path,
             CallTarget::UnresolvedPath { path } => path,
+            CallTarget::UnresolvedMethod { .. } => continue,
             CallTarget::Resolved { .. } => continue,
         };
         if rvs_is_reflection_S(path) {

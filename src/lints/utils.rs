@@ -589,6 +589,7 @@ pub(crate) enum CallSyntax {
 pub(crate) enum CallTarget {
     Resolved { def_path: String, def_kind: DefKind },
     UnresolvedPath { path: String },
+    UnresolvedMethod { name: String },
 }
 
 #[derive(Debug)]
@@ -619,21 +620,29 @@ pub(crate) fn rvs_resolve_call(cx: &LateContext<'_>, expr: &Expr<'_>) -> Option<
                 span: expr.span,
             })
         }
-        ExprKind::MethodCall(..) => {
+        ExprKind::MethodCall(path, ..) => {
             let owner = expr.hir_id.owner.def_id;
             let typeck = cx.tcx.typeck(owner);
-            let def_id = typeck.type_dependent_def_id(expr.hir_id)?;
+            let resolved = typeck
+                .type_dependent_def_id(expr.hir_id)
+                .map(|def_id| (rvs_def_path(cx, def_id), cx.tcx.def_kind(def_id)));
             Some(CallObservation {
                 syntax: CallSyntax::Method,
-                target: CallTarget::Resolved {
-                    def_path: rvs_def_path(cx, def_id),
-                    def_kind: cx.tcx.def_kind(def_id),
-                },
+                target: rvs_method_call_target(resolved, path.ident.name.as_str()),
                 span: expr.span,
             })
         }
         _ => None,
     }
+}
+
+fn rvs_method_call_target(resolved: Option<(String, DefKind)>, method_name: &str) -> CallTarget {
+    resolved.map_or_else(
+        || CallTarget::UnresolvedMethod {
+            name: method_name.to_string(),
+        },
+        |(def_path, def_kind)| CallTarget::Resolved { def_path, def_kind },
+    )
 }
 
 // ─── Path helpers ────────────────────────────────────────────────────────
@@ -791,6 +800,21 @@ pub(crate) fn rvs_valid_test(n: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::rvs_snapshot_BIS;
+
+    #[test]
+    fn test_20260711_unresolved_method_call_keeps_source_name() {
+        let target = rvs_method_call_target(None, "rvs_example");
+        rvs_snapshot_BIS(
+            "test_20260711_unresolved_method_call_keeps_source_name",
+            &format!("{target:?}\n"),
+        );
+
+        assert!(matches!(
+            target,
+            CallTarget::UnresolvedMethod { ref name } if name == "rvs_example"
+        ));
+    }
 
     #[test]
     #[expect(

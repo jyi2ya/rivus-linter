@@ -2,7 +2,7 @@ use std::collections::{BTreeSet, HashSet};
 
 use rustc_hir::{Body, ExprKind, Mutability, def::DefKind};
 use rustc_lint::LateContext;
-use rustc_span::{Span, Symbol};
+use rustc_span::Symbol;
 
 use super::super::utils::{
     CallObservation, CallTarget, rvs_collect_all_idents_M, rvs_qp, rvs_resolve_call,
@@ -13,7 +13,6 @@ use super::macro_expansion::rvs_span_has_bang_macro;
 #[derive(Debug, Default)]
 pub(crate) struct BodyFacts {
     pub(crate) calls: Vec<CallObservation>,
-    pub(crate) method_names: Vec<(String, Span)>,
     pub(crate) has_static_ref: bool,
     pub(crate) has_static_mut_ref: bool,
     pub(crate) has_thread_local_ref: bool,
@@ -47,11 +46,6 @@ pub(crate) fn rvs_collect_body_facts_M<'tcx>(
                     }
                 }
             }
-            ExprKind::MethodCall(path, ..) => {
-                facts
-                    .method_names
-                    .push((path.ident.name.as_str().to_string(), expr.span));
-            }
             _ => {}
         }
 
@@ -75,18 +69,15 @@ pub(crate) fn rvs_collect_body_facts_M<'tcx>(
 
 pub(crate) fn rvs_collect_test_call_names_M(facts: &BodyFacts, out: &mut HashSet<String>) {
     for observation in &facts.calls {
-        let path = match &observation.target {
-            CallTarget::Resolved { def_path, .. } => def_path,
-            CallTarget::UnresolvedPath { path } => path,
+        let name = match &observation.target {
+            CallTarget::Resolved { def_path, .. } => {
+                def_path.rsplit("::").next().unwrap_or(def_path)
+            }
+            CallTarget::UnresolvedPath { path } => path.rsplit("::").next().unwrap_or(path),
+            CallTarget::UnresolvedMethod { name } => name,
         };
-        let name = path.rsplit("::").next().unwrap_or(path);
         if name.starts_with("rvs_") {
             out.insert(name.to_string());
-        }
-    }
-    for (name, _) in &facts.method_names {
-        if name.starts_with("rvs_") {
-            out.insert(name.clone());
         }
     }
 }

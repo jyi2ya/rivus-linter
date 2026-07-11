@@ -2,17 +2,27 @@ use rustc_lint::{LateContext, LintContext};
 
 use super::super::RVS_ERROR_SWALLOW;
 use super::super::msg::Msg;
-use super::super::utils::ERROR_SWALLOW_METHODS;
+use super::super::utils::{CallSyntax, CallTarget, ERROR_SWALLOW_METHODS};
 use super::BodyFacts;
 
 /// Walk function body looking for `.ok()` and `.unwrap_or_default()` calls.
 pub(crate) fn rvs_check_fn_S<'tcx>(cx: &LateContext<'tcx>, facts: &BodyFacts) {
-    for (name, span) in &facts.method_names {
-        if ERROR_SWALLOW_METHODS.contains(&name.as_str()) {
+    for observation in &facts.calls {
+        if observation.syntax != CallSyntax::Method {
+            continue;
+        }
+        let name = match &observation.target {
+            CallTarget::Resolved { def_path, .. } => {
+                def_path.rsplit("::").next().unwrap_or(def_path)
+            }
+            CallTarget::UnresolvedMethod { name } => name,
+            CallTarget::UnresolvedPath { .. } => continue,
+        };
+        if ERROR_SWALLOW_METHODS.contains(&name) {
             cx.emit_span_lint(
                 RVS_ERROR_SWALLOW,
-                *span,
-                Msg::rvs_new(*span, format!(".{name}() swallows errors")),
+                observation.span,
+                Msg::rvs_new(observation.span, format!(".{name}() swallows errors")),
             );
         }
     }
