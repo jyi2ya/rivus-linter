@@ -33,6 +33,7 @@ mod capability;
 mod capsmap;
 mod cargo_targets;
 mod fs_guard;
+mod function_classification;
 mod infer_commands;
 mod inference;
 mod lints;

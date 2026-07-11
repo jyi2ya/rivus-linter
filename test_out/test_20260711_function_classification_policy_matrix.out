@@ -1,0 +1,7 @@
+ordinary: contract=true offline=true report=true strip=true
+root_main: contract=false offline=false report=true strip=true
+external: contract=false offline=false report=false strip=false
+test: contract=false offline=false report=true strip=true
+trait_impl: contract=false offline=false report=false strip=false
+port_impl: contract=false offline=true report=true strip=false
+snafu: contract=true offline=false report=true strip=true

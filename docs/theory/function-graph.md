@@ -70,6 +70,8 @@ body collector 必须进入 closure、async block 等嵌套 body，否则嵌套�
 
 能力诊断、annotate、why、report 不再各自发明一套解释，而是基于同一张图做不同视图。lint pass 只从 HIR 收集能力事实；能力契约、后缀、静态状态和调用边诊断统一由离线能力引擎计算。直接 rustc/UI 模式使用当前 crate 的内存图，`cargo rivus check` 使用合并后的全项目图。
 
+各视图共享函数的本地范围、入口点、测试、trait impl、Port、源码和生成代码分类，但保留具名的视图策略；contract、offline、report 和 rename 不得因复用分类而被压成同一套筛选条件。
+
 - **lint**：收集事实，并把统一能力引擎的当前 crate 诊断映射为 rustc lint
 - **annotate**：把期望名字写回源码
 - **why**：展示节点能力和边上的来源

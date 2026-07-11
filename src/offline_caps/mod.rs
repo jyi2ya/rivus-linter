@@ -4,9 +4,10 @@ use std::fmt;
 use crate::artifacts::{FnGraph, FnNode};
 use crate::capability::{Capability, CapabilitySet, ParsedFunctionName};
 use crate::capsmap::CapsMap;
+use crate::function_classification::{FunctionClassification, LocalScope};
 use crate::inference::{
     CallContractMismatchKind, FnContractMismatchKind, PreparedLocalAnalysis,
-    rvs_collect_call_contract_mismatch, rvs_collect_enforced_contract_diffs,
+    rvs_collect_call_contract_mismatch,
 };
 use crate::symbols::{CrateName, DefPath};
 
@@ -117,11 +118,12 @@ pub(crate) fn rvs_check_offline_caps_M(
     local_crate_names: &BTreeSet<CrateName>,
 ) -> OfflineCapsReport {
     let mut report = OfflineCapsReport::default();
+    let local_scope = LocalScope::rvs_new(local_crate_names);
     let analysis = PreparedLocalAnalysis::rvs_prepare_M(graph, caps, local_crate_names);
-    rvs_collect_contract_diagnostics_M(&mut report, graph, &analysis.diffs, local_crate_names);
-    rvs_collect_suffix_diagnostics_M(&mut report, graph, local_crate_names);
-    rvs_collect_static_ref_diagnostics_M(&mut report, graph, local_crate_names);
-    rvs_collect_call_diagnostics_M(&mut report, graph, caps, &analysis, local_crate_names);
+    rvs_collect_contract_diagnostics_M(&mut report, graph, &analysis.diffs, &local_scope);
+    rvs_collect_suffix_diagnostics_M(&mut report, graph, &local_scope);
+    rvs_collect_static_ref_diagnostics_M(&mut report, graph, &local_scope);
+    rvs_collect_call_diagnostics_M(&mut report, graph, caps, &analysis, &local_scope);
     report.diagnostics.sort();
     report
 }
@@ -130,14 +132,14 @@ fn rvs_collect_contract_diagnostics_M(
     report: &mut OfflineCapsReport,
     graph: &FnGraph,
     diffs: &[crate::inference::FnContractDiff],
-    local_crate_names: &BTreeSet<CrateName>,
+    local_scope: &LocalScope,
 ) {
-    let enforced = rvs_collect_enforced_contract_diffs(graph, diffs, local_crate_names);
-    for diff in &enforced {
+    for diff in diffs {
         let Some(node) = graph.rvs_get(diff.def_path.rvs_as_str()) else {
             continue;
         };
-        if !rvs_is_local_checked_fn(&diff.def_path, node, local_crate_names) {
+        let classification = FunctionClassification::rvs_new(local_scope, &diff.def_path, node);
+        if !classification.rvs_is_contract_enforced() || !classification.rvs_is_offline_checked() {
             continue;
         }
         let mismatch_kinds = diff.rvs_mismatch_kinds();
@@ -201,10 +203,10 @@ fn rvs_collect_contract_diagnostics_M(
 fn rvs_collect_suffix_diagnostics_M(
     report: &mut OfflineCapsReport,
     graph: &FnGraph,
-    local_crate_names: &BTreeSet<CrateName>,
+    local_scope: &LocalScope,
 ) {
     for (def_path, node) in graph.rvs_iter() {
-        if !rvs_is_local_checked_fn(def_path, node, local_crate_names) {
+        if !rvs_is_local_checked_fn(def_path, node, local_scope) {
             continue;
         }
         let parsed = ParsedFunctionName::rvs_parse(def_path.rvs_as_str());
@@ -255,10 +257,10 @@ fn rvs_collect_suffix_diagnostics_M(
 fn rvs_collect_static_ref_diagnostics_M(
     report: &mut OfflineCapsReport,
     graph: &FnGraph,
-    local_crate_names: &BTreeSet<CrateName>,
+    local_scope: &LocalScope,
 ) {
     for (def_path, node) in graph.rvs_iter() {
-        if !rvs_is_local_checked_fn(def_path, node, local_crate_names) {
+        if !rvs_is_local_checked_fn(def_path, node, local_scope) {
             continue;
         }
         let Some(declared) = rvs_declared_caps(def_path) else {
@@ -304,11 +306,11 @@ fn rvs_collect_call_diagnostics_M(
     graph: &FnGraph,
     caps: &CapsMap,
     analysis: &PreparedLocalAnalysis,
-    local_crate_names: &BTreeSet<CrateName>,
+    local_scope: &LocalScope,
 ) {
     let resolver = analysis.rvs_resolver(graph, caps);
     for (caller, node) in graph.rvs_iter() {
-        if !rvs_is_local_checked_fn(caller, node, local_crate_names) || !node.has_body {
+        if !rvs_is_local_checked_fn(caller, node, local_scope) || !node.has_body {
             continue;
         }
         let Some(caller_caps) =
@@ -370,39 +372,8 @@ fn rvs_collect_call_diagnostics_M(
     }
 }
 
-fn rvs_is_local_checked_fn(
-    def_path: &DefPath,
-    node: &FnNode,
-    local_crate_names: &BTreeSet<CrateName>,
-) -> bool {
-    if local_crate_names
-        .iter()
-        .any(|name| def_path == &name.rvs_prefix().rvs_join_name(&"main".into()))
-    {
-        return false;
-    }
-    if node.is_test {
-        return false;
-    }
-    if node.is_trait_impl && !node.facts.is_port_method {
-        return false;
-    }
-    if node.sources.is_empty() {
-        return false;
-    }
-    if rvs_is_generated_snafu_helper(def_path) {
-        return false;
-    }
-    local_crate_names
-        .iter()
-        .any(|name| def_path.rvs_starts_with(&name.rvs_prefix()))
-}
-
-fn rvs_is_generated_snafu_helper(def_path: &DefPath) -> bool {
-    let path = def_path.rvs_as_str();
-    let fn_name = def_path.rvs_fn_name();
-    matches!(fn_name.rvs_as_str(), "build" | "fail")
-        && path.split("::").any(|segment| segment.ends_with("Snafu"))
+fn rvs_is_local_checked_fn(def_path: &DefPath, node: &FnNode, local_scope: &LocalScope) -> bool {
+    FunctionClassification::rvs_new(local_scope, def_path, node).rvs_is_offline_checked()
 }
 
 fn rvs_is_test_harness_callee(callee: &DefPath) -> bool {

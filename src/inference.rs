@@ -5,6 +5,7 @@ use crate::capability::{
     Capability, CapabilityPolicy, CapabilitySet, ParsedFunctionName, rvs_parse_function,
 };
 use crate::capsmap;
+use crate::function_classification::{FunctionClassification, LocalScope};
 use crate::symbols::{CrateName, DefPath, FnName};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -509,21 +510,17 @@ pub(crate) fn rvs_scope_port_methods_M(
     graph: &mut FnGraph,
     local_crate_names: &BTreeSet<CrateName>,
 ) {
+    let scope = LocalScope::rvs_new(local_crate_names);
     for (def_path, node) in graph.rvs_iter_mut_M() {
-        if node.facts.is_port_method
-            && !local_crate_names
-                .iter()
-                .any(|name| def_path.rvs_starts_with(&name.rvs_prefix()))
-        {
+        if node.facts.is_port_method && !scope.rvs_contains(def_path) {
             node.facts.is_port_method = false;
         }
     }
-    debug_assert!(graph.rvs_iter().all(|(def_path, node)| {
-        !node.facts.is_port_method
-            || local_crate_names
-                .iter()
-                .any(|name| def_path.rvs_starts_with(&name.rvs_prefix()))
-    }));
+    debug_assert!(
+        graph
+            .rvs_iter()
+            .all(|(def_path, node)| { !node.facts.is_port_method || scope.rvs_contains(def_path) })
+    );
 }
 
 fn rvs_declared_caps_from_def_path(def_path: &DefPath) -> Option<CapabilitySet> {
@@ -535,27 +532,17 @@ pub(crate) fn rvs_project_expected_local_names(
     inferred: &BTreeMap<DefPath, CapabilitySet>,
     local_crate_names: &BTreeSet<CrateName>,
 ) -> BTreeMap<DefPath, FnName> {
-    let local_prefixes: Vec<_> = local_crate_names
-        .iter()
-        .map(CrateName::rvs_prefix)
-        .collect();
-    let root_main_paths: BTreeSet<DefPath> = local_prefixes
-        .iter()
-        .map(|prefix| prefix.rvs_join_name(&FnName::rvs_new("main")))
-        .collect();
+    let scope = LocalScope::rvs_new(local_crate_names);
     let mut expected_names = BTreeMap::new();
     for (full_path, node) in graph.rvs_iter() {
         let Some(caps) = inferred.get(full_path) else {
             continue;
         };
-        let Some(relative_path) = local_prefixes
-            .iter()
-            .find_map(|prefix| full_path.rvs_strip_prefix(prefix))
-        else {
+        let Some(relative_path) = scope.rvs_local_relative_path(full_path) else {
             continue;
         };
         let short_name = relative_path.rvs_fn_name();
-        if root_main_paths.contains(full_path) || node.is_test || node.is_trait_impl {
+        if !FunctionClassification::rvs_new(&scope, full_path, node).rvs_is_contract_enforced() {
             continue;
         }
         let caps_str = rvs_caps_to_string(caps);
@@ -591,17 +578,18 @@ pub(crate) fn rvs_contract_diff_is_enforced(
     diff: &FnContractDiff,
     local_crate_names: &BTreeSet<CrateName>,
 ) -> bool {
-    let root_main_paths: BTreeSet<_> = local_crate_names
-        .iter()
-        .map(|name| name.rvs_prefix().rvs_join_name(&FnName::rvs_new("main")))
-        .collect();
-    if root_main_paths.contains(&diff.def_path) {
-        return false;
-    }
+    rvs_contract_diff_is_enforced_in_scope(graph, diff, &LocalScope::rvs_new(local_crate_names))
+}
+
+fn rvs_contract_diff_is_enforced_in_scope(
+    graph: &FnGraph,
+    diff: &FnContractDiff,
+    local_scope: &LocalScope,
+) -> bool {
     let Some(node) = graph.rvs_get(diff.def_path.rvs_as_str()) else {
         return false;
     };
-    !node.is_test && !node.is_trait_impl
+    FunctionClassification::rvs_new(local_scope, &diff.def_path, node).rvs_is_contract_enforced()
 }
 
 pub(crate) fn rvs_collect_enforced_contract_diffs(
@@ -609,9 +597,10 @@ pub(crate) fn rvs_collect_enforced_contract_diffs(
     diffs: &[FnContractDiff],
     local_crate_names: &BTreeSet<CrateName>,
 ) -> Vec<FnContractDiff> {
+    let local_scope = LocalScope::rvs_new(local_crate_names);
     diffs
         .iter()
-        .filter(|diff| rvs_contract_diff_is_enforced(graph, diff, local_crate_names))
+        .filter(|diff| rvs_contract_diff_is_enforced_in_scope(graph, diff, &local_scope))
         .cloned()
         .collect()
 }
@@ -621,16 +610,10 @@ pub(crate) fn rvs_collect_contract_diffs(
     expected_names: &BTreeMap<DefPath, FnName>,
     local_crate_names: &BTreeSet<CrateName>,
 ) -> Vec<FnContractDiff> {
-    let local_prefixes: Vec<_> = local_crate_names
-        .iter()
-        .map(CrateName::rvs_prefix)
-        .collect();
+    let scope = LocalScope::rvs_new(local_crate_names);
     let mut diffs = Vec::new();
     for (def_path, expected_public_caps) in inferred {
-        if !local_prefixes
-            .iter()
-            .any(|prefix| def_path.rvs_starts_with(prefix))
-        {
+        if !scope.rvs_contains(def_path) {
             continue;
         }
         let actual_name = def_path.rvs_fn_name();

@@ -5,7 +5,7 @@ use std::path::Path;
 
 use crate::artifacts::FnGraph;
 use crate::capability::{Capability, CapabilityPolicy, CapabilitySet, ParsedFunctionName};
-use crate::cargo_targets::rvs_function_matches_local_prefix;
+use crate::function_classification::{FunctionClassification, LocalScope};
 use crate::inference::{
     FnContractDiff, FnContractMismatch, FnContractMismatchKind, PreparedLocalAnalysis,
     rvs_collect_contract_mismatch_items, rvs_collect_enforced_contract_diffs,
@@ -192,11 +192,9 @@ fn rvs_report_entries_from_callgraph(
     local_crate_names: &BTreeSet<CrateName>,
 ) -> Result<Vec<FnEntry>, String> {
     let mut entries = Vec::new();
+    let scope = LocalScope::rvs_new(local_crate_names);
     for (def_path, node) in graph.rvs_iter() {
-        if !rvs_function_matches_local_prefix(def_path.rvs_as_str(), local_crate_names) {
-            continue;
-        }
-        if node.is_trait_impl && !node.facts.is_port_method {
+        if !FunctionClassification::rvs_new(&scope, def_path, node).rvs_is_report_candidate() {
             continue;
         }
         let parsed = ParsedFunctionName::rvs_parse(def_path.rvs_as_str());
