@@ -7,6 +7,7 @@ use rustc_hir::{
 use rustc_lint::LateContext;
 use rustc_span::{Span, Symbol};
 
+use super::body::macro_expansion::rvs_span_has_bang_macro;
 use crate::capability::{CapabilitySet, ParsedFunctionName};
 
 // ─── Constants ───────────────────────────────────────────────────────────
@@ -247,76 +248,15 @@ fn rvs_is_only_debug_asserts(e: &Expr<'_>) -> bool {
 }
 
 fn rvs_expr_from_debug_assert_macro(e: &Expr<'_>) -> bool {
-    let da = Symbol::intern("debug_assert");
-    let dae = Symbol::intern("debug_assert_eq");
-    let dan = Symbol::intern("debug_assert_ne");
-    let outer = e.span.ctxt().outer_expn_data();
-    if let rustc_span::ExpnKind::Macro(rustc_span::MacroKind::Bang, name) = outer.kind
-        && (name == da || name == dae || name == dan)
-    {
-        return true;
-    }
-    let mut expn_id = outer.parent;
-    while expn_id != rustc_span::ExpnId::root() {
-        let expn = expn_id.expn_data();
-        if let rustc_span::ExpnKind::Macro(rustc_span::MacroKind::Bang, name) = expn.kind
-            && (name == da || name == dae || name == dan)
-        {
-            return true;
-        }
-        expn_id = expn.parent;
-    }
-    false
+    let names = [
+        Symbol::intern("debug_assert"),
+        Symbol::intern("debug_assert_eq"),
+        Symbol::intern("debug_assert_ne"),
+    ];
+    rvs_span_has_bang_macro(e.span, &names)
 }
 
-pub(crate) fn rvs_scan_debug_asserts_M<'tcx>(
-    tcx: rustc_middle::ty::TyCtxt<'tcx>,
-    body: &Body<'tcx>,
-) -> BTreeSet<String> {
-    let da = Symbol::intern("debug_assert");
-    let dae = Symbol::intern("debug_assert_eq");
-    let dan = Symbol::intern("debug_assert_ne");
-    let mut out = BTreeSet::new();
-    let resolver = |_bid: rustc_hir::BodyId| -> Option<&'tcx Body<'tcx>> { None };
-    let body_expr = rvs_root_body_expr(tcx, body);
-    rvs_walk_expr_M(
-        body_expr,
-        &mut |e| {
-            if e.span.from_expansion() {
-                let mut expn_id = e.span.ctxt().outer_expn_data().parent;
-                let mut is_debug_assert = false;
-                let outer_expn = e.span.ctxt().outer_expn_data();
-                if let rustc_span::ExpnKind::Macro(rustc_span::MacroKind::Bang, name) =
-                    outer_expn.kind
-                {
-                    if name == da || name == dae || name == dan {
-                        is_debug_assert = true;
-                    }
-                }
-                while expn_id != rustc_span::ExpnId::root() {
-                    let expn = expn_id.expn_data();
-                    if let rustc_span::ExpnKind::Macro(rustc_span::MacroKind::Bang, name) =
-                        expn.kind
-                    {
-                        if name == da || name == dae || name == dan {
-                            is_debug_assert = true;
-                            break;
-                        }
-                    }
-                    expn_id = expn.parent;
-                }
-                if is_debug_assert {
-                    rvs_collect_all_idents_M(e, &mut out);
-                }
-            }
-        },
-        &resolver,
-        0,
-    );
-    out
-}
-
-fn rvs_collect_all_idents_M(e: &Expr<'_>, out: &mut BTreeSet<String>) {
+pub(crate) fn rvs_collect_all_idents_M(e: &Expr<'_>, out: &mut BTreeSet<String>) {
     match &e.kind {
         ExprKind::Path(q) => {
             if let Some(n) = rvs_plast(q) {
@@ -440,7 +380,7 @@ pub(crate) fn rvs_count_effective_lines_M<'tcx>(
     count
 }
 
-fn rvs_root_body_expr<'tcx>(
+pub(crate) fn rvs_root_body_expr<'tcx>(
     tcx: rustc_middle::ty::TyCtxt<'tcx>,
     body: &Body<'tcx>,
 ) -> &'tcx Expr<'tcx> {
@@ -506,7 +446,7 @@ fn rvs_line_has_effective_code_M(line: &str, in_comment: &mut bool) -> bool {
 
 // ─── Walker ──────────────────────────────────────────────────────────────
 
-fn rvs_walk_expr_M<'tcx, F: FnMut(&'tcx Expr<'tcx>)>(
+fn rvs_walk_expr_M<'tcx, F: FnMut(&'tcx Expr<'tcx>, u32)>(
     e: &'tcx Expr<'tcx>,
     f: &mut F,
     resolve_body: &dyn Fn(rustc_hir::BodyId) -> Option<&'tcx Body<'tcx>>,
@@ -519,7 +459,7 @@ fn rvs_walk_expr_M<'tcx, F: FnMut(&'tcx Expr<'tcx>)>(
     if depth > 16 {
         return;
     }
-    f(e);
+    f(e, depth);
     match &e.kind {
         ExprKind::Array(a) | ExprKind::Tup(a) => a
             .iter()
@@ -599,7 +539,7 @@ fn rvs_walk_expr_M<'tcx, F: FnMut(&'tcx Expr<'tcx>)>(
     }
 }
 
-fn rvs_walk_block_M<'tcx, F: FnMut(&'tcx Expr<'tcx>)>(
+fn rvs_walk_block_M<'tcx, F: FnMut(&'tcx Expr<'tcx>, u32)>(
     b: &'tcx Block<'tcx>,
     f: &mut F,
     resolve_body: &dyn Fn(rustc_hir::BodyId) -> Option<&'tcx Body<'tcx>>,
@@ -630,7 +570,7 @@ fn rvs_walk_block_M<'tcx, F: FnMut(&'tcx Expr<'tcx>)>(
     }
 }
 
-pub(crate) fn rvs_visit_body_exprs_M<'tcx, F: FnMut(&'tcx Expr<'tcx>)>(
+pub(crate) fn rvs_visit_body_exprs_M<'tcx, F: FnMut(&'tcx Expr<'tcx>, u32)>(
     tcx: rustc_middle::ty::TyCtxt<'tcx>,
     e: &'tcx Expr<'tcx>,
     mut f: F,
@@ -889,16 +829,15 @@ mod tests {
             rvs_is_empty_body(_body);
             rvs_is_only_debug_asserts(_expr);
             rvs_expr_from_debug_assert_macro(_expr);
-            rvs_scan_debug_asserts_M(_tcx, _body);
             rvs_collect_all_idents_M(_expr, &mut set);
             rvs_static_is_thread_local(_cx, _def_id);
             rvs_count_effective_lines_M(_cx, _body);
             rvs_root_body_expr(_tcx, _body);
             rvs_line_has_effective_code_M("let x = 1;", &mut in_comment);
             let resolver = |_bid: rustc_hir::BodyId| -> Option<&Body<'_>> { None };
-            rvs_walk_expr_M(_expr, &mut |_| {}, &resolver, 0);
-            rvs_walk_block_M(_block, &mut |_| {}, &resolver, 0);
-            rvs_visit_body_exprs_M(_tcx, _expr, |_| {});
+            rvs_walk_expr_M(_expr, &mut |_, _| {}, &resolver, 0);
+            rvs_walk_block_M(_block, &mut |_, _| {}, &resolver, 0);
+            rvs_visit_body_exprs_M(_tcx, _expr, |_, _| {});
             rvs_qp(_qpath);
             rvs_tys(_ty);
             rvs_plast(_qpath);

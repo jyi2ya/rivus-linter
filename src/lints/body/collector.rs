@@ -1,13 +1,14 @@
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 use rustc_hir::{Body, ExprKind, Mutability, def::DefKind};
 use rustc_lint::LateContext;
 use rustc_span::{Span, Symbol};
 
 use super::super::utils::{
-    CallObservation, CallTarget, rvs_qp, rvs_resolve_call, rvs_static_is_thread_local,
-    rvs_visit_body_exprs_M,
+    CallObservation, CallTarget, rvs_collect_all_idents_M, rvs_qp, rvs_resolve_call,
+    rvs_root_body_expr, rvs_static_is_thread_local, rvs_visit_body_exprs_M,
 };
+use super::macro_expansion::rvs_span_has_bang_macro;
 
 #[derive(Debug, Default)]
 pub(crate) struct BodyFacts {
@@ -17,6 +18,7 @@ pub(crate) struct BodyFacts {
     pub(crate) has_static_mut_ref: bool,
     pub(crate) has_thread_local_ref: bool,
     pub(crate) has_stub: bool,
+    pub(crate) debug_assert_identifiers: BTreeSet<String>,
 }
 
 pub(crate) fn rvs_collect_body_facts_M<'tcx>(
@@ -24,7 +26,13 @@ pub(crate) fn rvs_collect_body_facts_M<'tcx>(
     body: &Body<'tcx>,
 ) -> BodyFacts {
     let mut facts = BodyFacts::default();
-    rvs_visit_body_exprs_M(cx.tcx, body.value, |expr| {
+    let debug_assert_macros = [
+        Symbol::intern("debug_assert"),
+        Symbol::intern("debug_assert_eq"),
+        Symbol::intern("debug_assert_ne"),
+    ];
+    let root_expr = rvs_root_body_expr(cx.tcx, body);
+    rvs_visit_body_exprs_M(cx.tcx, root_expr, |expr, nested_body_depth| {
         match &expr.kind {
             ExprKind::Path(qpath) => {
                 if let rustc_hir::def::Res::Def(DefKind::Static { mutability, .. }, def_id) =
@@ -54,6 +62,12 @@ pub(crate) fn rvs_collect_body_facts_M<'tcx>(
         }
         if !facts.has_stub && rvs_expr_is_stub(expr) {
             facts.has_stub = true;
+        }
+        if nested_body_depth == 0
+            && expr.span.from_expansion()
+            && rvs_span_has_bang_macro(expr.span, &debug_assert_macros)
+        {
+            rvs_collect_all_idents_M(expr, &mut facts.debug_assert_identifiers);
         }
     });
     facts
@@ -89,21 +103,5 @@ fn rvs_expr_is_stub(expr: &rustc_hir::Expr<'_>) -> bool {
     }
 
     let names = [Symbol::intern("todo"), Symbol::intern("unimplemented")];
-    let outer = expr.span.ctxt().outer_expn_data();
-    if rvs_is_named_bang_macro(&outer.kind, &names) {
-        return true;
-    }
-    let mut expansion = outer.parent;
-    while expansion != rustc_span::ExpnId::root() {
-        let data = expansion.expn_data();
-        if rvs_is_named_bang_macro(&data.kind, &names) {
-            return true;
-        }
-        expansion = data.parent;
-    }
-    false
-}
-
-fn rvs_is_named_bang_macro(kind: &rustc_span::ExpnKind, names: &[Symbol]) -> bool {
-    matches!(kind, rustc_span::ExpnKind::Macro(rustc_span::MacroKind::Bang, name) if names.contains(name))
+    rvs_span_has_bang_macro(expr.span, &names)
 }

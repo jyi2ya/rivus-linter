@@ -554,7 +554,7 @@ fn rvs_run_fn_checks_MS<'tcx>(
         error_swallow::rvs_check_fn_S(cx, body_facts);
 
         if has_body && !is_stub {
-            debug_assert::rvs_check_fn_MS(cx, body);
+            debug_assert::rvs_check_fn_MS(cx, body, body_facts);
             borrowed_param::rvs_check_fn_params_S(cx, sig);
             consumed_arg::rvs_check_fn_MS(cx, sig, name);
             validate::rvs_check_fn_S(cx, name, sig);

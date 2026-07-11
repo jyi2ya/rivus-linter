@@ -3,11 +3,11 @@ use rustc_lint::{LateContext, LintContext};
 
 use super::super::RVS_MISSING_DEBUG_ASSERT;
 use super::super::msg::Msg;
-use super::super::utils::rvs_scan_debug_asserts_M;
+use super::BodyFacts;
 
 /// Check that primitive numeric parameters have corresponding `debug_assert!`
 /// calls referencing them.
-pub(crate) fn rvs_check_fn_MS<'tcx>(cx: &LateContext<'tcx>, body: &Body<'tcx>) {
+pub(crate) fn rvs_check_fn_MS<'tcx>(cx: &LateContext<'tcx>, body: &Body<'tcx>, facts: &BodyFacts) {
     let owner = body.value.hir_id.owner;
     let tck = cx.tcx.typeck(owner.def_id);
     let mut prims = Vec::new();
@@ -38,9 +38,8 @@ pub(crate) fn rvs_check_fn_MS<'tcx>(cx: &LateContext<'tcx>, body: &Body<'tcx>) {
     if prims.is_empty() {
         return;
     }
-    let asserted = rvs_scan_debug_asserts_M(cx.tcx, body);
     for p in &prims {
-        if !asserted.contains(p) {
+        if !facts.debug_assert_identifiers.contains(p) {
             cx.emit_span_lint(
                 RVS_MISSING_DEBUG_ASSERT,
                 body.value.span,
