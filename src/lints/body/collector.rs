@@ -9,6 +9,8 @@ use super::super::utils::{
     rvs_root_body_expr, rvs_static_is_thread_local, rvs_visit_body_exprs_M,
 };
 use super::macro_expansion::rvs_span_has_bang_macro;
+use crate::lints::ctx::TestCallTarget;
+use crate::symbols::DefPath;
 
 #[derive(Debug, Default)]
 pub(crate) struct BodyFacts {
@@ -67,17 +69,23 @@ pub(crate) fn rvs_collect_body_facts_M<'tcx>(
     facts
 }
 
-pub(crate) fn rvs_collect_test_call_names_M(facts: &BodyFacts, out: &mut HashSet<String>) {
+pub(crate) fn rvs_collect_test_calls_M(facts: &BodyFacts, out: &mut HashSet<TestCallTarget>) {
     for observation in &facts.calls {
-        let name = match &observation.target {
-            CallTarget::Resolved { def_path, .. } => {
-                def_path.rsplit("::").next().unwrap_or(def_path)
+        let (name, target) = match &observation.target {
+            CallTarget::Resolved { def_path, .. } => (
+                def_path.rsplit("::").next().unwrap_or(def_path),
+                TestCallTarget::Resolved(DefPath::rvs_new(def_path.clone())),
+            ),
+            CallTarget::UnresolvedPath { path } => {
+                let name = path.rsplit("::").next().unwrap_or(path);
+                (name, TestCallTarget::UnresolvedName(name.to_string()))
             }
-            CallTarget::UnresolvedPath { path } => path.rsplit("::").next().unwrap_or(path),
-            CallTarget::UnresolvedMethod { name } => name,
+            CallTarget::UnresolvedMethod { name } => {
+                (name.as_str(), TestCallTarget::UnresolvedName(name.clone()))
+            }
         };
         if name.starts_with("rvs_") {
-            out.insert(name.to_string());
+            out.insert(target);
         }
     }
 }

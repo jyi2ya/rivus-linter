@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use rustc_lint::{LateContext, LintContext};
 
+use super::ctx::{CoverageFn, TestCallTarget};
 use super::msg::Msg;
 use super::{
     RVS_DUPLICATE_TEST, RVS_MISSING_TEST_OUTPUT, RVS_UNTESTED_GOOD_FN, RVS_UNTESTED_OK_FN,
@@ -16,16 +17,16 @@ use crate::symbols::CrateName;
 pub(crate) fn rvs_check_crate_post_BIMS<'tcx>(
     cx: &LateContext<'tcx>,
     test_names: &BTreeMap<String, Vec<rustc_span::Span>>,
-    good_fns: &[(String, rustc_span::Span)],
-    ok_fns: &[(String, rustc_span::Span)],
-    test_call_names: &HashSet<String>,
+    good_fns: &[CoverageFn],
+    ok_fns: &[CoverageFn],
+    test_calls: &HashSet<TestCallTarget>,
     callgraph: &FnGraph,
     collect_callgraph: bool,
 ) {
     rvs_check_duplicate_tests_S(cx, test_names);
     rvs_check_missing_test_output_BIS(cx, test_names);
-    rvs_check_untested_good_fns_S(cx, good_fns, test_call_names);
-    rvs_check_untested_ok_fns_S(cx, ok_fns, test_call_names);
+    rvs_check_untested_good_fns_S(cx, good_fns, test_calls);
+    rvs_check_untested_ok_fns_S(cx, ok_fns, test_calls);
     rvs_write_callgraph_BIS(cx, callgraph, collect_callgraph);
 }
 
@@ -74,19 +75,18 @@ fn rvs_has_test_output_BIS(name: &str, out_dir: &Path) -> bool {
 
 fn rvs_check_untested_good_fns_S<'tcx>(
     cx: &LateContext<'tcx>,
-    good_fns: &[(String, rustc_span::Span)],
-    test_call_names: &HashSet<String>,
+    good_fns: &[CoverageFn],
+    test_calls: &HashSet<TestCallTarget>,
 ) {
-    for (name, span) in good_fns {
-        if !test_call_names.contains(name)
-            && !test_call_names
-                .iter()
-                .any(|tc| tc.rsplit("::").next().unwrap_or(tc) == name.as_str())
-        {
+    for candidate in good_fns {
+        if !rvs_test_calls_function(test_calls, candidate) {
             cx.emit_span_lint(
                 RVS_UNTESTED_GOOD_FN,
-                *span,
-                Msg::rvs_new(*span, format!("good fn '{name}' not called by any test")),
+                candidate.span,
+                Msg::rvs_new(
+                    candidate.span,
+                    format!("good fn '{}' not called by any test", candidate.name),
+                ),
             );
         }
     }
@@ -94,22 +94,26 @@ fn rvs_check_untested_good_fns_S<'tcx>(
 
 fn rvs_check_untested_ok_fns_S<'tcx>(
     cx: &LateContext<'tcx>,
-    ok_fns: &[(String, rustc_span::Span)],
-    test_call_names: &HashSet<String>,
+    ok_fns: &[CoverageFn],
+    test_calls: &HashSet<TestCallTarget>,
 ) {
-    for (name, span) in ok_fns {
-        if !test_call_names.contains(name)
-            && !test_call_names
-                .iter()
-                .any(|tc| tc.rsplit("::").next().unwrap_or(tc) == name.as_str())
-        {
+    for candidate in ok_fns {
+        if !rvs_test_calls_function(test_calls, candidate) {
             cx.emit_span_lint(
                 RVS_UNTESTED_OK_FN,
-                *span,
-                Msg::rvs_new(*span, format!("ok fn '{name}' not called by any test")),
+                candidate.span,
+                Msg::rvs_new(
+                    candidate.span,
+                    format!("ok fn '{}' not called by any test", candidate.name),
+                ),
             );
         }
     }
+}
+
+fn rvs_test_calls_function(test_calls: &HashSet<TestCallTarget>, candidate: &CoverageFn) -> bool {
+    test_calls.contains(&TestCallTarget::Resolved(candidate.def_path.clone()))
+        || test_calls.contains(&TestCallTarget::UnresolvedName(candidate.name.clone()))
 }
 
 fn rvs_env_os_flag_enabled_BS(name: &str) -> bool {

@@ -248,9 +248,9 @@ pub static RIVUS_LINTS: &[&rustc_lint::Lint] = &[
 pub struct RivusLintPass {
     capsmap: Option<CapsMap>,
     test_names: BTreeMap<String, Vec<Span>>,
-    good_fns: Vec<(String, Span)>,
-    ok_fns: Vec<(String, Span)>,
-    test_call_names: HashSet<String>,
+    good_fns: Vec<ctx::CoverageFn>,
+    ok_fns: Vec<ctx::CoverageFn>,
+    test_calls: HashSet<ctx::TestCallTarget>,
     callgraph: FnGraph,
     diagnostic_spans: BTreeMap<DefPath, (rustc_hir::HirId, Span)>,
     done_crate_level: bool,
@@ -274,7 +274,7 @@ impl RivusLintPass {
             test_names: BTreeMap::new(),
             good_fns: Vec::new(),
             ok_fns: Vec::new(),
-            test_call_names: HashSet::new(),
+            test_calls: HashSet::new(),
             callgraph: FnGraph::rvs_new(),
             diagnostic_spans: BTreeMap::new(),
             done_crate_level: false,
@@ -398,7 +398,7 @@ impl<'tcx> LateLintPass<'tcx> for RivusLintPass {
             &self.test_names,
             &self.good_fns,
             &self.ok_fns,
-            &self.test_call_names,
+            &self.test_calls,
             &self.callgraph,
             self.collect_callgraph,
         );
@@ -419,7 +419,7 @@ impl<'tcx> LateLintPass<'tcx> for RivusLintPass {
             item,
             &self.test_fn_names,
             &mut self.test_names,
-            &mut self.test_call_names,
+            &mut self.test_calls,
             &mut data,
         );
     }
@@ -443,7 +443,7 @@ impl<'tcx> LateLintPass<'tcx> for RivusLintPass {
             impl_item,
             &self.test_fn_names,
             &mut self.test_names,
-            &mut self.test_call_names,
+            &mut self.test_calls,
             &mut data,
         );
     }
@@ -561,7 +561,14 @@ fn rvs_run_fn_checks_MS<'tcx>(
             && !utils::rvs_has_allow(attrs, "dead_code")
             && !utils::rvs_has_allow(attrs, "unused")
         {
-            data.good_fns.push((name.to_string(), subject.span));
+            data.good_fns.push(ctx::CoverageFn {
+                def_path: DefPath::rvs_new(utils::rvs_def_path(
+                    cx,
+                    subject.hir_id.owner.def_id.to_def_id(),
+                )),
+                name: name.to_string(),
+                span: subject.span,
+            });
         }
 
         // Collect ok fns (ABMP subset, mock-testable) for untested-ok-fn check.
@@ -574,7 +581,14 @@ fn rvs_run_fn_checks_MS<'tcx>(
             && !utils::rvs_has_allow(attrs, "dead_code")
             && !utils::rvs_has_allow(attrs, "unused")
         {
-            data.ok_fns.push((name.to_string(), subject.span));
+            data.ok_fns.push(ctx::CoverageFn {
+                def_path: DefPath::rvs_new(utils::rvs_def_path(
+                    cx,
+                    subject.hir_id.owner.def_id.to_def_id(),
+                )),
+                name: name.to_string(),
+                span: subject.span,
+            });
         }
     }
     test_name_format::rvs_check_fn_S(cx, name, subject.span, subject.is_test);
@@ -606,7 +620,7 @@ fn rvs_check_item_MS<'tcx>(
     item: &'tcx rustc_hir::Item<'tcx>,
     test_fn_names: &HashSet<String>,
     test_names: &mut BTreeMap<String, Vec<Span>>,
-    test_call_names: &mut HashSet<String>,
+    test_calls: &mut HashSet<ctx::TestCallTarget>,
     data: &mut FnCheckData<'_>,
 ) {
     use rustc_hir::{ItemKind, VariantData};
@@ -642,7 +656,7 @@ fn rvs_check_item_MS<'tcx>(
                         .entry(name.to_string())
                         .or_default()
                         .push(item.span);
-                    body::collector::rvs_collect_test_call_names_M(&body_facts, test_call_names);
+                    body::collector::rvs_collect_test_calls_M(&body_facts, test_calls);
                 }
                 let vis = cx.tcx.visibility(item.owner_id.def_id);
                 let is_pub = vis.is_public();
@@ -690,7 +704,7 @@ fn rvs_check_impl_item_MS<'tcx>(
     impl_item: &'tcx rustc_hir::ImplItem<'tcx>,
     test_fn_names: &HashSet<String>,
     test_names: &mut BTreeMap<String, Vec<Span>>,
-    test_call_names: &mut HashSet<String>,
+    test_calls: &mut HashSet<ctx::TestCallTarget>,
     data: &mut FnCheckData<'_>,
 ) {
     use rustc_hir::{Item, ItemKind};
@@ -753,7 +767,7 @@ fn rvs_check_impl_item_MS<'tcx>(
                     .entry(name.to_string())
                     .or_default()
                     .push(impl_item.span);
-                body::collector::rvs_collect_test_call_names_M(&body_facts, test_call_names);
+                body::collector::rvs_collect_test_calls_M(&body_facts, test_calls);
             }
             if !is_test && is_pub && !is_trait_impl {
                 missing_doc::rvs_check_fn_S(cx, name, impl_item.span, attrs, true);

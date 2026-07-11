@@ -10,6 +10,19 @@ use rustc_span::def_id::DefId;
 use super::body::BodyFacts;
 
 #[derive(Debug)]
+pub(crate) struct CoverageFn {
+    pub(crate) def_path: DefPath,
+    pub(crate) name: String,
+    pub(crate) span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum TestCallTarget {
+    Resolved(DefPath),
+    UnresolvedName(String),
+}
+
+#[derive(Debug)]
 pub(crate) struct FnSubject<'facts, 'tcx> {
     pub(crate) ident: Ident,
     pub(crate) hir_id: HirId,
@@ -59,8 +72,8 @@ impl<'facts, 'tcx> FnSubject<'facts, 'tcx> {
 /// threaded through without leaking RivusLintPass internals.
 #[derive(Debug)]
 pub(crate) struct FnCheckData<'a> {
-    pub good_fns: &'a mut Vec<(String, Span)>,
-    pub ok_fns: &'a mut Vec<(String, Span)>,
+    pub good_fns: &'a mut Vec<CoverageFn>,
+    pub ok_fns: &'a mut Vec<CoverageFn>,
     pub callgraph: &'a mut FnGraph,
     pub diagnostic_spans: &'a mut BTreeMap<DefPath, (HirId, Span)>,
     pub collect_caps_facts: bool,
