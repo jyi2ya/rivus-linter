@@ -1,8 +1,8 @@
 use rustc_hir::{Item, UseKind, UsePath};
 use rustc_lint::{LateContext, LintContext};
 
-use super::msg::Msg;
-use super::{RVS_BANNED_IMPORT, RVS_WILDCARD_IMPORT};
+use super::super::msg::Msg;
+use super::super::{RVS_BANNED_IMPORT, RVS_WILDCARD_IMPORT};
 
 /// Check `use` items for banned crates (anyhow/eyre/color_eyre/thiserror) and
 /// wildcard imports (`use xxx::*`).

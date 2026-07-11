@@ -2,9 +2,9 @@ use rustc_hir;
 use rustc_lint::{LateContext, LintContext};
 use rustc_span::Span;
 
-use super::RVS_MISSING_DOC;
-use super::msg::Msg;
-use super::utils::{rvs_has_any_doc, rvs_has_attr};
+use super::super::RVS_MISSING_DOC;
+use super::super::msg::Msg;
+use super::super::utils::{rvs_has_any_doc, rvs_has_attr};
 
 /// Check that pub rvs_ functions have `///` doc comments.
 pub(crate) fn rvs_check_fn_S(

@@ -1,9 +1,9 @@
 use rustc_hir::{self, Body, PatKind};
 use rustc_lint::{LateContext, LintContext};
 
-use super::RVS_MISSING_DEBUG_ASSERT;
-use super::msg::Msg;
-use super::utils::rvs_scan_debug_asserts_M;
+use super::super::RVS_MISSING_DEBUG_ASSERT;
+use super::super::msg::Msg;
+use super::super::utils::rvs_scan_debug_asserts_M;
 
 /// Check that primitive numeric parameters have corresponding `debug_assert!`
 /// calls referencing them.

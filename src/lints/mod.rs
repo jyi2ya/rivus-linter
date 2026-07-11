@@ -16,37 +16,24 @@ use rustc_span::Span;
 use crate::capsmap::CapsMap;
 use crate::symbols::{CrateName, DefPath};
 
-mod banned_import;
-mod borrowed_param;
-mod callgraph;
-mod catch_all_error;
-mod catch_unwind;
-mod consumed_arg;
+mod body;
+mod caps;
 mod ctx;
-mod dead_code;
-mod debug_assert;
-mod deny_warnings;
-mod deref_polymorphism;
-mod empty_fn;
-mod error_swallow;
-mod missing_allow;
-mod missing_debug_derive;
-mod missing_doc;
-mod missing_safety_doc;
 mod msg;
-mod port_traits;
-mod reflection;
-mod spawn;
-mod stub_macro;
-mod test_name_format;
+mod node;
 mod test_quality;
-mod todo_comment;
 mod utils;
-mod validate;
 
 pub use crate::artifacts::FnGraph;
 
+use body::{catch_unwind, debug_assert, empty_fn, error_swallow, reflection, spawn, stub_macro};
+use caps::callgraph;
 use ctx::FnCheckData;
+use node::{
+    banned_import, borrowed_param, catch_all_error, consumed_arg, dead_code, deny_warnings,
+    deref_polymorphism, missing_allow, missing_debug_derive, missing_doc, missing_safety_doc,
+    port_traits, test_name_format, todo_comment, validate,
+};
 
 // ─── Lint declarations ───────────────────────────────────────────────────
 
@@ -533,6 +520,7 @@ fn rvs_run_fn_checks_MS<'tcx>(
     span: Span,
     sig: &rustc_hir::FnSig<'tcx>,
     body: &rustc_hir::Body<'tcx>,
+    body_facts: &body::BodyFacts,
     has_body: bool,
     is_test: bool,
     is_trait_impl_method: bool,
@@ -552,7 +540,7 @@ fn rvs_run_fn_checks_MS<'tcx>(
             .map(|info| info.caps.clone())
             .unwrap_or_else(crate::capability::CapabilityPolicy::rvs_port_method_caps);
 
-        let is_stub = stub_macro::rvs_check_fn_MS(cx, body, span);
+        let is_stub = stub_macro::rvs_check_fn_S(cx, body_facts, span);
         empty_fn::rvs_check_fn_MS(cx, body, span, has_body, is_stub);
         if let Some(info) = info.as_ref() {
             missing_allow::rvs_check_fn_S(cx, hir_id, span, &info.raw_suffix);
@@ -560,10 +548,10 @@ fn rvs_run_fn_checks_MS<'tcx>(
         dead_code::rvs_check_fn_S(cx, attrs, span);
 
         // Spawn, reflection, catch_unwind, error swallow detection
-        spawn::rvs_check_fn_MS(cx, body, is_test);
-        reflection::rvs_check_fn_MS(cx, body);
-        catch_unwind::rvs_check_fn_MS(cx, body);
-        error_swallow::rvs_check_fn_MS(cx, body);
+        spawn::rvs_check_fn_S(cx, body_facts, is_test);
+        reflection::rvs_check_fn_S(cx, body_facts);
+        catch_unwind::rvs_check_fn_S(cx, body_facts);
+        error_swallow::rvs_check_fn_S(cx, body_facts);
 
         if has_body && !is_stub {
             debug_assert::rvs_check_fn_MS(cx, body);
@@ -622,6 +610,7 @@ fn rvs_check_item_MS<'tcx>(
         } => {
             let name = ident.name.as_str();
             let body = cx.tcx.hir_body(*body);
+            let body_facts = body::rvs_collect_body_facts_M(cx, body);
             let attrs = cx.tcx.hir_attrs(item.hir_id());
             let is_test = utils::rvs_has_attr(attrs, "test") || test_fn_names.contains(name);
             if data.should_emit_lints {
@@ -632,6 +621,7 @@ fn rvs_check_item_MS<'tcx>(
                     item.span,
                     sig,
                     body,
+                    &body_facts,
                     *has_body,
                     is_test,
                     false,
@@ -643,7 +633,7 @@ fn rvs_check_item_MS<'tcx>(
                         .entry(name.to_string())
                         .or_default()
                         .push(item.span);
-                    utils::rvs_collect_test_call_names_M(cx, body, test_call_names);
+                    body::collector::rvs_collect_test_call_names_M(&body_facts, test_call_names);
                 }
                 let vis = cx.tcx.visibility(item.owner_id.def_id);
                 let is_pub = vis.is_public();
@@ -664,6 +654,7 @@ fn rvs_check_item_MS<'tcx>(
                     *ident,
                     sig,
                     body,
+                    &body_facts,
                     false,
                     is_test,
                     false,
@@ -744,6 +735,7 @@ fn rvs_check_impl_item_MS<'tcx>(
         };
         let name = impl_item.ident.name.as_str();
         let body = cx.tcx.hir_body(*body_id);
+        let body_facts = body::rvs_collect_body_facts_M(cx, body);
         let attrs = cx.tcx.hir_attrs(impl_item.hir_id());
         let is_test = utils::rvs_has_attr(attrs, "test") || test_fn_names.contains(name);
         let is_pub = utils::rvs_is_pub_impl_item(cx, impl_item);
@@ -758,6 +750,7 @@ fn rvs_check_impl_item_MS<'tcx>(
                 impl_item.span,
                 sig,
                 body,
+                &body_facts,
                 true,
                 is_test,
                 is_trait_impl,
@@ -769,7 +762,7 @@ fn rvs_check_impl_item_MS<'tcx>(
                     .entry(name.to_string())
                     .or_default()
                     .push(impl_item.span);
-                utils::rvs_collect_test_call_names_M(cx, body, test_call_names);
+                body::collector::rvs_collect_test_call_names_M(&body_facts, test_call_names);
             }
             if !is_test && is_pub && !is_trait_impl {
                 missing_doc::rvs_check_fn_S(cx, name, impl_item.span, attrs, true);
@@ -791,6 +784,7 @@ fn rvs_check_impl_item_MS<'tcx>(
                 impl_item.ident,
                 sig,
                 body,
+                &body_facts,
                 is_trait_impl,
                 is_test,
                 is_port_method,
@@ -818,6 +812,7 @@ fn rvs_check_trait_item_MS<'tcx>(
         TraitItemKind::Fn(sig, TraitFn::Provided(body_id)) => {
             let name = trait_item.ident.name.as_str();
             let body = cx.tcx.hir_body(*body_id);
+            let body_facts = body::rvs_collect_body_facts_M(cx, body);
             if data.should_emit_lints {
                 rvs_run_fn_checks_MS(
                     cx,
@@ -826,6 +821,7 @@ fn rvs_check_trait_item_MS<'tcx>(
                     trait_item.span,
                     sig,
                     body,
+                    &body_facts,
                     true,
                     false,
                     false,
@@ -841,6 +837,7 @@ fn rvs_check_trait_item_MS<'tcx>(
                     trait_item.ident,
                     sig,
                     body,
+                    &body_facts,
                     false,
                     false,
                     is_port_trait,

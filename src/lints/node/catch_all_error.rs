@@ -1,9 +1,9 @@
 use rustc_hir::{EnumDef, Item};
 use rustc_lint::{LateContext, LintContext};
 
-use super::RVS_CATCH_ALL_ERROR_VARIANT;
-use super::msg::Msg;
-use super::utils::{CATCH_ALL_VARIANT_NAMES, rvs_has_attr};
+use super::super::RVS_CATCH_ALL_ERROR_VARIANT;
+use super::super::msg::Msg;
+use super::super::utils::{CATCH_ALL_VARIANT_NAMES, rvs_has_attr};
 
 /// Check error enums for catch-all variants (Unknown/Other/etc.).
 pub(crate) fn rvs_check_enum_S<'tcx>(

@@ -1,8 +1,8 @@
 use rustc_lint::{LateContext, LintContext};
 use rustc_span::Span;
 
-use super::RVS_TODO_COMMENT;
-use super::msg::Msg;
+use super::super::RVS_TODO_COMMENT;
+use super::super::msg::Msg;
 
 /// Check source span for `// TODO` or `// FIXME` comments.
 pub(crate) fn rvs_check_fn_S(cx: &LateContext<'_>, span: Span) {

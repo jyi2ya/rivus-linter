@@ -1,16 +1,13 @@
-use rustc_hir::{self, Body};
 use rustc_lint::{LateContext, LintContext};
 
-use super::RVS_SPAWN_WARNING;
-use super::msg::Msg;
-use super::utils::{CallSyntax, CallTarget, rvs_is_spawn_S, rvs_resolve_call, rvs_walk_closures};
+use super::super::RVS_SPAWN_WARNING;
+use super::super::msg::Msg;
+use super::super::utils::{CallSyntax, CallTarget, rvs_is_spawn_S};
+use super::BodyFacts;
 
 /// Walk function body looking for spawn calls outside of tests.
-pub(crate) fn rvs_check_fn_MS<'tcx>(cx: &LateContext<'tcx>, body: &Body<'tcx>, is_test: bool) {
-    rvs_walk_closures(cx.tcx, body.value, |expr| {
-        let Some(observation) = rvs_resolve_call(cx, expr) else {
-            return;
-        };
+pub(crate) fn rvs_check_fn_S<'tcx>(cx: &LateContext<'tcx>, facts: &BodyFacts, is_test: bool) {
+    for observation in &facts.calls {
         let path = match &observation.target {
             CallTarget::Resolved {
                 def_path,
@@ -20,7 +17,7 @@ pub(crate) fn rvs_check_fn_MS<'tcx>(cx: &LateContext<'tcx>, body: &Body<'tcx>, i
                     | rustc_hir::def::DefKind::Variant,
             } => def_path,
             CallTarget::UnresolvedPath { path } => path,
-            CallTarget::Resolved { .. } => return,
+            CallTarget::Resolved { .. } => continue,
         };
         if !is_test && rvs_is_spawn_S(path) {
             let message = match observation.syntax {
@@ -35,5 +32,5 @@ pub(crate) fn rvs_check_fn_MS<'tcx>(cx: &LateContext<'tcx>, body: &Body<'tcx>, i
                 Msg::rvs_new(observation.span, message),
             );
         }
-    });
+    }
 }

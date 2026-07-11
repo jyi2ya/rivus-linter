@@ -1,8 +1,8 @@
 use rustc_hir::{Impl, Item};
 use rustc_lint::{LateContext, LintContext};
 
-use super::msg::Msg;
-use super::{RVS_DEREF_POLYMORPHISM, RVS_INTO_IMPL};
+use super::super::msg::Msg;
+use super::super::{RVS_DEREF_POLYMORPHISM, RVS_INTO_IMPL};
 
 /// Check `impl` items for Into and Deref trait implementations.
 pub(crate) fn rvs_check_impl_S<'tcx>(

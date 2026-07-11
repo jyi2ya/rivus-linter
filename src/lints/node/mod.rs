@@ -1,0 +1,15 @@
+pub(crate) mod banned_import;
+pub(crate) mod borrowed_param;
+pub(crate) mod catch_all_error;
+pub(crate) mod consumed_arg;
+pub(crate) mod dead_code;
+pub(crate) mod deny_warnings;
+pub(crate) mod deref_polymorphism;
+pub(crate) mod missing_allow;
+pub(crate) mod missing_debug_derive;
+pub(crate) mod missing_doc;
+pub(crate) mod missing_safety_doc;
+pub(crate) mod port_traits;
+pub(crate) mod test_name_format;
+pub(crate) mod todo_comment;
+pub(crate) mod validate;

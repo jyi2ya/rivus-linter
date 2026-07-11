@@ -7,7 +7,7 @@ use rustc_hir::{
 use rustc_lint::LateContext;
 use rustc_span::{Span, Symbol};
 
-use crate::capability::{CapabilitySet, ParsedFunctionName, rvs_function_name_segment};
+use crate::capability::{CapabilitySet, ParsedFunctionName};
 
 // ─── Constants ───────────────────────────────────────────────────────────
 
@@ -180,49 +180,6 @@ pub(crate) fn rvs_has_mutable_params(sig: &rustc_hir::FnSig<'_>) -> bool {
 }
 
 // ─── Body scanners ───────────────────────────────────────────────────────
-
-pub(crate) fn rvs_scan_stub<'tcx>(tcx: rustc_middle::ty::TyCtxt<'tcx>, body: &Body<'tcx>) -> bool {
-    let mut f = false;
-    let todo_sym = Symbol::intern("todo");
-    let unimpl_sym = Symbol::intern("unimplemented");
-    rvs_walk_closures(tcx, body.value, |e| {
-        if f {
-            return;
-        }
-        if let ExprKind::Call(func, _) = &e.kind {
-            if let ExprKind::Path(ref q) = func.kind {
-                let s = rvs_qp(q);
-                let last = s.rsplit("::").next().unwrap_or(&s);
-                if last == "todo" || last == "unimplemented" {
-                    f = true;
-                    return;
-                }
-            }
-        }
-        if e.span.from_expansion() {
-            let mut expn_id = e.span.ctxt().outer_expn_data().parent;
-            while expn_id != rustc_span::ExpnId::root() {
-                let expn = expn_id.expn_data();
-                if let rustc_span::ExpnKind::Macro(rustc_span::MacroKind::Bang, name) = expn.kind {
-                    if name == todo_sym || name == unimpl_sym {
-                        f = true;
-                        return;
-                    }
-                }
-                expn_id = expn.parent;
-            }
-            let outer_expn = e.span.ctxt().outer_expn_data();
-            if let rustc_span::ExpnKind::Macro(rustc_span::MacroKind::Bang, name) = outer_expn.kind
-            {
-                if name == todo_sym || name == unimpl_sym {
-                    f = true;
-                    return;
-                }
-            }
-        }
-    });
-    f
-}
 
 pub(crate) fn rvs_is_empty_body(body: &Body<'_>) -> (bool, bool) {
     let block = match &body.value.kind {
@@ -455,33 +412,6 @@ pub(crate) fn rvs_static_is_thread_local(cx: &LateContext<'_>, did: DefId) -> bo
     false
 }
 
-pub(crate) fn rvs_collect_test_call_names_M<'tcx>(
-    cx: &LateContext<'tcx>,
-    body: &Body<'tcx>,
-    out: &mut HashSet<String>,
-) {
-    rvs_walk_closures(cx.tcx, body.value, |e| {
-        if matches!(e.kind, ExprKind::Call(..))
-            && let Some(observation) = rvs_resolve_call(cx, e)
-        {
-            let path = match &observation.target {
-                CallTarget::Resolved { def_path, .. } => def_path,
-                CallTarget::UnresolvedPath { path } => path,
-            };
-            let name = rvs_function_name_segment(path);
-            if name.starts_with("rvs_") {
-                out.insert(name.to_string());
-            }
-        }
-        if let ExprKind::MethodCall(p, ..) = &e.kind {
-            let n = p.ident.name.as_str();
-            if n.starts_with("rvs_") {
-                out.insert(n.to_string());
-            }
-        }
-    });
-}
-
 pub(crate) fn rvs_count_effective_lines_M<'tcx>(
     cx: &LateContext<'tcx>,
     body: &Body<'tcx>,
@@ -700,7 +630,7 @@ fn rvs_walk_block_M<'tcx, F: FnMut(&'tcx Expr<'tcx>)>(
     }
 }
 
-pub(crate) fn rvs_walk_closures<'tcx, F: FnMut(&'tcx Expr<'tcx>)>(
+pub(crate) fn rvs_visit_body_exprs_M<'tcx, F: FnMut(&'tcx Expr<'tcx>)>(
     tcx: rustc_middle::ty::TyCtxt<'tcx>,
     e: &'tcx Expr<'tcx>,
     mut f: F,
@@ -958,7 +888,6 @@ mod tests {
             let _tcx: rustc_middle::ty::TyCtxt<'_> = unreachable!();
             let mut set = BTreeSet::new();
             let mut refs = HashSet::new();
-            let mut names = HashSet::new();
             let mut in_comment = false;
 
             rvs_has_attr(_attrs, "test");
@@ -970,21 +899,19 @@ mod tests {
             rvs_is_pub_impl_item(_cx, _impl_item);
             FnInfo::rvs_extract("rvs_helper");
             rvs_has_mutable_params(_sig);
-            rvs_scan_stub(_tcx, _body);
             rvs_is_empty_body(_body);
             rvs_is_only_debug_asserts(_expr);
             rvs_expr_from_debug_assert_macro(_expr);
             rvs_scan_debug_asserts_M(_tcx, _body);
             rvs_collect_all_idents_M(_expr, &mut set);
             rvs_static_is_thread_local(_cx, _def_id);
-            rvs_collect_test_call_names_M(_cx, _body, &mut names);
             rvs_count_effective_lines_M(_cx, _body);
             rvs_root_body_expr(_tcx, _body);
             rvs_line_has_effective_code_M("let x = 1;", &mut in_comment);
             let resolver = |_bid: rustc_hir::BodyId| -> Option<&Body<'_>> { None };
             rvs_walk_expr_M(_expr, &mut |_| {}, &resolver, 0);
             rvs_walk_block_M(_block, &mut |_| {}, &resolver, 0);
-            rvs_walk_closures(_tcx, _expr, |_| {});
+            rvs_visit_body_exprs_M(_tcx, _expr, |_| {});
             rvs_qp(_qpath);
             rvs_tys(_ty);
             rvs_plast(_qpath);

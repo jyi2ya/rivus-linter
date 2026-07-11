@@ -1,9 +1,9 @@
 use rustc_hir::Item;
 use rustc_lint::{LateContext, LintContext};
 
-use super::RVS_MISSING_DEBUG_DERIVE;
-use super::msg::Msg;
-use super::utils::rvs_has_debug_derive;
+use super::super::RVS_MISSING_DEBUG_DERIVE;
+use super::super::msg::Msg;
+use super::super::utils::rvs_has_debug_derive;
 
 /// Check pub struct/enum missing `#[derive(Debug)]`.
 pub(crate) fn rvs_check_struct_or_enum_S<'tcx>(cx: &LateContext<'tcx>, item: &'tcx Item<'tcx>) {

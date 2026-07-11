@@ -2,8 +2,8 @@ use rustc_hir::{self};
 use rustc_lint::LintContext;
 use rustc_span::Symbol;
 
-use super::RVS_DENY_WARNINGS;
-use super::msg::Msg;
+use super::super::RVS_DENY_WARNINGS;
+use super::super::msg::Msg;
 
 /// `check_crate` — detect `#![deny(warnings)]` at crate level.
 pub(crate) fn rvs_check_crate_S(cx: &rustc_lint::LateContext<'_>) {

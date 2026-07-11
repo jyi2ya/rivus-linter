@@ -1,9 +1,9 @@
 use rustc_hir::{self, FieldDef, Mutability, TyKind};
 use rustc_lint::{LateContext, LintContext};
 
-use super::RVS_BORROWED_PARAM;
-use super::msg::Msg;
-use super::utils::{BORROWED_TYPES, rvs_ty_last_ident};
+use super::super::RVS_BORROWED_PARAM;
+use super::super::msg::Msg;
+use super::super::utils::{BORROWED_TYPES, rvs_ty_last_ident};
 
 /// Check function parameters for borrowed types (&String/&Vec/&Box).
 pub(crate) fn rvs_check_fn_params_S<'tcx>(cx: &LateContext<'_>, sig: &rustc_hir::FnSig<'tcx>) {

@@ -3,9 +3,11 @@ use std::collections::HashSet;
 use rustc_hir::{self, FnRetTy, QPath, TyKind};
 use rustc_lint::{LateContext, LintContext};
 
-use super::RVS_CONSUMED_ARG_ON_ERROR;
-use super::msg::Msg;
-use super::utils::{rvs_collect_type_idents_M, rvs_generic_args_result_type, rvs_plast, rvs_tys};
+use super::super::RVS_CONSUMED_ARG_ON_ERROR;
+use super::super::msg::Msg;
+use super::super::utils::{
+    rvs_collect_type_idents_M, rvs_generic_args_result_type, rvs_plast, rvs_tys,
+};
 
 /// Check that owned (non-ref) parameters are preserved in the error type when
 /// the function returns `Result<(), E>`.

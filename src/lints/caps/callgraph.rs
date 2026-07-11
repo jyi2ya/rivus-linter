@@ -2,13 +2,13 @@ use std::collections::BTreeSet;
 
 use std::path::PathBuf;
 
-use rustc_hir::{Body, ExprKind, HirId, Mutability, def::DefKind};
+use rustc_hir::{Body, HirId};
 use rustc_lint::LateContext;
 use rustc_span::{FileName, Ident};
 
-use super::utils::{
+use super::super::body::BodyFacts;
+use super::super::utils::{
     CallTarget, rvs_count_effective_lines_M, rvs_def_path, rvs_has_allow, rvs_has_mutable_params,
-    rvs_resolve_call, rvs_static_is_thread_local, rvs_walk_closures,
 };
 use crate::artifacts::{FnGraph, FnNode, FnSource};
 use crate::capability::{CapabilityFacts, ParsedFunctionName};
@@ -25,6 +25,7 @@ pub(crate) fn rvs_collect_callgraph_for_item_M<'tcx>(
     ident: Ident,
     sig: &rustc_hir::FnSig<'tcx>,
     body: &Body<'tcx>,
+    body_facts: &BodyFacts,
     is_trait_impl: bool,
     is_test: bool,
     is_port_method: bool,
@@ -35,41 +36,29 @@ pub(crate) fn rvs_collect_callgraph_for_item_M<'tcx>(
     let sources = rvs_fn_source(cx, ident).into_iter().collect();
     let attrs = cx.tcx.hir_attrs(hir_id);
 
-    let mut calls: BTreeSet<DefPath> = BTreeSet::new();
-    let mut has_static_ref = false;
-    let mut has_static_mut_ref = false;
-    let mut has_thread_local_ref = false;
-
-    rvs_walk_closures(cx.tcx, body.value, |e| match &e.kind {
-        ExprKind::Path(q) => {
-            if let rustc_hir::def::Res::Def(kind, did) = cx.qpath_res(q, e.hir_id) {
-                if let DefKind::Static { mutability, .. } = kind {
-                    if rvs_static_is_thread_local(cx, did) {
-                        has_thread_local_ref = true;
-                    }
-                    match mutability {
-                        Mutability::Mut => has_static_mut_ref = true,
-                        Mutability::Not => has_static_ref = true,
-                    }
-                }
-            }
-        }
-        ExprKind::Call(..) | ExprKind::MethodCall(..) => {
-            if let Some(observation) = rvs_resolve_call(cx, e)
-                && let CallTarget::Resolved {
-                    def_path,
-                    def_kind: DefKind::Fn | DefKind::AssocFn,
-                } = observation.target
+    let calls: BTreeSet<DefPath> = body_facts
+        .calls
+        .iter()
+        .filter_map(|observation| {
+            if let CallTarget::Resolved {
+                def_path,
+                def_kind: rustc_hir::def::DefKind::Fn | rustc_hir::def::DefKind::AssocFn,
+            } = &observation.target
             {
-                calls.insert(DefPath::rvs_new(def_path));
+                Some(DefPath::rvs_new(def_path.clone()))
+            } else {
+                None
             }
-        }
-        _ => {}
-    });
+        })
+        .collect();
 
     let facts =
         CapabilityFacts::rvs_from_signature(sig, rvs_has_mutable_params(sig), is_port_method)
-            .rvs_with_static_refs(has_static_ref, has_static_mut_ref, has_thread_local_ref);
+            .rvs_with_static_refs(
+                body_facts.has_static_ref,
+                body_facts.has_static_mut_ref,
+                body_facts.has_thread_local_ref,
+            );
     let is_reportable =
         is_port_method || ParsedFunctionName::rvs_parse(ident.name.as_str()).rvs_has_rvs_prefix();
     let report_line_count = if is_reportable {
@@ -188,8 +177,18 @@ mod tests {
             let _ident: Ident = unreachable!();
             let _sig: &rustc_hir::FnSig<'_> = unreachable!();
             let _body: &Body<'_> = unreachable!();
+            let _body_facts: &BodyFacts = unreachable!();
             rvs_collect_callgraph_for_item_M(
-                _callgraph, _cx, _hir_id, _ident, _sig, _body, false, false, false,
+                _callgraph,
+                _cx,
+                _hir_id,
+                _ident,
+                _sig,
+                _body,
+                _body_facts,
+                false,
+                false,
+                false,
             );
             rvs_collect_callgraph_for_signature_M(
                 _callgraph, _cx, _hir_id, _ident, _sig, false, false,

@@ -1,9 +1,9 @@
 use rustc_hir::{self, FnRetTy, QPath, TyKind};
 use rustc_lint::{LateContext, LintContext};
 
-use super::RVS_VALIDATE_RETURNS_UNIT;
-use super::msg::Msg;
-use super::utils::{VALIDATE_PREFIXES, rvs_generic_args_result_type, rvs_plast, rvs_tys};
+use super::super::RVS_VALIDATE_RETURNS_UNIT;
+use super::super::msg::Msg;
+use super::super::utils::{VALIDATE_PREFIXES, rvs_generic_args_result_type, rvs_plast, rvs_tys};
 
 /// Check for validate/check/verify functions returning `Result<(), E>` —
 /// should use TryFrom instead.

@@ -2,9 +2,9 @@ use rustc_hir::Body;
 use rustc_lint::{LateContext, LintContext};
 use rustc_span::Span;
 
-use super::RVS_EMPTY_FN;
-use super::msg::Msg;
-use super::utils::rvs_is_empty_body;
+use super::super::RVS_EMPTY_FN;
+use super::super::msg::Msg;
+use super::super::utils::rvs_is_empty_body;
 
 /// Check for empty function bodies (optionally containing only debug_assert!).
 pub(crate) fn rvs_check_fn_MS<'tcx>(

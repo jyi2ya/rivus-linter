@@ -2,9 +2,9 @@ use rustc_hir::{self, HeaderSafety, HirId, Safety};
 use rustc_lint::{LateContext, LintContext};
 use rustc_span::Span;
 
-use super::RVS_MISSING_SAFETY_DOC;
-use super::msg::Msg;
-use super::utils::rvs_has_doc_section;
+use super::super::RVS_MISSING_SAFETY_DOC;
+use super::super::msg::Msg;
+use super::super::utils::rvs_has_doc_section;
 
 /// Check that unsafe functions have `/// # Safety` doc section.
 pub(crate) fn rvs_check_fn_S(
