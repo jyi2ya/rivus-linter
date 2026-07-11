@@ -16,6 +16,40 @@ pub(crate) struct FnContractDiff {
     pub(crate) expected_public_caps: Option<CapabilitySet>,
 }
 
+#[derive(Debug)]
+pub(crate) struct PreparedLocalAnalysis {
+    pub(crate) diffs: Vec<FnContractDiff>,
+    pub(crate) inferred: BTreeMap<DefPath, CapabilitySet>,
+    pub(crate) impl_index: HashMap<String, Vec<DefPath>>,
+}
+
+impl PreparedLocalAnalysis {
+    pub(crate) fn rvs_prepare_M(
+        graph: &mut FnGraph,
+        seed: &capsmap::CapsMap,
+        local_crate_names: &BTreeSet<CrateName>,
+    ) -> Self {
+        rvs_scope_port_methods_M(graph, local_crate_names);
+        let inferred = rvs_infer_graph_M(graph, seed);
+        rvs_project_expected_local_names_M(graph, local_crate_names);
+        let diffs = rvs_collect_contract_diffs(graph, local_crate_names);
+        let impl_index = rvs_build_impl_index(graph);
+        Self {
+            diffs,
+            inferred,
+            impl_index,
+        }
+    }
+
+    pub(crate) fn rvs_resolver<'a>(
+        &'a self,
+        graph: &'a FnGraph,
+        seed: &'a capsmap::CapsMap,
+    ) -> CalleeCapsResolver<'a> {
+        CalleeCapsResolver::rvs_new(graph, seed, &self.inferred, &self.impl_index)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct FnContractMismatch {
     pub(crate) def_path: DefPath,
@@ -638,19 +672,7 @@ pub(crate) fn rvs_collect_local_contract_diffs_M(
     seed: &capsmap::CapsMap,
     local_crate_names: &BTreeSet<CrateName>,
 ) -> Vec<FnContractDiff> {
-    rvs_collect_local_contract_diffs_with_inferred_M(graph, seed, local_crate_names).0
-}
-
-pub(crate) fn rvs_collect_local_contract_diffs_with_inferred_M(
-    graph: &mut FnGraph,
-    seed: &capsmap::CapsMap,
-    local_crate_names: &BTreeSet<CrateName>,
-) -> (Vec<FnContractDiff>, BTreeMap<DefPath, CapabilitySet>) {
-    rvs_scope_port_methods_M(graph, local_crate_names);
-    let inferred = rvs_infer_graph_M(graph, seed);
-    rvs_project_expected_local_names_M(graph, local_crate_names);
-    let diffs = rvs_collect_contract_diffs(graph, local_crate_names);
-    (diffs, inferred)
+    PreparedLocalAnalysis::rvs_prepare_M(graph, seed, local_crate_names).diffs
 }
 
 pub(crate) fn rvs_summarize_contract_mismatch_items(
@@ -843,6 +865,7 @@ pub(crate) fn rvs_collect_direct_external_deps(
 mod tests {
     use super::*;
     use crate::capability::CapabilityFacts;
+    use crate::symbols::CapsMapKey;
     use crate::test_support::rvs_snapshot_BIS;
 
     /// Helper: build a default `FnNode` with all flags false and no calls.
@@ -860,6 +883,45 @@ mod tests {
             expected_public_caps: None,
             expected_name: None,
         }
+    }
+
+    #[test]
+    fn test_20260711_prepare_local_analysis_builds_shared_derivatives() {
+        let mut graph = FnGraph::rvs_new();
+        let mut caller = rvs_make_behavior();
+        caller.calls.insert(DefPath::from("dep::read"));
+        graph.rvs_insert_M(DefPath::from("demo::rvs_run"), caller);
+        graph.rvs_insert_M(
+            DefPath::from("demo::Service::rvs_load@demo::Repository"),
+            rvs_make_behavior(),
+        );
+        let mut seed = capsmap::CapsMap::rvs_new();
+        let mut external_caps = CapabilitySet::rvs_new();
+        external_caps.rvs_insert_M(Capability::B);
+        external_caps.rvs_insert_M(Capability::I);
+        seed.rvs_insert_M(CapsMapKey::from("dep::read"), external_caps);
+        let local = BTreeSet::from([CrateName::from("demo")]);
+
+        let analysis = PreparedLocalAnalysis::rvs_prepare_M(&mut graph, &seed, &local);
+        let run_caps = analysis
+            .inferred
+            .get(&DefPath::from("demo::rvs_run"))
+            .map(rvs_caps_to_string)
+            .unwrap_or_default();
+        let output = format!(
+            "diffs={}\ninferred={}\nimpl_keys={}\nrun_caps={run_caps}\n",
+            analysis.diffs.len(),
+            analysis.inferred.len(),
+            analysis.impl_index.len(),
+        );
+        rvs_snapshot_BIS(
+            "test_20260711_prepare_local_analysis_builds_shared_derivatives",
+            &output,
+        );
+
+        assert_eq!(run_caps, "BI");
+        assert_eq!(analysis.diffs.len(), 2);
+        assert_eq!(analysis.impl_index.len(), 1);
     }
 
     fn rvs_infer_caps_case_M(

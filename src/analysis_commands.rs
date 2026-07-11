@@ -3,8 +3,7 @@ use std::path::Path;
 use crate::artifacts::FnGraph;
 use crate::callgraph_cache::rvs_is_std_like_def_path;
 use crate::inference::{
-    CalleeCapsResolver, FnContractDiff, rvs_build_impl_index, rvs_caps_to_string,
-    rvs_collect_local_contract_diffs_M, rvs_collect_local_contract_diffs_with_inferred_M,
+    FnContractDiff, PreparedLocalAnalysis, rvs_caps_to_string, rvs_collect_local_contract_diffs_M,
     rvs_contract_diff_is_enforced,
 };
 use crate::rename;
@@ -91,10 +90,8 @@ pub(crate) fn rvs_run_why_BIMPS(function: &str, path: &Path) -> Result<(), Strin
         rvs_load_local_crate_prefixes_BIS(path)?
     };
     let (mut callgraph, seed) = rvs_load_callgraph_and_caps_for_function_BIMS(path, function)?;
-    let (diffs, inferred) =
-        rvs_collect_local_contract_diffs_with_inferred_M(&mut callgraph, &seed, &local_crate_names);
-    let impl_index = rvs_build_impl_index(&callgraph);
-    let resolver = CalleeCapsResolver::rvs_new(&callgraph, &seed, &inferred, &impl_index);
+    let analysis = PreparedLocalAnalysis::rvs_prepare_M(&mut callgraph, &seed, &local_crate_names);
+    let resolver = analysis.rvs_resolver(&callgraph, &seed);
 
     let Some(behavior) = callgraph.rvs_get(function) else {
         let candidates: Vec<&DefPath> = callgraph
@@ -107,7 +104,8 @@ pub(crate) fn rvs_run_why_BIMPS(function: &str, path: &Path) -> Result<(), Strin
         }
         eprintln!("Exact match not found. Did you mean:");
         for c in &candidates {
-            let caps_str = inferred
+            let caps_str = analysis
+                .inferred
                 .get(*c)
                 .map(|cs| {
                     let s = rvs_caps_to_string(cs);
@@ -125,7 +123,7 @@ pub(crate) fn rvs_run_why_BIMPS(function: &str, path: &Path) -> Result<(), Strin
         ));
     };
 
-    let own_caps = inferred.get(function);
+    let own_caps = analysis.inferred.get(function);
     let caps_str = match own_caps {
         Some(cs) => {
             let s = rvs_caps_to_string(cs);
@@ -143,9 +141,12 @@ pub(crate) fn rvs_run_why_BIMPS(function: &str, path: &Path) -> Result<(), Strin
         None => " (not in inferred)".to_string(),
     };
     println!("{function}{caps_str}");
-    for line in
-        rvs_format_enforced_contract_diff_summary(&callgraph, &diffs, &local_crate_names, function)
-    {
+    for line in rvs_format_enforced_contract_diff_summary(
+        &callgraph,
+        &analysis.diffs,
+        &local_crate_names,
+        function,
+    ) {
         println!("  {line}");
     }
     println!();
