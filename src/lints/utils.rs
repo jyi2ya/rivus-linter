@@ -809,19 +809,6 @@ pub(crate) fn rvs_ty_last_ident(ty: &rustc_hir::Ty<'_>) -> Option<String> {
     }
 }
 
-pub(crate) fn rvs_generic_args_result_type<'a>(
-    args: Option<&'a rustc_hir::GenericArgs<'a>>,
-) -> Vec<&'a rustc_hir::Ty<'a>> {
-    let Some(ga) = args else { return vec![] };
-    ga.args
-        .iter()
-        .filter_map(|a| match a {
-            GenericArg::Type(t) => Some(t.as_unambig_ty()),
-            _ => None,
-        })
-        .collect()
-}
-
 pub(crate) fn rvs_collect_type_idents_M(ty: &rustc_hir::Ty<'_>, out: &mut HashSet<String>) {
     match &ty.kind {
         TyKind::Path(q) => {
@@ -918,7 +905,6 @@ mod tests {
             rvs_def_path(_cx, _def_id);
             rvs_impl_type_name(_cx, _def_id);
             rvs_ty_last_ident(_ty);
-            rvs_generic_args_result_type(None);
             rvs_collect_type_idents_M(_ty, &mut refs);
         }
     }

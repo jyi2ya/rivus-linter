@@ -1,9 +1,9 @@
-use rustc_hir::{self, FnRetTy, QPath, TyKind};
 use rustc_lint::{LateContext, LintContext};
 
 use super::super::RVS_VALIDATE_RETURNS_UNIT;
 use super::super::msg::Msg;
-use super::super::utils::{VALIDATE_PREFIXES, rvs_generic_args_result_type, rvs_plast, rvs_tys};
+use super::super::utils::VALIDATE_PREFIXES;
+use super::result_return::rvs_result_return;
 
 /// Check for validate/check/verify functions returning `Result<(), E>` —
 /// should use TryFrom instead.
@@ -19,30 +19,7 @@ pub(crate) fn rvs_check_fn_S<'tcx>(cx: &LateContext<'_>, name: &str, sig: &rustc
         return;
     }
 
-    let FnRetTy::Return(ret_ty) = sig.decl.output else {
-        return;
-    };
-    let TyKind::Path(ref q) = ret_ty.kind else {
-        return;
-    };
-    let result_name = rvs_plast(q);
-    if result_name.as_deref() != Some("Result") {
-        return;
-    }
-
-    let type_args = match q {
-        QPath::Resolved(_, p) => p
-            .segments
-            .first()
-            .and_then(|s| s.args)
-            .map(|ga| rvs_generic_args_result_type(Some(ga)))
-            .unwrap_or_else(Vec::new),
-        _ => return,
-    };
-
-    if let Some(ok_ty) = type_args.first()
-        && rvs_tys(ok_ty) == "()"
-    {
+    if rvs_result_return(sig).is_some_and(|result| result.rvs_ok_is_unit()) {
         cx.emit_span_lint(
             RVS_VALIDATE_RETURNS_UNIT,
             sig.span,

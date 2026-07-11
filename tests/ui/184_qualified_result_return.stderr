@@ -1,0 +1,30 @@
+error: owned param 'Payload' consumed but not preserved in error type of rvs_validate
+  --> $DIR/tests/ui/184_qualified_result_return.rs:6:26
+   |
+LL | fn rvs_validate(payload: Payload) -> std::result::Result<(), std::io::Error> {
+   |                          ^^^^^^^
+   |
+   = note: `-D rivus::rvs-consumed-arg-on-error` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_consumed_arg_on_error)]`
+
+error: rvs_validate: validate returning Result<(),E> — use TryFrom returning Result<T,E>
+  --> $DIR/tests/ui/184_qualified_result_return.rs:6:1
+   |
+LL | fn rvs_validate(payload: Payload) -> std::result::Result<(), std::io::Error> {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-validate-returns-unit` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_validate_returns_unit)]`
+
+error: good fn 'rvs_validate' not called by any test
+  --> $DIR/tests/ui/184_qualified_result_return.rs:6:1
+   |
+LL | / fn rvs_validate(payload: Payload) -> std::result::Result<(), std::io::Error> {
+LL | |     Ok(())
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
+
+error: aborting due to 3 previous errors

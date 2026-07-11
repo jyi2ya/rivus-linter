@@ -10,6 +10,7 @@ pub(crate) mod missing_debug_derive;
 pub(crate) mod missing_doc;
 pub(crate) mod missing_safety_doc;
 pub(crate) mod port_traits;
+mod result_return;
 pub(crate) mod test_name_format;
 pub(crate) mod todo_comment;
 pub(crate) mod validate;

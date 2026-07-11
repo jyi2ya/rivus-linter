@@ -1,13 +1,12 @@
 use std::collections::HashSet;
 
-use rustc_hir::{self, FnRetTy, QPath, TyKind};
+use rustc_hir::{self, TyKind};
 use rustc_lint::{LateContext, LintContext};
 
 use super::super::RVS_CONSUMED_ARG_ON_ERROR;
 use super::super::msg::Msg;
-use super::super::utils::{
-    rvs_collect_type_idents_M, rvs_generic_args_result_type, rvs_plast, rvs_tys,
-};
+use super::super::utils::{rvs_collect_type_idents_M, rvs_plast};
+use super::result_return::rvs_result_return;
 
 /// Check that owned (non-ref) parameters are preserved in the error type when
 /// the function returns `Result<(), E>`.
@@ -16,38 +15,15 @@ pub(crate) fn rvs_check_fn_MS<'tcx>(
     sig: &rustc_hir::FnSig<'tcx>,
     fn_name: &str,
 ) {
-    let FnRetTy::Return(ret_ty) = sig.decl.output else {
+    let Some(result) = rvs_result_return(sig) else {
         return;
     };
-    let TyKind::Path(ref q) = ret_ty.kind else {
-        return;
-    };
-    let result_name = rvs_plast(q);
-    if result_name.as_deref() != Some("Result") {
-        return;
-    }
-
-    let type_args = match q {
-        QPath::Resolved(_, p) => p
-            .segments
-            .first()
-            .and_then(|s| s.args)
-            .map(|ga| rvs_generic_args_result_type(Some(ga)))
-            .unwrap_or_else(Vec::new),
-        _ => return,
-    };
-
-    let Some(ok_ty) = type_args.first() else {
-        return;
-    };
-    if rvs_tys(ok_ty) != "()" {
+    if !result.rvs_ok_is_unit() {
         return;
     }
 
     let mut error_idents = HashSet::new();
-    if let Some(error_ty) = type_args.get(1) {
-        rvs_collect_type_idents_M(error_ty, &mut error_idents);
-    }
+    rvs_collect_type_idents_M(result.error, &mut error_idents);
 
     for input in sig.decl.inputs {
         if let TyKind::Path(ref iq) = input.kind {
