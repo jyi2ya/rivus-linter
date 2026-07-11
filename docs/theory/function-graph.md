@@ -50,6 +50,8 @@
 
 body collector 必须进入 closure、async block 等嵌套 body，否则嵌套代码中的调用和行为会漏报。进入嵌套 body 是统一 body 遍历设施的职责，不属于任一具体 lint。callgraph、测试调用识别和 body lint 必须消费同一份调用观察，但可以按各自语义选择 canonical target、源码方法名或 unresolved path。
 
+free function、impl method 和带默认实现的 trait method 共享同一条 body-bearing 处理流水线；各函数来源只提供测试、文档和 Port 等策略差异。无函数体的 required trait method 只投影签名事实，不能用空 body facts 伪装成已观察的函数体。
+
 ## 测试覆盖
 
 测试是否覆盖函数，取决于调用实际指向的函数，而不是调用处书写的别名。导入重命名不能让真实调用失去测试覆盖，也不能让另一个函数借用同名别名伪造覆盖。方法调用在无法唯一确定动态目标时仍按方法名匹配。

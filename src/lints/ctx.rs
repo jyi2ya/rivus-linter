@@ -23,7 +23,33 @@ pub(crate) struct FnSubject<'facts, 'tcx> {
     pub(crate) is_port_method: bool,
 }
 
-impl FnSubject<'_, '_> {
+impl<'facts, 'tcx> FnSubject<'facts, 'tcx> {
+    pub(crate) fn rvs_body(
+        ident: Ident,
+        hir_id: HirId,
+        span: Span,
+        sig: &'tcx rustc_hir::FnSig<'tcx>,
+        body: &'tcx rustc_hir::Body<'tcx>,
+        body_facts: &'facts BodyFacts,
+        has_body: bool,
+        is_test: bool,
+        is_trait_impl: bool,
+        is_port_method: bool,
+    ) -> Self {
+        Self {
+            ident,
+            hir_id,
+            span,
+            sig,
+            body,
+            body_facts,
+            has_body,
+            is_test,
+            is_trait_impl,
+            is_port_method,
+        }
+    }
+
     pub(crate) fn rvs_name(&self) -> &str {
         self.ident.name.as_str()
     }

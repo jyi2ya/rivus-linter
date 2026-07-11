@@ -14,6 +14,30 @@ use crate::artifacts::{FnGraph, FnNode, FnSource};
 use crate::capability::{CapabilityFacts, ParsedFunctionName};
 use crate::symbols::DefPath;
 
+fn rvs_fn_node_from_signature(
+    cx: &LateContext<'_>,
+    ident: Ident,
+    sig: &rustc_hir::FnSig<'_>,
+    is_trait_impl: bool,
+    is_test: bool,
+    is_port_method: bool,
+) -> FnNode {
+    FnNode {
+        calls: BTreeSet::new(),
+        facts: CapabilityFacts::rvs_from_signature(
+            sig,
+            rvs_has_mutable_params(sig),
+            is_port_method,
+        ),
+        has_body: false,
+        is_trait_impl,
+        is_test,
+        sources: rvs_fn_source(cx, ident).into_iter().collect(),
+        report_line_count: None,
+        allows_dead_code: false,
+    }
+}
+
 pub(crate) fn rvs_collect_callgraph_for_item_M<'tcx>(
     callgraph: &mut FnGraph,
     cx: &LateContext<'tcx>,
@@ -22,8 +46,15 @@ pub(crate) fn rvs_collect_callgraph_for_item_M<'tcx>(
     let local_def_id = subject.hir_id.owner.def_id;
     let def_id = local_def_id.to_def_id();
     let caller_path = DefPath::rvs_new(rvs_def_path(cx, def_id));
-    let sources = rvs_fn_source(cx, subject.ident).into_iter().collect();
     let attrs = cx.tcx.hir_attrs(subject.hir_id);
+    let mut node = rvs_fn_node_from_signature(
+        cx,
+        subject.ident,
+        subject.sig,
+        subject.is_trait_impl,
+        subject.is_test,
+        subject.is_port_method,
+    );
 
     let calls: BTreeSet<DefPath> = subject
         .body_facts
@@ -42,12 +73,7 @@ pub(crate) fn rvs_collect_callgraph_for_item_M<'tcx>(
         })
         .collect();
 
-    let facts = CapabilityFacts::rvs_from_signature(
-        subject.sig,
-        rvs_has_mutable_params(subject.sig),
-        subject.is_port_method,
-    )
-    .rvs_with_static_refs(
+    node.facts = node.facts.rvs_with_static_refs(
         subject.body_facts.has_static_ref,
         subject.body_facts.has_static_mut_ref,
         subject.body_facts.has_thread_local_ref,
@@ -61,19 +87,11 @@ pub(crate) fn rvs_collect_callgraph_for_item_M<'tcx>(
     };
     let allows_dead_code = rvs_has_allow(attrs, "dead_code") || rvs_has_allow(attrs, "unused");
 
-    callgraph.rvs_merge_node_M(
-        caller_path.clone(),
-        FnNode {
-            calls,
-            facts,
-            has_body: true,
-            is_trait_impl: subject.is_trait_impl,
-            is_test: subject.is_test,
-            sources,
-            report_line_count,
-            allows_dead_code,
-        },
-    );
+    node.calls = calls;
+    node.has_body = true;
+    node.report_line_count = report_line_count;
+    node.allows_dead_code = allows_dead_code;
+    callgraph.rvs_merge_node_M(caller_path.clone(), node);
     caller_path
 }
 
@@ -91,24 +109,8 @@ pub(crate) fn rvs_collect_callgraph_for_signature_M(
     let local_def_id = hir_id.owner.def_id;
     let def_id = local_def_id.to_def_id();
     let caller_path = DefPath::rvs_new(rvs_def_path(cx, def_id));
-    let sources = rvs_fn_source(cx, ident).into_iter().collect();
-
-    let facts =
-        CapabilityFacts::rvs_from_signature(sig, rvs_has_mutable_params(sig), is_port_method);
-
-    callgraph.rvs_merge_node_M(
-        caller_path.clone(),
-        FnNode {
-            calls: BTreeSet::new(),
-            facts,
-            has_body: false,
-            is_trait_impl,
-            is_test: false,
-            sources,
-            report_line_count: None,
-            allows_dead_code: false,
-        },
-    );
+    let node = rvs_fn_node_from_signature(cx, ident, sig, is_trait_impl, false, is_port_method);
+    callgraph.rvs_merge_node_M(caller_path.clone(), node);
     caller_path
 }
 
