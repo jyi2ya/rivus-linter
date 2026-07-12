@@ -1203,18 +1203,7 @@ name = "throughput-bench"
 
     #[test]
     fn test_20260702_ensure_cargo_project_requires_cargo_toml() {
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("never: system clock should be after unix epoch for test temp dir")
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "rivus-workspace-cargo-check-{}-{unique}",
-            std::process::id()
-        ));
-        if dir.exists() {
-            std::fs::remove_dir_all(&dir).unwrap();
-        }
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = rvs_make_workspace_temp_dir_BIS("cargo-check");
 
         let result = rvs_ensure_cargo_project_BIS(&dir);
         let output = format!("{result:?}").replace(&dir.to_string_lossy().into_owned(), "$TMP");
@@ -2079,17 +2068,7 @@ name = "throughput-bench"
 
     #[test]
     fn test_20260704_load_std_only_cached_callgraph() {
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("never: system clock should be after unix epoch for test temp dir")
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "rivus-workspace-std-only-callgraph-{}-{unique}",
-            std::process::id()
-        ));
-        if dir.exists() {
-            std::fs::remove_dir_all(&dir).unwrap();
-        }
+        let dir = rvs_make_workspace_temp_dir_BIS("std-only-callgraph");
         std::fs::create_dir_all(dir.join("target/rivus-callgraph-std")).unwrap();
         std::fs::write(
             dir.join("target/rivus-callgraph-std/callgraph.json"),
