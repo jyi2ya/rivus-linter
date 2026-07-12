@@ -237,13 +237,6 @@ impl DefPath {
         self.0.starts_with(prefix.rvs_as_str())
     }
 
-    /// Remove a local crate prefix and return the workspace-relative function path.
-    pub fn rvs_strip_prefix(&self, prefix: &DefPathPrefix) -> Option<RelativeFnPath> {
-        self.0
-            .strip_prefix(prefix.rvs_as_str())
-            .map(|path| RelativeFnPath::rvs_new(path.to_string()))
-    }
-
     /// Return whether the def-path contains a substring.
     pub fn rvs_contains(&self, needle: &str) -> bool {
         self.0.contains(needle)
@@ -275,57 +268,6 @@ impl From<&str> for DefPath {
 }
 
 impl From<String> for DefPath {
-    fn from(value: String) -> Self {
-        Self::rvs_new(value)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct RelativeFnPath(String);
-
-impl RelativeFnPath {
-    /// Wrap a workspace-local relative function path.
-    pub fn rvs_new(path: impl Into<String>) -> Self {
-        Self(path.into())
-    }
-
-    /// Borrow the relative function path as `&str`.
-    pub fn rvs_as_str(&self) -> &str {
-        &self.0
-    }
-
-    /// Return the last function-name segment of the relative path.
-    pub fn rvs_fn_name(&self) -> FnName {
-        FnName::rvs_new(rvs_function_name_segment(&self.0))
-    }
-}
-
-impl fmt::Display for RelativeFnPath {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.rvs_as_str())
-    }
-}
-
-impl AsRef<str> for RelativeFnPath {
-    fn as_ref(&self) -> &str {
-        self.rvs_as_str()
-    }
-}
-
-impl Borrow<str> for RelativeFnPath {
-    fn borrow(&self) -> &str {
-        self.rvs_as_str()
-    }
-}
-
-impl From<&str> for RelativeFnPath {
-    fn from(value: &str) -> Self {
-        Self::rvs_new(value)
-    }
-}
-
-impl From<String> for RelativeFnPath {
     fn from(value: String) -> Self {
         Self::rvs_new(value)
     }
@@ -402,23 +344,18 @@ mod tests {
     }
 
     #[test]
-    fn test_20260702_def_path_strips_local_prefix() {
+    fn test_20260712_def_path_matches_local_prefix() {
         let def_path = DefPath::rvs_new("cargo_rivus::cli::main");
         let prefix = CrateName::rvs_from_manifest_name("cargo-rivus").rvs_prefix();
         let root_main = prefix.rvs_join_name(&FnName::from("main"));
-        let relative = def_path
-            .rvs_strip_prefix(&prefix)
-            .expect("def path should have local crate prefix");
         let output = format!(
-            "fn={}\nrelative={}\nstarts_with={}\nroot_main={}",
+            "fn={}\nstarts_with={}\nroot_main={}\n",
             def_path.rvs_fn_name(),
-            relative,
             def_path.rvs_starts_with(&prefix),
             root_main,
         );
-        rvs_snapshot_BIS("test_20260702_def_path_strips_local_prefix", &output);
+        rvs_snapshot_BIS("test_20260712_def_path_matches_local_prefix", &output);
         assert_eq!(def_path.rvs_fn_name().rvs_as_str(), "main");
-        assert_eq!(relative.rvs_as_str(), "cli::main");
         assert!(def_path.rvs_starts_with(&prefix));
         assert_eq!(root_main.rvs_as_str(), "cargo_rivus::main");
     }
@@ -426,15 +363,7 @@ mod tests {
     #[test]
     fn test_20260703_fn_name_ignores_trait_impl_suffix() {
         let def_path = DefPath::rvs_new("demo::Adapter::rvs_fetch_BI@demo::Client");
-        let prefix = CrateName::from("demo").rvs_prefix();
-        let relative = def_path
-            .rvs_strip_prefix(&prefix)
-            .expect("def path should have local prefix");
-        let output = format!(
-            "def_name={}\nrelative_name={}\n",
-            def_path.rvs_fn_name(),
-            relative.rvs_fn_name(),
-        );
+        let output = format!("def_name={}\n", def_path.rvs_fn_name());
         rvs_snapshot_BIS("test_20260703_fn_name_ignores_trait_impl_suffix", &output);
 
         assert_eq!(
@@ -442,7 +371,6 @@ mod tests {
             "rvs_fetch_BI"
         );
         assert_eq!(def_path.rvs_fn_name().rvs_as_str(), "rvs_fetch_BI");
-        assert_eq!(relative.rvs_fn_name().rvs_as_str(), "rvs_fetch_BI");
     }
 
     #[test]

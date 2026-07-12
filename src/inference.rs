@@ -79,13 +79,7 @@ impl PreparedLocalAnalysis {
         local_crate_names: &BTreeSet<CrateName>,
     ) -> Self {
         let inference = PreparedInference::rvs_prepare_M(graph, seed, local_crate_names);
-        let expected_names =
-            rvs_project_expected_local_names(graph, inference.rvs_inferred(), local_crate_names);
-        let diffs = rvs_collect_contract_diffs(
-            inference.rvs_inferred(),
-            &expected_names,
-            local_crate_names,
-        );
+        let diffs = rvs_collect_contract_diffs(graph, inference.rvs_inferred(), local_crate_names);
         Self { diffs, inference }
     }
 
@@ -573,34 +567,14 @@ fn rvs_declared_caps_from_def_path(def_path: &DefPath) -> Option<CapabilitySet> 
     ParsedFunctionName::rvs_parse(def_path.rvs_as_str()).rvs_declared_caps()
 }
 
-pub(crate) fn rvs_project_expected_local_names(
-    graph: &FnGraph,
-    inferred: &BTreeMap<DefPath, CapabilitySet>,
-    local_crate_names: &BTreeSet<CrateName>,
-) -> BTreeMap<DefPath, FnName> {
-    let scope = LocalScope::rvs_new(local_crate_names);
-    let mut expected_names = BTreeMap::new();
-    for (full_path, node) in graph.rvs_iter() {
-        let Some(caps) = inferred.get(full_path) else {
-            continue;
-        };
-        let Some(relative_path) = scope.rvs_local_relative_path(full_path) else {
-            continue;
-        };
-        let short_name = relative_path.rvs_fn_name();
-        if !FunctionClassification::rvs_new(&scope, full_path, node).rvs_is_contract_enforced() {
-            continue;
-        }
-        let caps_str = rvs_caps_to_string(caps);
-        let base_name = rvs_contract_base_name(short_name.rvs_as_str(), &caps_str);
-        let expected_name = if caps_str.is_empty() {
-            FnName::rvs_new(format!("rvs_{base_name}"))
-        } else {
-            FnName::rvs_new(format!("rvs_{base_name}_{caps_str}"))
-        };
-        expected_names.insert(full_path.clone(), expected_name);
+fn rvs_expected_contract_name(name: &FnName, caps: &CapabilitySet) -> FnName {
+    let caps_str = rvs_caps_to_string(caps);
+    let base_name = rvs_contract_base_name(name.rvs_as_str(), &caps_str);
+    if caps_str.is_empty() {
+        FnName::rvs_new(format!("rvs_{base_name}"))
+    } else {
+        FnName::rvs_new(format!("rvs_{base_name}_{caps_str}"))
     }
-    expected_names
 }
 
 fn rvs_contract_base_name<'a>(name: &'a str, expected_caps: &str) -> &'a str {
@@ -652,8 +626,8 @@ pub(crate) fn rvs_collect_enforced_contract_diffs(
 }
 
 pub(crate) fn rvs_collect_contract_diffs(
+    graph: &FnGraph,
     inferred: &BTreeMap<DefPath, CapabilitySet>,
-    expected_names: &BTreeMap<DefPath, FnName>,
     local_crate_names: &BTreeSet<CrateName>,
 ) -> Vec<FnContractDiff> {
     let scope = LocalScope::rvs_new(local_crate_names);
@@ -665,10 +639,16 @@ pub(crate) fn rvs_collect_contract_diffs(
         let actual_name = def_path.rvs_fn_name();
         let declared_public_caps =
             rvs_parse_function(actual_name.rvs_as_str()).map(|(_, caps)| caps);
+        let expected_name = graph
+            .rvs_get(def_path.rvs_as_str())
+            .filter(|node| {
+                FunctionClassification::rvs_new(&scope, def_path, node).rvs_is_contract_enforced()
+            })
+            .map(|_| rvs_expected_contract_name(&actual_name, expected_public_caps));
         diffs.push(FnContractDiff {
             def_path: def_path.clone(),
             actual_name,
-            expected_name: expected_names.get(def_path).cloned(),
+            expected_name,
             declared_public_caps,
             expected_public_caps: Some(expected_public_caps.clone()),
         });
@@ -1704,14 +1684,15 @@ mod tests {
             CapabilitySet::rvs_from_validated("BI"),
         )]);
 
-        let expected_names = rvs_project_expected_local_names(
+        let diffs = rvs_collect_contract_diffs(
             &graph,
             &inferred,
             &BTreeSet::from([CrateName::from("demo")]),
         );
 
-        let expected_name = expected_names
-            .get(&DefPath::from("demo::parse"))
+        let expected_name = diffs
+            .first()
+            .and_then(|diff| diff.expected_name.as_ref())
             .map(FnName::rvs_as_str)
             .unwrap_or("");
         rvs_snapshot_BIS(
@@ -1729,14 +1710,15 @@ mod tests {
         let inferred =
             BTreeMap::from([(DefPath::from("demo::parse_BI"), CapabilitySet::rvs_new())]);
 
-        let expected_names = rvs_project_expected_local_names(
+        let diffs = rvs_collect_contract_diffs(
             &graph,
             &inferred,
             &BTreeSet::from([CrateName::from("demo")]),
         );
 
-        let expected_name = expected_names
-            .get(&DefPath::from("demo::parse_BI"))
+        let expected_name = diffs
+            .first()
+            .and_then(|diff| diff.expected_name.as_ref())
             .map(FnName::rvs_as_str)
             .unwrap_or("");
         rvs_snapshot_BIS(
@@ -1913,10 +1895,11 @@ mod tests {
     fn test_20260703_collect_contract_diffs_reports_name_and_caps_mismatch() {
         let path = DefPath::from("demo::rvs_fetch_ABI");
         let inferred = BTreeMap::from([(path.clone(), CapabilitySet::rvs_from_validated("P"))]);
-        let expected_names = BTreeMap::from([(path, FnName::from("rvs_fetch_P"))]);
+        let mut graph = FnGraph::rvs_new();
+        graph.rvs_insert_M(path, rvs_make_behavior());
         let diffs = rvs_collect_contract_diffs(
+            &graph,
             &inferred,
-            &expected_names,
             &BTreeSet::from([CrateName::from("demo")]),
         );
         let diff = diffs.first().expect("expected one contract diff");
@@ -1940,10 +1923,18 @@ mod tests {
     #[test]
     fn test_20260703_collect_contract_diffs_reads_trait_impl_method_name() {
         let path = DefPath::from("demo::Adapter::rvs_fetch_BI@demo::Client");
-        let inferred = BTreeMap::from([(path, CapabilitySet::rvs_from_validated("P"))]);
+        let inferred = BTreeMap::from([(path.clone(), CapabilitySet::rvs_from_validated("P"))]);
+        let mut graph = FnGraph::rvs_new();
+        graph.rvs_insert_M(
+            path,
+            FnNode {
+                is_trait_impl: true,
+                ..FnNode::default()
+            },
+        );
         let diffs = rvs_collect_contract_diffs(
+            &graph,
             &inferred,
-            &BTreeMap::new(),
             &BTreeSet::from([CrateName::from("demo")]),
         );
         let diff = diffs.first().expect("expected trait impl contract diff");
@@ -1953,6 +1944,7 @@ mod tests {
         );
 
         assert_eq!(diff.actual_name.rvs_as_str(), "rvs_fetch_BI");
+        assert!(diff.expected_name.is_none());
         assert_eq!(
             diff.declared_public_caps.as_ref(),
             Some(&CapabilitySet::rvs_from_validated("BI"))
@@ -2030,6 +2022,7 @@ mod tests {
 
         assert!(synthetic);
         assert!(graph.rvs_get("demo::rvs_generated_BI").is_none());
+        assert!(synthetic_diff.expected_name.is_none());
         assert!(!rvs_contract_diff_is_enforced(
             &graph,
             synthetic_diff,

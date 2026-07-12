@@ -1,0 +1,3 @@
+fn=main
+starts_with=true
+root_main=cargo_rivus::main

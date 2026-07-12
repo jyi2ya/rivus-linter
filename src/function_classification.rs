@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use crate::artifacts::FnNode;
-use crate::symbols::{CrateName, DefPath, DefPathPrefix, FnName, RelativeFnPath};
+use crate::symbols::{CrateName, DefPath, DefPathPrefix, FnName};
 
 #[derive(Debug)]
 pub(crate) struct LocalScope {
@@ -33,12 +33,6 @@ impl LocalScope {
 
     pub(crate) fn rvs_is_root_main(&self, def_path: &DefPath) -> bool {
         self.root_main_paths.contains(def_path)
-    }
-
-    pub(crate) fn rvs_local_relative_path(&self, def_path: &DefPath) -> Option<RelativeFnPath> {
-        self.prefixes
-            .iter()
-            .find_map(|prefix| def_path.rvs_strip_prefix(prefix))
     }
 }
 
