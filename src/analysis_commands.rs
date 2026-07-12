@@ -302,7 +302,9 @@ mod tests {
 
     use crate::artifacts::FnSource;
     use crate::symbols::FnName;
-    use crate::test_support::{rvs_make_temp_dir_BIS, rvs_snapshot_BIS};
+    use crate::test_support::{
+        rvs_make_cargo_project_BIS, rvs_make_temp_dir_BIS, rvs_snapshot_BIS,
+    };
 
     #[test]
     fn test_20260703_format_contract_diff_summary() {
@@ -562,12 +564,11 @@ mod tests {
 
     #[test]
     fn test_20260706_why_inexact_match_returns_error() {
-        let dir = rvs_make_temp_dir_BIS("why-inexact-match");
-        let cargo_toml =
-            "[package]\nname = \"why-inexact-demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n";
-        std::fs::write(dir.join("Cargo.toml"), cargo_toml).unwrap();
-        std::fs::create_dir_all(dir.join("src")).unwrap();
-        std::fs::write(dir.join("src/lib.rs"), "pub fn rvs_parse() -> i32 { 1 }\n").unwrap();
+        let dir = rvs_make_cargo_project_BIS(
+            "why-inexact-match",
+            "why-inexact-demo",
+            &[("src/lib.rs", "pub fn rvs_parse() -> i32 { 1 }\n")],
+        );
 
         let result = rvs_run_why_BIMPS("parse", &dir);
         let output = format!("{result:?}\n").replace(&dir.to_string_lossy().into_owned(), "$TMP");
@@ -642,26 +643,24 @@ path = "src/main.rs"
 
     #[test]
     fn test_20260709_annotate_skips_integration_test_targets() {
-        let dir = rvs_make_temp_dir_BIS("annotate-skip-integration-tests");
-        let cargo_toml = "[package]\nname = \"annotate-skip-integration-demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n";
-        std::fs::write(dir.join("Cargo.toml"), cargo_toml).unwrap();
-        std::fs::create_dir_all(dir.join("src")).unwrap();
-        std::fs::write(
-            dir.join("src/lib.rs"),
-            "pub fn parse(values: &mut Vec<u8>) { values.push(1); }\n",
-        )
-        .unwrap();
-        std::fs::create_dir_all(dir.join("tests/fixtures")).unwrap();
-        std::fs::write(
-            dir.join("tests/fixtures/mod.rs"),
-            "pub struct TestServer;\n\nimpl TestServer {\n    pub fn url(&self, values: &mut Vec<u8>) { values.push(1); }\n}\n",
-        )
-        .unwrap();
-        std::fs::write(
-            dir.join("tests/upload_files.rs"),
-            "mod fixtures;\n\n#[test]\nfn integration_fixture_keeps_plain_name() {\n    let server = fixtures::TestServer;\n    let mut values = Vec::new();\n    server.url(&mut values);\n}\n",
-        )
-        .unwrap();
+        let dir = rvs_make_cargo_project_BIS(
+            "annotate-skip-integration-tests",
+            "annotate-skip-integration-demo",
+            &[
+                (
+                    "src/lib.rs",
+                    "pub fn parse(values: &mut Vec<u8>) { values.push(1); }\n",
+                ),
+                (
+                    "tests/fixtures/mod.rs",
+                    "pub struct TestServer;\n\nimpl TestServer {\n    pub fn url(&self, values: &mut Vec<u8>) { values.push(1); }\n}\n",
+                ),
+                (
+                    "tests/upload_files.rs",
+                    "mod fixtures;\n\n#[test]\nfn integration_fixture_keeps_plain_name() {\n    let server = fixtures::TestServer;\n    let mut values = Vec::new();\n    server.url(&mut values);\n}\n",
+                ),
+            ],
+        );
 
         let result = rvs_run_annotate_BIMPS(&dir);
         let source = std::fs::read_to_string(dir.join("src/lib.rs")).unwrap();
@@ -682,16 +681,14 @@ path = "src/main.rs"
 
     #[test]
     fn test_20260702_annotate_renames_nested_main_helper() {
-        let dir = rvs_make_temp_dir_BIS("annotate-nested-main");
-        let cargo_toml =
-            "[package]\nname = \"annotate-main-demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n";
-        std::fs::write(dir.join("Cargo.toml"), cargo_toml).unwrap();
-        std::fs::create_dir_all(dir.join("src")).unwrap();
-        std::fs::write(
-            dir.join("src/main.rs"),
-            "mod cli { pub fn main() {} }\n\nfn main() { cli::main(); }\n",
-        )
-        .unwrap();
+        let dir = rvs_make_cargo_project_BIS(
+            "annotate-nested-main",
+            "annotate-main-demo",
+            &[(
+                "src/main.rs",
+                "mod cli { pub fn main() {} }\n\nfn main() { cli::main(); }\n",
+            )],
+        );
         std::fs::create_dir_all(dir.join("target/rivus-callgraph")).unwrap();
         std::fs::write(
             dir.join("target/rivus-callgraph/callgraph.json"),
@@ -739,15 +736,14 @@ path = "src/main.rs"
 
     #[test]
     fn test_20260702_annotate_renames_conflicting_duplicate_names() {
-        let dir = rvs_make_temp_dir_BIS("annotate-duplicate-name");
-        let cargo_toml = "[package]\nname = \"annotate-duplicate-demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n";
-        std::fs::write(dir.join("Cargo.toml"), cargo_toml).unwrap();
-        std::fs::create_dir_all(dir.join("src")).unwrap();
-        std::fs::write(
-            dir.join("src/lib.rs"),
-            "pub mod a { pub fn parse() {} }\npub mod b { pub fn parse(_x: &mut u8) {} }\n",
-        )
-        .unwrap();
+        let dir = rvs_make_cargo_project_BIS(
+            "annotate-duplicate-name",
+            "annotate-duplicate-demo",
+            &[(
+                "src/lib.rs",
+                "pub mod a { pub fn parse() {} }\npub mod b { pub fn parse(_x: &mut u8) {} }\n",
+            )],
+        );
         std::fs::create_dir_all(dir.join("target/rivus-callgraph")).unwrap();
         std::fs::write(
             dir.join("target/rivus-callgraph/callgraph.json"),
@@ -800,16 +796,14 @@ path = "src/main.rs"
 
     #[test]
     fn test_20260703_annotate_renames_existing_rvs_wrong_suffix() {
-        let dir = rvs_make_temp_dir_BIS("annotate-existing-rvs-suffix");
-        let cargo_toml =
-            "[package]\nname = \"annotate-rvs-demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n";
-        std::fs::write(dir.join("Cargo.toml"), cargo_toml).unwrap();
-        std::fs::create_dir_all(dir.join("src")).unwrap();
-        std::fs::write(
-            dir.join("src/lib.rs"),
-            "pub trait ApiClient { fn rvs_fetch_ABI(&self) -> i32 { 1 } }\npub fn rvs_use<C: ApiClient>(client: &C) -> i32 { client.rvs_fetch_ABI() }\n",
-        )
-        .unwrap();
+        let dir = rvs_make_cargo_project_BIS(
+            "annotate-existing-rvs-suffix",
+            "annotate-rvs-demo",
+            &[(
+                "src/lib.rs",
+                "pub trait ApiClient { fn rvs_fetch_ABI(&self) -> i32 { 1 } }\npub fn rvs_use<C: ApiClient>(client: &C) -> i32 { client.rvs_fetch_ABI() }\n",
+            )],
+        );
 
         let result = rvs_run_annotate_BIMPS(&dir);
         let source = std::fs::read_to_string(dir.join("src/lib.rs")).unwrap();
@@ -827,11 +821,11 @@ path = "src/main.rs"
 
     #[test]
     fn test_20260704_annotate_renames_uppercase_function() {
-        let dir = rvs_make_temp_dir_BIS("annotate-uppercase-function");
-        let cargo_toml = "[package]\nname = \"annotate-uppercase-demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n";
-        std::fs::write(dir.join("Cargo.toml"), cargo_toml).unwrap();
-        std::fs::create_dir_all(dir.join("src")).unwrap();
-        std::fs::write(dir.join("src/lib.rs"), "pub fn Foo() -> i32 { 1 }\n").unwrap();
+        let dir = rvs_make_cargo_project_BIS(
+            "annotate-uppercase-function",
+            "annotate-uppercase-demo",
+            &[("src/lib.rs", "pub fn Foo() -> i32 { 1 }\n")],
+        );
         std::fs::create_dir_all(dir.join("target/rivus-callgraph")).unwrap();
         std::fs::write(
             dir.join("target/rivus-callgraph/callgraph.json"),
@@ -865,12 +859,12 @@ path = "src/main.rs"
 
     #[test]
     fn test_20260704_annotate_errors_when_candidates_match_no_symbols() {
-        let dir = rvs_make_temp_dir_BIS("annotate-unmatched-candidate");
-        let cargo_toml = "[package]\nname = \"annotate-unmatched-demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n";
-        std::fs::write(dir.join("Cargo.toml"), cargo_toml).unwrap();
-        std::fs::create_dir_all(dir.join("src")).unwrap();
+        let dir = rvs_make_cargo_project_BIS(
+            "annotate-unmatched-candidate",
+            "annotate-unmatched-demo",
+            &[("src/lib.rs", "pub fn existing() -> i32 { 1 }\n")],
+        );
         let source_path = dir.join("src/lib.rs");
-        std::fs::write(&source_path, "pub fn existing() -> i32 { 1 }\n").unwrap();
         let canonical_source = source_path.canonicalize().unwrap();
         let rename_map = HashMap::from([(
             FnSource::rvs_new(canonical_source, 0, 1),
@@ -891,12 +885,12 @@ path = "src/main.rs"
 
     #[test]
     fn test_20260704_annotate_errors_on_partial_rename() {
-        let dir = rvs_make_temp_dir_BIS("annotate-partial-rename");
-        let cargo_toml = "[package]\nname = \"annotate-partial-demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n";
-        std::fs::write(dir.join("Cargo.toml"), cargo_toml).unwrap();
-        std::fs::create_dir_all(dir.join("src")).unwrap();
+        let dir = rvs_make_cargo_project_BIS(
+            "annotate-partial-rename",
+            "annotate-partial-demo",
+            &[("src/lib.rs", "pub fn parse() -> i32 { 1 }\n")],
+        );
         let source_path = dir.join("src/lib.rs");
-        std::fs::write(&source_path, "pub fn parse() -> i32 { 1 }\n").unwrap();
         let canonical_source = source_path.canonicalize().unwrap();
         let rename_map = HashMap::from([
             (
@@ -923,13 +917,14 @@ path = "src/main.rs"
 
     #[test]
     fn test_20260704_annotate_renames_out_of_line_module_function() {
-        let dir = rvs_make_temp_dir_BIS("annotate-out-of-line-module");
-        let cargo_toml =
-            "[package]\nname = \"annotate-module-demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n";
-        std::fs::write(dir.join("Cargo.toml"), cargo_toml).unwrap();
-        std::fs::create_dir_all(dir.join("src")).unwrap();
-        std::fs::write(dir.join("src/lib.rs"), "pub mod api;\n").unwrap();
-        std::fs::write(dir.join("src/api.rs"), "pub fn parse() -> i32 { 1 }\n").unwrap();
+        let dir = rvs_make_cargo_project_BIS(
+            "annotate-out-of-line-module",
+            "annotate-module-demo",
+            &[
+                ("src/lib.rs", "pub mod api;\n"),
+                ("src/api.rs", "pub fn parse() -> i32 { 1 }\n"),
+            ],
+        );
         std::fs::create_dir_all(dir.join("target/rivus-callgraph")).unwrap();
         std::fs::write(
             dir.join("target/rivus-callgraph/callgraph.json"),
@@ -966,16 +961,14 @@ path = "src/main.rs"
 
     #[test]
     fn test_20260706_annotate_renames_path_attribute_module_function() {
-        let dir = rvs_make_temp_dir_BIS("annotate-path-attribute-module");
-        let cargo_toml = "[package]\nname = \"annotate-path-attr-demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n";
-        std::fs::write(dir.join("Cargo.toml"), cargo_toml).unwrap();
-        std::fs::create_dir_all(dir.join("src")).unwrap();
-        std::fs::write(
-            dir.join("src/lib.rs"),
-            "#[path = \"wire.rs\"]\npub mod api;\n",
-        )
-        .unwrap();
-        std::fs::write(dir.join("src/wire.rs"), "pub fn parse() -> i32 { 1 }\n").unwrap();
+        let dir = rvs_make_cargo_project_BIS(
+            "annotate-path-attribute-module",
+            "annotate-path-attr-demo",
+            &[
+                ("src/lib.rs", "#[path = \"wire.rs\"]\npub mod api;\n"),
+                ("src/wire.rs", "pub fn parse() -> i32 { 1 }\n"),
+            ],
+        );
 
         let result = rvs_run_annotate_BIMPS(&dir);
         let source = std::fs::read_to_string(dir.join("src/wire.rs")).unwrap();
@@ -992,16 +985,17 @@ path = "src/main.rs"
 
     #[test]
     fn test_20260706_annotate_renames_lib_and_main_same_name_functions() {
-        let dir = rvs_make_temp_dir_BIS("annotate-lib-main-same-name");
-        let cargo_toml = "[package]\nname = \"annotate-samename-demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n";
-        std::fs::write(dir.join("Cargo.toml"), cargo_toml).unwrap();
-        std::fs::create_dir_all(dir.join("src")).unwrap();
-        std::fs::write(dir.join("src/lib.rs"), "pub fn parse() -> i32 { 1 }\n").unwrap();
-        std::fs::write(
-            dir.join("src/main.rs"),
-            "fn parse() -> i32 { 2 }\n\nfn main() { let _ = parse(); }\n",
-        )
-        .unwrap();
+        let dir = rvs_make_cargo_project_BIS(
+            "annotate-lib-main-same-name",
+            "annotate-samename-demo",
+            &[
+                ("src/lib.rs", "pub fn parse() -> i32 { 1 }\n"),
+                (
+                    "src/main.rs",
+                    "fn parse() -> i32 { 2 }\n\nfn main() { let _ = parse(); }\n",
+                ),
+            ],
+        );
 
         let result = rvs_run_annotate_BIMPS(&dir);
         let lib_source = std::fs::read_to_string(dir.join("src/lib.rs")).unwrap();
@@ -1021,16 +1015,14 @@ path = "src/main.rs"
 
     #[test]
     fn test_20260706_annotate_skips_macro_generated_function_without_source() {
-        let dir = rvs_make_temp_dir_BIS("annotate-macro-generated-function");
-        let cargo_toml =
-            "[package]\nname = \"annotate-macro-demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n";
-        std::fs::write(dir.join("Cargo.toml"), cargo_toml).unwrap();
-        std::fs::create_dir_all(dir.join("src")).unwrap();
-        std::fs::write(
-            dir.join("src/lib.rs"),
-            "macro_rules! make_parse { () => { pub fn parse() -> i32 { 1 } }; }\nmake_parse!();\n",
-        )
-        .unwrap();
+        let dir = rvs_make_cargo_project_BIS(
+            "annotate-macro-generated-function",
+            "annotate-macro-demo",
+            &[(
+                "src/lib.rs",
+                "macro_rules! make_parse { () => { pub fn parse() -> i32 { 1 } }; }\nmake_parse!();\n",
+            )],
+        );
 
         let result = rvs_run_annotate_BIMPS(&dir);
         let source = std::fs::read_to_string(dir.join("src/lib.rs")).unwrap();
@@ -1051,16 +1043,14 @@ path = "src/main.rs"
 
     #[test]
     fn test_20260704_annotate_renames_inherent_method() {
-        let dir = rvs_make_temp_dir_BIS("annotate-inherent-method");
-        let cargo_toml =
-            "[package]\nname = \"annotate-method-demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n";
-        std::fs::write(dir.join("Cargo.toml"), cargo_toml).unwrap();
-        std::fs::create_dir_all(dir.join("src")).unwrap();
-        std::fs::write(
-            dir.join("src/lib.rs"),
-            "pub struct User;\nimpl User { pub fn new() -> Self { Self } }\n",
-        )
-        .unwrap();
+        let dir = rvs_make_cargo_project_BIS(
+            "annotate-inherent-method",
+            "annotate-method-demo",
+            &[(
+                "src/lib.rs",
+                "pub struct User;\nimpl User { pub fn new() -> Self { Self } }\n",
+            )],
+        );
         std::fs::create_dir_all(dir.join("target/rivus-callgraph")).unwrap();
         std::fs::write(
             dir.join("target/rivus-callgraph/callgraph.json"),
@@ -1094,15 +1084,14 @@ path = "src/main.rs"
 
     #[test]
     fn test_20260704_annotate_renames_generic_inherent_method() {
-        let dir = rvs_make_temp_dir_BIS("annotate-generic-inherent-method");
-        let cargo_toml = "[package]\nname = \"annotate-generic-method-demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n";
-        std::fs::write(dir.join("Cargo.toml"), cargo_toml).unwrap();
-        std::fs::create_dir_all(dir.join("src")).unwrap();
-        std::fs::write(
-            dir.join("src/lib.rs"),
-            "pub struct User<T>(T);\nimpl<T> User<T> { pub fn new(value: T) -> Self { Self(value) } }\n",
-        )
-        .unwrap();
+        let dir = rvs_make_cargo_project_BIS(
+            "annotate-generic-inherent-method",
+            "annotate-generic-method-demo",
+            &[(
+                "src/lib.rs",
+                "pub struct User<T>(T);\nimpl<T> User<T> { pub fn new(value: T) -> Self { Self(value) } }\n",
+            )],
+        );
         std::fs::create_dir_all(dir.join("target/rivus-callgraph")).unwrap();
         std::fs::write(
             dir.join("target/rivus-callgraph/callgraph.json"),
@@ -1139,11 +1128,11 @@ path = "src/main.rs"
 
     #[test]
     fn test_20260702_annotate_surfaces_callgraph_collection_error() {
-        let dir = rvs_make_temp_dir_BIS("annotate-callgraph-error");
-        let cargo_toml = "[package]\nname = \"annotate-callgraph-demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n";
-        std::fs::write(dir.join("Cargo.toml"), cargo_toml).unwrap();
-        std::fs::create_dir_all(dir.join("src")).unwrap();
-        std::fs::write(dir.join("src/lib.rs"), "pub fn parse( {\n").unwrap();
+        let dir = rvs_make_cargo_project_BIS(
+            "annotate-callgraph-error",
+            "annotate-callgraph-demo",
+            &[("src/lib.rs", "pub fn parse( {\n")],
+        );
 
         let result = rvs_run_annotate_BIMPS(&dir);
         let output = format!("{result:?}").replace(&dir.to_string_lossy().into_owned(), "$TMP");
