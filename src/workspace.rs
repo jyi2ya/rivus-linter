@@ -12,8 +12,7 @@ use crate::callgraph_cache::{
 };
 use crate::capsmap::{self, CapsMap};
 use crate::cargo_targets::{
-    CargoTargetScope, rvs_detect_local_crate_prefixes_BIS,
-    rvs_detect_local_crate_prefixes_for_function_query_BIS, rvs_function_matches_local_prefix,
+    CargoTargetScope, rvs_detect_local_crate_prefixes_BIS, rvs_function_matches_local_prefix,
 };
 #[cfg(test)]
 use crate::cargo_targets::{
@@ -475,38 +474,34 @@ pub(crate) fn rvs_load_project_caps_BIS(path: &Path) -> Result<capsmap::CapsMap,
 pub(crate) fn rvs_load_callgraph_and_caps_for_function_BIMS(
     path: &Path,
     function: &str,
+    local_crate_names: &BTreeSet<CrateName>,
 ) -> Result<(FnGraph, capsmap::CapsMap), String> {
-    let callgraph = if rvs_is_external_std_function_query_BIS(path, function)? {
+    let callgraph = if rvs_should_use_required_std_cache(function, local_crate_names) {
         rvs_load_required_std_callgraph_cache_BIS(path)?
     } else {
-        rvs_collect_project_callgraph_with_optional_std_cache_BIMS(path, true, None)?
+        rvs_collect_project_callgraph_with_optional_std_cache_BIMS(path, true, local_crate_names)?
     };
     let caps = rvs_load_project_caps_BIS(path)?;
     Ok((callgraph, caps))
 }
 
-fn rvs_is_external_std_function_query_BIS(path: &Path, function: &str) -> Result<bool, String> {
-    Ok(rvs_is_std_like_def_path(function) && !rvs_is_local_function_query_BIS(path, function)?)
-}
-
-fn rvs_is_local_function_query_BIS(path: &Path, function: &str) -> Result<bool, String> {
-    let cargo_toml = path.join("Cargo.toml");
-    if !cargo_toml.is_file() {
-        return Ok(false);
-    }
-    rvs_detect_local_crate_prefixes_for_function_query_BIS(path)
-        .map(|names| names.is_some_and(|names| rvs_function_matches_local_prefix(function, &names)))
+fn rvs_should_use_required_std_cache(
+    function: &str,
+    local_crate_names: &BTreeSet<CrateName>,
+) -> bool {
+    rvs_is_std_like_def_path(function)
+        && !rvs_function_matches_local_prefix(function, local_crate_names)
 }
 
 pub(crate) fn rvs_collect_callgraph_and_caps_BIMS(
     path: &Path,
     with_tests: bool,
-    local_prefixes: Option<&BTreeSet<CrateName>>,
+    local_crate_names: &BTreeSet<CrateName>,
 ) -> Result<(FnGraph, capsmap::CapsMap), String> {
     let callgraph = rvs_collect_project_callgraph_with_optional_std_cache_BIMS(
         path,
         with_tests,
-        local_prefixes,
+        local_crate_names,
     )?;
     let caps = rvs_load_project_caps_BIS(path)?;
     Ok((callgraph, caps))
@@ -515,34 +510,16 @@ pub(crate) fn rvs_collect_callgraph_and_caps_BIMS(
 fn rvs_collect_project_callgraph_with_optional_std_cache_BIMS(
     path: &Path,
     with_tests: bool,
-    local_prefixes: Option<&BTreeSet<CrateName>>,
+    local_crate_names: &BTreeSet<CrateName>,
 ) -> Result<FnGraph, String> {
     let mut callgraph = rvs_collect_callgraph_BIMS(path, false, with_tests, vec![])?;
     let cg_std_dir = path.join("target").join("rivus-callgraph-std");
     if rvs_warn_optional_dir_BIS(&cg_std_dir, "std callgraph cache") {
-        let detected_prefixes;
-        let local_prefixes = if let Some(prefixes) = local_prefixes {
-            prefixes
-        } else {
-            detected_prefixes = match rvs_detect_local_crate_prefixes_BIS(
-                path,
-                CargoTargetScope::WithTestExampleBench,
-            ) {
-                Ok(prefixes) => prefixes,
-                Err(e) => {
-                    eprintln!(
-                        "warning: cannot detect local crate prefixes for std cache filtering: {e}"
-                    );
-                    BTreeSet::new()
-                }
-            };
-            &detected_prefixes
-        };
         match rvs_merge_callgraph_dir_BIS(&cg_std_dir) {
             Ok(std_graph) => rvs_merge_std_like_callgraph_with_local_prefixes_M(
                 &mut callgraph,
                 std_graph,
-                local_prefixes,
+                local_crate_names,
             ),
             Err(e) => eprintln!("warning: ignoring stale std callgraph cache: {e}"),
         }
@@ -2278,10 +2255,9 @@ name = "throughput-bench"
         .unwrap();
         let local_names = rvs_load_local_crate_prefixes_BIS(&dir).unwrap();
         let matches_local = rvs_function_matches_local_prefix("std::rvs_run", &local_names);
-        let local_uses_std_cache =
-            rvs_is_external_std_function_query_BIS(&dir, "std::rvs_run").unwrap();
+        let local_uses_std_cache = rvs_should_use_required_std_cache("std::rvs_run", &local_names);
         let real_std_uses_std_cache =
-            rvs_is_external_std_function_query_BIS(&dir, "core::mem::drop").unwrap();
+            rvs_should_use_required_std_cache("core::mem::drop", &local_names);
         let output = format!(
             "matches_local={matches_local}\nlocal_uses_std_cache={local_uses_std_cache}\nreal_std_uses_std_cache={real_std_uses_std_cache}\n",
         );
@@ -2301,7 +2277,8 @@ name = "throughput-bench"
         let dir = rvs_make_workspace_temp_dir_BIS("std-like-invalid-cargo-toml");
         std::fs::write(dir.join("Cargo.toml"), "[package\nname = \"std\"\n").unwrap();
 
-        let result = rvs_is_external_std_function_query_BIS(&dir, "std::rvs_run");
+        let result =
+            crate::cargo_targets::rvs_detect_local_crate_prefixes_for_function_query_BIS(&dir);
         rvs_snapshot_BIS(
             "test_20260706_std_like_query_mode_reports_invalid_cargo_toml",
             &format!("{result:?}\n").replace(&dir.to_string_lossy().into_owned(), "$TMP"),

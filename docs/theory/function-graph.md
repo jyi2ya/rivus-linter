@@ -38,7 +38,7 @@
 - callgraph artifact 负责把这些节点持久化；artifact 使用显式 schema version，读取时同时兼容当前版本之前没有 envelope 的旧图
 - 每个参与收集的 crate 都必须成功写出自己的 artifact；任一写入失败都使本次收集失败，不能用其他 crate 的部分图继续分析
 - 源码写回只使用 artifact 记录的路径基准；旧 artifact 没有基准时允许兼容解析，但多个候选都存在则拒绝猜测
-- 同一命令已经确定本地 crate 边界后，后续报告和缓存过滤复用这一份边界快照，不在执行中途重新解释项目范围
+- 同一命令已经确定本地 crate 边界后，callgraph 收集、std cache 选择、报告和缓存过滤都必须接收并复用这一份边界快照，不允许用可选参数在执行中途重新探测项目范围
 - Cargo target 范围使用具名策略区分 production target 与 test/example/bench target，不能用含义不明的布尔值在命令间传递
 - 一次分析通过共享的 inference preparation 只执行一次 Port scope、能力推断、impl 索引和 synthetic path 识别；本地分析在这份结果上增加契约差异，各输出视图不能分别重建可能漂移的分析上下文
 

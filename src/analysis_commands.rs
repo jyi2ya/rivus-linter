@@ -10,7 +10,8 @@ use crate::rename;
 use crate::symbols::{CrateName, DefPath};
 
 use crate::cargo_targets::{
-    CargoTargetScope, rvs_detect_local_crate_prefixes_BIS, rvs_function_matches_local_prefix,
+    CargoTargetScope, rvs_detect_local_crate_prefixes_BIS,
+    rvs_detect_local_crate_prefixes_for_function_query_BIS, rvs_function_matches_local_prefix,
 };
 use crate::workspace::{
     rvs_collect_callgraph_and_caps_BIMS, rvs_ensure_cargo_project_BIS,
@@ -23,7 +24,8 @@ use crate::workspace::{
 pub(crate) fn rvs_run_annotate_BIMPS(path: &Path) -> Result<(), String> {
     let local_crate_names =
         rvs_detect_local_crate_prefixes_BIS(path, CargoTargetScope::Production)?;
-    let (mut callgraph, seed) = rvs_collect_callgraph_and_caps_BIMS(path, false, None)?;
+    let (mut callgraph, seed) =
+        rvs_collect_callgraph_and_caps_BIMS(path, false, &local_crate_names)?;
     let diffs = rvs_collect_local_contract_diffs_M(&mut callgraph, &seed, &local_crate_names);
     let mut candidates = Vec::new();
     for diff in diffs {
@@ -82,15 +84,15 @@ pub(crate) fn rvs_run_why_BIMPS(function: &str, path: &Path) -> Result<(), Strin
     rvs_ensure_cargo_project_BIS(path)?;
 
     let local_crate_names = if rvs_is_std_like_def_path(function) {
-        let loaded = rvs_load_local_crate_prefixes_BIS(path);
-        match loaded {
-            Ok(names) if rvs_function_matches_local_prefix(function, &names) => names,
-            Ok(_) | Err(_) => std::collections::BTreeSet::new(),
+        match rvs_detect_local_crate_prefixes_for_function_query_BIS(path)? {
+            Some(names) if rvs_function_matches_local_prefix(function, &names) => names,
+            Some(_) | None => std::collections::BTreeSet::new(),
         }
     } else {
         rvs_load_local_crate_prefixes_BIS(path)?
     };
-    let (mut callgraph, seed) = rvs_load_callgraph_and_caps_for_function_BIMS(path, function)?;
+    let (mut callgraph, seed) =
+        rvs_load_callgraph_and_caps_for_function_BIMS(path, function, &local_crate_names)?;
     let analysis = PreparedLocalAnalysis::rvs_prepare_M(&mut callgraph, &seed, &local_crate_names);
     let resolver = analysis.rvs_resolver(&callgraph, &seed);
 
