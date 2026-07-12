@@ -50,7 +50,7 @@
 - **body lint**：每个函数体只遍历一次并生成 `BodyFacts`，各规则只解释共享事实，不再自行遍历函数体
 - **caps lint**：把签名事实和 `BodyFacts` 投影为函数图事实，再由跨函数、跨 crate 的离线能力引擎统一推断
 
-body collector 必须进入 closure、async block 等嵌套 body，否则嵌套代码中的调用和行为会漏报。进入嵌套 body 是统一 body 遍历设施的职责，不属于任一具体 lint。callgraph、测试调用识别和 body lint 必须消费同一份调用观察，但可以按各自语义选择 canonical target、源码方法名或 unresolved path。方法解析失败时仍保留独立的 unresolved-method 观察，不能让语法级检查和测试覆盖因类型解析缺失而消失。
+body collector 必须进入 closure、async block 等嵌套 body，否则嵌套代码中的调用和行为会漏报。进入嵌套 body 是统一 body 遍历设施的职责，不属于任一具体 lint。callgraph、测试调用识别和 body lint 必须消费同一份调用观察；已解析调用直接携带结构化 `DefPath`，各消费者不能重新包装路径字符串，但仍可按各自语义选择 canonical target、源码方法名或 unresolved path。方法解析失败时仍保留独立的 unresolved-method 观察，不能让语法级检查和测试覆盖因类型解析缺失而消失。
 
 普通 HIR 表达式的直接子节点关系只维护一份。block/loop 和 closure 属于带上下文的边界：block 负责 statement、let-else 和尾表达式，closure 通过独立 body 解析并增加嵌套深度，不能被普通子节点遍历扁平化。
 

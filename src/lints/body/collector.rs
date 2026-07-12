@@ -10,7 +10,6 @@ use super::super::utils::{
 };
 use super::macro_expansion::rvs_span_has_bang_macro;
 use crate::lints::ctx::TestCallTarget;
-use crate::symbols::DefPath;
 
 #[derive(Debug, Default)]
 pub(crate) struct BodyFacts {
@@ -73,8 +72,8 @@ pub(crate) fn rvs_collect_test_calls_M(facts: &BodyFacts, out: &mut HashSet<Test
     for observation in &facts.calls {
         let (name, target) = match &observation.target {
             CallTarget::Resolved { def_path, .. } => (
-                def_path.rsplit("::").next().unwrap_or(def_path),
-                TestCallTarget::Resolved(DefPath::rvs_new(def_path.clone())),
+                def_path.rvs_fn_name_str(),
+                TestCallTarget::Resolved(def_path.clone()),
             ),
             CallTarget::UnresolvedPath { path } => {
                 let name = path.rsplit("::").next().unwrap_or(path);

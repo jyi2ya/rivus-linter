@@ -224,7 +224,12 @@ impl DefPath {
 
     /// Return the last function-name segment of the def-path.
     pub fn rvs_fn_name(&self) -> FnName {
-        FnName::rvs_new(rvs_function_name_segment(&self.0))
+        FnName::rvs_new(self.rvs_fn_name_str())
+    }
+
+    /// Borrow the last function-name segment of the def-path.
+    pub fn rvs_fn_name_str(&self) -> &str {
+        rvs_function_name_segment(&self.0)
     }
 
     /// Parse this path as a serialized trait-implementation method identity.

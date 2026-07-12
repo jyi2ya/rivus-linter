@@ -66,7 +66,7 @@ pub(crate) fn rvs_collect_callgraph_for_item_M<'tcx>(
                 def_kind: rustc_hir::def::DefKind::Fn | rustc_hir::def::DefKind::AssocFn,
             } = &observation.target
             {
-                Some(DefPath::rvs_new(def_path.clone()))
+                Some(def_path.clone())
             } else {
                 None
             }

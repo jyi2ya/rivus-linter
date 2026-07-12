@@ -10,7 +10,7 @@ pub(crate) fn rvs_check_fn_S<'tcx>(cx: &LateContext<'tcx>, facts: &BodyFacts) {
     for observation in &facts.calls {
         let is_catch_unwind = match (observation.syntax, &observation.target) {
             (CallSyntax::Method, CallTarget::Resolved { def_path, .. }) => {
-                def_path.rsplit("::").next() == Some("catch_unwind")
+                def_path.rvs_fn_name_str() == "catch_unwind"
             }
             (CallSyntax::Method, CallTarget::UnresolvedMethod { name }) => name == "catch_unwind",
             (
@@ -22,7 +22,7 @@ pub(crate) fn rvs_check_fn_S<'tcx>(cx: &LateContext<'tcx>, facts: &BodyFacts) {
                         | rustc_hir::def::DefKind::AssocFn
                         | rustc_hir::def::DefKind::Variant,
                 },
-            ) => def_path.rsplit("::").next() == Some("catch_unwind"),
+            ) => def_path.rvs_fn_name_str() == "catch_unwind",
             _ => false,
         };
         if is_catch_unwind {

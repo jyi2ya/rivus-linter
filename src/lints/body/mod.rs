@@ -20,7 +20,7 @@ fn rvs_path_lint_callable(target: &CallTarget) -> Option<&str> {
                 rustc_hir::def::DefKind::Fn
                 | rustc_hir::def::DefKind::AssocFn
                 | rustc_hir::def::DefKind::Variant,
-        } => Some(def_path),
+        } => Some(def_path.rvs_as_str()),
         CallTarget::UnresolvedPath { path } => Some(path),
         CallTarget::UnresolvedMethod { .. } | CallTarget::Resolved { .. } => None,
     }

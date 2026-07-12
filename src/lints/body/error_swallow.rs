@@ -12,9 +12,7 @@ pub(crate) fn rvs_check_fn_S<'tcx>(cx: &LateContext<'tcx>, facts: &BodyFacts) {
             continue;
         }
         let name = match &observation.target {
-            CallTarget::Resolved { def_path, .. } => {
-                def_path.rsplit("::").next().unwrap_or(def_path)
-            }
+            CallTarget::Resolved { def_path, .. } => def_path.rvs_fn_name_str(),
             CallTarget::UnresolvedMethod { name } => name,
             CallTarget::UnresolvedPath { .. } => continue,
         };

@@ -9,6 +9,7 @@ use rustc_span::{Span, Symbol};
 
 use super::body::macro_expansion::rvs_span_has_bang_macro;
 use crate::capability::{CapabilitySet, ParsedFunctionName};
+use crate::symbols::DefPath;
 
 // ─── Constants ───────────────────────────────────────────────────────────
 
@@ -538,9 +539,16 @@ pub(crate) enum CallSyntax {
 
 #[derive(Debug)]
 pub(crate) enum CallTarget {
-    Resolved { def_path: String, def_kind: DefKind },
-    UnresolvedPath { path: String },
-    UnresolvedMethod { name: String },
+    Resolved {
+        def_path: DefPath,
+        def_kind: DefKind,
+    },
+    UnresolvedPath {
+        path: String,
+    },
+    UnresolvedMethod {
+        name: String,
+    },
 }
 
 #[derive(Debug)]
@@ -558,7 +566,7 @@ pub(crate) fn rvs_resolve_call(cx: &LateContext<'_>, expr: &Expr<'_>) -> Option<
             };
             let target = match cx.qpath_res(qpath, func.hir_id) {
                 rustc_hir::def::Res::Def(def_kind, def_id) => CallTarget::Resolved {
-                    def_path: rvs_def_path(cx, def_id),
+                    def_path: DefPath::rvs_new(rvs_def_path(cx, def_id)),
                     def_kind,
                 },
                 _ => CallTarget::UnresolvedPath {
@@ -574,9 +582,12 @@ pub(crate) fn rvs_resolve_call(cx: &LateContext<'_>, expr: &Expr<'_>) -> Option<
         ExprKind::MethodCall(path, ..) => {
             let owner = expr.hir_id.owner.def_id;
             let typeck = cx.tcx.typeck(owner);
-            let resolved = typeck
-                .type_dependent_def_id(expr.hir_id)
-                .map(|def_id| (rvs_def_path(cx, def_id), cx.tcx.def_kind(def_id)));
+            let resolved = typeck.type_dependent_def_id(expr.hir_id).map(|def_id| {
+                (
+                    DefPath::rvs_new(rvs_def_path(cx, def_id)),
+                    cx.tcx.def_kind(def_id),
+                )
+            });
             Some(CallObservation {
                 syntax: CallSyntax::Method,
                 target: rvs_method_call_target(resolved, path.ident.name.as_str()),
@@ -587,7 +598,7 @@ pub(crate) fn rvs_resolve_call(cx: &LateContext<'_>, expr: &Expr<'_>) -> Option<
     }
 }
 
-fn rvs_method_call_target(resolved: Option<(String, DefKind)>, method_name: &str) -> CallTarget {
+fn rvs_method_call_target(resolved: Option<(DefPath, DefKind)>, method_name: &str) -> CallTarget {
     resolved.map_or_else(
         || CallTarget::UnresolvedMethod {
             name: method_name.to_string(),
@@ -764,6 +775,26 @@ mod tests {
         assert!(matches!(
             target,
             CallTarget::UnresolvedMethod { ref name } if name == "rvs_example"
+        ));
+    }
+
+    #[test]
+    fn test_20260712_resolved_call_keeps_typed_def_path() {
+        let target = rvs_method_call_target(
+            Some((DefPath::from("demo::Client::rvs_fetch_P"), DefKind::AssocFn)),
+            "fetch",
+        );
+        rvs_snapshot_BIS(
+            "test_20260712_resolved_call_keeps_typed_def_path",
+            &format!("{target:?}\n"),
+        );
+
+        assert!(matches!(
+            target,
+            CallTarget::Resolved {
+                ref def_path,
+                def_kind: DefKind::AssocFn,
+            } if def_path.rvs_as_str() == "demo::Client::rvs_fetch_P"
         ));
     }
 
