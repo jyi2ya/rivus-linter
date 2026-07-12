@@ -18,35 +18,43 @@ pub(crate) struct FnContractDiff {
 }
 
 #[derive(Debug)]
-pub(crate) struct PreparedLocalAnalysis {
-    pub(crate) diffs: Vec<FnContractDiff>,
-    pub(crate) inferred: BTreeMap<DefPath, CapabilitySet>,
-    pub(crate) impl_index: HashMap<TraitMethodKey, Vec<DefPath>>,
-    pub(crate) synthetic_paths: BTreeSet<DefPath>,
+pub(crate) struct PreparedInference {
+    inferred: BTreeMap<DefPath, CapabilitySet>,
+    impl_index: HashMap<TraitMethodKey, Vec<DefPath>>,
+    synthetic_paths: BTreeSet<DefPath>,
 }
 
-impl PreparedLocalAnalysis {
+impl PreparedInference {
     pub(crate) fn rvs_prepare_M(
         graph: &mut FnGraph,
         seed: &capsmap::CapsMap,
         local_crate_names: &BTreeSet<CrateName>,
     ) -> Self {
         rvs_scope_port_methods_M(graph, local_crate_names);
-        let inferred = rvs_infer_caps(graph, seed);
+        let impl_index = rvs_build_impl_index(graph);
+        let inferred = rvs_infer_caps_with_index(graph, seed, &impl_index);
         let synthetic_paths = inferred
             .keys()
             .filter(|path| graph.rvs_get(path.rvs_as_str()).is_none())
             .cloned()
             .collect();
-        let expected_names = rvs_project_expected_local_names(graph, &inferred, local_crate_names);
-        let diffs = rvs_collect_contract_diffs(&inferred, &expected_names, local_crate_names);
-        let impl_index = rvs_build_impl_index(graph);
         Self {
-            diffs,
             inferred,
             impl_index,
             synthetic_paths,
         }
+    }
+
+    pub(crate) fn rvs_inferred(&self) -> &BTreeMap<DefPath, CapabilitySet> {
+        &self.inferred
+    }
+
+    pub(crate) fn rvs_impl_index(&self) -> &HashMap<TraitMethodKey, Vec<DefPath>> {
+        &self.impl_index
+    }
+
+    pub(crate) fn rvs_synthetic_paths(&self) -> &BTreeSet<DefPath> {
+        &self.synthetic_paths
     }
 
     pub(crate) fn rvs_resolver<'a>(
@@ -55,6 +63,46 @@ impl PreparedLocalAnalysis {
         seed: &'a capsmap::CapsMap,
     ) -> CalleeCapsResolver<'a> {
         CalleeCapsResolver::rvs_new(graph, seed, &self.inferred, &self.impl_index)
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct PreparedLocalAnalysis {
+    pub(crate) diffs: Vec<FnContractDiff>,
+    inference: PreparedInference,
+}
+
+impl PreparedLocalAnalysis {
+    pub(crate) fn rvs_prepare_M(
+        graph: &mut FnGraph,
+        seed: &capsmap::CapsMap,
+        local_crate_names: &BTreeSet<CrateName>,
+    ) -> Self {
+        let inference = PreparedInference::rvs_prepare_M(graph, seed, local_crate_names);
+        let expected_names =
+            rvs_project_expected_local_names(graph, inference.rvs_inferred(), local_crate_names);
+        let diffs = rvs_collect_contract_diffs(
+            inference.rvs_inferred(),
+            &expected_names,
+            local_crate_names,
+        );
+        Self { diffs, inference }
+    }
+
+    pub(crate) fn rvs_inferred(&self) -> &BTreeMap<DefPath, CapabilitySet> {
+        self.inference.rvs_inferred()
+    }
+
+    pub(crate) fn rvs_synthetic_paths(&self) -> &BTreeSet<DefPath> {
+        self.inference.rvs_synthetic_paths()
+    }
+
+    pub(crate) fn rvs_resolver<'a>(
+        &'a self,
+        graph: &'a FnGraph,
+        seed: &'a capsmap::CapsMap,
+    ) -> CalleeCapsResolver<'a> {
+        self.inference.rvs_resolver(graph, seed)
     }
 }
 
@@ -404,9 +452,19 @@ pub(crate) fn rvs_caps_to_string(caps: &CapabilitySet) -> String {
     caps.rvs_iter().map(|c| c.rvs_as_char()).collect()
 }
 
+#[cfg(test)]
 pub(crate) fn rvs_infer_caps(
     graph: &FnGraph,
     seed: &capsmap::CapsMap,
+) -> BTreeMap<DefPath, CapabilitySet> {
+    let impl_index = rvs_build_impl_index(graph);
+    rvs_infer_caps_with_index(graph, seed, &impl_index)
+}
+
+pub(crate) fn rvs_infer_caps_with_index(
+    graph: &FnGraph,
+    seed: &capsmap::CapsMap,
+    impl_index: &HashMap<TraitMethodKey, Vec<DefPath>>,
 ) -> BTreeMap<DefPath, CapabilitySet> {
     let mut inferred = rvs_initial_caps(graph, seed);
     for (_, behavior) in graph.rvs_iter() {
@@ -423,8 +481,6 @@ pub(crate) fn rvs_infer_caps(
         }
     }
 
-    let impl_index = rvs_build_impl_index(graph);
-
     loop {
         let mut changed = false;
         for (func, behavior) in graph.rvs_iter() {
@@ -438,7 +494,7 @@ pub(crate) fn rvs_infer_caps(
                 .get(func)
                 .cloned()
                 .unwrap_or_else(CapabilitySet::rvs_new);
-            let resolver = CalleeCapsResolver::rvs_new(graph, seed, &inferred, &impl_index);
+            let resolver = CalleeCapsResolver::rvs_new(graph, seed, &inferred, impl_index);
             for callee in &behavior.calls {
                 let callee_caps = resolver.rvs_for_propagation_target(callee);
                 if let Some(cc) = callee_caps {
@@ -468,7 +524,7 @@ pub(crate) fn rvs_infer_caps(
         if seed.rvs_lookup(func.rvs_as_str()).is_some() {
             continue;
         }
-        if let Some(caps) = CalleeCapsResolver::rvs_new(graph, seed, &inferred, &impl_index)
+        if let Some(caps) = CalleeCapsResolver::rvs_new(graph, seed, &inferred, impl_index)
             .rvs_for_propagation_target(&func)
         {
             inferred.insert(func, caps);
@@ -850,16 +906,16 @@ mod tests {
 
         let analysis = PreparedLocalAnalysis::rvs_prepare_M(&mut graph, &seed, &local);
         let run_caps = analysis
-            .inferred
+            .rvs_inferred()
             .get(&DefPath::from("demo::rvs_run"))
             .map(rvs_caps_to_string)
             .unwrap_or_default();
         let output = format!(
             "diffs={}\ninferred={}\nimpl_keys={}\nsynthetic={}\ngraph_nodes={}\nrun_caps={run_caps}\n",
             analysis.diffs.len(),
-            analysis.inferred.len(),
-            analysis.impl_index.len(),
-            analysis.synthetic_paths.len(),
+            analysis.rvs_inferred().len(),
+            analysis.inference.rvs_impl_index().len(),
+            analysis.rvs_synthetic_paths().len(),
             graph.rvs_len(),
         );
         rvs_snapshot_BIS(
@@ -869,12 +925,65 @@ mod tests {
 
         assert_eq!(run_caps, "BI");
         assert_eq!(analysis.diffs.len(), 2);
-        assert_eq!(analysis.impl_index.len(), 1);
+        assert_eq!(analysis.inference.rvs_impl_index().len(), 1);
         assert_eq!(
-            analysis.synthetic_paths,
-            BTreeSet::from([DefPath::from("dep::read")])
+            analysis.rvs_synthetic_paths(),
+            &BTreeSet::from([DefPath::from("dep::read")])
         );
         assert_eq!(graph.rvs_len(), 2);
+    }
+
+    #[test]
+    fn test_20260712_prepare_inference_builds_shared_derivatives_once() {
+        let mut graph = FnGraph::rvs_new();
+        let mut caller = rvs_make_behavior();
+        caller.calls.insert(DefPath::from("dep::read"));
+        graph.rvs_insert_M(DefPath::from("demo::rvs_run"), caller);
+        let mut port_method = rvs_make_behavior();
+        port_method.facts.is_port_method = true;
+        graph.rvs_insert_M(
+            DefPath::from("demo::Service::rvs_load@demo::Repository"),
+            port_method,
+        );
+        let mut seed = capsmap::CapsMap::rvs_new();
+        seed.rvs_insert_M(
+            CapsMapKey::from("dep::read"),
+            CapabilitySet::rvs_from_validated("BI"),
+        );
+
+        let inference = PreparedInference::rvs_prepare_M(
+            &mut graph,
+            &seed,
+            &BTreeSet::from([CrateName::from("demo")]),
+        );
+        let run_caps = inference
+            .rvs_inferred()
+            .get(&DefPath::from("demo::rvs_run"))
+            .map(rvs_caps_to_string)
+            .unwrap_or_default();
+        let port_caps = inference
+            .rvs_inferred()
+            .get(&DefPath::from("demo::Service::rvs_load@demo::Repository"))
+            .map(rvs_caps_to_string)
+            .unwrap_or_default();
+        let output = format!(
+            "inferred={}\nimpl_keys={}\nsynthetic={}\nrun_caps={run_caps}\nport_caps={port_caps}\n",
+            inference.rvs_inferred().len(),
+            inference.rvs_impl_index().len(),
+            inference.rvs_synthetic_paths().len(),
+        );
+        rvs_snapshot_BIS(
+            "test_20260712_prepare_inference_builds_shared_derivatives_once",
+            &output,
+        );
+
+        assert_eq!(run_caps, "BI");
+        assert_eq!(port_caps, "P");
+        assert_eq!(inference.rvs_impl_index().len(), 1);
+        assert_eq!(
+            inference.rvs_synthetic_paths(),
+            &BTreeSet::from([DefPath::from("dep::read")])
+        );
     }
 
     fn rvs_infer_caps_case_M(
@@ -1491,14 +1600,14 @@ mod tests {
             &seed,
             &BTreeSet::from([CrateName::from("demo")]),
         );
-        let caps = analysis.inferred.get(&DefPath::from("demo::rvs_run"));
+        let caps = analysis.rvs_inferred().get(&DefPath::from("demo::rvs_run"));
         rvs_snapshot_BIS(
             "test_20260703_infer_graph_sets_node_caps",
             &format!("caps={caps:?}\n"),
         );
 
         assert!(caps.is_some());
-        assert!(analysis.synthetic_paths.is_empty());
+        assert!(analysis.rvs_synthetic_paths().is_empty());
     }
 
     #[test]
@@ -1515,11 +1624,11 @@ mod tests {
             &BTreeSet::from([CrateName::from("demo")]),
         );
         let mut output = String::new();
-        for (path, caps) in &analysis.inferred {
+        for (path, caps) in analysis.rvs_inferred() {
             output.push_str(&format!(
                 "{path}: inferred={} synthetic={} graph_contains={}\n",
                 rvs_caps_to_string(caps),
-                analysis.synthetic_paths.contains(path),
+                analysis.rvs_synthetic_paths().contains(path),
                 graph.rvs_get(path.rvs_as_str()).is_some(),
             ));
         }
@@ -1528,10 +1637,10 @@ mod tests {
             &output,
         );
 
-        assert_eq!(analysis.inferred.len(), 2);
+        assert_eq!(analysis.rvs_inferred().len(), 2);
         assert!(
             analysis
-                .synthetic_paths
+                .rvs_synthetic_paths()
                 .contains(&DefPath::from("std::fs::read_to_string"))
         );
         assert!(graph.rvs_get("std::fs::read_to_string").is_none());
@@ -1551,7 +1660,7 @@ mod tests {
         );
         assert!(
             first
-                .synthetic_paths
+                .rvs_synthetic_paths()
                 .contains(&DefPath::from("std::fs::read_to_string"))
         );
 
@@ -1567,10 +1676,10 @@ mod tests {
         );
 
         let has_synthetic = second
-            .synthetic_paths
+            .rvs_synthetic_paths()
             .contains(&DefPath::from("std::fs::read_to_string"));
         let run_caps = second
-            .inferred
+            .rvs_inferred()
             .get(&DefPath::from("demo::rvs_run"))
             .expect("demo node should keep inferred caps");
         let output = format!(
@@ -1869,7 +1978,7 @@ mod tests {
             "test_20260703_collect_local_contract_diffs_populates_expected_fields",
             &format!(
                 "diff={diff:?}\ninferred={:?}\n",
-                analysis.inferred.get(&DefPath::from("demo::parse"))
+                analysis.rvs_inferred().get(&DefPath::from("demo::parse"))
             ),
         );
 
@@ -1882,7 +1991,7 @@ mod tests {
             Some("rvs_parse")
         );
         assert_eq!(
-            analysis.inferred.get(&DefPath::from("demo::parse")),
+            analysis.rvs_inferred().get(&DefPath::from("demo::parse")),
             Some(&CapabilitySet::rvs_new())
         );
     }
@@ -1909,7 +2018,7 @@ mod tests {
             .find(|diff| diff.def_path.rvs_as_str() == "demo::rvs_generated_BI")
             .expect("synthetic local callee should have a raw diff");
         let synthetic_path = DefPath::from("demo::rvs_generated_BI");
-        let synthetic = analysis.synthetic_paths.contains(&synthetic_path);
+        let synthetic = analysis.rvs_synthetic_paths().contains(&synthetic_path);
         rvs_snapshot_BIS(
             "test_20260703_enforced_contract_diffs_skip_synthetic_nodes",
             &format!(

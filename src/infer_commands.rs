@@ -5,9 +5,9 @@ use crate::callgraph_cache::rvs_is_std_like_def_path;
 use crate::capsmap::CapsMap;
 use crate::cargo_targets::rvs_detect_local_crate_prefixes_for_cargo_check_BIS;
 use crate::inference::{
-    rvs_build_impl_index, rvs_collect_direct_external_deps, rvs_format_capsmap,
-    rvs_format_unknown_callees, rvs_generate_trait_aliases, rvs_infer_caps, rvs_initial_caps,
-    rvs_scope_port_methods_M,
+    PreparedInference, rvs_build_impl_index, rvs_collect_direct_external_deps, rvs_format_capsmap,
+    rvs_format_unknown_callees, rvs_generate_trait_aliases, rvs_infer_caps_with_index,
+    rvs_initial_caps, rvs_scope_port_methods_M,
 };
 use crate::symbols::{CapsMapKey, CrateName, DefPath, DefPathPrefix};
 use crate::workspace::{
@@ -39,17 +39,13 @@ pub(crate) fn rvs_run_infer_capsmap_BIMPS(path: &Path, output: &Path) -> Result<
     rvs_preflight_capsmap_file_BIS(&resolved_output, "deps capsmap")?;
 
     let mut callgraph = rvs_collect_callgraph_BIMS(&project_path, false, false, vec![])?;
-    rvs_scope_port_methods_M(&mut callgraph, &local_crate_prefixes);
-
-    let inferred = rvs_infer_caps(&callgraph, &seed);
-
-    let impl_index = rvs_build_impl_index(&callgraph);
+    let inference = PreparedInference::rvs_prepare_M(&mut callgraph, &seed, &local_crate_prefixes);
     let (direct_external_calls, unknown_callees) = rvs_collect_direct_external_deps(
         &callgraph,
         &local_crate_prefixes,
         &seed,
-        &inferred,
-        &impl_index,
+        inference.rvs_inferred(),
+        inference.rvs_impl_index(),
     );
 
     if !unknown_callees.is_empty() {
@@ -98,14 +94,13 @@ pub(crate) fn rvs_run_infer_std_BIMPS(path: &Path, output: &Path) -> Result<(), 
             .map(|(key, caps)| (CapsMapKey::from(key), caps)),
     );
 
-    let mut inferred = rvs_infer_caps(&callgraph, &alias_seed);
-    let impl_index = rvs_build_impl_index(&callgraph);
+    let mut inferred = rvs_infer_caps_with_index(&callgraph, &alias_seed, &pre_index);
     let std_inferred: BTreeMap<DefPath, crate::capability::CapabilitySet> = inferred
         .iter()
         .filter(|(k, _)| rvs_is_std_like_def_path(k.rvs_as_str()))
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
-    let post_aliases = rvs_generate_trait_aliases(&std_inferred, &impl_index, &callgraph);
+    let post_aliases = rvs_generate_trait_aliases(&std_inferred, &pre_index, &callgraph);
     inferred.extend(post_aliases);
 
     let std_only: BTreeMap<DefPath, crate::capability::CapabilitySet> = inferred

@@ -314,7 +314,7 @@ fn rvs_collect_call_diagnostics_M(
             continue;
         }
         let Some(caller_caps) =
-            rvs_declared_caps(caller).or_else(|| analysis.inferred.get(caller).cloned())
+            rvs_declared_caps(caller).or_else(|| analysis.rvs_inferred().get(caller).cloned())
         else {
             continue;
         };

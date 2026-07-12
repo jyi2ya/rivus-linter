@@ -94,11 +94,13 @@ pub(crate) fn rvs_run_why_BIMPS(function: &str, path: &Path) -> Result<(), Strin
     let resolver = analysis.rvs_resolver(&callgraph, &seed);
 
     let behavior = callgraph.rvs_get(function);
-    let is_synthetic = analysis.synthetic_paths.contains(&DefPath::from(function));
+    let is_synthetic = analysis
+        .rvs_synthetic_paths()
+        .contains(&DefPath::from(function));
     if behavior.is_none() && !is_synthetic {
         let candidates: Vec<DefPath> = callgraph
             .rvs_keys()
-            .chain(analysis.synthetic_paths.iter())
+            .chain(analysis.rvs_synthetic_paths().iter())
             .filter(|k| k.rvs_contains(function))
             .take(10)
             .cloned()
@@ -109,7 +111,7 @@ pub(crate) fn rvs_run_why_BIMPS(function: &str, path: &Path) -> Result<(), Strin
         eprintln!("Exact match not found. Did you mean:");
         for c in &candidates {
             let caps_str = analysis
-                .inferred
+                .rvs_inferred()
                 .get(c)
                 .map(|cs| {
                     let s = rvs_caps_to_string(cs);
@@ -127,7 +129,7 @@ pub(crate) fn rvs_run_why_BIMPS(function: &str, path: &Path) -> Result<(), Strin
         ));
     }
 
-    let own_caps = analysis.inferred.get(function);
+    let own_caps = analysis.rvs_inferred().get(function);
     let caps_str = match own_caps {
         Some(cs) => {
             let s = rvs_caps_to_string(cs);
