@@ -104,7 +104,11 @@ pub(crate) fn rvs_run_setup_BIMS(path: &Path) -> Result<(), String> {
     crate::workspace::rvs_ensure_cargo_project_BIS(path)?;
 
     let project = crate::cargo_targets::rvs_load_cargo_project_model_BIS(path)?;
-    crate::cargo_targets::rvs_collect_local_crate_prefixes_from_model_BIS(path, &project, true)?;
+    crate::cargo_targets::rvs_collect_local_crate_prefixes_from_model_BIS(
+        path,
+        &project,
+        crate::cargo_targets::CargoTargetScope::WithTestExampleBench,
+    )?;
     let (content, mut document) = project.rvs_into_source_and_document();
 
     let count = rvs_inject_clippy_lints_into_document_M(&mut document).map_err(|e| {

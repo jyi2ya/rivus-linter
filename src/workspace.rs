@@ -11,15 +11,14 @@ use crate::callgraph_cache::{
     rvs_merge_std_like_callgraph_with_local_prefixes_M,
 };
 use crate::capsmap::{self, CapsMap};
+use crate::cargo_targets::{
+    CargoTargetScope, rvs_detect_local_crate_prefixes_BIS,
+    rvs_detect_local_crate_prefixes_for_function_query_BIS, rvs_function_matches_local_prefix,
+};
 #[cfg(test)]
 use crate::cargo_targets::{
     rvs_collect_auto_target_prefixes_BIMS, rvs_collect_local_crate_prefixes,
-    rvs_collect_local_crate_prefixes_for_targets,
-    rvs_detect_local_crate_prefixes_for_cargo_check_BIS, rvs_insert_manifest_crate_name_M,
-};
-use crate::cargo_targets::{
-    rvs_detect_local_crate_prefixes_BIS, rvs_detect_local_crate_prefixes_for_function_query_BIS,
-    rvs_function_matches_local_prefix,
+    rvs_collect_local_crate_prefixes_for_targets, rvs_insert_manifest_crate_name_M,
 };
 use crate::fs_guard::rvs_render_atomic_write_failure;
 use crate::symbols::CrateName;
@@ -525,7 +524,10 @@ fn rvs_collect_project_callgraph_with_optional_std_cache_BIMS(
         let local_prefixes = if let Some(prefixes) = local_prefixes {
             prefixes
         } else {
-            detected_prefixes = match rvs_detect_local_crate_prefixes_BIS(path) {
+            detected_prefixes = match rvs_detect_local_crate_prefixes_BIS(
+                path,
+                CargoTargetScope::WithTestExampleBench,
+            ) {
                 Ok(prefixes) => prefixes,
                 Err(e) => {
                     eprintln!(
@@ -681,7 +683,7 @@ pub(crate) fn rvs_load_local_crate_prefixes_BIS(
     path: &Path,
 ) -> Result<BTreeSet<CrateName>, String> {
     rvs_ensure_cargo_project_BIS(path)?;
-    rvs_detect_local_crate_prefixes_BIS(path)
+    rvs_detect_local_crate_prefixes_BIS(path, CargoTargetScope::WithTestExampleBench)
 }
 
 pub(crate) fn rvs_clean_dir_BIS(path: &Path) -> Result<(), String> {
@@ -930,7 +932,9 @@ name = "demo-example"
 [[bench]]
 name = "throughput-bench"
 "#;
-        let prefixes = rvs_collect_local_crate_prefixes_for_targets(input, false).unwrap();
+        let prefixes =
+            rvs_collect_local_crate_prefixes_for_targets(input, CargoTargetScope::Production)
+                .unwrap();
         let output = prefixes
             .iter()
             .map(CrateName::rvs_as_str)
@@ -943,6 +947,65 @@ name = "throughput-bench"
         assert!(!prefixes.contains(&CrateName::from("integration_test")));
         assert!(!prefixes.contains(&CrateName::from("demo_example")));
         assert!(!prefixes.contains(&CrateName::from("throughput_bench")));
+    }
+
+    #[test]
+    fn test_20260712_cargo_target_scope_selects_optional_targets() {
+        let input = r#"
+[package]
+name = "core-demo"
+
+[[bin]]
+name = "tool-bin"
+
+[[test]]
+name = "integration-test"
+
+[[example]]
+name = "demo-example"
+
+[[bench]]
+name = "throughput-bench"
+"#;
+        let production =
+            rvs_collect_local_crate_prefixes_for_targets(input, CargoTargetScope::Production)
+                .expect("production targets should parse");
+        let with_optional = rvs_collect_local_crate_prefixes_for_targets(
+            input,
+            CargoTargetScope::WithTestExampleBench,
+        )
+        .expect("all targets should parse");
+        let rvs_render = |targets: &BTreeSet<CrateName>| {
+            targets
+                .iter()
+                .map(CrateName::rvs_as_str)
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        let output = format!(
+            "production={}\nwith_optional={}\n",
+            rvs_render(&production),
+            rvs_render(&with_optional),
+        );
+        rvs_snapshot_BIS(
+            "test_20260712_cargo_target_scope_selects_optional_targets",
+            &output,
+        );
+
+        assert_eq!(
+            production,
+            BTreeSet::from([CrateName::from("core_demo"), CrateName::from("tool_bin")])
+        );
+        assert_eq!(
+            with_optional,
+            BTreeSet::from([
+                CrateName::from("core_demo"),
+                CrateName::from("demo_example"),
+                CrateName::from("integration_test"),
+                CrateName::from("throughput_bench"),
+                CrateName::from("tool_bin"),
+            ])
+        );
     }
 
     #[test]
@@ -972,7 +1035,9 @@ name = "throughput-bench"
         .unwrap();
         std::fs::create_dir_all(dir.join("tests/support")).unwrap();
 
-        let prefixes = rvs_detect_local_crate_prefixes_BIS(&dir).unwrap();
+        let prefixes =
+            rvs_detect_local_crate_prefixes_BIS(&dir, CargoTargetScope::WithTestExampleBench)
+                .unwrap();
         let output = prefixes
             .iter()
             .map(CrateName::rvs_as_str)
@@ -1011,7 +1076,9 @@ name = "throughput-bench"
             std::fs::write(dir.join(subdir).join(file), "fn main() {}\n").unwrap();
         }
 
-        let prefixes = rvs_detect_local_crate_prefixes_BIS(&dir).unwrap();
+        let prefixes =
+            rvs_detect_local_crate_prefixes_BIS(&dir, CargoTargetScope::WithTestExampleBench)
+                .unwrap();
         let output = prefixes
             .iter()
             .map(CrateName::rvs_as_str)
@@ -1178,7 +1245,8 @@ name = "throughput-bench"
             std::fs::write(dir.join(subdir).join(file), "fn main() {}\n").unwrap();
         }
 
-        let prefixes = rvs_detect_local_crate_prefixes_for_cargo_check_BIS(&dir, false).unwrap();
+        let prefixes =
+            rvs_detect_local_crate_prefixes_BIS(&dir, CargoTargetScope::Production).unwrap();
         let output = prefixes
             .iter()
             .map(CrateName::rvs_as_str)

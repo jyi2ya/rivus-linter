@@ -10,7 +10,7 @@ use crate::rename;
 use crate::symbols::{CrateName, DefPath};
 
 use crate::cargo_targets::{
-    rvs_detect_local_crate_prefixes_for_cargo_check_BIS, rvs_function_matches_local_prefix,
+    CargoTargetScope, rvs_detect_local_crate_prefixes_BIS, rvs_function_matches_local_prefix,
 };
 use crate::workspace::{
     rvs_collect_callgraph_and_caps_BIMS, rvs_ensure_cargo_project_BIS,
@@ -21,7 +21,8 @@ use crate::workspace::{
 ///
 /// Panics if the current executable path, current directory, or cargo cannot be resolved.
 pub(crate) fn rvs_run_annotate_BIMPS(path: &Path) -> Result<(), String> {
-    let local_crate_names = rvs_detect_local_crate_prefixes_for_cargo_check_BIS(path, false)?;
+    let local_crate_names =
+        rvs_detect_local_crate_prefixes_BIS(path, CargoTargetScope::Production)?;
     let (mut callgraph, seed) = rvs_collect_callgraph_and_caps_BIMS(path, false, None)?;
     let diffs = rvs_collect_local_contract_diffs_M(&mut callgraph, &seed, &local_crate_names);
     let mut candidates = Vec::new();

@@ -4,6 +4,18 @@ use std::path::Path;
 use crate::symbols::CrateName;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CargoTargetScope {
+    Production,
+    WithTestExampleBench,
+}
+
+impl CargoTargetScope {
+    fn rvs_includes_test_example_bench(self) -> bool {
+        matches!(self, Self::WithTestExampleBench)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct AutoTargetFlags {
     autobins: bool,
     autotests: bool,
@@ -34,21 +46,21 @@ pub(crate) fn rvs_function_matches_local_prefix(
 
 #[cfg(test)]
 pub(crate) fn rvs_collect_local_crate_prefixes(toml: &str) -> Result<BTreeSet<CrateName>, String> {
-    rvs_collect_local_crate_prefixes_for_targets(toml, true)
+    rvs_collect_local_crate_prefixes_for_targets(toml, CargoTargetScope::WithTestExampleBench)
 }
 
 #[cfg(test)]
 pub(crate) fn rvs_collect_local_crate_prefixes_for_targets(
     toml: &str,
-    include_test_example_bench: bool,
+    scope: CargoTargetScope,
 ) -> Result<BTreeSet<CrateName>, String> {
     let model = rvs_parse_cargo_project_model(toml).map_err(|e| format!("invalid TOML: {e}"))?;
-    rvs_collect_manifest_crate_prefixes(&model.document, include_test_example_bench)
+    rvs_collect_manifest_crate_prefixes(&model.document, scope)
 }
 
 fn rvs_collect_manifest_crate_prefixes(
     document: &toml_edit::DocumentMut,
-    include_test_example_bench: bool,
+    scope: CargoTargetScope,
 ) -> Result<BTreeSet<CrateName>, String> {
     let mut prefixes = BTreeSet::new();
     if let Some(package_name) = document
@@ -75,7 +87,7 @@ fn rvs_collect_manifest_crate_prefixes(
             }
         }
     }
-    if include_test_example_bench {
+    if scope.rvs_includes_test_example_bench() {
         for table_name in ["test", "example", "bench"] {
             if let Some(targets) = document
                 .get(table_name)
@@ -122,23 +134,10 @@ pub(crate) fn rvs_insert_manifest_crate_name_M(
 
 pub(crate) fn rvs_detect_local_crate_prefixes_BIS(
     path: &Path,
-) -> Result<BTreeSet<CrateName>, String> {
-    rvs_detect_local_crate_prefixes_for_targets_BIS(path, true)
-}
-
-pub(crate) fn rvs_detect_local_crate_prefixes_for_cargo_check_BIS(
-    path: &Path,
-    include_test_example_bench: bool,
-) -> Result<BTreeSet<CrateName>, String> {
-    rvs_detect_local_crate_prefixes_for_targets_BIS(path, include_test_example_bench)
-}
-
-fn rvs_detect_local_crate_prefixes_for_targets_BIS(
-    path: &Path,
-    include_test_example_bench: bool,
+    scope: CargoTargetScope,
 ) -> Result<BTreeSet<CrateName>, String> {
     let model = rvs_load_cargo_project_model_BIS(path)?;
-    rvs_collect_local_crate_prefixes_from_model_BIS(path, &model, include_test_example_bench)
+    rvs_collect_local_crate_prefixes_from_model_BIS(path, &model, scope)
 }
 
 pub(crate) fn rvs_load_cargo_project_model_BIS(path: &Path) -> Result<CargoProjectModel, String> {
@@ -152,17 +151,16 @@ pub(crate) fn rvs_load_cargo_project_model_BIS(path: &Path) -> Result<CargoProje
 pub(crate) fn rvs_collect_local_crate_prefixes_from_model_BIS(
     path: &Path,
     model: &CargoProjectModel,
-    include_test_example_bench: bool,
+    scope: CargoTargetScope,
 ) -> Result<BTreeSet<CrateName>, String> {
     let cargo_toml = path.join("Cargo.toml");
-    let mut prefixes =
-        rvs_collect_manifest_crate_prefixes(&model.document, include_test_example_bench)
-            .map_err(|e| format!("{}: {e}", cargo_toml.display()))?;
+    let mut prefixes = rvs_collect_manifest_crate_prefixes(&model.document, scope)
+        .map_err(|e| format!("{}: {e}", cargo_toml.display()))?;
     let auto_target_flags = rvs_parse_auto_target_flags(&model.document);
     rvs_collect_auto_target_prefixes_for_targets_BIMS(
         path,
         &mut prefixes,
-        &include_test_example_bench,
+        scope,
         &auto_target_flags,
     )?;
     Ok(prefixes)
@@ -179,7 +177,12 @@ pub(crate) fn rvs_detect_local_crate_prefixes_for_function_query_BIS(
     if model.document.get("package").is_none() {
         return Ok(None);
     }
-    rvs_collect_local_crate_prefixes_from_model_BIS(path, &model, true).map(Some)
+    rvs_collect_local_crate_prefixes_from_model_BIS(
+        path,
+        &model,
+        CargoTargetScope::WithTestExampleBench,
+    )
+    .map(Some)
 }
 
 #[cfg(test)]
@@ -193,24 +196,29 @@ pub(crate) fn rvs_collect_auto_target_prefixes_BIMS(
     let model = rvs_parse_cargo_project_model(&content)
         .map_err(|e| format!("{}: {e}", cargo_toml.display()))?;
     let auto_target_flags = rvs_parse_auto_target_flags(&model.document);
-    rvs_collect_auto_target_prefixes_for_targets_BIMS(path, prefixes, &true, &auto_target_flags)
+    rvs_collect_auto_target_prefixes_for_targets_BIMS(
+        path,
+        prefixes,
+        CargoTargetScope::WithTestExampleBench,
+        &auto_target_flags,
+    )
 }
 
 fn rvs_collect_auto_target_prefixes_for_targets_BIMS(
     path: &Path,
     prefixes: &mut BTreeSet<CrateName>,
-    include_test_example_bench: &bool,
+    scope: CargoTargetScope,
     flags: &AutoTargetFlags,
 ) -> Result<(), String> {
-    if *include_test_example_bench && flags.autotests {
+    if scope.rvs_includes_test_example_bench() && flags.autotests {
         let tests_dir = path.join("tests");
         rvs_collect_auto_target_names_BIMS(&tests_dir, prefixes)?;
     }
-    if *include_test_example_bench && flags.autoexamples {
+    if scope.rvs_includes_test_example_bench() && flags.autoexamples {
         let examples_dir = path.join("examples");
         rvs_collect_auto_target_names_BIMS(&examples_dir, prefixes)?;
     }
-    if *include_test_example_bench && flags.autobenches {
+    if scope.rvs_includes_test_example_bench() && flags.autobenches {
         let benches_dir = path.join("benches");
         rvs_collect_auto_target_names_BIMS(&benches_dir, prefixes)?;
     }

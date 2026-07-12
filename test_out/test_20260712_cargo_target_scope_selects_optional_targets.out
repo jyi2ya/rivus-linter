@@ -1,0 +1,2 @@
+production=core_demo,tool_bin
+with_optional=core_demo,demo_example,integration_test,throughput_bench,tool_bin

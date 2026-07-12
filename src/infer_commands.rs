@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use crate::callgraph_cache::rvs_is_std_like_def_path;
 use crate::capsmap::CapsMap;
-use crate::cargo_targets::rvs_detect_local_crate_prefixes_for_cargo_check_BIS;
+use crate::cargo_targets::{CargoTargetScope, rvs_detect_local_crate_prefixes_BIS};
 use crate::inference::{
     PreparedInference, rvs_build_impl_index, rvs_collect_direct_external_deps, rvs_format_capsmap,
     rvs_format_unknown_callees, rvs_generate_trait_aliases, rvs_infer_caps_with_index,
@@ -24,7 +24,7 @@ pub(crate) fn rvs_run_infer_capsmap_BIMPS(path: &Path, output: &Path) -> Result<
         .canonicalize()
         .map_err(|e| format!("cannot canonicalize '{}': {e}", path.display()))?;
     let local_crate_prefixes =
-        rvs_detect_local_crate_prefixes_for_cargo_check_BIS(&project_path, false)?;
+        rvs_detect_local_crate_prefixes_BIS(&project_path, CargoTargetScope::Production)?;
 
     let abs_seed = project_path.join("caps");
     if !rvs_validate_optional_capsmap_dir_BIS(&abs_seed)? {
@@ -66,7 +66,7 @@ pub(crate) fn rvs_run_infer_std_BIMPS(path: &Path, output: &Path) -> Result<(), 
         .canonicalize()
         .map_err(|e| format!("cannot canonicalize '{}': {e}", path.display()))?;
     let local_crate_names =
-        rvs_detect_local_crate_prefixes_for_cargo_check_BIS(&project_path, false)?;
+        rvs_detect_local_crate_prefixes_BIS(&project_path, CargoTargetScope::Production)?;
     let local_prefixes: Vec<DefPathPrefix> = local_crate_names
         .iter()
         .map(CrateName::rvs_prefix)
@@ -248,7 +248,7 @@ mod tests {
         std::fs::write(dir.join("tests/alloc.rs"), "fn main() {}\n").unwrap();
 
         let prefixes: Vec<DefPathPrefix> =
-            rvs_detect_local_crate_prefixes_for_cargo_check_BIS(&dir, false)
+            rvs_detect_local_crate_prefixes_BIS(&dir, CargoTargetScope::Production)
                 .unwrap()
                 .into_iter()
                 .map(|name| name.rvs_prefix())
