@@ -11,8 +11,9 @@ use crate::symbols::{CrateName, DefPath};
 
 use crate::cargo_targets::{
     CargoTargetScope, rvs_detect_local_crate_prefixes_BIS,
-    rvs_detect_local_crate_prefixes_for_function_query_BIS, rvs_function_matches_local_prefix,
+    rvs_detect_local_crate_prefixes_for_function_query_BIS,
 };
+use crate::function_classification::LocalScope;
 use crate::workspace::{
     rvs_collect_callgraph_and_caps_BIMS, rvs_ensure_cargo_project_BIS,
     rvs_load_callgraph_and_caps_for_function_BIMS, rvs_load_local_crate_prefixes_BIS,
@@ -85,7 +86,7 @@ pub(crate) fn rvs_run_why_BIMPS(function: &str, path: &Path) -> Result<(), Strin
 
     let local_crate_names = if rvs_is_std_like_def_path(function) {
         match rvs_detect_local_crate_prefixes_for_function_query_BIS(path)? {
-            Some(names) if rvs_function_matches_local_prefix(function, &names) => names,
+            Some(names) if LocalScope::rvs_new(&names).rvs_contains_str(function) => names,
             Some(_) | None => std::collections::BTreeSet::new(),
         }
     } else {

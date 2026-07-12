@@ -801,7 +801,7 @@ where
 
 pub(crate) fn rvs_collect_direct_external_deps(
     graph: &FnGraph,
-    local_crate_prefixes: &BTreeSet<CrateName>,
+    local_crate_names: &BTreeSet<CrateName>,
     seed: &capsmap::CapsMap,
     inferred: &BTreeMap<DefPath, CapabilitySet>,
     impl_index: &HashMap<TraitMethodKey, Vec<DefPath>>,
@@ -809,25 +809,16 @@ pub(crate) fn rvs_collect_direct_external_deps(
     BTreeMap<DefPath, CapabilitySet>,
     BTreeMap<DefPath, BTreeSet<DefPath>>,
 ) {
-    let local_prefixes: Vec<_> = local_crate_prefixes
-        .iter()
-        .map(CrateName::rvs_prefix)
-        .collect();
+    let local_scope = LocalScope::rvs_new(local_crate_names);
     let mut known: BTreeMap<DefPath, CapabilitySet> = BTreeMap::new();
     let mut unknown: BTreeMap<DefPath, BTreeSet<DefPath>> = BTreeMap::new();
     let resolver = CalleeCapsResolver::rvs_new(graph, seed, inferred, impl_index);
     for (func, behavior) in graph.rvs_iter() {
-        if !local_prefixes
-            .iter()
-            .any(|prefix| func.rvs_starts_with(prefix))
-        {
+        if !local_scope.rvs_contains(func) {
             continue;
         }
         for callee in &behavior.calls {
-            if local_prefixes
-                .iter()
-                .any(|prefix| callee.rvs_starts_with(prefix))
-            {
+            if local_scope.rvs_contains(callee) {
                 continue;
             }
             if seed.rvs_lookup(callee.rvs_as_str()).is_some() {

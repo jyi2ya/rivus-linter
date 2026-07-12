@@ -26,9 +26,13 @@ impl LocalScope {
     }
 
     pub(crate) fn rvs_contains(&self, def_path: &DefPath) -> bool {
+        self.rvs_contains_str(def_path.rvs_as_str())
+    }
+
+    pub(crate) fn rvs_contains_str(&self, def_path: &str) -> bool {
         self.prefixes
             .iter()
-            .any(|prefix| def_path.rvs_starts_with(prefix))
+            .any(|prefix| def_path.starts_with(prefix.rvs_as_str()))
     }
 
     pub(crate) fn rvs_is_root_main(&self, def_path: &DefPath) -> bool {
@@ -159,6 +163,31 @@ mod tests {
         }
         rvs_snapshot_BIS(
             "test_20260711_function_classification_policy_matrix",
+            &output,
+        );
+    }
+
+    #[test]
+    fn test_20260712_local_scope_matches_typed_and_borrowed_paths() {
+        let scope = LocalScope::rvs_new(&BTreeSet::from([
+            CrateName::from("demo"),
+            CrateName::from("cargo-rivus"),
+        ]));
+        let cases = [
+            "demo::rvs_run",
+            "cargo_rivus::rvs_check",
+            "dependency::rvs_run",
+            "demonstration::rvs_run",
+        ];
+        let mut output = String::new();
+        for path in cases {
+            let typed = scope.rvs_contains(&DefPath::from(path));
+            let borrowed = scope.rvs_contains_str(path);
+            output.push_str(&format!("{path}: typed={typed} borrowed={borrowed}\n"));
+            assert_eq!(typed, borrowed);
+        }
+        rvs_snapshot_BIS(
+            "test_20260712_local_scope_matches_typed_and_borrowed_paths",
             &output,
         );
     }

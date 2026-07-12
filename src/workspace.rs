@@ -11,15 +11,14 @@ use crate::callgraph_cache::{
     rvs_merge_std_like_callgraph_with_local_prefixes_M,
 };
 use crate::capsmap::{self, CapsMap};
-use crate::cargo_targets::{
-    CargoTargetScope, rvs_detect_local_crate_prefixes_BIS, rvs_function_matches_local_prefix,
-};
+use crate::cargo_targets::{CargoTargetScope, rvs_detect_local_crate_prefixes_BIS};
 #[cfg(test)]
 use crate::cargo_targets::{
     rvs_collect_auto_target_prefixes_BIMS, rvs_collect_local_crate_prefixes,
     rvs_collect_local_crate_prefixes_for_targets, rvs_insert_manifest_crate_name_M,
 };
 use crate::fs_guard::rvs_render_atomic_write_failure;
+use crate::function_classification::LocalScope;
 use crate::symbols::CrateName;
 
 /// Resolve the capsmap path for the lint pass.
@@ -490,7 +489,7 @@ fn rvs_should_use_required_std_cache(
     local_crate_names: &BTreeSet<CrateName>,
 ) -> bool {
     rvs_is_std_like_def_path(function)
-        && !rvs_function_matches_local_prefix(function, local_crate_names)
+        && !LocalScope::rvs_new(local_crate_names).rvs_contains_str(function)
 }
 
 pub(crate) fn rvs_collect_callgraph_and_caps_BIMS(
@@ -2254,7 +2253,7 @@ name = "throughput-bench"
         )
         .unwrap();
         let local_names = rvs_load_local_crate_prefixes_BIS(&dir).unwrap();
-        let matches_local = rvs_function_matches_local_prefix("std::rvs_run", &local_names);
+        let matches_local = LocalScope::rvs_new(&local_names).rvs_contains_str("std::rvs_run");
         let local_uses_std_cache = rvs_should_use_required_std_cache("std::rvs_run", &local_names);
         let real_std_uses_std_cache =
             rvs_should_use_required_std_cache("core::mem::drop", &local_names);

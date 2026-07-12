@@ -1,0 +1,4 @@
+demo::rvs_run: typed=true borrowed=true
+cargo_rivus::rvs_check: typed=true borrowed=true
+dependency::rvs_run: typed=false borrowed=false
+demonstration::rvs_run: typed=false borrowed=false

@@ -4,12 +4,13 @@ use std::path::{Path, PathBuf};
 use crate::callgraph_cache::rvs_is_std_like_def_path;
 use crate::capsmap::CapsMap;
 use crate::cargo_targets::{CargoTargetScope, rvs_detect_local_crate_prefixes_BIS};
+use crate::function_classification::LocalScope;
 use crate::inference::{
     PreparedInference, rvs_build_impl_index, rvs_collect_direct_external_deps, rvs_format_capsmap,
     rvs_format_unknown_callees, rvs_generate_trait_aliases, rvs_infer_caps_with_index,
     rvs_initial_caps, rvs_scope_port_methods_M,
 };
-use crate::symbols::{CapsMapKey, CrateName, DefPath, DefPathPrefix};
+use crate::symbols::{CapsMapKey, DefPath};
 use crate::workspace::{
     rvs_collect_callgraph_BIMS, rvs_ensure_cargo_project_BIS, rvs_preflight_capsmap_file_BIS,
     rvs_validate_optional_capsmap_dir_BIS, rvs_write_capsmap_result_BIS,
@@ -23,7 +24,7 @@ pub(crate) fn rvs_run_infer_capsmap_BIMPS(path: &Path, output: &Path) -> Result<
     let project_path = path
         .canonicalize()
         .map_err(|e| format!("cannot canonicalize '{}': {e}", path.display()))?;
-    let local_crate_prefixes =
+    let local_crate_names =
         rvs_detect_local_crate_prefixes_BIS(&project_path, CargoTargetScope::Production)?;
 
     let abs_seed = project_path.join("caps");
@@ -39,10 +40,10 @@ pub(crate) fn rvs_run_infer_capsmap_BIMPS(path: &Path, output: &Path) -> Result<
     rvs_preflight_capsmap_file_BIS(&resolved_output, "deps capsmap")?;
 
     let mut callgraph = rvs_collect_callgraph_BIMS(&project_path, false, false, vec![])?;
-    let inference = PreparedInference::rvs_prepare_M(&mut callgraph, &seed, &local_crate_prefixes);
+    let inference = PreparedInference::rvs_prepare_M(&mut callgraph, &seed, &local_crate_names);
     let (direct_external_calls, unknown_callees) = rvs_collect_direct_external_deps(
         &callgraph,
-        &local_crate_prefixes,
+        &local_crate_names,
         &seed,
         inference.rvs_inferred(),
         inference.rvs_impl_index(),
@@ -67,10 +68,7 @@ pub(crate) fn rvs_run_infer_std_BIMPS(path: &Path, output: &Path) -> Result<(), 
         .map_err(|e| format!("cannot canonicalize '{}': {e}", path.display()))?;
     let local_crate_names =
         rvs_detect_local_crate_prefixes_BIS(&project_path, CargoTargetScope::Production)?;
-    let local_prefixes: Vec<DefPathPrefix> = local_crate_names
-        .iter()
-        .map(CrateName::rvs_prefix)
-        .collect();
+    let local_scope = LocalScope::rvs_new(&local_crate_names);
 
     let caps_dir = project_path.join("caps");
     rvs_validate_optional_capsmap_dir_BIS(&caps_dir)?;
@@ -106,15 +104,12 @@ pub(crate) fn rvs_run_infer_std_BIMPS(path: &Path, output: &Path) -> Result<(), 
     let std_only: BTreeMap<DefPath, crate::capability::CapabilitySet> = inferred
         .iter()
         .filter(|(name, _)| {
-            !local_prefixes
-                .iter()
-                .any(|prefix| name.rvs_starts_with(prefix))
-                && rvs_is_std_like_def_path(name.rvs_as_str())
+            !local_scope.rvs_contains(name) && rvs_is_std_like_def_path(name.rvs_as_str())
         })
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
 
-    let unknown = rvs_collect_std_unknown_callees(&callgraph, &inferred, &seed, &local_prefixes);
+    let unknown = rvs_collect_std_unknown_callees(&callgraph, &inferred, &seed, &local_scope);
 
     if !unknown.is_empty() {
         return Err(rvs_format_unknown_callees(
@@ -141,14 +136,12 @@ fn rvs_collect_std_unknown_callees(
     callgraph: &crate::artifacts::FnGraph,
     inferred: &BTreeMap<DefPath, crate::capability::CapabilitySet>,
     seed: &CapsMap,
-    local_prefixes: &[DefPathPrefix],
+    local_scope: &LocalScope,
 ) -> BTreeMap<DefPath, BTreeSet<DefPath>> {
     let mut unknown: BTreeMap<DefPath, BTreeSet<DefPath>> = BTreeMap::new();
     for (func, behavior) in callgraph.rvs_iter() {
         let is_std = rvs_is_std_like_def_path(func.rvs_as_str());
-        let is_local = local_prefixes
-            .iter()
-            .any(|prefix| func.rvs_starts_with(prefix));
+        let is_local = local_scope.rvs_contains(func);
         if !is_std || is_local {
             continue;
         }
@@ -247,15 +240,11 @@ mod tests {
         std::fs::create_dir_all(dir.join("tests")).unwrap();
         std::fs::write(dir.join("tests/alloc.rs"), "fn main() {}\n").unwrap();
 
-        let prefixes: Vec<DefPathPrefix> =
-            rvs_detect_local_crate_prefixes_BIS(&dir, CargoTargetScope::Production)
-                .unwrap()
-                .into_iter()
-                .map(|name| name.rvs_prefix())
-                .collect();
-        let output = prefixes
+        let local_crate_names =
+            rvs_detect_local_crate_prefixes_BIS(&dir, CargoTargetScope::Production).unwrap();
+        let output = local_crate_names
             .iter()
-            .map(crate::symbols::DefPathPrefix::rvs_as_str)
+            .map(|name| name.rvs_prefix().rvs_as_str().to_string())
             .collect::<Vec<_>>()
             .join("\n");
         rvs_snapshot_BIS(
@@ -264,20 +253,24 @@ mod tests {
         );
 
         assert!(
-            prefixes
+            local_crate_names
                 .iter()
-                .any(|prefix| prefix.rvs_as_str() == "demo::")
-        );
-        assert!(!prefixes.iter().any(|prefix| prefix.rvs_as_str() == "std::"));
-        assert!(
-            !prefixes
-                .iter()
-                .any(|prefix| prefix.rvs_as_str() == "core::")
+                .any(|name| name.rvs_as_str() == "demo")
         );
         assert!(
-            !prefixes
+            !local_crate_names
                 .iter()
-                .any(|prefix| prefix.rvs_as_str() == "alloc::")
+                .any(|name| name.rvs_as_str() == "std")
+        );
+        assert!(
+            !local_crate_names
+                .iter()
+                .any(|name| name.rvs_as_str() == "core")
+        );
+        assert!(
+            !local_crate_names
+                .iter()
+                .any(|name| name.rvs_as_str() == "alloc")
         );
 
         std::fs::remove_dir_all(dir).unwrap();
@@ -473,8 +466,13 @@ mod tests {
             ),
         ]);
 
-        let unknown =
-            rvs_collect_std_unknown_callees(&callgraph, &inferred, &CapsMap::rvs_new(), &[]);
+        let local_scope = LocalScope::rvs_new(&BTreeSet::new());
+        let unknown = rvs_collect_std_unknown_callees(
+            &callgraph,
+            &inferred,
+            &CapsMap::rvs_new(),
+            &local_scope,
+        );
         let output = format!("unknown={unknown:?}\n");
         rvs_snapshot_BIS(
             "test_20260704_collect_std_unknown_callees_reports_non_emitted_support_crate",
@@ -497,13 +495,14 @@ mod tests {
             DefPath::from("std::rvs_local"),
             crate::capability::CapabilitySet::rvs_new(),
         )]);
-        let local_prefixes = vec![crate::symbols::CrateName::from("std").rvs_prefix()];
+        let local_scope =
+            LocalScope::rvs_new(&BTreeSet::from([crate::symbols::CrateName::from("std")]));
 
         let unknown = rvs_collect_std_unknown_callees(
             &callgraph,
             &inferred,
             &CapsMap::rvs_new(),
-            &local_prefixes,
+            &local_scope,
         );
         let output = format!("unknown={unknown:?}\n");
         rvs_snapshot_BIS(

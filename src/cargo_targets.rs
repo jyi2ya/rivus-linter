@@ -35,15 +35,6 @@ impl CargoProjectModel {
     }
 }
 
-pub(crate) fn rvs_function_matches_local_prefix(
-    function: &str,
-    local_crate_names: &BTreeSet<CrateName>,
-) -> bool {
-    local_crate_names
-        .iter()
-        .any(|name| function.starts_with(name.rvs_prefix().rvs_as_str()))
-}
-
 #[cfg(test)]
 pub(crate) fn rvs_collect_local_crate_prefixes(toml: &str) -> Result<BTreeSet<CrateName>, String> {
     rvs_collect_local_crate_prefixes_for_targets(toml, CargoTargetScope::WithTestExampleBench)

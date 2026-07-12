@@ -237,11 +237,6 @@ impl DefPath {
         TraitMethodIdentity::rvs_parse(&self.0)
     }
 
-    /// Return whether this def-path belongs to the given crate prefix.
-    pub fn rvs_starts_with(&self, prefix: &DefPathPrefix) -> bool {
-        self.0.starts_with(prefix.rvs_as_str())
-    }
-
     /// Return whether the def-path contains a substring.
     pub fn rvs_contains(&self, needle: &str) -> bool {
         self.0.contains(needle)
@@ -349,19 +344,13 @@ mod tests {
     }
 
     #[test]
-    fn test_20260712_def_path_matches_local_prefix() {
+    fn test_20260712_def_path_builds_root_main() {
         let def_path = DefPath::rvs_new("cargo_rivus::cli::main");
         let prefix = CrateName::rvs_from_manifest_name("cargo-rivus").rvs_prefix();
         let root_main = prefix.rvs_join_name(&FnName::from("main"));
-        let output = format!(
-            "fn={}\nstarts_with={}\nroot_main={}\n",
-            def_path.rvs_fn_name(),
-            def_path.rvs_starts_with(&prefix),
-            root_main,
-        );
-        rvs_snapshot_BIS("test_20260712_def_path_matches_local_prefix", &output);
+        let output = format!("fn={}\nroot_main={}\n", def_path.rvs_fn_name(), root_main);
+        rvs_snapshot_BIS("test_20260712_def_path_builds_root_main", &output);
         assert_eq!(def_path.rvs_fn_name().rvs_as_str(), "main");
-        assert!(def_path.rvs_starts_with(&prefix));
         assert_eq!(root_main.rvs_as_str(), "cargo_rivus::main");
     }
 

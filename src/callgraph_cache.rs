@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use crate::artifacts::{self, FnGraph};
-use crate::cargo_targets::rvs_function_matches_local_prefix;
+use crate::function_classification::LocalScope;
 use crate::symbols::CrateName;
 
 pub(crate) fn rvs_merge_std_like_callgraph_M(target: &mut FnGraph, source: FnGraph) {
@@ -14,10 +14,9 @@ pub(crate) fn rvs_merge_std_like_callgraph_with_local_prefixes_M(
     source: FnGraph,
     local_crate_names: &BTreeSet<CrateName>,
 ) {
+    let local_scope = LocalScope::rvs_new(local_crate_names);
     for (path, node) in source.nodes {
-        if rvs_is_std_like_def_path(path.rvs_as_str())
-            && !rvs_function_matches_local_prefix(path.rvs_as_str(), local_crate_names)
-        {
+        if rvs_is_std_like_def_path(path.rvs_as_str()) && !local_scope.rvs_contains(&path) {
             target.rvs_merge_node_M(path, node);
         }
     }
