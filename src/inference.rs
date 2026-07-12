@@ -6,7 +6,7 @@ use crate::capability::{
 };
 use crate::capsmap;
 use crate::function_classification::{FunctionClassification, LocalScope};
-use crate::symbols::{CrateName, DefPath, FnName};
+use crate::symbols::{CrateName, DefPath, FnName, TraitMethodKey};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FnContractDiff {
@@ -21,7 +21,7 @@ pub(crate) struct FnContractDiff {
 pub(crate) struct PreparedLocalAnalysis {
     pub(crate) diffs: Vec<FnContractDiff>,
     pub(crate) inferred: BTreeMap<DefPath, CapabilitySet>,
-    pub(crate) impl_index: HashMap<String, Vec<DefPath>>,
+    pub(crate) impl_index: HashMap<TraitMethodKey, Vec<DefPath>>,
     pub(crate) synthetic_paths: BTreeSet<DefPath>,
 }
 
@@ -202,17 +202,13 @@ pub(crate) fn rvs_collect_call_contract_mismatch(
 }
 
 /// Build a "method@trait_path" → set-of-keys index from callgraph keys.
-pub(crate) fn rvs_build_impl_index(graph: &FnGraph) -> HashMap<String, Vec<DefPath>> {
-    let mut idx: HashMap<String, Vec<DefPath>> = HashMap::new();
+pub(crate) fn rvs_build_impl_index(graph: &FnGraph) -> HashMap<TraitMethodKey, Vec<DefPath>> {
+    let mut idx: HashMap<TraitMethodKey, Vec<DefPath>> = HashMap::new();
     for key in graph.rvs_keys() {
-        if let Some(at_pos) = key.rvs_as_str().find('@') {
-            let (method, suffix_with_sep) = key.rvs_as_str().split_at(at_pos);
-            let Some(suffix) = suffix_with_sep.strip_prefix('@') else {
-                continue;
-            };
-            let method_name = DefPath::from(method).rvs_fn_name();
-            let lookup = format!("{method_name}@{suffix}");
-            idx.entry(lookup).or_default().push(key.clone());
+        if let Some(identity) = key.rvs_trait_method_identity() {
+            idx.entry(identity.rvs_lookup_key())
+                .or_default()
+                .push(key.clone());
         }
     }
     idx
@@ -258,7 +254,7 @@ pub(crate) struct CalleeCapsResolver<'a> {
     graph: &'a FnGraph,
     caps: &'a capsmap::CapsMap,
     inferred: &'a BTreeMap<DefPath, CapabilitySet>,
-    impl_index: &'a HashMap<String, Vec<DefPath>>,
+    impl_index: &'a HashMap<TraitMethodKey, Vec<DefPath>>,
 }
 
 impl<'a> CalleeCapsResolver<'a> {
@@ -266,7 +262,7 @@ impl<'a> CalleeCapsResolver<'a> {
         graph: &'a FnGraph,
         caps: &'a capsmap::CapsMap,
         inferred: &'a BTreeMap<DefPath, CapabilitySet>,
-        impl_index: &'a HashMap<String, Vec<DefPath>>,
+        impl_index: &'a HashMap<TraitMethodKey, Vec<DefPath>>,
     ) -> Self {
         Self {
             graph,
@@ -321,7 +317,7 @@ impl<'a> CalleeCapsResolver<'a> {
             CalleeCapsSource::Inferred => self.inferred.get(callee).cloned(),
             CalleeCapsSource::DeclaredCaps => rvs_declared_caps_from_def_path(callee),
             CalleeCapsSource::ImplMajority => {
-                if callee.rvs_as_str().contains('@') {
+                if callee.rvs_trait_method_identity().is_some() {
                     None
                 } else {
                     rvs_resolve_impl_majority_caps(
@@ -336,7 +332,7 @@ impl<'a> CalleeCapsResolver<'a> {
     }
 
     fn rvs_bodyless_impl_caps_with_signature(&self, callee: &DefPath) -> Option<CapabilitySet> {
-        if callee.rvs_as_str().contains('@')
+        if callee.rvs_trait_method_identity().is_some()
             || !self
                 .graph
                 .rvs_get(callee.rvs_as_str())
@@ -384,25 +380,19 @@ pub(crate) fn rvs_format_unknown_callees(
 /// keys using at-least-half capability aggregation across impls.
 pub(crate) fn rvs_generate_trait_aliases(
     inferred: &BTreeMap<DefPath, CapabilitySet>,
-    impl_index: &HashMap<String, Vec<DefPath>>,
+    impl_index: &HashMap<TraitMethodKey, Vec<DefPath>>,
     graph: &FnGraph,
 ) -> BTreeMap<DefPath, CapabilitySet> {
     let mut aliases = BTreeMap::new();
     let mut seen = HashSet::new();
     for key in inferred.keys() {
-        if let Some(at_pos) = key.rvs_as_str().find('@') {
-            let (method_full, trait_path_with_sep) = key.rvs_as_str().split_at(at_pos);
-            let Some(trait_path) = trait_path_with_sep.strip_prefix('@') else {
-                continue;
-            };
-            if let Some(method_name) = method_full.rsplit("::").next() {
-                let alias = DefPath::rvs_new(format!("{trait_path}::{method_name}"));
-                if seen.insert(alias.clone())
-                    && let Some(voted) =
-                        rvs_resolve_impl_majority_caps(&alias, impl_index, inferred, graph)
-                {
-                    aliases.insert(alias, voted);
-                }
+        if let Some(identity) = key.rvs_trait_method_identity() {
+            let alias = identity.rvs_trait_method_path();
+            if seen.insert(alias.clone())
+                && let Some(voted) =
+                    rvs_resolve_impl_majority_caps(&alias, impl_index, inferred, graph)
+            {
+                aliases.insert(alias, voted);
             }
         }
     }
@@ -705,12 +695,11 @@ pub(crate) fn rvs_collect_signature_contract_diff_from_facts_M(
 /// impl methods for each propagated capability.
 pub(crate) fn rvs_resolve_impl_majority_caps(
     callee: &DefPath,
-    impl_index: &HashMap<String, Vec<DefPath>>,
+    impl_index: &HashMap<TraitMethodKey, Vec<DefPath>>,
     inferred: &BTreeMap<DefPath, CapabilitySet>,
     graph: &FnGraph,
 ) -> Option<CapabilitySet> {
-    let (trait_path, method) = callee.rvs_as_str().rsplit_once("::")?;
-    let lookup_key = format!("{method}@{trait_path}");
+    let lookup_key = TraitMethodKey::rvs_from_trait_method(callee)?;
     let impl_keys = impl_index.get(&lookup_key)?;
 
     for key in impl_keys {
@@ -779,7 +768,7 @@ pub(crate) fn rvs_collect_direct_external_deps(
     local_crate_prefixes: &BTreeSet<CrateName>,
     seed: &capsmap::CapsMap,
     inferred: &BTreeMap<DefPath, CapabilitySet>,
-    impl_index: &HashMap<String, Vec<DefPath>>,
+    impl_index: &HashMap<TraitMethodKey, Vec<DefPath>>,
 ) -> (
     BTreeMap<DefPath, CapabilitySet>,
     BTreeMap<DefPath, BTreeSet<DefPath>>,

@@ -1,0 +1,7 @@
+implementation=demo::Adapter::rvs_fetch_BI
+method=rvs_fetch_BI
+trait=demo::Client
+lookup=rvs_fetch_BI@demo::Client
+trait_method=demo::Client::rvs_fetch_BI
+declaration_lookup=rvs_fetch_BI@demo::Client
+malformed_rejected=true

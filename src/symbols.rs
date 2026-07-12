@@ -3,8 +3,6 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::capability::rvs_function_name_segment;
-
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct CrateName(String);
@@ -127,6 +125,92 @@ impl From<String> for FnName {
 #[serde(transparent)]
 pub struct DefPath(String);
 
+/// Borrowed semantic view of a serialized trait-implementation method path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TraitMethodIdentity<'a> {
+    implementation_path: &'a str,
+    method_name: &'a str,
+    trait_path: &'a str,
+}
+
+impl<'a> TraitMethodIdentity<'a> {
+    /// Parse the stable `implementation_path@trait_path` artifact representation.
+    pub(crate) fn rvs_parse(path: &'a str) -> Option<Self> {
+        let (implementation_path, trait_path) = path.split_once('@')?;
+        if implementation_path.is_empty() || trait_path.is_empty() || trait_path.contains('@') {
+            return None;
+        }
+        let method_name = implementation_path.rsplit("::").next()?;
+        if method_name.is_empty() {
+            return None;
+        }
+        Some(Self {
+            implementation_path,
+            method_name,
+            trait_path,
+        })
+    }
+
+    /// Return the bare implementation method name.
+    pub(crate) fn rvs_method_name(self) -> &'a str {
+        self.method_name
+    }
+
+    /// Build the canonical trait declaration path represented by this implementation.
+    pub(crate) fn rvs_trait_method_path(self) -> DefPath {
+        DefPath::rvs_new(format!("{}::{}", self.trait_path, self.method_name))
+    }
+
+    /// Build the canonical implementation-index key.
+    pub(crate) fn rvs_lookup_key(self) -> TraitMethodKey {
+        TraitMethodKey::rvs_new(format!("{}@{}", self.method_name, self.trait_path))
+    }
+}
+
+/// Canonical `method_name@trait_path` key used to group trait implementations.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct TraitMethodKey(String);
+
+impl TraitMethodKey {
+    fn rvs_new(key: String) -> Self {
+        Self(key)
+    }
+
+    /// Build an implementation-index key from a trait declaration path.
+    pub(crate) fn rvs_from_trait_method(path: &DefPath) -> Option<Self> {
+        if path.rvs_trait_method_identity().is_some() {
+            return None;
+        }
+        let (trait_path, method_name) = path.rvs_as_str().rsplit_once("::")?;
+        if trait_path.is_empty() || method_name.is_empty() {
+            return None;
+        }
+        Some(Self::rvs_new(format!("{method_name}@{trait_path}")))
+    }
+
+    /// Borrow the canonical lookup key as `&str`.
+    pub(crate) fn rvs_as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Borrow<str> for TraitMethodKey {
+    fn borrow(&self) -> &str {
+        self.rvs_as_str()
+    }
+}
+
+/// Return the function segment before any trait-implementation suffix.
+pub(crate) fn rvs_function_name_segment(name: &str) -> &str {
+    TraitMethodIdentity::rvs_parse(name).map_or_else(
+        || {
+            let method_path = name.split_once('@').map_or(name, |(method, _)| method);
+            method_path.rsplit("::").next().unwrap_or(method_path)
+        },
+        TraitMethodIdentity::rvs_method_name,
+    )
+}
+
 impl DefPath {
     /// Wrap a canonical def-path string.
     pub fn rvs_new(path: impl Into<String>) -> Self {
@@ -141,6 +225,11 @@ impl DefPath {
     /// Return the last function-name segment of the def-path.
     pub fn rvs_fn_name(&self) -> FnName {
         FnName::rvs_new(rvs_function_name_segment(&self.0))
+    }
+
+    /// Parse this path as a serialized trait-implementation method identity.
+    pub(crate) fn rvs_trait_method_identity(&self) -> Option<TraitMethodIdentity<'_>> {
+        TraitMethodIdentity::rvs_parse(&self.0)
     }
 
     /// Return whether this def-path belongs to the given crate prefix.
@@ -354,5 +443,50 @@ mod tests {
         );
         assert_eq!(def_path.rvs_fn_name().rvs_as_str(), "rvs_fetch_BI");
         assert_eq!(relative.rvs_fn_name().rvs_as_str(), "rvs_fetch_BI");
+    }
+
+    #[test]
+    fn test_20260712_trait_method_identity_is_structured() {
+        let def_path = DefPath::rvs_new("demo::Adapter::rvs_fetch_BI@demo::Client");
+        let identity = def_path
+            .rvs_trait_method_identity()
+            .expect("expected canonical trait method identity");
+        let lookup = identity.rvs_lookup_key();
+        let trait_method = identity.rvs_trait_method_path();
+        let declaration_lookup = TraitMethodKey::rvs_from_trait_method(&trait_method)
+            .expect("expected trait declaration lookup key");
+        let malformed = [
+            DefPath::rvs_new("demo::Adapter::rvs_fetch_BI@"),
+            DefPath::rvs_new("@demo::Client"),
+            DefPath::rvs_new("demo::Adapter::rvs_fetch_BI@demo::Client@extra"),
+        ];
+        let output = format!(
+            "implementation={}\nmethod={}\ntrait={}\nlookup={}\ntrait_method={}\ndeclaration_lookup={}\nmalformed_rejected={}\n",
+            identity.implementation_path,
+            identity.rvs_method_name(),
+            identity.trait_path,
+            lookup.rvs_as_str(),
+            trait_method,
+            declaration_lookup.rvs_as_str(),
+            malformed
+                .iter()
+                .all(|path| path.rvs_trait_method_identity().is_none()),
+        );
+        rvs_snapshot_BIS("test_20260712_trait_method_identity_is_structured", &output);
+
+        assert_eq!(identity.implementation_path, "demo::Adapter::rvs_fetch_BI");
+        assert_eq!(identity.rvs_method_name(), "rvs_fetch_BI");
+        assert_eq!(identity.trait_path, "demo::Client");
+        assert_eq!(lookup.rvs_as_str(), "rvs_fetch_BI@demo::Client");
+        assert_eq!(trait_method.rvs_as_str(), "demo::Client::rvs_fetch_BI");
+        assert_eq!(declaration_lookup, lookup);
+        assert!(TraitMethodKey::rvs_from_trait_method(&def_path).is_none());
+        assert!(TraitMethodKey::rvs_from_trait_method(&DefPath::rvs_new("plain")).is_none());
+        assert!(TraitMethodKey::rvs_from_trait_method(&DefPath::rvs_new("demo::")).is_none());
+        assert!(
+            malformed
+                .iter()
+                .all(|path| path.rvs_trait_method_identity().is_none())
+        );
     }
 }

@@ -1,6 +1,8 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
+use crate::symbols::rvs_function_name_segment;
+
 use rustc_hir::{self, Safety};
 use serde::{Deserialize, Serialize};
 use snafu::Snafu;
@@ -72,12 +74,6 @@ impl fmt::Display for Capability {
 
 #[cfg(test)]
 const VALID_SUFFIX_CHARS: &[char] = &['A', 'B', 'I', 'M', 'P', 'S', 'T', 'U'];
-
-/// Return the function segment before any trait-implementation suffix.
-pub(crate) fn rvs_function_name_segment(name: &str) -> &str {
-    let method_path = name.split_once('@').map_or(name, |(method, _)| method);
-    method_path.rsplit("::").next().unwrap_or(method_path)
-}
 
 /// Canonical semantic view of a function name or def-path.
 #[derive(Debug, Clone, PartialEq, Eq)]
