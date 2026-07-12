@@ -703,7 +703,9 @@ fn rvs_require_directory_BIS(path: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{rvs_make_temp_dir_BIS, rvs_snapshot_BIS};
+    use crate::test_support::{
+        rvs_make_cargo_project_BIS, rvs_make_temp_dir_BIS, rvs_snapshot_BIS,
+    };
     use ra_ap_ide::{TextRange, TextSize};
 
     #[test]
@@ -843,17 +845,17 @@ mod tests {
 
     #[test]
     fn test_20260706_strip_renames_lib_and_main_same_name_functions() {
-        let dir = rvs_make_temp_dir_BIS("strip-lib-main-same-name");
-        let cargo_toml =
-            "[package]\nname = \"strip-samename-demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n";
-        std::fs::write(dir.join("Cargo.toml"), cargo_toml).unwrap();
-        std::fs::create_dir_all(dir.join("src")).unwrap();
-        std::fs::write(dir.join("src/lib.rs"), "pub fn rvs_parse() -> i32 { 1 }\n").unwrap();
-        std::fs::write(
-            dir.join("src/main.rs"),
-            "fn rvs_parse() -> i32 { 2 }\n\nfn main() { let _ = rvs_parse(); }\n",
-        )
-        .unwrap();
+        let dir = rvs_make_cargo_project_BIS(
+            "strip-lib-main-same-name",
+            "strip-samename-demo",
+            &[
+                ("src/lib.rs", "pub fn rvs_parse() -> i32 { 1 }\n"),
+                (
+                    "src/main.rs",
+                    "fn rvs_parse() -> i32 { 2 }\n\nfn main() { let _ = rvs_parse(); }\n",
+                ),
+            ],
+        );
 
         let result = rvs_strip_BIS(&dir);
         let lib_source = std::fs::read_to_string(dir.join("src/lib.rs")).unwrap();
@@ -873,16 +875,14 @@ mod tests {
 
     #[test]
     fn test_20260706_strip_skips_direct_trait_impl_candidates() {
-        let dir = rvs_make_temp_dir_BIS("strip-trait-impl-method");
-        let cargo_toml =
-            "[package]\nname = \"strip-trait-demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n";
-        std::fs::write(dir.join("Cargo.toml"), cargo_toml).unwrap();
-        std::fs::create_dir_all(dir.join("src")).unwrap();
-        std::fs::write(
-            dir.join("src/lib.rs"),
-            "pub trait Api { fn rvs_fetch_P(&self) -> i32; }\npub struct Client;\nimpl Api for Client { fn rvs_fetch_P(&self) -> i32 { 1 } }\npub fn rvs_run_P(api: &dyn Api) -> i32 { api.rvs_fetch_P() }\n",
-        )
-        .unwrap();
+        let dir = rvs_make_cargo_project_BIS(
+            "strip-trait-impl-method",
+            "strip-trait-demo",
+            &[(
+                "src/lib.rs",
+                "pub trait Api { fn rvs_fetch_P(&self) -> i32; }\npub struct Client;\nimpl Api for Client { fn rvs_fetch_P(&self) -> i32 { 1 } }\npub fn rvs_run_P(api: &dyn Api) -> i32 { api.rvs_fetch_P() }\n",
+            )],
+        );
 
         let result = rvs_strip_BIS(&dir);
         let source = std::fs::read_to_string(dir.join("src/lib.rs")).unwrap();

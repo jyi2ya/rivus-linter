@@ -273,7 +273,9 @@ mod tests {
     use super::*;
     use crate::artifacts::FnNode;
     use crate::symbols::DefPath;
-    use crate::test_support::{rvs_make_temp_dir_BIS, rvs_snapshot_BIS};
+    use crate::test_support::{
+        rvs_make_cargo_project_BIS, rvs_make_temp_dir_BIS, rvs_snapshot_BIS,
+    };
 
     #[test]
     fn test_20260709_build_report_table() {
@@ -644,34 +646,30 @@ mod tests {
 
     #[test]
     fn test_20260708_run_report_accepts_async_fn_project() {
-        let dir = rvs_make_temp_dir_BIS("report-async-project");
-        std::fs::create_dir_all(dir.join("src")).unwrap();
-        std::fs::write(
-            dir.join("Cargo.toml"),
-            "[package]\nname = \"report-async-project\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
-        )
-        .unwrap();
-        std::fs::write(
-            dir.join("src/lib.rs"),
-            concat!(
-                "#![allow(non_snake_case)]\n",
-                "pub async fn rvs_send_messages_AS(x: i32) -> i32 {\n",
-                "    debug_assert!(x > 0);\n",
-                "    if x > 1 { x } else { x + 1 }\n",
-                "}\n",
-                "\n",
-                "#[cfg(test)]\n",
-                "mod tests {\n",
-                "    use super::*;\n",
-                "\n",
-                "    #[test]\n",
-                "    fn test_20260708_async_report_project() {\n",
-                "        std::mem::drop(rvs_send_messages_AS(1));\n",
-                "    }\n",
-                "}\n",
-            ),
-        )
-        .unwrap();
+        let dir = rvs_make_cargo_project_BIS(
+            "report-async-project",
+            "report-async-project",
+            &[(
+                "src/lib.rs",
+                concat!(
+                    "#![allow(non_snake_case)]\n",
+                    "pub async fn rvs_send_messages_AS(x: i32) -> i32 {\n",
+                    "    debug_assert!(x > 0);\n",
+                    "    if x > 1 { x } else { x + 1 }\n",
+                    "}\n",
+                    "\n",
+                    "#[cfg(test)]\n",
+                    "mod tests {\n",
+                    "    use super::*;\n",
+                    "\n",
+                    "    #[test]\n",
+                    "    fn test_20260708_async_report_project() {\n",
+                    "        std::mem::drop(rvs_send_messages_AS(1));\n",
+                    "    }\n",
+                    "}\n",
+                ),
+            )],
+        );
 
         let result = rvs_run_report_BIMPS(&dir);
         let local_crate_names = rvs_load_local_crate_prefixes_BIS(&dir).unwrap();
