@@ -176,7 +176,9 @@ fn rvs_collect_std_unknown_callees(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{rvs_make_temp_dir_BIS, rvs_snapshot_BIS};
+    use crate::test_support::{
+        rvs_make_cargo_project_BIS, rvs_make_temp_dir_BIS, rvs_snapshot_BIS,
+    };
 
     #[test]
     fn test_20260702_infer_capsmap_rejects_workspace_root() {
@@ -222,14 +224,11 @@ mod tests {
 
     #[test]
     fn test_20260706_infer_std_rejects_caps_file() {
-        let dir = rvs_make_temp_dir_BIS("infer-std-caps-file");
-        std::fs::write(
-            dir.join("Cargo.toml"),
-            "[package]\nname = \"infer-std-caps-file\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
-        )
-        .unwrap();
-        std::fs::create_dir_all(dir.join("src")).unwrap();
-        std::fs::write(dir.join("src/lib.rs"), "pub fn rvs_add() -> i32 { 1 }\n").unwrap();
+        let dir = rvs_make_cargo_project_BIS(
+            "infer-std-caps-file",
+            "infer-std-caps-file",
+            &[("src/lib.rs", "pub fn rvs_add() -> i32 { 1 }\n")],
+        );
         std::fs::write(dir.join("caps"), "bad=Z\n").unwrap();
 
         let result = rvs_run_infer_std_BIMPS(&dir, Path::new("caps/std"));
@@ -292,14 +291,11 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_20260706_infer_std_rejects_broken_caps_symlink() {
-        let dir = rvs_make_temp_dir_BIS("infer-std-broken-caps-symlink");
-        std::fs::write(
-            dir.join("Cargo.toml"),
-            "[package]\nname = \"infer-std-broken-caps\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
-        )
-        .unwrap();
-        std::fs::create_dir_all(dir.join("src")).unwrap();
-        std::fs::write(dir.join("src/lib.rs"), "pub fn rvs_add() -> i32 { 1 }\n").unwrap();
+        let dir = rvs_make_cargo_project_BIS(
+            "infer-std-broken-caps-symlink",
+            "infer-std-broken-caps",
+            &[("src/lib.rs", "pub fn rvs_add() -> i32 { 1 }\n")],
+        );
         std::os::unix::fs::symlink(dir.join("missing-caps"), dir.join("caps")).unwrap();
 
         let result = rvs_run_infer_std_BIMPS(&dir, Path::new("caps/std"));
@@ -317,15 +313,12 @@ mod tests {
 
     #[test]
     fn test_20260707_infer_std_rejects_invalid_seed_before_callgraph() {
-        let dir = rvs_make_temp_dir_BIS("infer-std-invalid-seed-preflight");
-        std::fs::write(
-            dir.join("Cargo.toml"),
-            "[package]\nname = \"infer-std-invalid-seed\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
-        )
-        .unwrap();
-        std::fs::create_dir_all(dir.join("src")).unwrap();
+        let dir = rvs_make_cargo_project_BIS(
+            "infer-std-invalid-seed-preflight",
+            "infer-std-invalid-seed",
+            &[("src/lib.rs", "pub fn rvs_add() -> i32 { 1 }\n")],
+        );
         std::fs::create_dir_all(dir.join("caps")).unwrap();
-        std::fs::write(dir.join("src/lib.rs"), "pub fn rvs_add() -> i32 { 1 }\n").unwrap();
         std::fs::write(dir.join("caps/seed"), "demo=Z\n").unwrap();
 
         let result = rvs_run_infer_std_BIMPS(&dir, Path::new("caps/std"));
@@ -344,15 +337,12 @@ mod tests {
 
     #[test]
     fn test_20260706_infer_capsmap_rejects_output_directory_before_cache_write() {
-        let dir = rvs_make_temp_dir_BIS("infer-capsmap-output-dir-preflight");
-        std::fs::write(
-            dir.join("Cargo.toml"),
-            "[package]\nname = \"infer-capsmap-output-dir\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
-        )
-        .unwrap();
-        std::fs::create_dir_all(dir.join("src")).unwrap();
+        let dir = rvs_make_cargo_project_BIS(
+            "infer-capsmap-output-dir-preflight",
+            "infer-capsmap-output-dir",
+            &[("src/lib.rs", "pub fn rvs_add() -> i32 { 1 }\n")],
+        );
         std::fs::create_dir_all(dir.join("caps")).unwrap();
-        std::fs::write(dir.join("src/lib.rs"), "pub fn rvs_add() -> i32 { 1 }\n").unwrap();
         let output_path = dir.join("out-dir");
         std::fs::create_dir_all(&output_path).unwrap();
 
@@ -374,15 +364,12 @@ mod tests {
 
     #[test]
     fn test_20260707_infer_capsmap_rejects_dotdot_output_before_callgraph() {
-        let dir = rvs_make_temp_dir_BIS("infer-capsmap-dotdot-output");
-        std::fs::write(
-            dir.join("Cargo.toml"),
-            "[package]\nname = \"infer-capsmap-dotdot-output\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
-        )
-        .unwrap();
-        std::fs::create_dir_all(dir.join("src")).unwrap();
+        let dir = rvs_make_cargo_project_BIS(
+            "infer-capsmap-dotdot-output",
+            "infer-capsmap-dotdot-output",
+            &[("src/lib.rs", "pub fn rvs_add() -> i32 { 1 }\n")],
+        );
         std::fs::create_dir_all(dir.join("caps")).unwrap();
-        std::fs::write(dir.join("src/lib.rs"), "pub fn rvs_add() -> i32 { 1 }\n").unwrap();
         let output_path = PathBuf::from("target/../target/rivus-inferred-capsmap.txt");
 
         let result = rvs_run_infer_capsmap_BIMPS(&dir, &output_path);
@@ -405,15 +392,12 @@ mod tests {
 
     #[test]
     fn test_20260706_infer_capsmap_rejects_invalid_seed_before_callgraph() {
-        let dir = rvs_make_temp_dir_BIS("infer-capsmap-invalid-seed-preflight");
-        std::fs::write(
-            dir.join("Cargo.toml"),
-            "[package]\nname = \"infer-capsmap-invalid-seed\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
-        )
-        .unwrap();
-        std::fs::create_dir_all(dir.join("src")).unwrap();
+        let dir = rvs_make_cargo_project_BIS(
+            "infer-capsmap-invalid-seed-preflight",
+            "infer-capsmap-invalid-seed",
+            &[("src/lib.rs", "pub fn rvs_add() -> i32 { 1 }\n")],
+        );
         std::fs::create_dir_all(dir.join("caps")).unwrap();
-        std::fs::write(dir.join("src/lib.rs"), "pub fn rvs_add() -> i32 { 1 }\n").unwrap();
         std::fs::write(dir.join("caps/seed"), "demo=Z\n").unwrap();
 
         let result = rvs_run_infer_capsmap_BIMPS(&dir, Path::new("caps/deps"));
@@ -432,15 +416,12 @@ mod tests {
 
     #[test]
     fn test_20260710_infer_capsmap_replaces_invalid_deps() {
-        let dir = rvs_make_temp_dir_BIS("infer-capsmap-invalid-old-deps");
-        std::fs::write(
-            dir.join("Cargo.toml"),
-            "[package]\nname = \"infer-capsmap-invalid-old-deps\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
-        )
-        .unwrap();
-        std::fs::create_dir_all(dir.join("src")).unwrap();
+        let dir = rvs_make_cargo_project_BIS(
+            "infer-capsmap-invalid-old-deps",
+            "infer-capsmap-invalid-old-deps",
+            &[("src/lib.rs", "pub fn rvs_add() -> i32 { 1 }\n")],
+        );
         std::fs::create_dir_all(dir.join("caps")).unwrap();
-        std::fs::write(dir.join("src/lib.rs"), "pub fn rvs_add() -> i32 { 1 }\n").unwrap();
         std::fs::write(dir.join("caps/deps"), "broken=Z\n").unwrap();
 
         let result = rvs_run_infer_capsmap_BIMPS(&dir, Path::new("caps/deps"));

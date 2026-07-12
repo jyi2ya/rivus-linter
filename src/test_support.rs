@@ -1,5 +1,5 @@
 use std::ffi::OsStr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 fn rvs_bless_value_enabled(value: Option<&OsStr>) -> bool {
     value.and_then(OsStr::to_str) == Some("1")
@@ -79,6 +79,33 @@ pub(crate) fn rvs_make_temp_dir_BIS(tag: &str) -> PathBuf {
     dir
 }
 
+pub(crate) fn rvs_make_cargo_project_BIS(
+    tag: &str,
+    package_name: &str,
+    files: &[(&str, &str)],
+) -> PathBuf {
+    let dir = rvs_make_temp_dir_BIS(tag);
+    let manifest =
+        format!("[package]\nname = \"{package_name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n");
+    std::fs::write(dir.join("Cargo.toml"), manifest).unwrap();
+
+    for (relative_path, contents) in files {
+        let relative_path = Path::new(relative_path);
+        debug_assert!(relative_path.is_relative());
+        debug_assert!(!relative_path.components().any(|component| matches!(
+            component,
+            std::path::Component::ParentDir | std::path::Component::RootDir
+        )));
+        let path = dir.join(relative_path);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(path, contents).unwrap();
+    }
+
+    dir
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -120,5 +147,19 @@ mod tests {
             "test_20260710_snapshot_bless_flag_and_comparison_logic",
             &output,
         );
+    }
+
+    #[test]
+    fn test_20260712_make_cargo_project_layout() {
+        let dir = rvs_make_cargo_project_BIS(
+            "cargo-project-layout",
+            "fixture-demo",
+            &[("src/lib.rs", "pub fn value() -> i32 { 1 }\n")],
+        );
+        let manifest = std::fs::read_to_string(dir.join("Cargo.toml")).unwrap();
+        let source = std::fs::read_to_string(dir.join("src/lib.rs")).unwrap();
+        let output = format!("manifest={manifest:?}\nsource={source:?}\n");
+        rvs_snapshot_BIS("test_20260712_make_cargo_project_layout", &output);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

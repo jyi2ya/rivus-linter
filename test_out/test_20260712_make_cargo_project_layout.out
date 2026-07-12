@@ -1,0 +1,2 @@
+manifest="[package]\nname = \"fixture-demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n"
+source="pub fn value() -> i32 { 1 }\n"
