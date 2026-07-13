@@ -1,0 +1,8 @@
+result_is_ok=true
+lib:
+#[path = "../tests/production.rs"]
+mod production;
+pub use production::parse;
+
+module:
+pub fn parse() -> i32 { 1 }

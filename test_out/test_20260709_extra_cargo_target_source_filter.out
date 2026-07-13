@@ -1,7 +1,0 @@
-src/lib.rs=false
-src/bin/tool.rs=false
-tests/upload_files.rs=true
-tests/fixtures/mod.rs=true
-examples/demo.rs=true
-benches/throughput.rs=true
-../outside/tests/demo.rs=false

@@ -27,7 +27,6 @@ struct FunctionNode {
     name: FnName,
     source: FnSource,
     position: FilePosition,
-    is_in_trait_impl: bool,
 }
 
 #[derive(Debug)]
@@ -233,24 +232,20 @@ fn rvs_load_workspace_BIS(
     Ok((analysis, vfs, local_files))
 }
 
-fn rvs_is_extra_cargo_target_source(file_path: &Path, canonical_path: &Path) -> bool {
-    let Ok(relative) = file_path.strip_prefix(canonical_path) else {
-        return false;
-    };
-    let Some(first) = relative.components().next() else {
-        return false;
-    };
-    let std::path::Component::Normal(name) = first else {
-        return false;
-    };
-    name == "tests" || name == "examples" || name == "benches"
-}
-
-/// Finds all function/method definitions in local files and returns
-/// a list of [`FunctionNode`]s with name, position, and context flags.
-fn rvs_find_functions_BIMS(analysis: &Analysis, local_files: &[LocalVfsFile]) -> Vec<FunctionNode> {
+/// Resolves source-plan entries to rust-analyzer function positions.
+fn rvs_find_functions_BIMS(
+    analysis: &Analysis,
+    local_files: &[LocalVfsFile],
+    rename_map: &HashMap<FnSource, FnName>,
+) -> Vec<FunctionNode> {
     let mut functions: Vec<FunctionNode> = Vec::new();
     for local_file in local_files {
+        if !rename_map
+            .keys()
+            .any(|source| source.file == local_file.path)
+        {
+            continue;
+        }
         let structure_config = FileStructureConfig {
             exclude_locals: true,
         };
@@ -263,16 +258,6 @@ fn rvs_find_functions_BIMS(analysis: &Analysis, local_files: &[LocalVfsFile]) ->
             Ok(s) => s,
             Err(_) => continue,
         };
-
-        // Collect trait impl ranges so we can flag functions inside them.
-        let mut trait_impl_ranges: Vec<ra_ap_ide::TextRange> = Vec::new();
-        for node in &nodes {
-            if let StructureNodeKind::SymbolKind(SymbolKind::Impl) = node.kind
-                && node.label.contains(" for ")
-            {
-                trait_impl_ranges.push(node.node_range);
-            }
-        }
 
         for node in &nodes {
             match node.kind {
@@ -298,21 +283,21 @@ fn rvs_find_functions_BIMS(analysis: &Analysis, local_files: &[LocalVfsFile]) ->
                 continue;
             }
 
-            let is_in_trait_impl = trait_impl_ranges
-                .iter()
-                .any(|r| r.contains_range(node.navigation_range));
+            let source = FnSource::rvs_new(
+                local_file.path.clone(),
+                u32::from(node.navigation_range.start()),
+                u32::from(node.navigation_range.end()),
+            );
+            if !rename_map.contains_key(&source) {
+                continue;
+            }
             functions.push(FunctionNode {
                 name,
-                source: FnSource::rvs_new(
-                    local_file.path.clone(),
-                    u32::from(node.navigation_range.start()),
-                    u32::from(node.navigation_range.end()),
-                ),
+                source,
                 position: FilePosition {
                     file_id: local_file.file_id,
                     offset: node.navigation_range.start(),
                 },
-                is_in_trait_impl,
             });
         }
     }
@@ -540,28 +525,25 @@ pub fn rvs_apply_ra_source_renames_BIS(
         .map_err(|e| format!("cannot canonicalize '{}': {e}", path.display()))?;
 
     let (analysis, vfs, local_files) = rvs_load_workspace_BIS(&canonical_path)?;
-    let all_functions = rvs_find_functions_BIMS(&analysis, &local_files);
-    let eligible: Vec<FunctionNode> = all_functions
-        .into_iter()
-        .filter(|f| {
-            !f.is_in_trait_impl
-                && !rvs_is_extra_cargo_target_source(&f.source.file, &canonical_path)
-        })
-        .collect();
+    let functions = rvs_find_functions_BIMS(&analysis, &local_files, rename_map);
 
-    let stats =
-        match rvs_apply_source_renames_BIS(&analysis, &vfs, &eligible, rename_map, &canonical_path)
-        {
-            Ok(stats) => stats,
-            Err(e) => {
-                if let Err(invalidate_error) = rvs_invalidate_callgraph_cache_BIS(path) {
-                    return Err(format!(
-                        "{e}; additionally failed to invalidate callgraph cache: {invalidate_error}"
-                    ));
-                }
-                return Err(e);
+    let stats = match rvs_apply_source_renames_BIS(
+        &analysis,
+        &vfs,
+        &functions,
+        rename_map,
+        &canonical_path,
+    ) {
+        Ok(stats) => stats,
+        Err(e) => {
+            if let Err(invalidate_error) = rvs_invalidate_callgraph_cache_BIS(path) {
+                return Err(format!(
+                    "{e}; additionally failed to invalidate callgraph cache: {invalidate_error}"
+                ));
             }
-        };
+            return Err(e);
+        }
+    };
     if stats.files_changed > 0 {
         rvs_invalidate_callgraph_cache_BIS(path)?;
     }
@@ -712,29 +694,6 @@ mod tests {
     use ra_ap_ide::{TextRange, TextSize};
 
     #[test]
-    fn test_20260709_extra_cargo_target_source_filter() {
-        let root = Path::new("/workspace/demo");
-        let cases = [
-            ("src/lib.rs", false),
-            ("src/bin/tool.rs", false),
-            ("tests/upload_files.rs", true),
-            ("tests/fixtures/mod.rs", true),
-            ("examples/demo.rs", true),
-            ("benches/throughput.rs", true),
-            ("../outside/tests/demo.rs", false),
-        ];
-        let mut output = String::new();
-        for (relative, expected) in cases {
-            let path = root.join(relative);
-            let actual = rvs_is_extra_cargo_target_source(&path, root);
-            output.push_str(&format!("{relative}={actual}\n"));
-            assert_eq!(actual, expected, "unexpected filter result for {relative}");
-        }
-
-        rvs_snapshot_BIS("test_20260709_extra_cargo_target_source_filter", &output);
-    }
-
-    #[test]
     fn test_20260610_compute_strip_name_with_suffix() {
         assert_eq!(
             rvs_compute_strip_name("rvs_write_db_ABI"),
@@ -873,6 +832,38 @@ mod tests {
         assert!(main_source.contains("fn parse()"));
         assert!(main_source.contains("parse();"));
 
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260713_strip_renames_production_module_under_tests_directory() {
+        let dir = rvs_make_cargo_project_BIS(
+            "strip-production-module-under-tests",
+            "strip-production-path-demo",
+            &[
+                (
+                    "src/lib.rs",
+                    "#[path = \"../tests/production.rs\"]\nmod production;\npub use production::rvs_parse;\n",
+                ),
+                ("tests/production.rs", "pub fn rvs_parse() -> i32 { 1 }\n"),
+            ],
+        );
+
+        let result = rvs_strip_BIS(&dir);
+        let lib_source = std::fs::read_to_string(dir.join("src/lib.rs")).unwrap();
+        let module_source = std::fs::read_to_string(dir.join("tests/production.rs")).unwrap();
+        let output = format!(
+            "result_is_ok={}\nlib:\n{lib_source}\nmodule:\n{module_source}",
+            result.is_ok()
+        );
+        rvs_snapshot_BIS(
+            "test_20260713_strip_renames_production_module_under_tests_directory",
+            &output,
+        );
+
+        assert!(result.is_ok(), "strip should succeed: {result:?}");
+        assert!(lib_source.contains("pub use production::parse;"));
+        assert!(module_source.contains("pub fn parse()"));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

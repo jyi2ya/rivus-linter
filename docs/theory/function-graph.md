@@ -38,6 +38,7 @@
 - callgraph artifact 负责把这些节点持久化；artifact 使用显式 schema version，读取时同时兼容当前版本之前没有 envelope 的旧图
 - 每个参与收集的 crate 都必须成功写出自己的 artifact；任一写入失败都使本次收集失败，不能用其他 crate 的部分图继续分析
 - 源码写回只使用 artifact 记录的路径基准；旧 artifact 没有基准时允许兼容解析，但多个候选都存在则拒绝猜测
+- 源码写回的 eligibility 只由 rustc 函数图生成的精确 source plan 决定；rust-analyzer 只把计划中的文件和字节范围解析为语义 rename position，不能按目录或语法标签再次筛选候选
 - 同一命令已经确定本地 crate 边界后，callgraph 收集、std cache 选择、报告和缓存过滤都必须接收并复用这一份边界快照，并通过同一个 `LocalScope` 执行 typed path 和字符串 path 的归属判定，不允许各阶段重新构造 prefix 规则或用可选参数在执行中途重新探测项目范围
 - `check` 的父进程在启动两个 Cargo 阶段前加载一次项目 caps 快照；第一阶段只执行非能力 HIR lint，不重新解析 caps，最终离线能力分析必须复用命令开始时的同一份快照
 - Cargo target 范围使用具名策略区分 production target 与 test/example/bench target；本地 crate 发现与 Cargo invocation 必须共享同一策略，不能用含义不明的布尔值分别传递
