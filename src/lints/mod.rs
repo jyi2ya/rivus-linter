@@ -37,210 +37,168 @@ use node::{
 
 // ─── Lint declarations ───────────────────────────────────────────────────
 
-macro_rules! rvs_declare {
-    ($name:ident, Deny, $desc:expr) => {
-        declare_tool_lint! { pub rivus::$name, Deny, $desc }
-    };
-    ($name:ident, Warn, $desc:expr) => {
-        declare_tool_lint! { pub rivus::$name, Warn, $desc }
+macro_rules! rvs_declare_lints {
+    ($(($name:ident, $level:ident, $desc:expr)),+ $(,)?) => {
+        $(declare_tool_lint! { pub rivus::$name, $level, $desc })+
+
+        pub static RIVUS_LINTS: &[&rustc_lint::Lint] = &[$($name),+];
     };
 }
 
-rvs_declare!(RVS_CALL_VIOLATION, Deny, "capability call chain violation");
-rvs_declare!(
-    RVS_STATIC_REF,
-    Deny,
-    "static/thread_local reference without capability"
+rvs_declare_lints!(
+    (RVS_CALL_VIOLATION, Deny, "capability call chain violation"),
+    (
+        RVS_STATIC_REF,
+        Deny,
+        "static/thread_local reference without capability"
+    ),
+    (RVS_STUB_MACRO, Deny, "todo!/unimplemented!() stub"),
+    (RVS_EMPTY_FN, Deny, "empty function body"),
+    (
+        RVS_MISSING_DEBUG_ASSERT,
+        Warn,
+        "primitive numeric parameter without debug_assert!"
+    ),
+    (
+        RVS_MISSING_ALLOW,
+        Warn,
+        "rvs_ function with uppercase suffix but no #[allow(non_snake_case)]"
+    ),
+    (RVS_NON_RVS_FN, Warn, "function missing rvs_ prefix"),
+    (
+        RVS_CONTRACT_MISMATCH,
+        Warn,
+        "Port method name does not match inferred public contract"
+    ),
+    (
+        RVS_UNKNOWN_CALLEE,
+        Warn,
+        "call to function neither rvs_-prefixed nor in capsmap"
+    ),
+    (
+        RVS_MISSING_MUTABLE,
+        Warn,
+        "function has &mut param but suffix lacks M"
+    ),
+    (RVS_MISSING_ASYNC, Warn, "async fn but suffix lacks A"),
+    (RVS_MISSING_UNSAFE, Warn, "unsafe code but suffix lacks U"),
+    (
+        RVS_MISSING_SIDE_EFFECT,
+        Warn,
+        "reads static but suffix lacks S"
+    ),
+    (
+        RVS_MISSING_THREAD_LOCAL,
+        Warn,
+        "reads thread_local! but suffix lacks T"
+    ),
+    (
+        RVS_NON_ALPHABETICAL_SUFFIX,
+        Warn,
+        "capability suffix letters not in alphabetical order"
+    ),
+    (
+        RVS_DUPLICATE_SUFFIX,
+        Warn,
+        "duplicate letter in capability suffix"
+    ),
+    (
+        RVS_UNKNOWN_SUFFIX_LETTER,
+        Warn,
+        "suffix contains unrecognized capability letters"
+    ),
+    (RVS_SPAWN_WARNING, Warn, "unstructured spawn"),
+    (
+        RVS_DEAD_CODE,
+        Warn,
+        "rvs_ function marked #[allow(dead_code)] or #[allow(unused)]"
+    ),
+    (
+        RVS_TEST_NAME_FORMAT,
+        Warn,
+        "test name does not match format"
+    ),
+    (RVS_BANNED_IMPORT, Warn, "import of banned crate"),
+    (
+        RVS_MISSING_DEBUG_DERIVE,
+        Warn,
+        "pub struct/enum missing #[derive(Debug)]"
+    ),
+    (
+        RVS_ERROR_SWALLOW,
+        Warn,
+        ".ok() or .unwrap_or_default() swallows errors"
+    ),
+    (
+        RVS_CATCH_UNWIND,
+        Warn,
+        "catch_unwind — fix panic source instead"
+    ),
+    (
+        RVS_REFLECTION_USAGE,
+        Warn,
+        "std::any::Any/type_name/type_id — use trait dispatch"
+    ),
+    (
+        RVS_BORROWED_PARAM,
+        Warn,
+        "&String/&Vec<T>/&Box<T> — use &str/&[T]/&T"
+    ),
+    (RVS_INTO_IMPL, Warn, "impl Into<T> — implement From instead"),
+    (
+        RVS_DEREF_POLYMORPHISM,
+        Warn,
+        "impl Deref — use composition instead"
+    ),
+    (
+        RVS_DENY_WARNINGS,
+        Warn,
+        "#![deny(warnings)] — use named lints"
+    ),
+    (RVS_WILDCARD_IMPORT, Warn, "use xxx::*; wildcard import"),
+    (
+        RVS_MISSING_DOC,
+        Warn,
+        "pub fn/method missing /// doc comment"
+    ),
+    (
+        RVS_MISSING_SAFETY_DOC,
+        Warn,
+        "unsafe fn missing /// # Safety"
+    ),
+    (
+        RVS_CATCH_ALL_ERROR_VARIANT,
+        Warn,
+        "error enum has Unknown/Other catch-all variant"
+    ),
+    (
+        RVS_VALIDATE_RETURNS_UNIT,
+        Warn,
+        "validate/check/verify returns Result<(),E> — use TryFrom"
+    ),
+    (
+        RVS_CONSUMED_ARG_ON_ERROR,
+        Warn,
+        "owned param consumed but not preserved in error type"
+    ),
+    (RVS_TODO_COMMENT, Warn, "// TODO or // FIXME comment"),
+    (
+        RVS_MISSING_TEST_OUTPUT,
+        Warn,
+        "test missing test_out/{name}.out snapshot"
+    ),
+    (RVS_DUPLICATE_TEST, Warn, "duplicate test function name"),
+    (
+        RVS_UNTESTED_GOOD_FN,
+        Warn,
+        "good function not called by any test"
+    ),
+    (
+        RVS_UNTESTED_OK_FN,
+        Warn,
+        "ok function (ABMP subset, mock-testable) not called by any test"
+    ),
 );
-rvs_declare!(RVS_STUB_MACRO, Deny, "todo!/unimplemented!() stub");
-rvs_declare!(RVS_EMPTY_FN, Deny, "empty function body");
-rvs_declare!(
-    RVS_MISSING_DEBUG_ASSERT,
-    Warn,
-    "primitive numeric parameter without debug_assert!"
-);
-rvs_declare!(
-    RVS_MISSING_ALLOW,
-    Warn,
-    "rvs_ function with uppercase suffix but no #[allow(non_snake_case)]"
-);
-rvs_declare!(RVS_NON_RVS_FN, Warn, "function missing rvs_ prefix");
-rvs_declare!(
-    RVS_CONTRACT_MISMATCH,
-    Warn,
-    "Port method name does not match inferred public contract"
-);
-rvs_declare!(
-    RVS_UNKNOWN_CALLEE,
-    Warn,
-    "call to function neither rvs_-prefixed nor in capsmap"
-);
-rvs_declare!(
-    RVS_MISSING_MUTABLE,
-    Warn,
-    "function has &mut param but suffix lacks M"
-);
-rvs_declare!(RVS_MISSING_ASYNC, Warn, "async fn but suffix lacks A");
-rvs_declare!(RVS_MISSING_UNSAFE, Warn, "unsafe code but suffix lacks U");
-rvs_declare!(
-    RVS_MISSING_SIDE_EFFECT,
-    Warn,
-    "reads static but suffix lacks S"
-);
-rvs_declare!(
-    RVS_MISSING_THREAD_LOCAL,
-    Warn,
-    "reads thread_local! but suffix lacks T"
-);
-rvs_declare!(
-    RVS_NON_ALPHABETICAL_SUFFIX,
-    Warn,
-    "capability suffix letters not in alphabetical order"
-);
-rvs_declare!(
-    RVS_DUPLICATE_SUFFIX,
-    Warn,
-    "duplicate letter in capability suffix"
-);
-rvs_declare!(
-    RVS_UNKNOWN_SUFFIX_LETTER,
-    Warn,
-    "suffix contains unrecognized capability letters"
-);
-rvs_declare!(RVS_SPAWN_WARNING, Warn, "unstructured spawn");
-rvs_declare!(
-    RVS_DEAD_CODE,
-    Warn,
-    "rvs_ function marked #[allow(dead_code)] or #[allow(unused)]"
-);
-rvs_declare!(
-    RVS_TEST_NAME_FORMAT,
-    Warn,
-    "test name does not match format"
-);
-rvs_declare!(RVS_BANNED_IMPORT, Warn, "import of banned crate");
-rvs_declare!(
-    RVS_MISSING_DEBUG_DERIVE,
-    Warn,
-    "pub struct/enum missing #[derive(Debug)]"
-);
-rvs_declare!(
-    RVS_ERROR_SWALLOW,
-    Warn,
-    ".ok() or .unwrap_or_default() swallows errors"
-);
-rvs_declare!(
-    RVS_CATCH_UNWIND,
-    Warn,
-    "catch_unwind — fix panic source instead"
-);
-rvs_declare!(
-    RVS_REFLECTION_USAGE,
-    Warn,
-    "std::any::Any/type_name/type_id — use trait dispatch"
-);
-rvs_declare!(
-    RVS_BORROWED_PARAM,
-    Warn,
-    "&String/&Vec<T>/&Box<T> — use &str/&[T]/&T"
-);
-rvs_declare!(RVS_INTO_IMPL, Warn, "impl Into<T> — implement From instead");
-rvs_declare!(
-    RVS_DEREF_POLYMORPHISM,
-    Warn,
-    "impl Deref — use composition instead"
-);
-rvs_declare!(
-    RVS_DENY_WARNINGS,
-    Warn,
-    "#![deny(warnings)] — use named lints"
-);
-rvs_declare!(RVS_WILDCARD_IMPORT, Warn, "use xxx::*; wildcard import");
-rvs_declare!(
-    RVS_MISSING_DOC,
-    Warn,
-    "pub fn/method missing /// doc comment"
-);
-rvs_declare!(
-    RVS_MISSING_SAFETY_DOC,
-    Warn,
-    "unsafe fn missing /// # Safety"
-);
-rvs_declare!(
-    RVS_CATCH_ALL_ERROR_VARIANT,
-    Warn,
-    "error enum has Unknown/Other catch-all variant"
-);
-rvs_declare!(
-    RVS_VALIDATE_RETURNS_UNIT,
-    Warn,
-    "validate/check/verify returns Result<(),E> — use TryFrom"
-);
-rvs_declare!(
-    RVS_CONSUMED_ARG_ON_ERROR,
-    Warn,
-    "owned param consumed but not preserved in error type"
-);
-rvs_declare!(RVS_TODO_COMMENT, Warn, "// TODO or // FIXME comment");
-rvs_declare!(
-    RVS_MISSING_TEST_OUTPUT,
-    Warn,
-    "test missing test_out/{name}.out snapshot"
-);
-rvs_declare!(RVS_DUPLICATE_TEST, Warn, "duplicate test function name");
-rvs_declare!(
-    RVS_UNTESTED_GOOD_FN,
-    Warn,
-    "good function not called by any test"
-);
-rvs_declare!(
-    RVS_UNTESTED_OK_FN,
-    Warn,
-    "ok function (ABMP subset, mock-testable) not called by any test"
-);
-
-pub static RIVUS_LINTS: &[&rustc_lint::Lint] = &[
-    RVS_CALL_VIOLATION,
-    RVS_STATIC_REF,
-    RVS_STUB_MACRO,
-    RVS_EMPTY_FN,
-    RVS_MISSING_DEBUG_ASSERT,
-    RVS_MISSING_ALLOW,
-    RVS_NON_RVS_FN,
-    RVS_CONTRACT_MISMATCH,
-    RVS_UNKNOWN_CALLEE,
-    RVS_MISSING_MUTABLE,
-    RVS_MISSING_ASYNC,
-    RVS_MISSING_UNSAFE,
-    RVS_MISSING_SIDE_EFFECT,
-    RVS_MISSING_THREAD_LOCAL,
-    RVS_NON_ALPHABETICAL_SUFFIX,
-    RVS_DUPLICATE_SUFFIX,
-    RVS_UNKNOWN_SUFFIX_LETTER,
-    RVS_SPAWN_WARNING,
-    RVS_DEAD_CODE,
-    RVS_TEST_NAME_FORMAT,
-    RVS_BANNED_IMPORT,
-    RVS_MISSING_DEBUG_DERIVE,
-    RVS_ERROR_SWALLOW,
-    RVS_CATCH_UNWIND,
-    RVS_REFLECTION_USAGE,
-    RVS_BORROWED_PARAM,
-    RVS_INTO_IMPL,
-    RVS_DEREF_POLYMORPHISM,
-    RVS_DENY_WARNINGS,
-    RVS_WILDCARD_IMPORT,
-    RVS_MISSING_DOC,
-    RVS_MISSING_SAFETY_DOC,
-    RVS_CATCH_ALL_ERROR_VARIANT,
-    RVS_VALIDATE_RETURNS_UNIT,
-    RVS_CONSUMED_ARG_ON_ERROR,
-    RVS_TODO_COMMENT,
-    RVS_MISSING_TEST_OUTPUT,
-    RVS_DUPLICATE_TEST,
-    RVS_UNTESTED_GOOD_FN,
-    RVS_UNTESTED_OK_FN,
-];
 
 // ─── Lint pass ───────────────────────────────────────────────────────────
 
