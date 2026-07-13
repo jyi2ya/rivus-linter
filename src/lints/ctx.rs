@@ -1,13 +1,11 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 
 use rustc_hir::HirId;
 use rustc_span::{Ident, Span};
 
+use super::body::BodyFacts;
 use crate::artifacts::FnGraph;
 use crate::symbols::DefPath;
-use rustc_span::def_id::DefId;
-
-use super::body::BodyFacts;
 
 #[derive(Debug)]
 pub(crate) struct CoverageFn {
@@ -78,5 +76,4 @@ pub(crate) struct FnCheckData<'a> {
     pub diagnostic_spans: &'a mut BTreeMap<DefPath, (HirId, Span)>,
     pub collect_caps_facts: bool,
     pub should_emit_lints: bool,
-    pub port_traits: &'a HashSet<DefId>,
 }

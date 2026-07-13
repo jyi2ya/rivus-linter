@@ -55,6 +55,7 @@ rustc_session::session::EarlyDiagCtxt::new=
 rustc_session::session::Session::is_test_crate=
 rustc_session::session::Session::source_map=
 rustc_span::def_id::DefId::as_local=
+rustc_span::def_id::DefId::is_local=
 rustc_span::def_id::LocalDefId::to_def_id=
 rustc_span::RealFileName::local_path=
 rustc_span::hygiene::ExpnId::expn_data=

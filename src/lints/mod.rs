@@ -218,8 +218,6 @@ pub struct RivusLintPass {
     should_emit_lints: bool,
     should_emit_caps_report: bool,
     test_fn_names: HashSet<String>,
-    /// DefIds of Port traits (names ending in Repository/Client) in this crate.
-    port_traits: HashSet<rustc_span::def_id::DefId>,
 }
 
 impl RivusLintPass {
@@ -242,7 +240,6 @@ impl RivusLintPass {
             should_emit_lints: !collect_callgraph,
             should_emit_caps_report,
             test_fn_names: HashSet::new(),
-            port_traits: HashSet::new(),
         }
     }
 
@@ -298,9 +295,6 @@ impl<'tcx> LateLintPass<'tcx> for RivusLintPass {
         if self.should_emit_caps_report {
             self.rvs_ensure_capsmap_BIMS();
         }
-
-        // Collect Port traits (names ending in Repository/Client) in this crate.
-        self.port_traits = port_traits::rvs_collect_port_traits_S(cx);
 
         // Pre-scan: collect names of test functions
         if cx.tcx.sess.is_test_crate() {
@@ -371,7 +365,6 @@ impl<'tcx> LateLintPass<'tcx> for RivusLintPass {
             diagnostic_spans: &mut self.diagnostic_spans,
             collect_caps_facts: self.collect_caps_facts,
             should_emit_lints: self.should_emit_lints,
-            port_traits: &self.port_traits,
         };
         rvs_check_item_MS(
             cx,
@@ -395,7 +388,6 @@ impl<'tcx> LateLintPass<'tcx> for RivusLintPass {
             diagnostic_spans: &mut self.diagnostic_spans,
             collect_caps_facts: self.collect_caps_facts,
             should_emit_lints: self.should_emit_lints,
-            port_traits: &self.port_traits,
         };
         rvs_check_impl_item_MS(
             cx,
@@ -419,7 +411,6 @@ impl<'tcx> LateLintPass<'tcx> for RivusLintPass {
             diagnostic_spans: &mut self.diagnostic_spans,
             collect_caps_facts: self.collect_caps_facts,
             should_emit_lints: self.should_emit_lints,
-            port_traits: &self.port_traits,
         };
         rvs_check_trait_item_MS(cx, trait_item, &mut data);
     }
@@ -693,7 +684,7 @@ fn rvs_check_impl_item_MS<'tcx>(
                 if let Some(trait_ref) = &imp.of_trait
                     && let Some(trait_did) = trait_ref.trait_ref.trait_def_id()
                 {
-                    data.port_traits.contains(&trait_did)
+                    port_traits::rvs_is_local_port_trait_S(cx, trait_did)
                 } else {
                     false
                 }
@@ -756,7 +747,7 @@ fn rvs_check_trait_item_MS<'tcx>(
     // Determine if this trait item belongs to a Port trait.
     let parent = cx.tcx.hir_get_parent_item(trait_item.hir_id());
     let parent_def_id = parent.def_id.to_def_id();
-    let is_port_trait = data.port_traits.contains(&parent_def_id);
+    let is_port_trait = port_traits::rvs_is_local_port_trait_S(cx, parent_def_id);
 
     match &trait_item.kind {
         TraitItemKind::Fn(sig, TraitFn::Provided(body_id)) => {
