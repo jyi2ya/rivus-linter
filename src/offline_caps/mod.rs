@@ -334,7 +334,6 @@ fn rvs_collect_call_diagnostics_M(
         let callee_caps = resolver.rvs_for_contract_check(callee);
         let Some(mismatch) = rvs_collect_call_contract_mismatch(
             callee.rvs_as_str(),
-            None,
             caller_caps,
             callee_caps.as_ref(),
         ) else {

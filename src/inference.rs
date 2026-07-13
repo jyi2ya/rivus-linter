@@ -205,25 +205,12 @@ impl FnContractDiff {
     }
 }
 
-pub(crate) fn rvs_make_callee_display(def_path: &str, src_path: Option<&str>) -> String {
-    if let Some(sp) = src_path {
-        if sp != def_path {
-            format!("{sp} ({def_path})")
-        } else {
-            def_path.to_string()
-        }
-    } else {
-        def_path.to_string()
-    }
-}
-
 pub(crate) fn rvs_collect_call_contract_mismatch(
     def_path: &str,
-    src_path: Option<&str>,
     caps: &CapabilitySet,
     callee_caps: Option<&CapabilitySet>,
 ) -> Option<CallContractMismatch> {
-    let callee_display = rvs_make_callee_display(def_path, src_path);
+    let callee_display = def_path.to_string();
     let Some(callee_caps) = callee_caps else {
         return Some(CallContractMismatch {
             callee_display,
