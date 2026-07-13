@@ -56,24 +56,12 @@ pub(crate) fn rvs_run_annotate_BIMPS(path: &Path) -> Result<(), String> {
         return Ok(());
     }
 
-    let stats = rename::rvs_apply_ra_source_renames_BIS(path, &rename_map)?;
-    if stats.matched_functions == 0 {
-        return Err(format!(
-            "annotate found {} candidate function(s), but none were renamed by rust-analyzer",
-            rename_map.len()
-        ));
-    }
-    if stats.matched_functions < rename_map.len() {
-        return Err(format!(
-            "annotate only renamed {} of {} candidate function(s)",
-            stats.matched_functions,
-            rename_map.len()
-        ));
-    }
+    let renamed_functions = rename_map.len();
+    let files_changed = rename::rvs_apply_ra_source_renames_BIS(path, &rename_map)?;
 
     println!(
         "Annotate complete: renamed {} function(s) in {} file(s).",
-        stats.matched_functions, stats.files_changed
+        renamed_functions, files_changed
     );
     Ok(())
 }

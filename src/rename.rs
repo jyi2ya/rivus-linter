@@ -35,12 +35,6 @@ struct LocalVfsFile {
     path: PathBuf,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct RenameStats {
-    pub(crate) matched_functions: usize,
-    pub(crate) files_changed: usize,
-}
-
 #[derive(Debug, Clone)]
 pub(crate) struct SourceRenameCandidate {
     pub(crate) def_path: DefPath,
@@ -311,10 +305,9 @@ fn rvs_apply_source_renames_BIS(
     functions: &[FunctionNode],
     rename_map: &HashMap<FnSource, FnName>,
     canonical_path: &Path,
-) -> Result<RenameStats, String> {
+) -> Result<usize, String> {
     rvs_preflight_source_rename_matches(rename_map, functions)?;
     let mut file_edits: HashMap<PathBuf, Vec<Indel>> = HashMap::new();
-    let mut matched_functions = 0usize;
 
     let rename_config = RenameConfig {
         prefer_no_std: false,
@@ -338,11 +331,6 @@ fn rvs_apply_source_renames_BIS(
                         func.name, new_name
                     ));
                 }
-                matched_functions = rvs_checked_rename_count(
-                    matched_functions,
-                    1,
-                    "matched rename function count",
-                )?;
             }
             Ok(Err(e)) => {
                 return Err(format!(
@@ -359,10 +347,7 @@ fn rvs_apply_source_renames_BIS(
         }
     }
 
-    rvs_write_collected_edits_BIS(file_edits, canonical_path).map(|files_changed| RenameStats {
-        matched_functions,
-        files_changed,
-    })
+    rvs_write_collected_edits_BIS(file_edits, canonical_path)
 }
 
 fn rvs_write_collected_edits_BIS(
@@ -383,11 +368,10 @@ fn rvs_write_collected_edits_BIS(
         prepared_files.push((file_path, text));
     }
 
-    let mut files_changed = 0usize;
+    let files_changed = prepared_files.len();
     for (file_path, text) in prepared_files {
         std::fs::write(&file_path, &text)
             .map_err(|e| format!("cannot write {}: {e}", file_path.display()))?;
-        files_changed = rvs_checked_rename_count(files_changed, 1, "changed file count")?;
     }
 
     Ok(files_changed)
@@ -502,11 +486,12 @@ pub fn rvs_strip_BIS(path: &Path) -> Result<(), String> {
         return Ok(());
     }
 
-    let stats = rvs_apply_ra_source_renames_BIS(path, &rename_map)?;
+    let renamed_functions = rename_map.len();
+    let files_changed = rvs_apply_ra_source_renames_BIS(path, &rename_map)?;
 
     println!(
         "Strip complete: renamed {} function(s) in {} file(s).",
-        stats.matched_functions, stats.files_changed
+        renamed_functions, files_changed
     );
     Ok(())
 }
@@ -518,7 +503,7 @@ pub fn rvs_strip_BIS(path: &Path) -> Result<(), String> {
 pub fn rvs_apply_ra_source_renames_BIS(
     path: &Path,
     rename_map: &HashMap<FnSource, FnName>,
-) -> Result<RenameStats, String> {
+) -> Result<usize, String> {
     rvs_require_directory_BIS(path)?;
     let canonical_path = path
         .canonicalize()
@@ -527,14 +512,14 @@ pub fn rvs_apply_ra_source_renames_BIS(
     let (analysis, vfs, local_files) = rvs_load_workspace_BIS(&canonical_path)?;
     let functions = rvs_find_functions_BIMS(&analysis, &local_files, rename_map);
 
-    let stats = match rvs_apply_source_renames_BIS(
+    let files_changed = match rvs_apply_source_renames_BIS(
         &analysis,
         &vfs,
         &functions,
         rename_map,
         &canonical_path,
     ) {
-        Ok(stats) => stats,
+        Ok(files_changed) => files_changed,
         Err(e) => {
             if let Err(invalidate_error) = rvs_invalidate_callgraph_cache_BIS(path) {
                 return Err(format!(
@@ -544,11 +529,11 @@ pub fn rvs_apply_ra_source_renames_BIS(
             return Err(e);
         }
     };
-    if stats.files_changed > 0 {
+    if files_changed > 0 {
         rvs_invalidate_callgraph_cache_BIS(path)?;
     }
 
-    Ok(stats)
+    Ok(files_changed)
 }
 
 fn rvs_collect_edits_BIMS(
