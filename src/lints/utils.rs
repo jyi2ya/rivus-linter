@@ -1,8 +1,8 @@
 use std::collections::{BTreeSet, HashSet};
 
 use rustc_hir::{
-    self, Block, Body, Expr, ExprKind, GenericArg, HirId, ImplItem, ImplItemImplKind, Mutability,
-    QPath, TyKind, attrs::AttributeKind, def::DefKind, def_id::DefId,
+    self, Block, Body, Expr, ExprKind, GenericArg, HirId, Mutability, QPath, TyKind,
+    attrs::AttributeKind, def::DefKind, def_id::DefId,
 };
 use rustc_lint::LateContext;
 use rustc_span::{Span, Symbol};
@@ -137,11 +137,6 @@ pub(crate) fn rvs_has_debug_derive(cx: &LateContext<'_>, def_id: DefId) -> bool 
         .blanket_impls()
         .iter()
         .any(|impl_did| cx.tcx.type_of(*impl_did).skip_binder() == item_ty)
-}
-
-pub(crate) fn rvs_is_pub_impl_item(cx: &LateContext<'_>, impl_item: &ImplItem<'_>) -> bool {
-    matches!(impl_item.impl_kind, ImplItemImplKind::Inherent { .. })
-        && cx.tcx.visibility(impl_item.owner_id.def_id).is_public()
 }
 
 pub(crate) fn rvs_has_mutable_params(sig: &rustc_hir::FnSig<'_>) -> bool {
@@ -789,7 +784,6 @@ mod tests {
             let _cx: &LateContext<'_> = unreachable!();
             let _hir_id: HirId = unreachable!();
             let _def_id: DefId = unreachable!();
-            let _impl_item: &ImplItem<'_> = unreachable!();
             let _sig: &rustc_hir::FnSig<'_> = unreachable!();
             let _body: &Body<'_> = unreachable!();
             let _block: &Block<'_> = unreachable!();
@@ -807,7 +801,6 @@ mod tests {
             rvs_has_doc_section(_cx, _hir_id, "Safety");
             rvs_has_any_doc(_attrs);
             rvs_has_debug_derive(_cx, _def_id);
-            rvs_is_pub_impl_item(_cx, _impl_item);
             rvs_has_mutable_params(_sig);
             rvs_is_empty_body(_body);
             rvs_is_only_debug_asserts(_expr);

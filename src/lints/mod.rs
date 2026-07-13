@@ -664,40 +664,27 @@ fn rvs_check_impl_item_MS<'tcx>(
     if let rustc_hir::ImplItemKind::Fn(sig, body_id) = &impl_item.kind {
         let parent = cx.tcx.hir_get_parent_item(impl_item.hir_id());
         let parent_node = cx.tcx.hir_owner_node(parent);
-        let is_trait_impl = matches!(
-            parent_node,
+        let (is_trait_impl, is_port_method) = match parent_node {
             rustc_hir::OwnerNode::Item(Item {
-                kind: ItemKind::Impl(rustc_hir::Impl {
-                    of_trait: Some(_),
-                    ..
-                }),
-                ..
-            })
-        );
-        // Check if this is a Port trait impl method
-        let is_port_method = is_trait_impl && {
-            if let rustc_hir::OwnerNode::Item(Item {
                 kind: ItemKind::Impl(imp),
                 ..
-            }) = parent_node
-            {
-                if let Some(trait_ref) = &imp.of_trait
-                    && let Some(trait_did) = trait_ref.trait_ref.trait_def_id()
-                {
-                    port_traits::rvs_is_local_port_trait_S(cx, trait_did)
-                } else {
-                    false
-                }
-            } else {
-                false
-            }
+            }) => match &imp.of_trait {
+                Some(trait_ref) => (
+                    true,
+                    trait_ref.trait_ref.trait_def_id().is_some_and(|trait_did| {
+                        port_traits::rvs_is_local_port_trait_S(cx, trait_did)
+                    }),
+                ),
+                None => (false, false),
+            },
+            _ => (false, false),
         };
         let name = impl_item.ident.name.as_str();
         let body = cx.tcx.hir_body(*body_id);
         let body_facts = body::rvs_collect_body_facts_M(cx, body);
         let attrs = cx.tcx.hir_attrs(impl_item.hir_id());
         let is_test = utils::rvs_has_attr(attrs, "test") || test_fn_names.contains(name);
-        let is_pub = utils::rvs_is_pub_impl_item(cx, impl_item);
+        let is_pub = !is_trait_impl && cx.tcx.visibility(impl_item.owner_id.def_id).is_public();
         let subject = FnSubject::rvs_body(
             impl_item.ident,
             impl_item.hir_id(),
@@ -721,10 +708,10 @@ fn rvs_check_impl_item_MS<'tcx>(
                     .push(impl_item.span);
                 body::collector::rvs_collect_test_calls_M(&body_facts, test_calls);
             }
-            if !is_test && is_pub && !is_trait_impl {
+            if !is_test && is_pub {
                 missing_doc::rvs_check_fn_S(cx, name, impl_item.span, attrs, true);
             }
-            if is_pub && !is_trait_impl {
+            if is_pub {
                 missing_safety_doc::rvs_check_fn_S(
                     cx,
                     impl_item.hir_id(),
