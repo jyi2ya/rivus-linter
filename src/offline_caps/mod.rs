@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::fmt;
 
 use crate::artifacts::{FnGraph, FnNode};
@@ -6,8 +6,8 @@ use crate::capability::{Capability, CapabilitySet, ParsedFunctionName};
 use crate::capsmap::CapsMap;
 use crate::function_classification::{FunctionClassification, LocalScope};
 use crate::inference::{
-    CallContractMismatchKind, FnContractMismatchKind, PreparedLocalAnalysis,
-    rvs_collect_call_contract_mismatch,
+    CallContractMismatchKind, CalleeCapsResolver, FnContractDiff, FnContractMismatchKind,
+    PreparedLocalAnalysis, rvs_collect_call_contract_mismatch,
 };
 use crate::symbols::{CrateName, DefPath};
 
@@ -112,6 +112,16 @@ impl fmt::Display for OfflineCapsReport {
     }
 }
 
+struct OfflineFnContext<'a> {
+    def_path: &'a DefPath,
+    node: &'a FnNode,
+    classification: FunctionClassification,
+    parsed_name: ParsedFunctionName<'a>,
+    declared_caps: Option<CapabilitySet>,
+    inferred_caps: Option<&'a CapabilitySet>,
+    contract_diff: Option<&'a FnContractDiff>,
+}
+
 pub(crate) fn rvs_check_offline_caps_M(
     graph: &mut FnGraph,
     caps: &CapsMap,
@@ -120,268 +130,257 @@ pub(crate) fn rvs_check_offline_caps_M(
     let mut report = OfflineCapsReport::default();
     let local_scope = LocalScope::rvs_new(local_crate_names);
     let analysis = PreparedLocalAnalysis::rvs_prepare_M(graph, caps, local_crate_names);
-    rvs_collect_contract_diagnostics_M(&mut report, graph, &analysis.diffs, &local_scope);
-    rvs_collect_suffix_diagnostics_M(&mut report, graph, &local_scope);
-    rvs_collect_static_ref_diagnostics_M(&mut report, graph, &local_scope);
-    rvs_collect_call_diagnostics_M(&mut report, graph, caps, &analysis, &local_scope);
+    let diffs_by_path: HashMap<&str, &FnContractDiff> = analysis
+        .diffs
+        .iter()
+        .map(|diff| (diff.def_path.rvs_as_str(), diff))
+        .collect();
+    let resolver = analysis.rvs_resolver(graph, caps);
+    for (def_path, node) in graph.rvs_iter() {
+        let classification = FunctionClassification::rvs_new(&local_scope, def_path, node);
+        if !classification.rvs_is_offline_checked() {
+            continue;
+        }
+        let parsed_name = ParsedFunctionName::rvs_parse(def_path.rvs_as_str());
+        let declared_caps = parsed_name.rvs_declared_caps();
+        let context = OfflineFnContext {
+            def_path,
+            node,
+            classification,
+            parsed_name,
+            declared_caps,
+            inferred_caps: analysis.rvs_inferred().get(def_path),
+            contract_diff: diffs_by_path.get(def_path.rvs_as_str()).copied(),
+        };
+        rvs_collect_contract_diagnostics_M(&mut report, &context);
+        rvs_collect_suffix_diagnostics_M(&mut report, &context);
+        rvs_collect_static_ref_diagnostics_M(&mut report, &context);
+        rvs_collect_call_diagnostics_M(&mut report, &context, &resolver);
+    }
     report.diagnostics.sort();
     report
 }
 
 fn rvs_collect_contract_diagnostics_M(
     report: &mut OfflineCapsReport,
-    graph: &FnGraph,
-    diffs: &[crate::inference::FnContractDiff],
-    local_scope: &LocalScope,
+    context: &OfflineFnContext<'_>,
 ) {
-    for diff in diffs {
-        let Some(node) = graph.rvs_get(diff.def_path.rvs_as_str()) else {
-            continue;
-        };
-        let classification = FunctionClassification::rvs_new(local_scope, &diff.def_path, node);
-        if !classification.rvs_is_contract_enforced() || !classification.rvs_is_offline_checked() {
-            continue;
+    if !context.classification.rvs_is_contract_enforced() {
+        return;
+    }
+    let Some(diff) = context.contract_diff else {
+        return;
+    };
+    let mismatch_kinds = diff.rvs_mismatch_kinds();
+    let selected: Vec<_> = if mismatch_kinds.contains(&FnContractMismatchKind::MissingRvsPrefix) {
+        vec![FnContractMismatchKind::MissingRvsPrefix]
+    } else if mismatch_kinds.contains(&FnContractMismatchKind::NameMismatch)
+        && diff
+            .expected_public_caps
+            .as_ref()
+            .is_some_and(|caps| caps.rvs_contains(Capability::P))
+    {
+        vec![FnContractMismatchKind::NameMismatch]
+    } else {
+        mismatch_kinds
+            .into_iter()
+            .filter(|kind| *kind != FnContractMismatchKind::NameMismatch)
+            .collect()
+    };
+    for kind in selected {
+        let mut details = Vec::new();
+        if let Some(expected) = diff.expected_name.as_ref() {
+            details.push(format!("expected name: {expected}"));
         }
-        let mismatch_kinds = diff.rvs_mismatch_kinds();
-        let selected: Vec<_> = if mismatch_kinds.contains(&FnContractMismatchKind::MissingRvsPrefix)
-        {
-            vec![FnContractMismatchKind::MissingRvsPrefix]
-        } else if mismatch_kinds.contains(&FnContractMismatchKind::NameMismatch)
-            && diff
-                .expected_public_caps
-                .as_ref()
-                .is_some_and(|caps| caps.rvs_contains(Capability::P))
-        {
-            vec![FnContractMismatchKind::NameMismatch]
-        } else {
-            mismatch_kinds
-                .into_iter()
-                .filter(|kind| *kind != FnContractMismatchKind::NameMismatch)
-                .collect()
-        };
-        for kind in selected {
-            let mut details = Vec::new();
-            if let Some(expected) = diff.expected_name.as_ref() {
-                details.push(format!("expected name: {expected}"));
+        details.push(format!(
+            "declared caps: {}",
+            rvs_format_optional_caps(diff.declared_public_caps.as_ref())
+        ));
+        details.push(format!(
+            "inferred caps: {}",
+            rvs_format_optional_caps(diff.expected_public_caps.as_ref())
+        ));
+        let message = match kind {
+            FnContractMismatchKind::MissingRvsPrefix => {
+                format!("'{}' is missing the rvs_ prefix", diff.actual_name)
             }
-            details.push(format!(
-                "declared caps: {}",
-                rvs_format_optional_caps(diff.declared_public_caps.as_ref())
-            ));
-            details.push(format!(
-                "inferred caps: {}",
-                rvs_format_optional_caps(diff.expected_public_caps.as_ref())
-            ));
-            let message = match kind {
-                FnContractMismatchKind::MissingRvsPrefix => {
-                    format!("'{}' is missing the rvs_ prefix", diff.actual_name)
-                }
-                FnContractMismatchKind::NameMismatch => format!(
-                    "'{}' should be named '{}'",
-                    diff.actual_name,
-                    diff.expected_name
-                        .as_ref()
-                        .expect("never: name mismatch carries expected name")
-                ),
-                kind => format!(
-                    "'{}' is missing capability marker {}",
-                    diff.actual_name,
-                    kind.rvs_as_str()
-                ),
-            };
-            report.diagnostics.push(OfflineCapsDiagnostic {
-                severity: OfflineCapsSeverity::Warning,
-                kind: OfflineCapsKind::Contract(kind),
-                function: diff.def_path.clone(),
-                message,
-                details,
-            });
-        }
+            FnContractMismatchKind::NameMismatch => format!(
+                "'{}' should be named '{}'",
+                diff.actual_name,
+                diff.expected_name
+                    .as_ref()
+                    .expect("never: name mismatch carries expected name")
+            ),
+            kind => format!(
+                "'{}' is missing capability marker {}",
+                diff.actual_name,
+                kind.rvs_as_str()
+            ),
+        };
+        report.diagnostics.push(OfflineCapsDiagnostic {
+            severity: OfflineCapsSeverity::Warning,
+            kind: OfflineCapsKind::Contract(kind),
+            function: diff.def_path.clone(),
+            message,
+            details,
+        });
     }
 }
 
 fn rvs_collect_suffix_diagnostics_M(
     report: &mut OfflineCapsReport,
-    graph: &FnGraph,
-    local_scope: &LocalScope,
+    context: &OfflineFnContext<'_>,
 ) {
-    for (def_path, node) in graph.rvs_iter() {
-        if !rvs_is_local_checked_fn(def_path, node, local_scope) {
-            continue;
-        }
-        let parsed = ParsedFunctionName::rvs_parse(def_path.rvs_as_str());
-        let Some(raw_suffix) = parsed.rvs_raw_suffix() else {
-            continue;
-        };
-        if !parsed.rvs_suffix_is_canonical() {
-            let sorted = parsed
-                .rvs_canonical_suffix()
-                .expect("never: raw suffix has a canonical form");
-            report.diagnostics.push(OfflineCapsDiagnostic {
-                severity: OfflineCapsSeverity::Warning,
-                kind: OfflineCapsKind::NonAlphabeticalSuffix,
-                function: def_path.clone(),
-                message: format!("suffix '{raw_suffix}' should be alphabetically ordered"),
-                details: vec![format!("suggested suffix order: {sorted}")],
-            });
-        }
-        if let Some(letter) = parsed.rvs_duplicate_suffix_letters().first() {
-            report.diagnostics.push(OfflineCapsDiagnostic {
-                severity: OfflineCapsSeverity::Warning,
-                kind: OfflineCapsKind::DuplicateSuffix,
-                function: def_path.clone(),
-                message: format!("suffix '{raw_suffix}' repeats '{letter}'"),
-                details: vec!["remove duplicate capability letters".to_string()],
-            });
-        }
-        let unknown = parsed.rvs_unknown_suffix_letters();
-        if !unknown.is_empty() {
-            report.diagnostics.push(OfflineCapsDiagnostic {
-                severity: OfflineCapsSeverity::Warning,
-                kind: OfflineCapsKind::UnknownSuffixLetter,
-                function: def_path.clone(),
-                message: format!(
-                    "suffix '{raw_suffix}' contains unknown letters: {}",
-                    unknown
-                        .iter()
-                        .map(char::to_string)
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-                details: vec!["known letters are A, B, I, M, P, S, T, U".to_string()],
-            });
-        }
+    let Some(raw_suffix) = context.parsed_name.rvs_raw_suffix() else {
+        return;
+    };
+    if !context.parsed_name.rvs_suffix_is_canonical() {
+        let sorted = context
+            .parsed_name
+            .rvs_canonical_suffix()
+            .expect("never: raw suffix has a canonical form");
+        report.diagnostics.push(OfflineCapsDiagnostic {
+            severity: OfflineCapsSeverity::Warning,
+            kind: OfflineCapsKind::NonAlphabeticalSuffix,
+            function: context.def_path.clone(),
+            message: format!("suffix '{raw_suffix}' should be alphabetically ordered"),
+            details: vec![format!("suggested suffix order: {sorted}")],
+        });
+    }
+    if let Some(letter) = context.parsed_name.rvs_duplicate_suffix_letters().first() {
+        report.diagnostics.push(OfflineCapsDiagnostic {
+            severity: OfflineCapsSeverity::Warning,
+            kind: OfflineCapsKind::DuplicateSuffix,
+            function: context.def_path.clone(),
+            message: format!("suffix '{raw_suffix}' repeats '{letter}'"),
+            details: vec!["remove duplicate capability letters".to_string()],
+        });
+    }
+    let unknown = context.parsed_name.rvs_unknown_suffix_letters();
+    if !unknown.is_empty() {
+        report.diagnostics.push(OfflineCapsDiagnostic {
+            severity: OfflineCapsSeverity::Warning,
+            kind: OfflineCapsKind::UnknownSuffixLetter,
+            function: context.def_path.clone(),
+            message: format!(
+                "suffix '{raw_suffix}' contains unknown letters: {}",
+                unknown
+                    .iter()
+                    .map(char::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            details: vec!["known letters are A, B, I, M, P, S, T, U".to_string()],
+        });
     }
 }
 
 fn rvs_collect_static_ref_diagnostics_M(
     report: &mut OfflineCapsReport,
-    graph: &FnGraph,
-    local_scope: &LocalScope,
+    context: &OfflineFnContext<'_>,
 ) {
-    for (def_path, node) in graph.rvs_iter() {
-        if !rvs_is_local_checked_fn(def_path, node, local_scope) {
-            continue;
-        }
-        let Some(declared) = rvs_declared_caps(def_path) else {
-            continue;
-        };
-        let mut required = CapabilitySet::rvs_new();
-        if node.facts.has_static_ref || node.facts.has_static_mut_ref {
-            required.rvs_insert_M(Capability::S);
-        }
-        if node.facts.has_static_mut_ref {
-            required.rvs_insert_M(Capability::U);
-        }
-        if node.facts.has_thread_local_ref {
-            required.rvs_insert_M(Capability::T);
-        }
-        let missing: Vec<_> = [Capability::S, Capability::T, Capability::U]
-            .into_iter()
-            .filter(|cap| required.rvs_contains(*cap) && !declared.rvs_contains(*cap))
-            .collect();
-        if missing.is_empty() {
-            continue;
-        }
-        report.diagnostics.push(OfflineCapsDiagnostic {
-            severity: OfflineCapsSeverity::Error,
-            kind: OfflineCapsKind::StaticRefRequiresCaps,
-            function: def_path.clone(),
-            message: "function touches static/thread-local state without declaring required caps"
-                .to_string(),
-            details: vec![
-                format!("declared caps: {}", rvs_format_caps(&declared)),
-                format!(
-                    "required caps from body facts: {}",
-                    rvs_format_caps(&required)
-                ),
-                format!("missing: {}", rvs_format_cap_list(&missing)),
-            ],
-        });
+    let Some(declared) = context.declared_caps.as_ref() else {
+        return;
+    };
+    let mut required = CapabilitySet::rvs_new();
+    if context.node.facts.has_static_ref || context.node.facts.has_static_mut_ref {
+        required.rvs_insert_M(Capability::S);
     }
+    if context.node.facts.has_static_mut_ref {
+        required.rvs_insert_M(Capability::U);
+    }
+    if context.node.facts.has_thread_local_ref {
+        required.rvs_insert_M(Capability::T);
+    }
+    let missing: Vec<_> = [Capability::S, Capability::T, Capability::U]
+        .into_iter()
+        .filter(|cap| required.rvs_contains(*cap) && !declared.rvs_contains(*cap))
+        .collect();
+    if missing.is_empty() {
+        return;
+    }
+    report.diagnostics.push(OfflineCapsDiagnostic {
+        severity: OfflineCapsSeverity::Error,
+        kind: OfflineCapsKind::StaticRefRequiresCaps,
+        function: context.def_path.clone(),
+        message: "function touches static/thread-local state without declaring required caps"
+            .to_string(),
+        details: vec![
+            format!("declared caps: {}", rvs_format_caps(declared)),
+            format!(
+                "required caps from body facts: {}",
+                rvs_format_caps(&required)
+            ),
+            format!("missing: {}", rvs_format_cap_list(&missing)),
+        ],
+    });
 }
 
 fn rvs_collect_call_diagnostics_M(
     report: &mut OfflineCapsReport,
-    graph: &FnGraph,
-    caps: &CapsMap,
-    analysis: &PreparedLocalAnalysis,
-    local_scope: &LocalScope,
+    context: &OfflineFnContext<'_>,
+    resolver: &CalleeCapsResolver<'_>,
 ) {
-    let resolver = analysis.rvs_resolver(graph, caps);
-    for (caller, node) in graph.rvs_iter() {
-        if !rvs_is_local_checked_fn(caller, node, local_scope) || !node.has_body {
+    if !context.node.has_body {
+        return;
+    }
+    let Some(caller_caps) = context.declared_caps.as_ref().or(context.inferred_caps) else {
+        return;
+    };
+    for callee in &context.node.calls {
+        if rvs_is_test_harness_callee(callee) {
             continue;
         }
-        let Some(caller_caps) =
-            rvs_declared_caps(caller).or_else(|| analysis.rvs_inferred().get(caller).cloned())
-        else {
+        let callee_caps = resolver.rvs_for_contract_check(callee);
+        let Some(mismatch) = rvs_collect_call_contract_mismatch(
+            callee.rvs_as_str(),
+            None,
+            caller_caps,
+            callee_caps.as_ref(),
+        ) else {
             continue;
         };
-        for callee in &node.calls {
-            if rvs_is_test_harness_callee(callee) {
-                continue;
+        match mismatch.kind {
+            CallContractMismatchKind::UnknownCallee => {
+                report.diagnostics.push(OfflineCapsDiagnostic {
+                    severity: OfflineCapsSeverity::Warning,
+                    kind: OfflineCapsKind::UnknownCallee,
+                    function: context.def_path.clone(),
+                    message: format!(
+                        "callee '{}' has no rvs_ suffix and no caps/ entry",
+                        mismatch.callee_display
+                    ),
+                    details: vec![
+                        format!("callee: {callee}"),
+                        "add an exact def_path entry to caps/seed or caps/ext".to_string(),
+                    ],
+                });
             }
-            let callee_caps = resolver.rvs_for_contract_check(callee);
-            let Some(mismatch) = rvs_collect_call_contract_mismatch(
-                callee.rvs_as_str(),
-                None,
-                &caller_caps,
-                callee_caps.as_ref(),
-            ) else {
-                continue;
-            };
-            match mismatch.kind {
-                CallContractMismatchKind::UnknownCallee => {
-                    report.diagnostics.push(OfflineCapsDiagnostic {
-                        severity: OfflineCapsSeverity::Warning,
-                        kind: OfflineCapsKind::UnknownCallee,
-                        function: caller.clone(),
-                        message: format!(
-                            "callee '{}' has no rvs_ suffix and no caps/ entry",
-                            mismatch.callee_display
-                        ),
-                        details: vec![
-                            format!("callee: {callee}"),
-                            "add an exact def_path entry to caps/seed or caps/ext".to_string(),
-                        ],
-                    });
-                }
-                CallContractMismatchKind::MissingCapabilities => {
-                    let callee_caps = mismatch
-                        .callee_caps
-                        .as_ref()
-                        .expect("never: missing-capability mismatch carries callee caps");
-                    let missing: Vec<_> = mismatch.missing_caps.iter().copied().collect();
-                    report.diagnostics.push(OfflineCapsDiagnostic {
-                        severity: OfflineCapsSeverity::Error,
-                        kind: OfflineCapsKind::CallViolation,
-                        function: caller.clone(),
-                        message: "caller lacks propagated capabilities required by callee"
-                            .to_string(),
-                        details: vec![
-                            format!("callee: {callee}"),
-                            format!("caller declared caps: {}", rvs_format_caps(&caller_caps)),
-                            format!("callee caps: {}", rvs_format_caps(callee_caps)),
-                            format!("missing propagated caps: {}", rvs_format_cap_list(&missing)),
-                        ],
-                    });
-                }
+            CallContractMismatchKind::MissingCapabilities => {
+                let callee_caps = mismatch
+                    .callee_caps
+                    .as_ref()
+                    .expect("never: missing-capability mismatch carries callee caps");
+                let missing: Vec<_> = mismatch.missing_caps.iter().copied().collect();
+                report.diagnostics.push(OfflineCapsDiagnostic {
+                    severity: OfflineCapsSeverity::Error,
+                    kind: OfflineCapsKind::CallViolation,
+                    function: context.def_path.clone(),
+                    message: "caller lacks propagated capabilities required by callee".to_string(),
+                    details: vec![
+                        format!("callee: {callee}"),
+                        format!("caller declared caps: {}", rvs_format_caps(caller_caps)),
+                        format!("callee caps: {}", rvs_format_caps(callee_caps)),
+                        format!("missing propagated caps: {}", rvs_format_cap_list(&missing)),
+                    ],
+                });
             }
         }
     }
 }
 
-fn rvs_is_local_checked_fn(def_path: &DefPath, node: &FnNode, local_scope: &LocalScope) -> bool {
-    FunctionClassification::rvs_new(local_scope, def_path, node).rvs_is_offline_checked()
-}
-
 fn rvs_is_test_harness_callee(callee: &DefPath) -> bool {
     callee.rvs_as_str() == "test::test_main_static"
-}
-
-fn rvs_declared_caps(def_path: &DefPath) -> Option<CapabilitySet> {
-    ParsedFunctionName::rvs_parse(def_path.rvs_as_str()).rvs_declared_caps()
 }
 
 fn rvs_format_optional_caps(caps: Option<&CapabilitySet>) -> String {
@@ -467,5 +466,42 @@ mod tests {
 
         assert!(output.contains("warning[missing_rvs_prefix]"));
         assert!(output.contains("expected name: rvs_read_cache_S"));
+    }
+
+    #[test]
+    fn test_20260713_offline_caps_single_context_emits_all_diagnostic_families() {
+        let mut graph = FnGraph::rvs_new();
+        let mut node = rvs_node(&["dep::effect"]);
+        node.facts = CapabilityFacts {
+            has_static_ref: true,
+            ..CapabilityFacts::default()
+        };
+        graph.rvs_insert_M(DefPath::from("demo::rvs_handle_IBBZ"), node);
+        let caps = CapsMap::rvs_parse("dep::effect=S\n").unwrap();
+        let local = BTreeSet::from([CrateName::from("demo")]);
+
+        let report = rvs_check_offline_caps_M(&mut graph, &caps, &local);
+        let output = report.to_string();
+        rvs_snapshot_BIS(
+            "test_20260713_offline_caps_single_context_emits_all_diagnostic_families",
+            &output,
+        );
+
+        for kind in [
+            OfflineCapsKind::CallViolation,
+            OfflineCapsKind::Contract(FnContractMismatchKind::MissingSideEffect),
+            OfflineCapsKind::DuplicateSuffix,
+            OfflineCapsKind::NonAlphabeticalSuffix,
+            OfflineCapsKind::StaticRefRequiresCaps,
+            OfflineCapsKind::UnknownSuffixLetter,
+        ] {
+            assert!(
+                report
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.kind == kind),
+                "missing diagnostic family: {kind:?}"
+            );
+        }
     }
 }

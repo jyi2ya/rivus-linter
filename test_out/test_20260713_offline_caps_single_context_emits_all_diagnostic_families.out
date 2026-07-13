@@ -1,0 +1,27 @@
+Offline Caps Check: 2 error(s), 4 warning(s)
+------------------------------------------------------------
+error[call_violation]: demo::rvs_handle_IBBZ
+  caller lacks propagated capabilities required by callee
+  callee: dep::effect
+  caller declared caps: BI
+  callee caps: S
+  missing propagated caps: S
+error[static_ref_requires_caps]: demo::rvs_handle_IBBZ
+  function touches static/thread-local state without declaring required caps
+  declared caps: BI
+  required caps from body facts: S
+  missing: S
+warning[missing_side_effect]: demo::rvs_handle_IBBZ
+  'rvs_handle_IBBZ' is missing capability marker missing_side_effect
+  expected name: rvs_handle_S
+  declared caps: BI
+  inferred caps: S
+warning[duplicate_suffix]: demo::rvs_handle_IBBZ
+  suffix 'IBBZ' repeats 'B'
+  remove duplicate capability letters
+warning[non_alphabetical_suffix]: demo::rvs_handle_IBBZ
+  suffix 'IBBZ' should be alphabetically ordered
+  suggested suffix order: BBIZ
+warning[unknown_suffix_letter]: demo::rvs_handle_IBBZ
+  suffix 'IBBZ' contains unknown letters: Z
+  known letters are A, B, I, M, P, S, T, U
