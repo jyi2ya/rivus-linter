@@ -13,6 +13,7 @@ use rustc_lint::{LateContext, LateLintPass, LintPass};
 use rustc_session::declare_tool_lint;
 use rustc_span::Span;
 
+use crate::capability::{CapabilityPolicy, ParsedFunctionName};
 use crate::capsmap::CapsMap;
 use crate::symbols::{CrateName, DefPath};
 
@@ -477,22 +478,24 @@ fn rvs_run_fn_checks_MS<'tcx>(
 ) {
     let name = subject.rvs_name();
     let attrs = cx.tcx.hir_attrs(subject.hir_id);
-    let mut info = utils::FnInfo::rvs_extract(name);
-    if subject.is_port_method {
-        if let Some(info) = info.as_mut() {
-            info.caps = crate::capability::CapabilityPolicy::rvs_port_method_caps();
-        }
-    }
-    if info.is_some() || subject.is_port_method {
-        let effective_caps = info
-            .as_ref()
-            .map(|info| info.caps.clone())
-            .unwrap_or_else(crate::capability::CapabilityPolicy::rvs_port_method_caps);
+    let parsed_name = ParsedFunctionName::rvs_parse(name);
+    let has_rvs_prefix = parsed_name.rvs_has_rvs_prefix();
+    if has_rvs_prefix || subject.is_port_method {
+        let effective_caps = if subject.is_port_method {
+            CapabilityPolicy::rvs_port_method_caps()
+        } else {
+            parsed_name.rvs_known_caps().clone()
+        };
 
         let is_stub = stub_macro::rvs_check_fn_S(cx, subject.body_facts, subject.span);
         empty_fn::rvs_check_fn_MS(cx, subject.body, subject.span, subject.has_body, is_stub);
-        if let Some(info) = info.as_ref() {
-            missing_allow::rvs_check_fn_S(cx, subject.hir_id, subject.span, &info.raw_suffix);
+        if has_rvs_prefix {
+            missing_allow::rvs_check_fn_S(
+                cx,
+                subject.hir_id,
+                subject.span,
+                parsed_name.rvs_raw_suffix().unwrap_or(""),
+            );
         }
         dead_code::rvs_check_fn_S(cx, attrs, subject.span);
 
@@ -509,10 +512,10 @@ fn rvs_run_fn_checks_MS<'tcx>(
             validate::rvs_check_fn_S(cx, name, subject.sig);
         }
 
-        let is_good = crate::capability::CapabilityPolicy::rvs_is_good(&effective_caps);
+        let is_good = CapabilityPolicy::rvs_is_good(&effective_caps);
 
         // Collect good fns for later untested-good-fn check
-        if info.is_some()
+        if has_rvs_prefix
             && is_good
             && data.should_emit_lints
             && !subject.is_test
@@ -530,12 +533,12 @@ fn rvs_run_fn_checks_MS<'tcx>(
         }
 
         // Collect ok fns (ABMP subset, mock-testable) for untested-ok-fn check.
-        if crate::capability::CapabilityPolicy::rvs_is_ok(&effective_caps)
+        if CapabilityPolicy::rvs_is_ok(&effective_caps)
             && !is_good
             && data.should_emit_lints
             && !subject.is_test
             && !subject.is_trait_impl
-            && info.is_some()
+            && has_rvs_prefix
             && !utils::rvs_has_allow(attrs, "dead_code")
             && !utils::rvs_has_allow(attrs, "unused")
         {
@@ -776,12 +779,13 @@ fn rvs_check_trait_item_MS<'tcx>(
         TraitItemKind::Fn(sig, TraitFn::Required(_)) => {
             if data.should_emit_lints {
                 let name = trait_item.ident.name.as_str();
-                if let Some(info) = utils::FnInfo::rvs_extract(name) {
+                let parsed_name = ParsedFunctionName::rvs_parse(name);
+                if parsed_name.rvs_has_rvs_prefix() {
                     missing_allow::rvs_check_fn_S(
                         cx,
                         trait_item.hir_id(),
                         trait_item.span,
-                        &info.raw_suffix,
+                        parsed_name.rvs_raw_suffix().unwrap_or(""),
                     );
                 }
             }

@@ -8,7 +8,6 @@ use rustc_lint::LateContext;
 use rustc_span::{Span, Symbol};
 
 use super::body::macro_expansion::rvs_span_has_bang_macro;
-use crate::capability::{CapabilitySet, ParsedFunctionName};
 use crate::symbols::DefPath;
 
 // ─── Constants ───────────────────────────────────────────────────────────
@@ -143,27 +142,6 @@ pub(crate) fn rvs_has_debug_derive(cx: &LateContext<'_>, def_id: DefId) -> bool 
 pub(crate) fn rvs_is_pub_impl_item(cx: &LateContext<'_>, impl_item: &ImplItem<'_>) -> bool {
     matches!(impl_item.impl_kind, ImplItemImplKind::Inherent { .. })
         && cx.tcx.visibility(impl_item.owner_id.def_id).is_public()
-}
-
-// ─── FnInfo ──────────────────────────────────────────────────────────────
-
-#[derive(Debug)]
-pub(crate) struct FnInfo {
-    pub caps: CapabilitySet,
-    pub raw_suffix: String,
-}
-
-impl FnInfo {
-    pub(crate) fn rvs_extract(name: &str) -> Option<Self> {
-        let parsed = ParsedFunctionName::rvs_parse(name);
-        if !parsed.rvs_has_rvs_prefix() {
-            return None;
-        }
-        Some(Self {
-            caps: parsed.rvs_known_caps().clone(),
-            raw_suffix: parsed.rvs_raw_suffix().unwrap_or("").to_string(),
-        })
-    }
 }
 
 pub(crate) fn rvs_has_mutable_params(sig: &rustc_hir::FnSig<'_>) -> bool {
@@ -830,7 +808,6 @@ mod tests {
             rvs_has_any_doc(_attrs);
             rvs_has_debug_derive(_cx, _def_id);
             rvs_is_pub_impl_item(_cx, _impl_item);
-            FnInfo::rvs_extract("rvs_helper");
             rvs_has_mutable_params(_sig);
             rvs_is_empty_body(_body);
             rvs_is_only_debug_asserts(_expr);
