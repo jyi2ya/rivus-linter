@@ -66,8 +66,8 @@ pub(crate) struct CargoCheckConfig<'a> {
     pub(crate) project_path: &'a Path,
     /// Use RUSTC_WRAPPER (wraps all crates) instead of RUSTC_WORKSPACE_WRAPPER (workspace only).
     pub(crate) wrap_all_crates: bool,
-    /// Pass --tests to cargo check.
-    pub(crate) with_tests: bool,
+    /// Select the same Cargo target universe used for local crate discovery.
+    pub(crate) target_scope: CargoTargetScope,
     /// Use -Zbuild-std with nightly toolchain.
     pub(crate) build_std: bool,
     /// Extra environment variables to set.
@@ -210,8 +210,8 @@ fn rvs_prepare_cargo_check_command_BIMS(
     }
 
     cmd.arg("check");
-    if config.with_tests {
-        cmd.arg("--tests");
+    if let Some(arg) = config.target_scope.rvs_cargo_check_arg() {
+        cmd.arg(arg);
     }
     if config.build_std {
         cmd.arg("-Zbuild-std=std,core,alloc");
@@ -256,6 +256,7 @@ pub(crate) fn rvs_run_cargo_check_BIMS(extra_args: &[String]) -> Result<(), i32>
         return Err(2);
     }
     let project_path = Path::new(".");
+    let target_scope = CargoTargetScope::WithTestExampleBench;
     let extra_args_ref: Vec<&str> = extra_args.iter().map(|arg| arg.as_str()).collect();
     let caps = match rvs_load_project_caps_BIS(project_path) {
         Ok(caps) => caps,
@@ -267,7 +268,7 @@ pub(crate) fn rvs_run_cargo_check_BIMS(extra_args: &[String]) -> Result<(), i32>
     match rvs_run_cargo_check_impl_BIMS(&CargoCheckConfig {
         project_path,
         wrap_all_crates: false,
-        with_tests: true,
+        target_scope,
         build_std: false,
         extra_env: vec![("RIVUS_OFFLINE_CAPS", "1".into())],
         extra_args: extra_args_ref.clone(),
@@ -283,7 +284,7 @@ pub(crate) fn rvs_run_cargo_check_BIMS(extra_args: &[String]) -> Result<(), i32>
     let mut callgraph = match rvs_collect_callgraph_with_args_BIMS(
         project_path,
         false,
-        true,
+        target_scope,
         vec![],
         extra_args_ref,
     ) {
@@ -293,7 +294,7 @@ pub(crate) fn rvs_run_cargo_check_BIMS(extra_args: &[String]) -> Result<(), i32>
             return Err(1);
         }
     };
-    let local_crate_names = match rvs_load_local_crate_prefixes_BIS(project_path) {
+    let local_crate_names = match rvs_load_local_crate_prefixes_BIS(project_path, target_scope) {
         Ok(names) => names,
         Err(e) => {
             eprintln!("offline caps check cannot detect local crates: {e}");
@@ -401,16 +402,16 @@ fn rvs_collect_config_key_paths_M(prefix: &str, item: &toml_edit::Item, out: &mu
 pub(crate) fn rvs_collect_callgraph_BIMS(
     path: &Path,
     build_std: bool,
-    with_tests: bool,
+    target_scope: CargoTargetScope,
     extra_env: Vec<(&str, OsString)>,
 ) -> Result<FnGraph, String> {
-    rvs_collect_callgraph_with_args_BIMS(path, build_std, with_tests, extra_env, vec![])
+    rvs_collect_callgraph_with_args_BIMS(path, build_std, target_scope, extra_env, vec![])
 }
 
 pub(crate) fn rvs_collect_callgraph_with_args_BIMS(
     path: &Path,
     build_std: bool,
-    with_tests: bool,
+    target_scope: CargoTargetScope,
     extra_env: Vec<(&str, OsString)>,
     extra_args: Vec<&str>,
 ) -> Result<FnGraph, String> {
@@ -431,7 +432,7 @@ pub(crate) fn rvs_collect_callgraph_with_args_BIMS(
     rvs_run_cargo_check_impl_BIMS(&CargoCheckConfig {
         project_path: path,
         wrap_all_crates: true,
-        with_tests,
+        target_scope,
         build_std,
         extra_env: env_vars,
         extra_args,
@@ -477,12 +478,17 @@ pub(crate) fn rvs_load_project_caps_BIS(path: &Path) -> Result<capsmap::CapsMap,
 pub(crate) fn rvs_load_callgraph_and_caps_for_function_BIMS(
     path: &Path,
     function: &str,
+    target_scope: CargoTargetScope,
     local_crate_names: &BTreeSet<CrateName>,
 ) -> Result<(FnGraph, capsmap::CapsMap), String> {
     let callgraph = if rvs_should_use_required_std_cache(function, local_crate_names) {
         rvs_load_required_std_callgraph_cache_BIS(path)?
     } else {
-        rvs_collect_project_callgraph_with_optional_std_cache_BIMS(path, true, local_crate_names)?
+        rvs_collect_project_callgraph_with_optional_std_cache_BIMS(
+            path,
+            target_scope,
+            local_crate_names,
+        )?
     };
     let caps = rvs_load_project_caps_BIS(path)?;
     Ok((callgraph, caps))
@@ -498,12 +504,12 @@ fn rvs_should_use_required_std_cache(
 
 pub(crate) fn rvs_collect_callgraph_and_caps_BIMS(
     path: &Path,
-    with_tests: bool,
+    target_scope: CargoTargetScope,
     local_crate_names: &BTreeSet<CrateName>,
 ) -> Result<(FnGraph, capsmap::CapsMap), String> {
     let callgraph = rvs_collect_project_callgraph_with_optional_std_cache_BIMS(
         path,
-        with_tests,
+        target_scope,
         local_crate_names,
     )?;
     let caps = rvs_load_project_caps_BIS(path)?;
@@ -512,10 +518,10 @@ pub(crate) fn rvs_collect_callgraph_and_caps_BIMS(
 
 fn rvs_collect_project_callgraph_with_optional_std_cache_BIMS(
     path: &Path,
-    with_tests: bool,
+    target_scope: CargoTargetScope,
     local_crate_names: &BTreeSet<CrateName>,
 ) -> Result<FnGraph, String> {
-    let mut callgraph = rvs_collect_callgraph_BIMS(path, false, with_tests, vec![])?;
+    let mut callgraph = rvs_collect_callgraph_BIMS(path, false, target_scope, vec![])?;
     let cg_std_dir = path.join("target").join("rivus-callgraph-std");
     if rvs_warn_optional_dir_BIS(&cg_std_dir, "std callgraph cache") {
         match rvs_merge_callgraph_dir_BIS(&cg_std_dir) {
@@ -661,9 +667,10 @@ fn rvs_write_capsmap_file_BIS(path: &Path, result: &str, label: &str) -> Result<
 
 pub(crate) fn rvs_load_local_crate_prefixes_BIS(
     path: &Path,
+    target_scope: CargoTargetScope,
 ) -> Result<BTreeSet<CrateName>, String> {
     rvs_ensure_cargo_project_BIS(path)?;
-    rvs_detect_local_crate_prefixes_BIS(path, CargoTargetScope::WithTestExampleBench)
+    rvs_detect_local_crate_prefixes_BIS(path, target_scope)
 }
 
 pub(crate) fn rvs_clean_dir_BIS(path: &Path) -> Result<(), String> {
@@ -785,7 +792,9 @@ mod tests {
         )
         .unwrap();
 
-        let graph = rvs_collect_callgraph_BIMS(&member, false, false, vec![]).unwrap();
+        let graph =
+            rvs_collect_callgraph_BIMS(&member, false, CargoTargetScope::Production, vec![])
+                .unwrap();
         let source = graph
             .rvs_get("member::rvs_parse")
             .and_then(|node| node.sources.first())
@@ -1285,12 +1294,48 @@ name = "throughput-bench"
     }
 
     #[test]
+    fn test_20260713_prepare_cargo_check_matches_target_scope() {
+        let dir = rvs_make_workspace_temp_dir_BIS("target-scope-command");
+        let mut output = String::new();
+        for (name, target_scope) in [
+            ("production", CargoTargetScope::Production),
+            ("all_targets", CargoTargetScope::WithTestExampleBench),
+        ] {
+            let config = CargoCheckConfig {
+                project_path: &dir,
+                wrap_all_crates: false,
+                target_scope,
+                build_std: false,
+                extra_env: vec![],
+                extra_args: vec![],
+                target_subdir: None,
+            };
+            let cmd = rvs_prepare_cargo_check_command_BIMS(&config).unwrap();
+            let args = cmd
+                .get_args()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect::<Vec<_>>();
+            output.push_str(&format!("{name}={}\n", args.join(" ")));
+        }
+        rvs_snapshot_BIS(
+            "test_20260713_prepare_cargo_check_matches_target_scope",
+            &output,
+        );
+
+        assert_eq!(
+            output,
+            "production=check\nall_targets=check --all-targets\n"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn test_20260704_prepare_cargo_check_sanitizes_rivus_env() {
         let dir = rvs_make_workspace_temp_dir_BIS("sanitize-env-no-caps");
         let config = CargoCheckConfig {
             project_path: &dir,
             wrap_all_crates: false,
-            with_tests: true,
+            target_scope: CargoTargetScope::WithTestExampleBench,
             build_std: false,
             extra_env: vec![],
             extra_args: vec![],
@@ -1341,7 +1386,7 @@ name = "throughput-bench"
         let config = CargoCheckConfig {
             project_path: &dir,
             wrap_all_crates: false,
-            with_tests: true,
+            target_scope: CargoTargetScope::WithTestExampleBench,
             build_std: false,
             extra_env: vec![
                 ("RIVUS_ENABLED", "0".into()),
@@ -1382,7 +1427,7 @@ name = "throughput-bench"
         let config = CargoCheckConfig {
             project_path: &dir,
             wrap_all_crates: false,
-            with_tests: true,
+            target_scope: CargoTargetScope::WithTestExampleBench,
             build_std: false,
             extra_env: vec![("RIVUS_CALLGRAPH", "0".into())],
             extra_args: vec![],
@@ -1435,7 +1480,7 @@ name = "throughput-bench"
         let config = CargoCheckConfig {
             project_path: &dir,
             wrap_all_crates: false,
-            with_tests: true,
+            target_scope: CargoTargetScope::WithTestExampleBench,
             build_std: false,
             extra_env: vec![("RIVUS_CAPSMAP", explicit_caps.clone().into_os_string())],
             extra_args: vec![],
@@ -1472,7 +1517,7 @@ name = "throughput-bench"
         let config = CargoCheckConfig {
             project_path: &dir,
             wrap_all_crates: false,
-            with_tests: true,
+            target_scope: CargoTargetScope::WithTestExampleBench,
             build_std: false,
             extra_env: vec![("RIVUS_CAPSMAP", explicit_caps.clone().into_os_string())],
             extra_args: vec![],
@@ -1506,7 +1551,7 @@ name = "throughput-bench"
         let config = CargoCheckConfig {
             project_path: &dir,
             wrap_all_crates: false,
-            with_tests: true,
+            target_scope: CargoTargetScope::WithTestExampleBench,
             build_std: false,
             extra_env: vec![("RIVUS_CAPSMAP", explicit_caps.into_os_string())],
             extra_args: vec![],
@@ -1531,7 +1576,7 @@ name = "throughput-bench"
         let config = CargoCheckConfig {
             project_path: &dir,
             wrap_all_crates: false,
-            with_tests: true,
+            target_scope: CargoTargetScope::WithTestExampleBench,
             build_std: false,
             extra_env: vec![("RIVUS_CAPSMAP", "explicit-caps".into())],
             extra_args: vec![],
@@ -1563,7 +1608,7 @@ name = "throughput-bench"
         let config = CargoCheckConfig {
             project_path: &dir,
             wrap_all_crates: false,
-            with_tests: true,
+            target_scope: CargoTargetScope::WithTestExampleBench,
             build_std: false,
             extra_env: vec![],
             extra_args: vec![],
@@ -1588,7 +1633,7 @@ name = "throughput-bench"
         let config = CargoCheckConfig {
             project_path: &dir,
             wrap_all_crates: false,
-            with_tests: true,
+            target_scope: CargoTargetScope::WithTestExampleBench,
             build_std: false,
             extra_env: vec![("RIVUS_OFFLINE_CAPS", "1".into())],
             extra_args: vec![],
@@ -1629,7 +1674,7 @@ name = "throughput-bench"
         let result = rvs_prepare_cargo_check_command_BIMS(&CargoCheckConfig {
             project_path: &dir,
             wrap_all_crates: false,
-            with_tests: true,
+            target_scope: CargoTargetScope::WithTestExampleBench,
             build_std: false,
             extra_env: vec![],
             extra_args: vec![],
@@ -2073,7 +2118,7 @@ name = "throughput-bench"
         let config = CargoCheckConfig {
             project_path: &dir,
             wrap_all_crates: false,
-            with_tests: true,
+            target_scope: CargoTargetScope::WithTestExampleBench,
             build_std: false,
             extra_env: vec![],
             extra_args: vec![],
@@ -2107,7 +2152,7 @@ name = "throughput-bench"
         let config = CargoCheckConfig {
             project_path: &relative_project,
             wrap_all_crates: false,
-            with_tests: true,
+            target_scope: CargoTargetScope::WithTestExampleBench,
             build_std: false,
             extra_env: vec![],
             extra_args: vec![],
@@ -2290,7 +2335,9 @@ name = "throughput-bench"
             "[package]\nname = \"std\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
         )
         .unwrap();
-        let local_names = rvs_load_local_crate_prefixes_BIS(&dir).unwrap();
+        let local_names =
+            rvs_load_local_crate_prefixes_BIS(&dir, CargoTargetScope::WithTestExampleBench)
+                .unwrap();
         let matches_local = LocalScope::rvs_new(&local_names).rvs_contains_str("std::rvs_run");
         let local_uses_std_cache = rvs_should_use_required_std_cache("std::rvs_run", &local_names);
         let real_std_uses_std_cache =
@@ -2314,8 +2361,10 @@ name = "throughput-bench"
         let dir = rvs_make_workspace_temp_dir_BIS("std-like-invalid-cargo-toml");
         std::fs::write(dir.join("Cargo.toml"), "[package\nname = \"std\"\n").unwrap();
 
-        let result =
-            crate::cargo_targets::rvs_detect_local_crate_prefixes_for_function_query_BIS(&dir);
+        let result = crate::cargo_targets::rvs_detect_local_crate_prefixes_for_function_query_BIS(
+            &dir,
+            CargoTargetScope::WithTestExampleBench,
+        );
         rvs_snapshot_BIS(
             "test_20260706_std_like_query_mode_reports_invalid_cargo_toml",
             &format!("{result:?}\n").replace(&dir.to_string_lossy().into_owned(), "$TMP"),

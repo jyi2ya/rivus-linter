@@ -40,7 +40,7 @@
 - 源码写回只使用 artifact 记录的路径基准；旧 artifact 没有基准时允许兼容解析，但多个候选都存在则拒绝猜测
 - 同一命令已经确定本地 crate 边界后，callgraph 收集、std cache 选择、报告和缓存过滤都必须接收并复用这一份边界快照，并通过同一个 `LocalScope` 执行 typed path 和字符串 path 的归属判定，不允许各阶段重新构造 prefix 规则或用可选参数在执行中途重新探测项目范围
 - `check` 的父进程在启动两个 Cargo 阶段前加载一次项目 caps 快照；第一阶段只执行非能力 HIR lint，不重新解析 caps，最终离线能力分析必须复用命令开始时的同一份快照
-- Cargo target 范围使用具名策略区分 production target 与 test/example/bench target，不能用含义不明的布尔值在命令间传递
+- Cargo target 范围使用具名策略区分 production target 与 test/example/bench target；本地 crate 发现与 Cargo invocation 必须共享同一策略，不能用含义不明的布尔值分别传递
 - 一次分析通过共享的 inference preparation 只执行一次 Port scope、能力推断、impl 索引和 synthetic path 识别；本地分析直接从图节点和推断结果生成契约差异，不先建立独立的期望名称投影，各输出视图不能分别重建可能漂移的分析上下文
 
 ## Lint 分层

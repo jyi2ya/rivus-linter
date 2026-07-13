@@ -5,6 +5,7 @@ use std::path::Path;
 
 use crate::artifacts::FnGraph;
 use crate::capability::{Capability, CapabilityPolicy, CapabilitySet, ParsedFunctionName};
+use crate::cargo_targets::CargoTargetScope;
 use crate::function_classification::{FunctionClassification, LocalScope};
 use crate::inference::{
     FnContractDiff, FnContractMismatch, FnContractMismatchKind, PreparedLocalAnalysis,
@@ -250,9 +251,10 @@ fn rvs_collect_reportable_contract_diffs(
 ///
 /// Panics if the current executable path, current directory, or cargo cannot be resolved.
 pub(crate) fn rvs_run_report_BIMPS(path: &Path) -> Result<(), String> {
-    let local_crate_names = rvs_load_local_crate_prefixes_BIS(path)?;
+    let target_scope = CargoTargetScope::WithTestExampleBench;
+    let local_crate_names = rvs_load_local_crate_prefixes_BIS(path, target_scope)?;
     let (mut callgraph, caps) =
-        rvs_collect_callgraph_and_caps_BIMS(path, true, &local_crate_names)?;
+        rvs_collect_callgraph_and_caps_BIMS(path, target_scope, &local_crate_names)?;
     let analysis = PreparedLocalAnalysis::rvs_prepare_M(&mut callgraph, &caps, &local_crate_names);
     let report_entries = rvs_report_entries_from_callgraph(&callgraph, &local_crate_names)?;
     let report = rvs_build_report(&report_entries)?;
@@ -672,9 +674,10 @@ mod tests {
         );
 
         let result = rvs_run_report_BIMPS(&dir);
-        let local_crate_names = rvs_load_local_crate_prefixes_BIS(&dir).unwrap();
+        let target_scope = CargoTargetScope::WithTestExampleBench;
+        let local_crate_names = rvs_load_local_crate_prefixes_BIS(&dir, target_scope).unwrap();
         let (mut callgraph, caps) =
-            rvs_collect_callgraph_and_caps_BIMS(&dir, true, &local_crate_names).unwrap();
+            rvs_collect_callgraph_and_caps_BIMS(&dir, target_scope, &local_crate_names).unwrap();
         let _diffs = crate::inference::rvs_collect_local_contract_diffs_M(
             &mut callgraph,
             &caps,

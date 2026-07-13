@@ -54,7 +54,7 @@ cargo rivus check -- --features foo  # 传递额外 cargo check 参数
 注意：capsmap 只从项目 `caps/` 目录加载。CLI 不再支持 `-m/--capsmap`，也不再读取或生成 `target/rivus-std-capsmap.txt`、`target/rivus-inferred-capsmap.txt`、`target/rivus-deps-capsmap.txt`、`target/rivus-effective-capsmap/`。目录不存在时统一能力引擎使用空 capsmap。caps 目录使用统一的层级加载器（`CapsMap::rvs_load_dir_BIS`），按 `std → deps → seed → suppress → ext → 其余字母序` 的固定顺序合并。
 
 
-注意：`check` 默认编译 `--tests`（含测试代码），因此 `#[test]` 函数也会被分析。`infer-capsmap` 和 `infer-std` 不编译测试代码。
+注意：`check` 默认编译 `--all-targets`，因此测试、示例和 benchmark 中的函数也会被分析。`infer-capsmap` 和 `infer-std` 只编译 production targets。
 
 退出码：`check` 成功时返回 `0`；失败时透传底层 `cargo check` 的退出码。其他子命令成功时返回 `0`，工具自身运行失败时返回 `2`。warning 不影响退出码。
 

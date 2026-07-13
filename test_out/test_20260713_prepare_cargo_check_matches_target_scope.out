@@ -1,0 +1,2 @@
+production=check
+all_targets=check --all-targets

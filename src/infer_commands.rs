@@ -24,8 +24,8 @@ pub(crate) fn rvs_run_infer_capsmap_BIMPS(path: &Path, output: &Path) -> Result<
     let project_path = path
         .canonicalize()
         .map_err(|e| format!("cannot canonicalize '{}': {e}", path.display()))?;
-    let local_crate_names =
-        rvs_detect_local_crate_prefixes_BIS(&project_path, CargoTargetScope::Production)?;
+    let target_scope = CargoTargetScope::Production;
+    let local_crate_names = rvs_detect_local_crate_prefixes_BIS(&project_path, target_scope)?;
 
     let abs_seed = project_path.join("caps");
     if !rvs_validate_optional_capsmap_dir_BIS(&abs_seed)? {
@@ -38,7 +38,7 @@ pub(crate) fn rvs_run_infer_capsmap_BIMPS(path: &Path, output: &Path) -> Result<
         .map_err(|e| format!("caps: {e}"))?;
     let resolved_output = rvs_prepare_output_path_BIS(&project_path, output, "deps capsmap")?;
 
-    let mut callgraph = rvs_collect_callgraph_BIMS(&project_path, false, false, vec![])?;
+    let mut callgraph = rvs_collect_callgraph_BIMS(&project_path, false, target_scope, vec![])?;
     let inference = PreparedInference::rvs_prepare_M(&mut callgraph, &seed, &local_crate_names);
     let (direct_external_calls, unknown_callees) = rvs_collect_direct_external_deps(
         &callgraph,
@@ -65,8 +65,8 @@ pub(crate) fn rvs_run_infer_std_BIMPS(path: &Path, output: &Path) -> Result<(), 
     let project_path = path
         .canonicalize()
         .map_err(|e| format!("cannot canonicalize '{}': {e}", path.display()))?;
-    let local_crate_names =
-        rvs_detect_local_crate_prefixes_BIS(&project_path, CargoTargetScope::Production)?;
+    let target_scope = CargoTargetScope::Production;
+    let local_crate_names = rvs_detect_local_crate_prefixes_BIS(&project_path, target_scope)?;
     let local_scope = LocalScope::rvs_new(&local_crate_names);
 
     let caps_dir = project_path.join("caps");
@@ -74,7 +74,7 @@ pub(crate) fn rvs_run_infer_std_BIMPS(path: &Path, output: &Path) -> Result<(), 
     let seed = CapsMap::rvs_load_dir_layers_BIS(&caps_dir, &["seed", "suppress"])
         .map_err(|e| format!("caps: {e}"))?;
     let resolved_output = rvs_prepare_output_path_BIS(&project_path, output, "std capsmap")?;
-    let mut callgraph = rvs_collect_callgraph_BIMS(&project_path, true, false, vec![])?;
+    let mut callgraph = rvs_collect_callgraph_BIMS(&project_path, true, target_scope, vec![])?;
     rvs_scope_port_methods_M(&mut callgraph, &local_crate_names);
 
     let pre_index = rvs_build_impl_index(&callgraph);

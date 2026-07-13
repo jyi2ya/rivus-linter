@@ -13,6 +13,13 @@ impl CargoTargetScope {
     fn rvs_includes_test_example_bench(self) -> bool {
         matches!(self, Self::WithTestExampleBench)
     }
+
+    pub(crate) fn rvs_cargo_check_arg(self) -> Option<&'static str> {
+        match self {
+            Self::Production => None,
+            Self::WithTestExampleBench => Some("--all-targets"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -159,6 +166,7 @@ pub(crate) fn rvs_collect_local_crate_prefixes_from_model_BIS(
 
 pub(crate) fn rvs_detect_local_crate_prefixes_for_function_query_BIS(
     path: &Path,
+    target_scope: CargoTargetScope,
 ) -> Result<Option<BTreeSet<CrateName>>, String> {
     let cargo_toml = path.join("Cargo.toml");
     let content = std::fs::read_to_string(&cargo_toml)
@@ -168,12 +176,7 @@ pub(crate) fn rvs_detect_local_crate_prefixes_for_function_query_BIS(
     if model.document.get("package").is_none() {
         return Ok(None);
     }
-    rvs_collect_local_crate_prefixes_from_model_BIS(
-        path,
-        &model,
-        CargoTargetScope::WithTestExampleBench,
-    )
-    .map(Some)
+    rvs_collect_local_crate_prefixes_from_model_BIS(path, &model, target_scope).map(Some)
 }
 
 #[cfg(test)]
