@@ -455,7 +455,7 @@ fn rvs_callgraph_collection_env(
 
 fn rvs_load_required_std_callgraph_cache_BIS(path: &Path) -> Result<FnGraph, String> {
     let cg_std_dir = path.join("target").join("rivus-callgraph-std");
-    if rvs_validate_optional_dir_BIS(&cg_std_dir, "std callgraph cache")? {
+    if crate::fs_guard::rvs_validate_optional_dir_BIS(&cg_std_dir, "std callgraph cache")? {
         let cg = rvs_merge_callgraph_dir_BIS(&cg_std_dir)
             .map_err(|e| format!("{e}; run cargo rivus infer-std first"))?;
         let mut std_only = FnGraph::rvs_new();
@@ -536,12 +536,8 @@ fn rvs_collect_project_callgraph_with_optional_std_cache_BIMS(
     Ok(callgraph)
 }
 
-fn rvs_validate_optional_dir_BIS(path: &Path, label: &str) -> Result<bool, String> {
-    crate::fs_guard::rvs_validate_optional_dir_BIS(path, label)
-}
-
 fn rvs_warn_optional_dir_BIS(path: &Path, label: &str) -> bool {
-    match rvs_validate_optional_dir_BIS(path, label) {
+    match crate::fs_guard::rvs_validate_optional_dir_BIS(path, label) {
         Ok(exists) => exists,
         Err(e) => {
             eprintln!("warning: ignoring stale {label}: {e}");
@@ -613,32 +609,7 @@ pub(crate) fn rvs_preflight_capsmap_file_BIS(path: &Path, label: &str) -> Result
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
     {
-        match std::fs::metadata(parent) {
-            Ok(metadata) if metadata.is_dir() => Ok(()),
-            Ok(_) => Err(format!(
-                "{label} output parent must be a directory: {}",
-                parent.display()
-            )),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                match std::fs::symlink_metadata(parent) {
-                    Err(symlink_error) if symlink_error.kind() == std::io::ErrorKind::NotFound => {
-                        Ok(())
-                    }
-                    Ok(_) => Err(format!(
-                        "{label} output parent must be a directory: {}",
-                        parent.display()
-                    )),
-                    Err(symlink_error) => Err(format!(
-                        "cannot inspect {label} output parent {}: {symlink_error}",
-                        parent.display()
-                    )),
-                }
-            }
-            Err(e) => Err(format!(
-                "cannot inspect {label} output parent {}: {e}",
-                parent.display()
-            )),
-        }?;
+        crate::fs_guard::rvs_validate_optional_dir_BIS(parent, &format!("{label} output parent"))?;
     }
     Ok(())
 }
