@@ -1,3 +1,3 @@
 actual=rvs_fetch_BI
-expected=Some(FnName("rvs_fetch"))
-caps=Some(CapabilitySet({}))
+expected=FnName("rvs_fetch")
+caps=CapabilitySet({})

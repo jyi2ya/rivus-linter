@@ -8,9 +8,8 @@ use crate::capability::{Capability, CapabilityPolicy, CapabilitySet, ParsedFunct
 use crate::cargo_targets::CargoTargetScope;
 use crate::function_classification::{FunctionClassification, LocalScope};
 use crate::inference::{
-    FnContractDiff, FnContractMismatch, FnContractMismatchKind, PreparedLocalAnalysis,
-    rvs_collect_contract_mismatch_items, rvs_collect_enforced_contract_diffs,
-    rvs_summarize_contract_mismatch_items,
+    FnContractMismatch, FnContractMismatchKind, PreparedLocalAnalysis,
+    rvs_collect_contract_mismatch_items, rvs_summarize_contract_mismatch_items,
 };
 use crate::symbols::CrateName;
 use crate::workspace::{rvs_collect_callgraph_and_caps_BIMS, rvs_load_local_crate_prefixes_BIS};
@@ -239,14 +238,6 @@ fn rvs_format_contract_mismatch_summary(
     out
 }
 
-fn rvs_collect_reportable_contract_diffs(
-    graph: &FnGraph,
-    diffs: &[FnContractDiff],
-    local_crate_names: &std::collections::BTreeSet<CrateName>,
-) -> Vec<FnContractDiff> {
-    rvs_collect_enforced_contract_diffs(graph, diffs, local_crate_names)
-}
-
 /// # Panics
 ///
 /// Panics if the current executable path, current directory, or cargo cannot be resolved.
@@ -258,9 +249,7 @@ pub(crate) fn rvs_run_report_BIMPS(path: &Path) -> Result<(), String> {
     let analysis = PreparedLocalAnalysis::rvs_prepare_M(&mut callgraph, &caps, &local_crate_names);
     let report_entries = rvs_report_entries_from_callgraph(&callgraph, &local_crate_names)?;
     let report = rvs_build_report(&report_entries)?;
-    let reportable_diffs =
-        rvs_collect_reportable_contract_diffs(&callgraph, &analysis.diffs, &local_crate_names);
-    let mismatch_items = rvs_collect_contract_mismatch_items(&reportable_diffs);
+    let mismatch_items = rvs_collect_contract_mismatch_items(&analysis.diffs);
     let mismatch_summary = rvs_summarize_contract_mismatch_items(&mismatch_items);
     let mismatch_output = rvs_format_contract_mismatch_summary(&mismatch_summary, &mismatch_items);
     print!("{report}");
@@ -415,63 +404,12 @@ mod tests {
         );
         graph.rvs_insert_M(DefPath::from("demo::parse"), FnNode::default());
 
-        let diffs = vec![
-            FnContractDiff {
-                def_path: DefPath::from("demo::main"),
-                actual_name: crate::symbols::FnName::from("main"),
-                expected_name: Some(crate::symbols::FnName::from("rvs_main_BI")),
-                declared_public_caps: None,
-                expected_public_caps: Some(CapabilitySet::rvs_from_validated("BI")),
-            },
-            FnContractDiff {
-                def_path: DefPath::from("demo::cli::main"),
-                actual_name: crate::symbols::FnName::from("main"),
-                expected_name: Some(crate::symbols::FnName::from("rvs_main")),
-                declared_public_caps: None,
-                expected_public_caps: Some(CapabilitySet::rvs_new()),
-            },
-            FnContractDiff {
-                def_path: DefPath::from("demo::User::new"),
-                actual_name: crate::symbols::FnName::from("new"),
-                expected_name: Some(crate::symbols::FnName::from("rvs_new")),
-                declared_public_caps: None,
-                expected_public_caps: Some(CapabilitySet::rvs_new()),
-            },
-            FnContractDiff {
-                def_path: DefPath::from("demo::go"),
-                actual_name: crate::symbols::FnName::from("go"),
-                expected_name: Some(crate::symbols::FnName::from("rvs_go")),
-                declared_public_caps: None,
-                expected_public_caps: Some(CapabilitySet::rvs_new()),
-            },
-            FnContractDiff {
-                def_path: DefPath::from("demo::wblk"),
-                actual_name: crate::symbols::FnName::from("wblk"),
-                expected_name: Some(crate::symbols::FnName::from("rvs_wblk")),
-                declared_public_caps: None,
-                expected_public_caps: Some(CapabilitySet::rvs_new()),
-            },
-            FnContractDiff {
-                def_path: DefPath::from("demo::Widget::sync@demo::Syncer"),
-                actual_name: crate::symbols::FnName::from("rvs_sync_BI"),
-                expected_name: Some(crate::symbols::FnName::from("rvs_sync_P")),
-                declared_public_caps: Some(CapabilitySet::rvs_from_validated("BI")),
-                expected_public_caps: Some(CapabilitySet::rvs_from_validated("P")),
-            },
-            FnContractDiff {
-                def_path: DefPath::from("demo::parse"),
-                actual_name: crate::symbols::FnName::from("parse"),
-                expected_name: Some(crate::symbols::FnName::from("rvs_parse")),
-                declared_public_caps: None,
-                expected_public_caps: Some(CapabilitySet::rvs_new()),
-            },
-        ];
-
-        let filtered = rvs_collect_reportable_contract_diffs(
-            &graph,
-            &diffs,
+        let analysis = PreparedLocalAnalysis::rvs_prepare_M(
+            &mut graph,
+            &crate::capsmap::CapsMap::rvs_new(),
             &std::collections::BTreeSet::from([CrateName::from("demo")]),
         );
+        let filtered = analysis.diffs;
         let output = format!(
             "filtered={filtered:?}\nsummary={:?}\n",
             rvs_summarize_contract_mismatch_items(&rvs_collect_contract_mismatch_items(&filtered))

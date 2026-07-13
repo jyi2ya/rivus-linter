@@ -1,2 +1,2 @@
-diff=FnContractDiff { def_path: DefPath("demo::parse"), actual_name: FnName("parse"), expected_name: Some(FnName("rvs_parse")), declared_public_caps: None, expected_public_caps: Some(CapabilitySet({})) }
+diff=FnContractDiff { def_path: DefPath("demo::parse"), actual_name: FnName("parse"), expected_name: FnName("rvs_parse"), declared_public_caps: None, expected_public_caps: CapabilitySet({}) }
 inferred=Some(CapabilitySet({}))

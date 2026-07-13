@@ -12,9 +12,9 @@ use crate::symbols::{CrateName, DefPath, FnName, TraitMethodKey};
 pub(crate) struct FnContractDiff {
     pub(crate) def_path: DefPath,
     pub(crate) actual_name: FnName,
-    pub(crate) expected_name: Option<FnName>,
+    pub(crate) expected_name: FnName,
     pub(crate) declared_public_caps: Option<CapabilitySet>,
-    pub(crate) expected_public_caps: Option<CapabilitySet>,
+    pub(crate) expected_public_caps: CapabilitySet,
 }
 
 #[derive(Debug)]
@@ -154,13 +154,11 @@ impl FnContractMismatchKind {
 
 impl FnContractDiff {
     pub(crate) fn rvs_has_name_mismatch(&self) -> bool {
-        self.expected_name
-            .as_ref()
-            .is_some_and(|expected| expected != &self.actual_name)
+        self.expected_name != self.actual_name
     }
 
     pub(crate) fn rvs_missing_rvs_prefix(&self) -> bool {
-        self.expected_name.is_some() && !self.actual_name.rvs_as_str().starts_with("rvs_")
+        !self.actual_name.rvs_as_str().starts_with("rvs_")
     }
 
     pub(crate) fn rvs_mismatch_kinds(&self) -> Vec<FnContractMismatchKind> {
@@ -170,25 +168,23 @@ impl FnContractDiff {
         } else if self.rvs_has_name_mismatch() {
             mismatches.push(FnContractMismatchKind::NameMismatch);
         }
-        if let Some(expected_caps) = self.expected_public_caps.as_ref() {
-            let declared_has = |cap| {
-                self.declared_public_caps
-                    .as_ref()
-                    .is_some_and(|caps| caps.rvs_contains(cap))
-            };
-            for (cap, kind) in [
-                (Capability::A, FnContractMismatchKind::MissingAsync),
-                (Capability::B, FnContractMismatchKind::MissingBlocking),
-                (Capability::I, FnContractMismatchKind::MissingIo),
-                (Capability::M, FnContractMismatchKind::MissingMutable),
-                (Capability::P, FnContractMismatchKind::MissingPort),
-                (Capability::S, FnContractMismatchKind::MissingSideEffect),
-                (Capability::T, FnContractMismatchKind::MissingThreadLocal),
-                (Capability::U, FnContractMismatchKind::MissingUnsafe),
-            ] {
-                if expected_caps.rvs_contains(cap) && !declared_has(cap) {
-                    mismatches.push(kind);
-                }
+        let declared_has = |cap| {
+            self.declared_public_caps
+                .as_ref()
+                .is_some_and(|caps| caps.rvs_contains(cap))
+        };
+        for (cap, kind) in [
+            (Capability::A, FnContractMismatchKind::MissingAsync),
+            (Capability::B, FnContractMismatchKind::MissingBlocking),
+            (Capability::I, FnContractMismatchKind::MissingIo),
+            (Capability::M, FnContractMismatchKind::MissingMutable),
+            (Capability::P, FnContractMismatchKind::MissingPort),
+            (Capability::S, FnContractMismatchKind::MissingSideEffect),
+            (Capability::T, FnContractMismatchKind::MissingThreadLocal),
+            (Capability::U, FnContractMismatchKind::MissingUnsafe),
+        ] {
+            if self.expected_public_caps.rvs_contains(cap) && !declared_has(cap) {
+                mismatches.push(kind);
             }
         }
         mismatches
@@ -570,64 +566,30 @@ fn rvs_contract_base_name<'a>(name: &'a str, expected_caps: &str) -> &'a str {
     name
 }
 
-pub(crate) fn rvs_contract_diff_is_enforced(
-    graph: &FnGraph,
-    diff: &FnContractDiff,
-    local_crate_names: &BTreeSet<CrateName>,
-) -> bool {
-    rvs_contract_diff_is_enforced_in_scope(graph, diff, &LocalScope::rvs_new(local_crate_names))
-}
-
-fn rvs_contract_diff_is_enforced_in_scope(
-    graph: &FnGraph,
-    diff: &FnContractDiff,
-    local_scope: &LocalScope,
-) -> bool {
-    let Some(node) = graph.rvs_get(diff.def_path.rvs_as_str()) else {
-        return false;
-    };
-    FunctionClassification::rvs_new(local_scope, &diff.def_path, node).rvs_is_contract_enforced()
-}
-
-pub(crate) fn rvs_collect_enforced_contract_diffs(
-    graph: &FnGraph,
-    diffs: &[FnContractDiff],
-    local_crate_names: &BTreeSet<CrateName>,
-) -> Vec<FnContractDiff> {
-    let local_scope = LocalScope::rvs_new(local_crate_names);
-    diffs
-        .iter()
-        .filter(|diff| rvs_contract_diff_is_enforced_in_scope(graph, diff, &local_scope))
-        .cloned()
-        .collect()
-}
-
-pub(crate) fn rvs_collect_contract_diffs(
+fn rvs_collect_contract_diffs(
     graph: &FnGraph,
     inferred: &BTreeMap<DefPath, CapabilitySet>,
     local_crate_names: &BTreeSet<CrateName>,
 ) -> Vec<FnContractDiff> {
     let scope = LocalScope::rvs_new(local_crate_names);
     let mut diffs = Vec::new();
-    for (def_path, expected_public_caps) in inferred {
-        if !scope.rvs_contains(def_path) {
+    for (def_path, node) in graph.rvs_iter() {
+        if !FunctionClassification::rvs_new(&scope, def_path, node).rvs_is_contract_enforced() {
             continue;
         }
+        let expected_public_caps = inferred
+            .get(def_path)
+            .expect("never: prepared inference covers every graph node");
         let actual_name = def_path.rvs_fn_name();
         let declared_public_caps =
             rvs_parse_function(actual_name.rvs_as_str()).map(|(_, caps)| caps);
-        let expected_name = graph
-            .rvs_get(def_path.rvs_as_str())
-            .filter(|node| {
-                FunctionClassification::rvs_new(&scope, def_path, node).rvs_is_contract_enforced()
-            })
-            .map(|_| rvs_expected_contract_name(&actual_name, expected_public_caps));
+        let expected_name = rvs_expected_contract_name(&actual_name, expected_public_caps);
         diffs.push(FnContractDiff {
             def_path: def_path.clone(),
             actual_name,
             expected_name,
             declared_public_caps,
-            expected_public_caps: Some(expected_public_caps.clone()),
+            expected_public_caps: expected_public_caps.clone(),
         });
     }
     diffs
@@ -841,9 +803,11 @@ mod tests {
         let mut caller = rvs_make_behavior();
         caller.calls.insert(DefPath::from("dep::read"));
         graph.rvs_insert_M(DefPath::from("demo::rvs_run"), caller);
+        let mut impl_method = rvs_make_behavior();
+        impl_method.is_trait_impl = true;
         graph.rvs_insert_M(
             DefPath::from("demo::Service::rvs_load@demo::Repository"),
-            rvs_make_behavior(),
+            impl_method,
         );
         let mut seed = capsmap::CapsMap::rvs_new();
         let mut external_caps = CapabilitySet::rvs_new();
@@ -872,7 +836,7 @@ mod tests {
         );
 
         assert_eq!(run_caps, "BI");
-        assert_eq!(analysis.diffs.len(), 2);
+        assert_eq!(analysis.diffs.len(), 1);
         assert_eq!(analysis.inference.rvs_impl_index().len(), 1);
         assert_eq!(
             analysis.rvs_synthetic_paths(),
@@ -1660,8 +1624,7 @@ mod tests {
 
         let expected_name = diffs
             .first()
-            .and_then(|diff| diff.expected_name.as_ref())
-            .map(FnName::rvs_as_str)
+            .map(|diff| diff.expected_name.rvs_as_str())
             .unwrap_or("");
         rvs_snapshot_BIS(
             "test_20260703_project_expected_local_names_sets_expected_name",
@@ -1686,8 +1649,7 @@ mod tests {
 
         let expected_name = diffs
             .first()
-            .and_then(|diff| diff.expected_name.as_ref())
-            .map(FnName::rvs_as_str)
+            .map(|diff| diff.expected_name.rvs_as_str())
             .unwrap_or("");
         rvs_snapshot_BIS(
             "test_20260704_project_expected_local_names_preserves_pure_suffix_like_name",
@@ -1756,18 +1718,12 @@ mod tests {
 
         assert!(diffs.iter().any(|diff| {
             diff.actual_name.rvs_as_str() == "Foo"
-                && diff
-                    .expected_name
-                    .as_ref()
-                    .is_some_and(|name| name.rvs_as_str() == "rvs_Foo")
+                && diff.expected_name.rvs_as_str() == "rvs_Foo"
                 && diff.rvs_missing_rvs_prefix()
         }));
         assert!(diffs.iter().any(|diff| {
             diff.actual_name.rvs_as_str() == "_helper"
-                && diff
-                    .expected_name
-                    .as_ref()
-                    .is_some_and(|name| name.rvs_as_str() == "rvs__helper")
+                && diff.expected_name.rvs_as_str() == "rvs__helper"
                 && diff.rvs_missing_rvs_prefix()
         }));
     }
@@ -1806,10 +1762,7 @@ mod tests {
             ),
         );
 
-        assert_eq!(
-            diff.expected_name.as_ref().map(FnName::rvs_as_str),
-            Some("rvs_fetch_P")
-        );
+        assert_eq!(diff.expected_name.rvs_as_str(), "rvs_fetch_P");
         assert!(diff.rvs_has_name_mismatch());
     }
 
@@ -1848,15 +1801,8 @@ mod tests {
             ),
         );
 
-        assert_eq!(
-            diff.expected_name.as_ref().map(FnName::rvs_as_str),
-            Some("rvs_fetch")
-        );
-        assert!(
-            diff.expected_public_caps
-                .as_ref()
-                .is_some_and(CapabilitySet::rvs_is_empty)
-        );
+        assert_eq!(diff.expected_name.rvs_as_str(), "rvs_fetch");
+        assert!(diff.expected_public_caps.rvs_is_empty());
     }
 
     #[test]
@@ -1879,8 +1825,8 @@ mod tests {
         assert_eq!(diff.actual_name.rvs_as_str(), "rvs_fetch_ABI");
         assert!(diff.rvs_has_name_mismatch());
         assert_eq!(
-            diff.expected_public_caps.as_ref(),
-            Some(&CapabilitySet::rvs_from_validated("P"))
+            diff.expected_public_caps,
+            CapabilitySet::rvs_from_validated("P")
         );
         assert_eq!(
             diff.declared_public_caps.as_ref(),
@@ -1905,18 +1851,12 @@ mod tests {
             &inferred,
             &BTreeSet::from([CrateName::from("demo")]),
         );
-        let diff = diffs.first().expect("expected trait impl contract diff");
         rvs_snapshot_BIS(
             "test_20260703_collect_contract_diffs_reads_trait_impl_method_name",
-            &format!("diff={diff:?}\n"),
+            &format!("diffs={diffs:?}\n"),
         );
 
-        assert_eq!(diff.actual_name.rvs_as_str(), "rvs_fetch_BI");
-        assert!(diff.expected_name.is_none());
-        assert_eq!(
-            diff.declared_public_caps.as_ref(),
-            Some(&CapabilitySet::rvs_from_validated("BI"))
-        );
+        assert!(diffs.is_empty());
     }
 
     #[test]
@@ -1942,14 +1882,7 @@ mod tests {
             ),
         );
 
-        assert_eq!(
-            diff.expected_name.as_ref().map(FnName::rvs_as_str),
-            Some("rvs_parse")
-        );
-        assert_eq!(
-            diff.expected_name.as_ref().map(FnName::rvs_as_str),
-            Some("rvs_parse")
-        );
+        assert_eq!(diff.expected_name.rvs_as_str(), "rvs_parse");
         assert_eq!(
             analysis.rvs_inferred().get(&DefPath::from("demo::parse")),
             Some(&CapabilitySet::rvs_new())
@@ -1968,39 +1901,19 @@ mod tests {
             &BTreeSet::from([CrateName::from("demo")]),
         );
         let diffs = &analysis.diffs;
-        let enforced = rvs_collect_enforced_contract_diffs(
-            &graph,
-            &diffs,
-            &BTreeSet::from([CrateName::from("demo")]),
-        );
-        let synthetic_diff = diffs
+        let has_synthetic_diff = diffs
             .iter()
-            .find(|diff| diff.def_path.rvs_as_str() == "demo::rvs_generated_BI")
-            .expect("synthetic local callee should have a raw diff");
+            .any(|diff| diff.def_path.rvs_as_str() == "demo::rvs_generated_BI");
         let synthetic_path = DefPath::from("demo::rvs_generated_BI");
         let synthetic = analysis.rvs_synthetic_paths().contains(&synthetic_path);
         rvs_snapshot_BIS(
             "test_20260703_enforced_contract_diffs_skip_synthetic_nodes",
-            &format!(
-                "synthetic={}\nraw={}\nenforced={enforced:?}\n",
-                synthetic,
-                diffs.len(),
-            ),
+            &format!("synthetic={}\ndiffs={diffs:?}\n", synthetic,),
         );
 
         assert!(synthetic);
         assert!(graph.rvs_get("demo::rvs_generated_BI").is_none());
-        assert!(synthetic_diff.expected_name.is_none());
-        assert!(!rvs_contract_diff_is_enforced(
-            &graph,
-            synthetic_diff,
-            &BTreeSet::from([CrateName::from("demo")])
-        ));
-        assert!(
-            !enforced
-                .iter()
-                .any(|diff| diff.def_path.rvs_as_str() == "demo::rvs_generated_BI")
-        );
+        assert!(!has_synthetic_diff);
     }
 
     #[test]
@@ -2030,8 +1943,8 @@ mod tests {
         );
 
         assert_eq!(
-            diff.expected_public_caps.as_ref(),
-            Some(&CapabilitySet::rvs_from_validated("P"))
+            diff.expected_public_caps,
+            CapabilitySet::rvs_from_validated("P")
         );
         assert_eq!(
             diff.declared_public_caps.as_ref(),
@@ -2056,8 +1969,8 @@ mod tests {
         );
 
         assert_eq!(
-            diff.expected_public_caps.as_ref(),
-            Some(&CapabilitySet::rvs_from_validated("P"))
+            diff.expected_public_caps,
+            CapabilitySet::rvs_from_validated("P")
         );
         assert_eq!(
             diff.declared_public_caps.as_ref(),
@@ -2071,16 +1984,16 @@ mod tests {
             FnContractDiff {
                 def_path: DefPath::from("demo::parse"),
                 actual_name: FnName::from("parse"),
-                expected_name: Some(FnName::from("rvs_parse")),
+                expected_name: FnName::from("rvs_parse"),
                 declared_public_caps: None,
-                expected_public_caps: Some(CapabilitySet::rvs_new()),
+                expected_public_caps: CapabilitySet::rvs_new(),
             },
             FnContractDiff {
                 def_path: DefPath::from("demo::rvs_fetch_BI"),
                 actual_name: FnName::from("rvs_fetch_BI"),
-                expected_name: Some(FnName::from("rvs_fetch_P")),
+                expected_name: FnName::from("rvs_fetch_P"),
                 declared_public_caps: Some(CapabilitySet::rvs_from_validated("BI")),
-                expected_public_caps: Some(CapabilitySet::rvs_from_validated("AP")),
+                expected_public_caps: CapabilitySet::rvs_from_validated("AP"),
             },
         ];
         let items = rvs_collect_contract_mismatch_items(&diffs);
@@ -2103,9 +2016,9 @@ mod tests {
         let diffs = vec![FnContractDiff {
             def_path: DefPath::from("demo::rvs_fetch_BI"),
             actual_name: FnName::from("rvs_fetch_BI"),
-            expected_name: Some(FnName::from("rvs_fetch_P")),
+            expected_name: FnName::from("rvs_fetch_P"),
             declared_public_caps: Some(CapabilitySet::rvs_from_validated("BI")),
-            expected_public_caps: Some(CapabilitySet::rvs_from_validated("AP")),
+            expected_public_caps: CapabilitySet::rvs_from_validated("AP"),
         }];
         let items = rvs_collect_contract_mismatch_items(&diffs);
         rvs_snapshot_BIS(
@@ -2124,9 +2037,9 @@ mod tests {
         let diff = FnContractDiff {
             def_path: DefPath::from("demo::parse"),
             actual_name: FnName::from("parse"),
-            expected_name: Some(FnName::from("rvs_parse")),
+            expected_name: FnName::from("rvs_parse"),
             declared_public_caps: None,
-            expected_public_caps: Some(CapabilitySet::rvs_new()),
+            expected_public_caps: CapabilitySet::rvs_new(),
         };
         rvs_snapshot_BIS(
             "test_20260703_contract_diff_missing_rvs_prefix",
@@ -2141,13 +2054,13 @@ mod tests {
         let missing_all = FnContractDiff {
             def_path: DefPath::from("demo::rvs_fetch"),
             actual_name: FnName::from("rvs_fetch"),
-            expected_name: Some(FnName::from("rvs_fetch_ABIMPSTU")),
+            expected_name: FnName::from("rvs_fetch_ABIMPSTU"),
             declared_public_caps: Some(CapabilitySet::rvs_new()),
-            expected_public_caps: Some(CapabilitySet::rvs_from_validated("ABIMPSTU")),
+            expected_public_caps: CapabilitySet::rvs_from_validated("ABIMPSTU"),
         };
         let declared_all = FnContractDiff {
             actual_name: FnName::from("rvs_fetch_ABIMPSTU"),
-            declared_public_caps: missing_all.expected_public_caps.clone(),
+            declared_public_caps: Some(missing_all.expected_public_caps.clone()),
             ..missing_all.clone()
         };
         let mismatches = missing_all.rvs_mismatch_kinds();

@@ -115,7 +115,6 @@ impl fmt::Display for OfflineCapsReport {
 struct OfflineFnContext<'a> {
     def_path: &'a DefPath,
     node: &'a FnNode,
-    classification: FunctionClassification,
     parsed_name: ParsedFunctionName<'a>,
     declared_caps: Option<CapabilitySet>,
     inferred_caps: Option<&'a CapabilitySet>,
@@ -146,7 +145,6 @@ pub(crate) fn rvs_check_offline_caps_M(
         let context = OfflineFnContext {
             def_path,
             node,
-            classification,
             parsed_name,
             declared_caps,
             inferred_caps: analysis.rvs_inferred().get(def_path),
@@ -165,9 +163,6 @@ fn rvs_collect_contract_diagnostics_M(
     report: &mut OfflineCapsReport,
     context: &OfflineFnContext<'_>,
 ) {
-    if !context.classification.rvs_is_contract_enforced() {
-        return;
-    }
     let Some(diff) = context.contract_diff else {
         return;
     };
@@ -175,10 +170,7 @@ fn rvs_collect_contract_diagnostics_M(
     let selected: Vec<_> = if mismatch_kinds.contains(&FnContractMismatchKind::MissingRvsPrefix) {
         vec![FnContractMismatchKind::MissingRvsPrefix]
     } else if mismatch_kinds.contains(&FnContractMismatchKind::NameMismatch)
-        && diff
-            .expected_public_caps
-            .as_ref()
-            .is_some_and(|caps| caps.rvs_contains(Capability::P))
+        && diff.expected_public_caps.rvs_contains(Capability::P)
     {
         vec![FnContractMismatchKind::NameMismatch]
     } else {
@@ -188,17 +180,14 @@ fn rvs_collect_contract_diagnostics_M(
             .collect()
     };
     for kind in selected {
-        let mut details = Vec::new();
-        if let Some(expected) = diff.expected_name.as_ref() {
-            details.push(format!("expected name: {expected}"));
-        }
+        let mut details = vec![format!("expected name: {}", diff.expected_name)];
         details.push(format!(
             "declared caps: {}",
             rvs_format_optional_caps(diff.declared_public_caps.as_ref())
         ));
         details.push(format!(
             "inferred caps: {}",
-            rvs_format_optional_caps(diff.expected_public_caps.as_ref())
+            rvs_format_caps(&diff.expected_public_caps)
         ));
         let message = match kind {
             FnContractMismatchKind::MissingRvsPrefix => {
@@ -206,10 +195,7 @@ fn rvs_collect_contract_diagnostics_M(
             }
             FnContractMismatchKind::NameMismatch => format!(
                 "'{}' should be named '{}'",
-                diff.actual_name,
-                diff.expected_name
-                    .as_ref()
-                    .expect("never: name mismatch carries expected name")
+                diff.actual_name, diff.expected_name
             ),
             kind => format!(
                 "'{}' is missing capability marker {}",

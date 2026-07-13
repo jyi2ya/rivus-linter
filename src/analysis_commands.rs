@@ -1,13 +1,11 @@
 use std::path::Path;
 
-use crate::artifacts::FnGraph;
 use crate::callgraph_cache::rvs_is_std_like_def_path;
 use crate::inference::{
     FnContractDiff, PreparedLocalAnalysis, rvs_caps_to_string, rvs_collect_local_contract_diffs_M,
-    rvs_contract_diff_is_enforced,
 };
 use crate::rename;
-use crate::symbols::{CrateName, DefPath};
+use crate::symbols::DefPath;
 
 use crate::cargo_targets::{
     CargoTargetScope, rvs_detect_local_crate_prefixes_BIS,
@@ -30,15 +28,12 @@ pub(crate) fn rvs_run_annotate_BIMPS(path: &Path) -> Result<(), String> {
     let diffs = rvs_collect_local_contract_diffs_M(&mut callgraph, &seed, &local_crate_names);
     let mut candidates = Vec::new();
     for diff in diffs {
-        let Some(expected_name) = diff.expected_name.as_ref() else {
-            continue;
-        };
-        if !diff.rvs_has_name_mismatch() || expected_name == &diff.actual_name {
+        if !diff.rvs_has_name_mismatch() {
             continue;
         }
         candidates.push(rename::SourceRenameCandidate::rvs_new(
             diff.def_path,
-            expected_name.clone(),
+            diff.expected_name,
         ));
     }
     let plan = rename::rvs_build_source_rename_plan_BIS(&callgraph, path, candidates, "annotate")?;
@@ -144,12 +139,7 @@ pub(crate) fn rvs_run_why_BIMPS(function: &str, path: &Path) -> Result<(), Strin
         None => " (not in inferred)".to_string(),
     };
     println!("{function}{caps_str}");
-    for line in rvs_format_enforced_contract_diff_summary(
-        &callgraph,
-        &analysis.diffs,
-        &local_crate_names,
-        function,
-    ) {
+    for line in rvs_format_enforced_contract_diff_summary(&analysis.diffs, function) {
         println!("  {line}");
     }
     println!();
@@ -214,10 +204,8 @@ fn rvs_callee_absence_message(had_collected_body: bool, is_synthetic: bool) -> &
 
 fn rvs_format_contract_diff_summary(diff: &FnContractDiff) -> Vec<String> {
     let mut lines = Vec::new();
-    if let Some(expected_name) = diff.expected_name.as_ref()
-        && expected_name != &diff.actual_name
-    {
-        lines.push(format!("expected name: {expected_name}"));
+    if diff.expected_name != diff.actual_name {
+        lines.push(format!("expected name: {}", diff.expected_name));
     }
     lines.push(format!(
         "declared caps: {}",
@@ -225,12 +213,10 @@ fn rvs_format_contract_diff_summary(diff: &FnContractDiff) -> Vec<String> {
     ));
     lines.push(format!(
         "expected caps: {}",
-        rvs_format_optional_caps(diff.expected_public_caps.as_ref())
+        rvs_format_optional_caps(Some(&diff.expected_public_caps))
     ));
-    if let (Some(declared), Some(expected)) = (
-        diff.declared_public_caps.as_ref(),
-        diff.expected_public_caps.as_ref(),
-    ) {
+    if let Some(declared) = diff.declared_public_caps.as_ref() {
+        let expected = &diff.expected_public_caps;
         let missing: Vec<_> = expected
             .rvs_iter()
             .filter(|cap| !declared.rvs_contains(*cap))
@@ -280,15 +266,13 @@ fn rvs_format_optional_caps(caps: Option<&crate::capability::CapabilitySet>) -> 
 }
 
 fn rvs_format_enforced_contract_diff_summary(
-    graph: &FnGraph,
     diffs: &[FnContractDiff],
-    local_crate_names: &std::collections::BTreeSet<CrateName>,
     function: &str,
 ) -> Vec<String> {
-    let Some(diff) = diffs.iter().find(|diff| {
-        diff.def_path.rvs_as_str() == function
-            && rvs_contract_diff_is_enforced(graph, diff, local_crate_names)
-    }) else {
+    let Some(diff) = diffs
+        .iter()
+        .find(|diff| diff.def_path.rvs_as_str() == function)
+    else {
         return Vec::new();
     };
     rvs_format_contract_diff_summary(diff)
@@ -299,8 +283,8 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
-    use crate::artifacts::FnSource;
-    use crate::symbols::FnName;
+    use crate::artifacts::{FnGraph, FnSource};
+    use crate::symbols::{CrateName, FnName};
     use crate::test_support::{
         rvs_make_cargo_project_BIS, rvs_make_temp_dir_BIS, rvs_snapshot_BIS,
     };
@@ -310,9 +294,9 @@ mod tests {
         let diff = FnContractDiff {
             def_path: DefPath::from("demo::rvs_fetch_ABI"),
             actual_name: FnName::from("rvs_fetch_ABI"),
-            expected_name: Some(FnName::from("rvs_fetch_P")),
+            expected_name: FnName::from("rvs_fetch_P"),
             declared_public_caps: Some(crate::capability::CapabilitySet::rvs_from_validated("ABI")),
-            expected_public_caps: Some(crate::capability::CapabilitySet::rvs_from_validated("AP")),
+            expected_public_caps: crate::capability::CapabilitySet::rvs_from_validated("AP"),
         };
         let lines = rvs_format_contract_diff_summary(&diff);
         let none_caps = rvs_format_optional_caps(None);
@@ -472,25 +456,19 @@ mod tests {
             DefPath::from("demo::main"),
             crate::artifacts::FnNode::default(),
         );
-        let diff = FnContractDiff {
-            def_path: DefPath::from("demo::main"),
-            actual_name: FnName::from("main"),
-            expected_name: None,
-            declared_public_caps: None,
-            expected_public_caps: Some(crate::capability::CapabilitySet::rvs_from_validated("BI")),
-        };
-        let lines = rvs_format_enforced_contract_diff_summary(
-            &graph,
-            &[diff],
+        let analysis = PreparedLocalAnalysis::rvs_prepare_M(
+            &mut graph,
+            &crate::capsmap::CapsMap::rvs_new(),
             &std::collections::BTreeSet::from([CrateName::from("demo")]),
-            "demo::main",
         );
+        let lines = rvs_format_enforced_contract_diff_summary(&analysis.diffs, "demo::main");
         rvs_snapshot_BIS(
             "test_20260703_why_contract_summary_skips_root_main",
             &format!("lines={lines:?}\n"),
         );
 
         assert!(lines.is_empty());
+        assert!(analysis.diffs.is_empty());
     }
 
     #[test]
