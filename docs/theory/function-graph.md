@@ -42,7 +42,7 @@
 - 同一命令已经确定本地 crate 边界后，callgraph 收集、std cache 选择、报告和缓存过滤都必须接收并复用这一份边界快照，并通过同一个 `LocalScope` 执行 typed path 和字符串 path 的归属判定，不允许各阶段重新构造 prefix 规则或用可选参数在执行中途重新探测项目范围
 - `check` 的父进程在启动两个 Cargo 阶段前加载一次项目 caps 快照；第一阶段只执行非能力 HIR lint，不重新解析 caps，最终离线能力分析必须复用命令开始时的同一份快照
 - Cargo target 范围使用具名策略区分 production target 与 test/example/bench target；本地 crate 发现与 Cargo invocation 必须共享同一策略，不能用含义不明的布尔值分别传递
-- 一次分析通过共享的 inference preparation 只执行一次 Port scope、能力推断、impl 索引和 synthetic path 识别；本地分析只为真实且启用契约检查的图节点生成契约差异，每条差异都携带完整的期望名称和期望能力，不用 `Option` 表示“此节点不检查契约”。synthetic path 只属于推断结果，各输出视图不能分别重建可能漂移的分析上下文
+- 一次分析通过共享的 inference preparation 只执行一次 Port scope、能力推断、impl 索引和 synthetic path 识别；本地分析只为具有可写源码位置且启用契约检查的真实图节点生成契约差异，每条差异都携带完整的期望名称和期望能力，不用 `Option` 表示“此节点不检查契约”。synthetic path 和无可写源码的宏生成节点仍参与能力推断，但不产生无法修复的名称契约。synthetic path 只属于推断结果，各输出视图不能分别重建可能漂移的分析上下文
 
 ## Lint 分层
 
@@ -76,7 +76,7 @@ free function、impl method 和带默认实现的 trait method 共享同一条 b
 
 ## 差异
 
-能力诊断、annotate、why、report 不再各自发明一套解释，而是基于同一张图做不同视图。lint pass 只从 HIR 收集能力事实；能力契约、后缀、静态状态和调用边诊断统一由离线能力引擎计算。离线引擎对每个真实函数节点只做一次本地分类和名称解析，再由各诊断规则消费同一个函数上下文；root main、测试和 trait impl 不生成契约差异，synthetic 推断路径没有真实节点，也不参与节点诊断。直接 rustc/UI 模式使用当前 crate 的内存图，`cargo rivus check` 使用合并后的全项目图。
+能力诊断、annotate、why、report 不再各自发明一套解释，而是基于同一张图做不同视图。lint pass 只从 HIR 收集能力事实；能力契约、后缀、静态状态和调用边诊断统一由离线能力引擎计算。各视图复用同一套本地分类策略；离线诊断在遍历真实节点时构造一次名称上下文供各诊断规则消费。由 rustc 选中的可执行入口、测试和无可写源码的生成节点不生成一般源码诊断；trait impl 不生成名称契约，其中 Port impl 仍检查后缀、静态状态和调用边。synthetic 推断路径没有真实节点，也不参与节点诊断。跨 Cargo target 合并先丢弃同一源码的 test-compilation 副本；同名普通函数和入口并存时保留普通函数用于契约，并独立保留入口的直接调用用于依赖推断；若同一源码同时承担普通函数和生产入口，或同路径普通定义的行为不同，则拒绝猜测。直接 rustc/UI 模式使用当前 crate 的内存图，`cargo rivus check` 使用合并后的全项目图。
 
 各视图共享函数的本地范围、入口点、测试、trait impl、Port、源码和生成代码分类，但保留具名的视图策略；contract、offline、report 和 rename 不得因复用分类而被压成同一套筛选条件。
 

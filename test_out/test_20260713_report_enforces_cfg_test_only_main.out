@@ -1,0 +1,5 @@
+entry=false
+test_compilation=true
+source_ranges=[(48, 52)]
+expected=Some("rvs_main")
+entry_calls={}

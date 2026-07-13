@@ -262,7 +262,7 @@ pub(crate) fn rvs_run_report_BIMPS(path: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::artifacts::FnNode;
+    use crate::artifacts::{FnNode, FnSource};
     use crate::symbols::DefPath;
     use crate::test_support::{
         rvs_make_cargo_project_BIS, rvs_make_temp_dir_BIS, rvs_snapshot_BIS,
@@ -390,11 +390,25 @@ mod tests {
     #[test]
     fn test_20260703_collect_reportable_contract_diffs_keeps_nested_main() {
         let mut graph = FnGraph::rvs_new();
-        graph.rvs_insert_M(DefPath::from("demo::main"), FnNode::default());
-        graph.rvs_insert_M(DefPath::from("demo::cli::main"), FnNode::default());
-        graph.rvs_insert_M(DefPath::from("demo::User::new"), FnNode::default());
-        graph.rvs_insert_M(DefPath::from("demo::go"), FnNode::default());
-        graph.rvs_insert_M(DefPath::from("demo::wblk"), FnNode::default());
+        let rvs_sourced_node = || FnNode {
+            sources: std::collections::BTreeSet::from([FnSource::rvs_new(
+                std::path::PathBuf::from("src/lib.rs"),
+                1,
+                2,
+            )]),
+            ..FnNode::default()
+        };
+        graph.rvs_insert_M(
+            DefPath::from("demo::main"),
+            FnNode {
+                is_entrypoint: true,
+                ..rvs_sourced_node()
+            },
+        );
+        graph.rvs_insert_M(DefPath::from("demo::cli::main"), rvs_sourced_node());
+        graph.rvs_insert_M(DefPath::from("demo::User::new"), rvs_sourced_node());
+        graph.rvs_insert_M(DefPath::from("demo::go"), rvs_sourced_node());
+        graph.rvs_insert_M(DefPath::from("demo::wblk"), rvs_sourced_node());
         graph.rvs_insert_M(
             DefPath::from("demo::Widget::sync@demo::Syncer"),
             FnNode {
@@ -402,7 +416,7 @@ mod tests {
                 ..FnNode::default()
             },
         );
-        graph.rvs_insert_M(DefPath::from("demo::parse"), FnNode::default());
+        graph.rvs_insert_M(DefPath::from("demo::parse"), rvs_sourced_node());
 
         let analysis = PreparedLocalAnalysis::rvs_prepare_M(
             &mut graph,
@@ -444,6 +458,311 @@ mod tests {
             filtered
                 .iter()
                 .any(|diff| diff.def_path.rvs_as_str() == "demo::parse")
+        );
+    }
+
+    #[test]
+    fn test_20260713_report_enforces_library_crate_root_main() {
+        let dir = rvs_make_cargo_project_BIS(
+            "report-library-root-main",
+            "report-library-main",
+            &[("src/lib.rs", "pub fn main() -> i32 { 1 }\n")],
+        );
+        let target_scope = CargoTargetScope::WithTestExampleBench;
+        let local_crate_names = rvs_load_local_crate_prefixes_BIS(&dir, target_scope).unwrap();
+        let (mut callgraph, caps) =
+            rvs_collect_callgraph_and_caps_BIMS(&dir, target_scope, &local_crate_names).unwrap();
+        let analysis =
+            PreparedLocalAnalysis::rvs_prepare_M(&mut callgraph, &caps, &local_crate_names);
+        let def_path = "report_library_main::main";
+        let diff = analysis
+            .diffs
+            .iter()
+            .find(|diff| diff.def_path.rvs_as_str() == def_path);
+        let mismatch_kinds = diff.map(|diff| diff.rvs_mismatch_kinds());
+        let output = format!(
+            "node={}\ndiff={}\nexpected={:?}\nmismatches={mismatch_kinds:?}\n",
+            callgraph.rvs_get(def_path).is_some(),
+            diff.is_some(),
+            diff.map(|diff| diff.expected_name.rvs_as_str()),
+        );
+        rvs_snapshot_BIS(
+            "test_20260713_report_enforces_library_crate_root_main",
+            &output,
+        );
+
+        let diff = diff.expect("library crate-root main should have a contract diff");
+        assert_eq!(diff.expected_name.rvs_as_str(), "rvs_main");
+        assert_eq!(
+            diff.rvs_mismatch_kinds(),
+            vec![FnContractMismatchKind::MissingRvsPrefix]
+        );
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260713_report_preserves_binary_entry_across_all_targets() {
+        let dir = rvs_make_cargo_project_BIS(
+            "report-binary-entry-all-targets",
+            "report-binary-entry",
+            &[("src/main.rs", "fn main() {}\n")],
+        );
+        let target_scope = CargoTargetScope::WithTestExampleBench;
+        let local_crate_names = rvs_load_local_crate_prefixes_BIS(&dir, target_scope).unwrap();
+        let (mut callgraph, caps) =
+            rvs_collect_callgraph_and_caps_BIMS(&dir, target_scope, &local_crate_names).unwrap();
+        let analysis =
+            PreparedLocalAnalysis::rvs_prepare_M(&mut callgraph, &caps, &local_crate_names);
+        let def_path = "report_binary_entry::main";
+        let node = callgraph
+            .rvs_get(def_path)
+            .expect("binary entry should be collected");
+        let source_files: Vec<_> = node
+            .sources
+            .iter()
+            .filter_map(|source| source.file.file_name())
+            .collect();
+        let has_diff = analysis
+            .diffs
+            .iter()
+            .any(|diff| diff.def_path.rvs_as_str() == def_path);
+        let output = format!(
+            "entry={}\nsource_files={source_files:?}\ncontract_diff={has_diff}\n",
+            node.is_entrypoint,
+        );
+        rvs_snapshot_BIS(
+            "test_20260713_report_preserves_binary_entry_across_all_targets",
+            &output,
+        );
+
+        assert!(node.is_entrypoint);
+        assert!(!has_diff);
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260713_report_enforces_integration_test_main_as_ordinary() {
+        let dir = rvs_make_cargo_project_BIS(
+            "report-integration-test-main",
+            "report-integration-main",
+            &[
+                ("src/lib.rs", "pub fn rvs_value() -> i32 { 1 }\n"),
+                ("tests/helper.rs", "fn main() -> i32 { 2 }\n"),
+            ],
+        );
+        let target_scope = CargoTargetScope::WithTestExampleBench;
+        let local_crate_names = rvs_load_local_crate_prefixes_BIS(&dir, target_scope).unwrap();
+        let (mut callgraph, caps) =
+            rvs_collect_callgraph_and_caps_BIMS(&dir, target_scope, &local_crate_names).unwrap();
+        let analysis =
+            PreparedLocalAnalysis::rvs_prepare_M(&mut callgraph, &caps, &local_crate_names);
+        let def_path = "helper::main";
+        let node = callgraph
+            .rvs_get(def_path)
+            .expect("integration-test main should be collected");
+        let diff = analysis
+            .diffs
+            .iter()
+            .find(|diff| diff.def_path.rvs_as_str() == def_path);
+        let output = format!(
+            "entry={}\nexpected={:?}\n",
+            node.is_entrypoint,
+            diff.map(|diff| diff.expected_name.rvs_as_str()),
+        );
+        rvs_snapshot_BIS(
+            "test_20260713_report_enforces_integration_test_main_as_ordinary",
+            &output,
+        );
+
+        assert!(!node.is_entrypoint);
+        assert_eq!(
+            diff.map(|diff| diff.expected_name.rvs_as_str()),
+            Some("rvs_main")
+        );
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260713_report_enforces_no_main_binary_function() {
+        let dir = rvs_make_cargo_project_BIS(
+            "report-no-main-binary-function",
+            "report-no-main-binary",
+            &[("src/main.rs", "#![no_main]\nfn main() -> i32 { 1 }\n")],
+        );
+        let target_scope = CargoTargetScope::WithTestExampleBench;
+        let local_crate_names = rvs_load_local_crate_prefixes_BIS(&dir, target_scope).unwrap();
+        let collected = rvs_collect_callgraph_and_caps_BIMS(&dir, target_scope, &local_crate_names);
+        let output = match collected {
+            Ok((mut callgraph, caps)) => {
+                let analysis =
+                    PreparedLocalAnalysis::rvs_prepare_M(&mut callgraph, &caps, &local_crate_names);
+                let def_path = "report_no_main_binary::main";
+                let node = callgraph
+                    .rvs_get(def_path)
+                    .expect("no_main function should be collected");
+                let expected = analysis
+                    .diffs
+                    .iter()
+                    .find(|diff| diff.def_path.rvs_as_str() == def_path)
+                    .map(|diff| diff.expected_name.rvs_as_str());
+                assert!(!node.is_entrypoint);
+                assert_eq!(expected, Some("rvs_main"));
+                format!("entry={}\nexpected={expected:?}\n", node.is_entrypoint)
+            }
+            Err(error) => panic!("no_main binary collection should succeed: {error}"),
+        };
+        rvs_snapshot_BIS(
+            "test_20260713_report_enforces_no_main_binary_function",
+            &output,
+        );
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260713_report_enforces_cfg_test_only_main() {
+        let dir = rvs_make_cargo_project_BIS(
+            "report-cfg-test-only-main",
+            "report-cfg-main",
+            &[(
+                "src/main.rs",
+                "#[cfg(not(test))]\nfn main() {}\n\n#[cfg(test)]\nfn main(value: i32) -> i32 { value }\n",
+            )],
+        );
+        let target_scope = CargoTargetScope::WithTestExampleBench;
+        let local_crate_names = rvs_load_local_crate_prefixes_BIS(&dir, target_scope).unwrap();
+        let (mut callgraph, caps) =
+            rvs_collect_callgraph_and_caps_BIMS(&dir, target_scope, &local_crate_names).unwrap();
+        let analysis =
+            PreparedLocalAnalysis::rvs_prepare_M(&mut callgraph, &caps, &local_crate_names);
+        let def_path = "report_cfg_main::main";
+        let node = callgraph
+            .rvs_get(def_path)
+            .expect("cfg(test) main should be collected");
+        let diff = analysis
+            .diffs
+            .iter()
+            .find(|diff| diff.def_path.rvs_as_str() == def_path);
+        let source_ranges: Vec<_> = node
+            .sources
+            .iter()
+            .map(|source| (source.name_start, source.name_end))
+            .collect();
+        let output = format!(
+            "entry={}\ntest_compilation={}\nsource_ranges={source_ranges:?}\nexpected={:?}\nentry_calls={:?}\n",
+            node.is_entrypoint,
+            node.is_test_compilation,
+            diff.map(|diff| diff.expected_name.rvs_as_str()),
+            node.entry_calls,
+        );
+        rvs_snapshot_BIS("test_20260713_report_enforces_cfg_test_only_main", &output);
+
+        assert!(!node.is_entrypoint);
+        assert!(node.is_test_compilation);
+        assert_eq!(source_ranges.len(), 1);
+        assert_eq!(
+            diff.map(|diff| diff.expected_name.rvs_as_str()),
+            Some("rvs_main")
+        );
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260713_report_same_name_lib_bin_retains_only_library_main() {
+        let dir = rvs_make_cargo_project_BIS(
+            "report-same-name-lib-bin-main",
+            "report-same-name-main",
+            &[
+                ("src/lib.rs", "pub fn main() -> i32 { 1 }\n"),
+                ("src/main.rs", "fn main() { std::process::exit(0); }\n"),
+            ],
+        );
+        let target_scope = CargoTargetScope::WithTestExampleBench;
+        let local_crate_names = rvs_load_local_crate_prefixes_BIS(&dir, target_scope).unwrap();
+        let (mut callgraph, caps) =
+            rvs_collect_callgraph_and_caps_BIMS(&dir, target_scope, &local_crate_names).unwrap();
+        let analysis =
+            PreparedLocalAnalysis::rvs_prepare_M(&mut callgraph, &caps, &local_crate_names);
+        let def_path = "report_same_name_main::main";
+        let node = callgraph
+            .rvs_get(def_path)
+            .expect("same-name library main should be retained");
+        let source_files: Vec<_> = node
+            .sources
+            .iter()
+            .filter_map(|source| source.file.file_name())
+            .collect();
+        let diff = analysis
+            .diffs
+            .iter()
+            .find(|diff| diff.def_path.rvs_as_str() == def_path);
+        let output = format!(
+            "entry={}\nsource_files={source_files:?}\nexpected={:?}\nentry_calls={:?}\n",
+            node.is_entrypoint,
+            diff.map(|diff| diff.expected_name.rvs_as_str()),
+            node.entry_calls,
+        );
+        rvs_snapshot_BIS(
+            "test_20260713_report_same_name_lib_bin_retains_only_library_main",
+            &output,
+        );
+
+        assert!(!node.is_entrypoint);
+        assert_eq!(source_files, vec![std::ffi::OsStr::new("lib.rs")]);
+        assert_eq!(
+            diff.map(|diff| diff.expected_name.rvs_as_str()),
+            Some("rvs_main")
+        );
+        assert!(node.entry_calls.contains("std::process::exit"));
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260713_report_skips_sourceless_generated_helpers() {
+        let mut graph = FnGraph::rvs_new();
+        graph.rvs_insert_M(
+            DefPath::from("demo::OpenFileSnafu::build"),
+            FnNode::default(),
+        );
+        graph.rvs_insert_M(
+            DefPath::from("demo::CustomContext::fail"),
+            FnNode::default(),
+        );
+        let mut user_node = FnNode::default();
+        user_node.sources.insert(FnSource::rvs_new(
+            std::path::PathBuf::from("src/lib.rs"),
+            1,
+            6,
+        ));
+        graph.rvs_insert_M(DefPath::from("demo::UserSnafu::build"), user_node);
+
+        let analysis = PreparedLocalAnalysis::rvs_prepare_M(
+            &mut graph,
+            &crate::capsmap::CapsMap::rvs_new(),
+            &std::collections::BTreeSet::from([CrateName::from("demo")]),
+        );
+        let diff_paths: Vec<_> = analysis
+            .diffs
+            .iter()
+            .map(|diff| diff.def_path.rvs_as_str())
+            .collect();
+        let mismatch_items = rvs_collect_contract_mismatch_items(&analysis.diffs);
+        let output = format!("diff_paths={diff_paths:?}\nmismatches={mismatch_items:?}\n");
+        rvs_snapshot_BIS(
+            "test_20260713_report_skips_sourceless_generated_helpers",
+            &output,
+        );
+
+        assert_eq!(diff_paths, vec!["demo::UserSnafu::build"]);
+        assert_eq!(mismatch_items.len(), 1);
+        assert_eq!(
+            mismatch_items[0].kind,
+            FnContractMismatchKind::MissingRvsPrefix
         );
     }
 

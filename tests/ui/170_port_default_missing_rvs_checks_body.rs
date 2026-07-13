@@ -15,5 +15,3 @@ trait ApiClient {
         rvs_read_BI()
     }
 }
-
-fn main() {}

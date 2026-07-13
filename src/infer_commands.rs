@@ -38,7 +38,13 @@ pub(crate) fn rvs_run_infer_capsmap_BIMPS(path: &Path, output: &Path) -> Result<
         .map_err(|e| format!("caps: {e}"))?;
     let resolved_output = rvs_prepare_output_path_BIS(&project_path, output, "deps capsmap")?;
 
-    let mut callgraph = rvs_collect_callgraph_BIMS(&project_path, false, target_scope, vec![])?;
+    let mut callgraph = rvs_collect_callgraph_BIMS(
+        &project_path,
+        false,
+        target_scope,
+        vec![],
+        &local_crate_names,
+    )?;
     let inference = PreparedInference::rvs_prepare_M(&mut callgraph, &seed, &local_crate_names);
     let (direct_external_calls, unknown_callees) = rvs_collect_direct_external_deps(
         &callgraph,
@@ -74,7 +80,13 @@ pub(crate) fn rvs_run_infer_std_BIMPS(path: &Path, output: &Path) -> Result<(), 
     let seed = CapsMap::rvs_load_dir_layers_BIS(&caps_dir, &["seed", "suppress"])
         .map_err(|e| format!("caps: {e}"))?;
     let resolved_output = rvs_prepare_output_path_BIS(&project_path, output, "std capsmap")?;
-    let mut callgraph = rvs_collect_callgraph_BIMS(&project_path, true, target_scope, vec![])?;
+    let mut callgraph = rvs_collect_callgraph_BIMS(
+        &project_path,
+        true,
+        target_scope,
+        vec![],
+        &local_crate_names,
+    )?;
     rvs_scope_port_methods_M(&mut callgraph, &local_crate_names);
 
     let pre_index = rvs_build_impl_index(&callgraph);
@@ -154,7 +166,7 @@ fn rvs_collect_std_unknown_callees(
         if !is_std || is_local {
             continue;
         }
-        for callee in &behavior.calls {
+        for callee in behavior.rvs_dependency_calls() {
             let callee_is_emitted_std = rvs_is_std_like_def_path(callee.rvs_as_str());
             if seed.rvs_lookup(callee.rvs_as_str()).is_some()
                 || (callee_is_emitted_std && inferred.contains_key(callee))

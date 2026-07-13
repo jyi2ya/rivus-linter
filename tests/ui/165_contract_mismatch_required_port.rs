@@ -5,5 +5,3 @@
 trait ApiClient {
     fn rvs_fetch_BI(&self) -> i32;
 }
-
-fn main() {}

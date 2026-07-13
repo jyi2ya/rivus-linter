@@ -191,7 +191,7 @@ cargo rivus annotate /path/to  # 指定目录
 注意：
 - 需要项目能成功 `cargo check`
 - annotate 只基于普通 `cargo check` 范围收集 callgraph 和候选；`tests/`、`examples/`、`benches/` 下的独立 Cargo target 暂不参与能力推断和直接重命名。`src/` 中的单元测试源码不按路径排除，但是否进入候选取决于普通 `cargo check` 是否编译到对应代码
-- root `main`、测试函数、trait impl 方法、synthetic 节点、宏展开或其他没有真实源码位置的函数不会作为直接 annotate 候选；trait impl 方法可能会随 trait 声明或调用点的语义重命名被间接更新
+- rustc 选中的可执行入口、测试函数、trait impl 方法、synthetic 节点、宏展开或其他没有真实源码位置的函数不会作为直接 annotate 候选；库 crate 中普通的根级 `main` 仍按一般函数处理，trait impl 方法可能会随 trait 声明或调用点的语义重命名被间接更新
 - 本地非 Port trait 方法的能力由各 impl 按 at-least-half vote（`ceil(n/2)`）聚合；声明后缀只在没有 impl 可聚合时作为回退。Port 方法固定为 `P`
 - annotate 后 `#[serde(default = "...")]` 等字符串字面量中的函数引用不会自动更新，需要手动修复
 - annotate 会删除 `target/rivus-callgraph` 和 `target/rivus-callgraph-std` 缓存（函数名已变，旧缓存失效）
@@ -271,7 +271,7 @@ std::process::exit=S           # 副作用：终止进程
 | `TestNameFormatWarning` | `#[test]` 函数名不匹配 `^test_\d{8}_\w+$` 格式 |
 | `DuplicateTestWarning` | 同名测试函数出现多次（跨文件检测） |
 | `BannedImportWarning` | 导入了被禁 crate（`thiserror`、`anyhow`、`eyre`、`color_eyre`） |
-| `NonRvsFnWarning` | 函数缺少 `rvs_` 前缀（`#[test]` 函数、`main`、`new`、`go`、`wblk`、trait impl 方法除外） |
+| `NonRvsFnWarning` | 函数缺少 `rvs_` 前缀（`#[test]` 函数、rustc 选中的可执行入口、trait impl 方法和没有可写源码位置的生成函数除外） |
 | `MissingDocWarning` | `rvs_` 开头的 pub 函数/方法缺少 `///` 文档注释 |
 | `DenyWarningsWarning` | crate 级 `#![deny(warnings)]` 反模式——应改用具名 lint |
 | `WildcardImportWarning` | `use xxx::*;` 通配导入（`super::*` 和 `*::prelude::*` 除外） |

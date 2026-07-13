@@ -1,0 +1,2 @@
+known={DefPath("external_crate::shutdown_S"): CapabilitySet({S})}
+unknown={}

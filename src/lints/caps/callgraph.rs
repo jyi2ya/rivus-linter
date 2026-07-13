@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use rustc_hir::HirId;
 use rustc_lint::LateContext;
-use rustc_span::{FileName, Ident};
+use rustc_span::{FileName, Ident, Span};
 
 use super::super::ctx::FnSubject;
 use super::super::utils::{
@@ -21,9 +21,13 @@ fn rvs_fn_node_from_signature(
     is_trait_impl: bool,
     is_test: bool,
     is_port_method: bool,
+    is_entrypoint: bool,
+    is_test_compilation: bool,
+    declaration_span: Span,
 ) -> FnNode {
     FnNode {
         calls: BTreeSet::new(),
+        entry_calls: BTreeSet::new(),
         facts: CapabilityFacts::rvs_from_signature(
             sig,
             rvs_has_mutable_params(sig),
@@ -32,7 +36,11 @@ fn rvs_fn_node_from_signature(
         has_body: false,
         is_trait_impl,
         is_test,
-        sources: rvs_fn_source(cx, ident).into_iter().collect(),
+        is_entrypoint,
+        is_test_compilation,
+        sources: rvs_fn_source(cx, ident, declaration_span)
+            .into_iter()
+            .collect(),
         report_line_count: None,
         allows_dead_code: false,
     }
@@ -46,6 +54,8 @@ pub(crate) fn rvs_collect_callgraph_for_item_M<'tcx>(
     let local_def_id = subject.hir_id.owner.def_id;
     let def_id = local_def_id.to_def_id();
     let caller_path = DefPath::rvs_new(rvs_def_path(cx, def_id));
+    let is_entrypoint = rvs_is_executable_entry(cx, def_id);
+    let is_test_compilation = cx.tcx.sess.opts.test;
     let attrs = cx.tcx.hir_attrs(subject.hir_id);
     let mut node = rvs_fn_node_from_signature(
         cx,
@@ -54,6 +64,9 @@ pub(crate) fn rvs_collect_callgraph_for_item_M<'tcx>(
         subject.is_trait_impl,
         subject.is_test,
         subject.is_port_method,
+        is_entrypoint,
+        is_test_compilation,
+        subject.span,
     );
 
     let calls: BTreeSet<DefPath> = subject
@@ -109,14 +122,32 @@ pub(crate) fn rvs_collect_callgraph_for_signature_M(
     let local_def_id = hir_id.owner.def_id;
     let def_id = local_def_id.to_def_id();
     let caller_path = DefPath::rvs_new(rvs_def_path(cx, def_id));
-    let node = rvs_fn_node_from_signature(cx, ident, sig, is_trait_impl, false, is_port_method);
+    let node = rvs_fn_node_from_signature(
+        cx,
+        ident,
+        sig,
+        is_trait_impl,
+        false,
+        is_port_method,
+        false,
+        cx.tcx.sess.opts.test,
+        cx.tcx.hir_span(hir_id),
+    );
     callgraph.rvs_merge_node_M(caller_path.clone(), node);
     caller_path
 }
 
-fn rvs_fn_source(cx: &LateContext<'_>, ident: Ident) -> Option<FnSource> {
+fn rvs_is_executable_entry(cx: &LateContext<'_>, def_id: rustc_span::def_id::DefId) -> bool {
+    !cx.tcx.sess.opts.test
+        && cx
+            .tcx
+            .entry_fn(())
+            .is_some_and(|(entry_def_id, _)| entry_def_id == def_id)
+}
+
+fn rvs_fn_source(cx: &LateContext<'_>, ident: Ident, declaration_span: Span) -> Option<FnSource> {
     let span = ident.span;
-    if span.from_expansion() {
+    if span.from_expansion() || declaration_span.from_expansion() {
         return None;
     }
     let source_map = cx.tcx.sess.source_map();
@@ -170,7 +201,8 @@ mod tests {
             rvs_collect_callgraph_for_signature_M(
                 _callgraph, _cx, _hir_id, _ident, _sig, false, false,
             );
-            let _ = rvs_fn_source(_cx, _ident);
+            let _span: Span = unreachable!();
+            let _ = rvs_fn_source(_cx, _ident, _span);
             let _file_name: &FileName = unreachable!();
             let _ = rvs_real_file_name(_file_name);
         }

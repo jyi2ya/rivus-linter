@@ -1,0 +1,5 @@
+lib:
+pub fn rvs_main() -> i32 { 1 }
+
+bin:
+fn main() {}

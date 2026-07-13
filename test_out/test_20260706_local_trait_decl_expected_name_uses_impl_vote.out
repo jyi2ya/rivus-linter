@@ -1,3 +1,4 @@
 actual=rvs_fetch_BI
 expected=FnName("rvs_fetch")
 caps=CapabilitySet({})
+diff_paths=["demo::Fetcher::rvs_fetch_BI"]

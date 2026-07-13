@@ -281,23 +281,24 @@ pub(crate) fn rvs_run_cargo_check_BIMS(extra_args: &[String]) -> Result<(), i32>
         }
     }
 
+    let local_crate_names = match rvs_load_local_crate_prefixes_BIS(project_path, target_scope) {
+        Ok(names) => names,
+        Err(e) => {
+            eprintln!("offline caps check cannot detect local crates: {e}");
+            return Err(1);
+        }
+    };
     let mut callgraph = match rvs_collect_callgraph_with_args_BIMS(
         project_path,
         false,
         target_scope,
         vec![],
         extra_args_ref,
+        &local_crate_names,
     ) {
         Ok(callgraph) => callgraph,
         Err(e) => {
             eprintln!("offline caps check unavailable: {e}");
-            return Err(1);
-        }
-    };
-    let local_crate_names = match rvs_load_local_crate_prefixes_BIS(project_path, target_scope) {
-        Ok(names) => names,
-        Err(e) => {
-            eprintln!("offline caps check cannot detect local crates: {e}");
             return Err(1);
         }
     };
@@ -404,8 +405,16 @@ pub(crate) fn rvs_collect_callgraph_BIMS(
     build_std: bool,
     target_scope: CargoTargetScope,
     extra_env: Vec<(&str, OsString)>,
+    local_crate_names: &BTreeSet<CrateName>,
 ) -> Result<FnGraph, String> {
-    rvs_collect_callgraph_with_args_BIMS(path, build_std, target_scope, extra_env, vec![])
+    rvs_collect_callgraph_with_args_BIMS(
+        path,
+        build_std,
+        target_scope,
+        extra_env,
+        vec![],
+        local_crate_names,
+    )
 }
 
 pub(crate) fn rvs_collect_callgraph_with_args_BIMS(
@@ -414,6 +423,7 @@ pub(crate) fn rvs_collect_callgraph_with_args_BIMS(
     target_scope: CargoTargetScope,
     extra_env: Vec<(&str, OsString)>,
     extra_args: Vec<&str>,
+    local_crate_names: &BTreeSet<CrateName>,
 ) -> Result<FnGraph, String> {
     let suffix = if build_std { "-std" } else { "" };
     let cg_subdir = format!("rivus-callgraph{suffix}");
@@ -440,7 +450,7 @@ pub(crate) fn rvs_collect_callgraph_with_args_BIMS(
     })
     .map_err(|e| e.to_string())?;
 
-    rvs_merge_callgraph_dir_BIS(&cg_dir)
+    rvs_merge_callgraph_dir_BIS(&cg_dir, local_crate_names)
 }
 
 fn rvs_callgraph_collection_env(
@@ -456,7 +466,7 @@ fn rvs_callgraph_collection_env(
 fn rvs_load_required_std_callgraph_cache_BIS(path: &Path) -> Result<FnGraph, String> {
     let cg_std_dir = path.join("target").join("rivus-callgraph-std");
     if crate::fs_guard::rvs_validate_optional_dir_BIS(&cg_std_dir, "std callgraph cache")? {
-        let cg = rvs_merge_callgraph_dir_BIS(&cg_std_dir)
+        let cg = rvs_merge_callgraph_dir_BIS(&cg_std_dir, &BTreeSet::new())
             .map_err(|e| format!("{e}; run cargo rivus infer-std first"))?;
         let mut std_only = FnGraph::rvs_new();
         rvs_merge_std_like_callgraph_M(&mut std_only, cg);
@@ -521,10 +531,11 @@ fn rvs_collect_project_callgraph_with_optional_std_cache_BIMS(
     target_scope: CargoTargetScope,
     local_crate_names: &BTreeSet<CrateName>,
 ) -> Result<FnGraph, String> {
-    let mut callgraph = rvs_collect_callgraph_BIMS(path, false, target_scope, vec![])?;
+    let mut callgraph =
+        rvs_collect_callgraph_BIMS(path, false, target_scope, vec![], local_crate_names)?;
     let cg_std_dir = path.join("target").join("rivus-callgraph-std");
     if rvs_warn_optional_dir_BIS(&cg_std_dir, "std callgraph cache") {
-        match rvs_merge_callgraph_dir_BIS(&cg_std_dir) {
+        match rvs_merge_callgraph_dir_BIS(&cg_std_dir, &BTreeSet::new()) {
             Ok(std_graph) => rvs_merge_std_like_callgraph_with_local_prefixes_M(
                 &mut callgraph,
                 std_graph,
@@ -763,9 +774,14 @@ mod tests {
         )
         .unwrap();
 
-        let graph =
-            rvs_collect_callgraph_BIMS(&member, false, CargoTargetScope::Production, vec![])
-                .unwrap();
+        let graph = rvs_collect_callgraph_BIMS(
+            &member,
+            false,
+            CargoTargetScope::Production,
+            vec![],
+            &BTreeSet::from([CrateName::from("member")]),
+        )
+        .unwrap();
         let source = graph
             .rvs_get("member::rvs_parse")
             .and_then(|node| node.sources.first())
@@ -2483,7 +2499,7 @@ name = "throughput-bench"
         let cg_dir = dir.join("target/rivus-callgraph");
         std::fs::create_dir_all(&cg_dir).unwrap();
 
-        let result = rvs_merge_callgraph_dir_BIS(&cg_dir);
+        let result = rvs_merge_callgraph_dir_BIS(&cg_dir, &BTreeSet::new());
         let output = format!("{result:?}\n").replace(&dir.to_string_lossy().into_owned(), "$TMP");
         rvs_snapshot_BIS(
             "test_20260706_merge_callgraph_dir_rejects_empty_artifact_dir",
@@ -2501,7 +2517,7 @@ name = "throughput-bench"
         std::fs::create_dir_all(&cg_dir).unwrap();
         std::fs::write(cg_dir.join("demo-1.json"), "{}\n").unwrap();
 
-        let result = rvs_merge_callgraph_dir_BIS(&cg_dir);
+        let result = rvs_merge_callgraph_dir_BIS(&cg_dir, &BTreeSet::new());
         let output = format!("{result:?}\n").replace(&dir.to_string_lossy().into_owned(), "$TMP");
         rvs_snapshot_BIS(
             "test_20260706_merge_callgraph_dir_rejects_empty_graph_json",
@@ -2520,7 +2536,7 @@ name = "throughput-bench"
         std::fs::write(cg_dir.join("z.json"), "not json\n").unwrap();
         std::fs::write(cg_dir.join("a.json"), "not json\n").unwrap();
 
-        let result = rvs_merge_callgraph_dir_BIS(&cg_dir);
+        let result = rvs_merge_callgraph_dir_BIS(&cg_dir, &BTreeSet::new());
         let output = format!("{result:?}\n").replace(&dir.to_string_lossy().into_owned(), "$TMP");
         rvs_snapshot_BIS(
             "test_20260706_merge_callgraph_dir_sorts_json_artifacts",
@@ -2558,7 +2574,8 @@ name = "throughput-bench"
         )
         .unwrap();
 
-        let result = rvs_merge_callgraph_dir_BIS(&cg_dir);
+        let result =
+            rvs_merge_callgraph_dir_BIS(&cg_dir, &BTreeSet::from([CrateName::from("demo")]));
         let ok = result
             .as_ref()
             .is_ok_and(|graph| graph.rvs_get("demo::rvs_run").is_some());

@@ -29,8 +29,11 @@ pub(crate) fn rvs_is_std_like_def_path(function: &str) -> bool {
         || function.starts_with("compiler_builtins::")
 }
 
-pub(crate) fn rvs_merge_callgraph_dir_BIS(cg_dir: &Path) -> Result<FnGraph, String> {
-    let mut merged = FnGraph::rvs_new();
+pub(crate) fn rvs_merge_callgraph_dir_BIS(
+    cg_dir: &Path,
+    local_crate_names: &BTreeSet<CrateName>,
+) -> Result<FnGraph, String> {
+    let mut artifacts = Vec::new();
     let mut json_paths = Vec::new();
     let cg_entries =
         std::fs::read_dir(cg_dir).map_err(|e| format!("cannot read {}: {e}", cg_dir.display()))?;
@@ -50,7 +53,7 @@ pub(crate) fn rvs_merge_callgraph_dir_BIS(cg_dir: &Path) -> Result<FnGraph, Stri
             .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
         let partial = artifacts::rvs_parse_callgraph_json_S(&json_str)
             .map_err(|e| format!("{}: {e}", path.display()))?;
-        merged.rvs_merge_from_M(partial);
+        artifacts.push(partial);
     }
     if json_paths.is_empty() {
         return Err(format!(
@@ -58,6 +61,7 @@ pub(crate) fn rvs_merge_callgraph_dir_BIS(cg_dir: &Path) -> Result<FnGraph, Stri
             cg_dir.display()
         ));
     }
+    let merged = FnGraph::rvs_merge_artifacts(artifacts, local_crate_names)?;
     if merged.rvs_is_empty() {
         return Err(format!(
             "callgraph JSON artifacts in {} contained no nodes",

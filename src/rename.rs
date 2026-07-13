@@ -451,8 +451,13 @@ pub fn rvs_strip_BIS(path: &Path) -> Result<(), String> {
     let target_scope = crate::cargo_targets::CargoTargetScope::Production;
     let local_crate_names =
         crate::workspace::rvs_load_local_crate_prefixes_BIS(path, target_scope)?;
-    let callgraph =
-        crate::workspace::rvs_collect_callgraph_BIMS(path, false, target_scope, vec![])?;
+    let callgraph = crate::workspace::rvs_collect_callgraph_BIMS(
+        path,
+        false,
+        target_scope,
+        vec![],
+        &local_crate_names,
+    )?;
     let mut candidates = Vec::new();
     let scope = LocalScope::rvs_new(&local_crate_names);
     for (def_path, node) in callgraph.rvs_iter() {

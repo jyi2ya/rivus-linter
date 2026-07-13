@@ -654,11 +654,18 @@ pub(crate) fn rvs_collect_signature_contract_diff_from_facts_M(
         def_path,
         FnNode {
             calls: BTreeSet::new(),
+            entry_calls: BTreeSet::new(),
             facts,
             has_body: true,
             is_trait_impl: false,
             is_test: false,
-            sources: BTreeSet::new(),
+            is_entrypoint: false,
+            is_test_compilation: false,
+            sources: BTreeSet::from([crate::artifacts::FnSource::rvs_new(
+                "src/lib.rs".into(),
+                1,
+                2,
+            )]),
             report_line_count: None,
             allows_dead_code: false,
         },
@@ -756,7 +763,7 @@ pub(crate) fn rvs_collect_direct_external_deps(
         if !local_scope.rvs_contains(func) {
             continue;
         }
-        for callee in &behavior.calls {
+        for callee in behavior.rvs_dependency_calls() {
             if local_scope.rvs_contains(callee) {
                 continue;
             }
@@ -787,11 +794,18 @@ mod tests {
     fn rvs_make_behavior() -> FnNode {
         FnNode {
             calls: BTreeSet::new(),
+            entry_calls: BTreeSet::new(),
             facts: CapabilityFacts::default(),
             has_body: true,
             is_trait_impl: false,
             is_test: false,
-            sources: BTreeSet::new(),
+            is_entrypoint: false,
+            is_test_compilation: false,
+            sources: BTreeSet::from([crate::artifacts::FnSource::rvs_new(
+                "src/lib.rs".into(),
+                1,
+                2,
+            )]),
             report_line_count: None,
             allows_dead_code: false,
         }
@@ -1735,6 +1749,7 @@ mod tests {
             DefPath::from("demo::rvs_fetch_ABI"),
             FnNode {
                 calls: BTreeSet::new(),
+                entry_calls: BTreeSet::new(),
                 facts: CapabilityFacts {
                     is_port_method: true,
                     ..CapabilityFacts::default()
@@ -1742,7 +1757,13 @@ mod tests {
                 has_body: true,
                 is_trait_impl: false,
                 is_test: false,
-                sources: BTreeSet::new(),
+                is_entrypoint: false,
+                is_test_compilation: false,
+                sources: BTreeSet::from([crate::artifacts::FnSource::rvs_new(
+                    "src/lib.rs".into(),
+                    1,
+                    2,
+                )]),
                 report_line_count: None,
                 allows_dead_code: false,
             },
@@ -1773,18 +1794,28 @@ mod tests {
             DefPath::from("demo::Fetcher::rvs_fetch_BI"),
             FnNode {
                 calls: BTreeSet::new(),
+                entry_calls: BTreeSet::new(),
                 facts: CapabilityFacts::default(),
                 has_body: false,
                 is_trait_impl: false,
                 is_test: false,
-                sources: BTreeSet::new(),
+                is_entrypoint: false,
+                is_test_compilation: false,
+                sources: BTreeSet::from([crate::artifacts::FnSource::rvs_new(
+                    "src/lib.rs".into(),
+                    1,
+                    2,
+                )]),
                 report_line_count: None,
                 allows_dead_code: false,
             },
         );
         graph.rvs_insert_M(
             DefPath::from("demo::MemoryFetcher::rvs_fetch_BI@demo::Fetcher"),
-            FnNode::default(),
+            FnNode {
+                is_trait_impl: true,
+                ..rvs_make_behavior()
+            },
         );
 
         let diffs = rvs_collect_local_contract_diffs_M(
@@ -1793,14 +1824,19 @@ mod tests {
             &BTreeSet::from([CrateName::from("demo")]),
         );
         let diff = diffs.first().expect("expected trait declaration diff");
+        let diff_paths: Vec<_> = diffs
+            .iter()
+            .map(|diff| diff.def_path.rvs_as_str())
+            .collect();
         rvs_snapshot_BIS(
             "test_20260706_local_trait_decl_expected_name_uses_impl_vote",
             &format!(
-                "actual={}\nexpected={:?}\ncaps={:?}\n",
-                diff.actual_name, diff.expected_name, diff.expected_public_caps
+                "actual={}\nexpected={:?}\ncaps={:?}\ndiff_paths={diff_paths:?}\n",
+                diff.actual_name, diff.expected_name, diff.expected_public_caps,
             ),
         );
 
+        assert_eq!(diffs.len(), 1);
         assert_eq!(diff.expected_name.rvs_as_str(), "rvs_fetch");
         assert!(diff.expected_public_caps.rvs_is_empty());
     }
@@ -1920,6 +1956,7 @@ mod tests {
     fn test_20260703_collect_single_local_contract_diff_port_ignores_async() {
         let node = FnNode {
             calls: BTreeSet::new(),
+            entry_calls: BTreeSet::new(),
             facts: CapabilityFacts {
                 has_async: true,
                 is_port_method: true,
@@ -1928,7 +1965,13 @@ mod tests {
             has_body: true,
             is_trait_impl: false,
             is_test: false,
-            sources: BTreeSet::new(),
+            is_entrypoint: false,
+            is_test_compilation: false,
+            sources: BTreeSet::from([crate::artifacts::FnSource::rvs_new(
+                "src/lib.rs".into(),
+                1,
+                2,
+            )]),
             report_line_count: None,
             allows_dead_code: false,
         };
@@ -2593,6 +2636,35 @@ mod tests {
             &format!("known={known:?}\nunknown={unknown:?}"),
         );
         assert!(known.contains_key("serde_json::de::from_str"));
+        assert!(unknown.is_empty());
+    }
+
+    #[test]
+    fn test_20260713_collect_direct_external_deps_includes_entry_calls() {
+        let mut graph = FnGraph::rvs_new();
+        let mut local = rvs_make_behavior();
+        local
+            .entry_calls
+            .insert("external_crate::shutdown_S".into());
+        graph.rvs_insert_M("demo::main".into(), local);
+        let inferred = BTreeMap::from([(
+            DefPath::from("external_crate::shutdown_S"),
+            CapabilitySet::rvs_from_validated("S"),
+        )]);
+
+        let (known, unknown) = rvs_collect_direct_external_deps(
+            &graph,
+            &BTreeSet::from([CrateName::from("demo")]),
+            &capsmap::CapsMap::rvs_new(),
+            &inferred,
+            &HashMap::new(),
+        );
+        rvs_snapshot_BIS(
+            "test_20260713_collect_direct_external_deps_includes_entry_calls",
+            &format!("known={known:?}\nunknown={unknown:?}\n"),
+        );
+
+        assert!(known.contains_key("external_crate::shutdown_S"));
         assert!(unknown.is_empty());
     }
 

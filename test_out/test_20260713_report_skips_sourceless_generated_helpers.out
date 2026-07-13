@@ -1,0 +1,2 @@
+diff_paths=["demo::UserSnafu::build"]
+mismatches=[FnContractMismatch { def_path: DefPath("demo::UserSnafu::build"), actual_name: FnName("build"), kind: MissingRvsPrefix }]

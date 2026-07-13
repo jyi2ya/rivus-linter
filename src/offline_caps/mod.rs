@@ -454,6 +454,43 @@ mod tests {
     }
 
     #[test]
+    fn test_20260713_port_trait_impl_offline_checked_without_contract_diff() {
+        let mut graph = FnGraph::rvs_new();
+        let mut node = rvs_node(&["dep::effect"]);
+        node.is_trait_impl = true;
+        node.facts.is_port_method = true;
+        graph.rvs_insert_M(
+            DefPath::from("demo::Adapter::rvs_fetch_P@demo::ApiClient"),
+            node,
+        );
+        let caps = CapsMap::rvs_parse("dep::effect=S\n").unwrap();
+        let local = BTreeSet::from([CrateName::from("demo")]);
+        let mut analysis_graph = graph.clone();
+        let analysis = PreparedLocalAnalysis::rvs_prepare_M(&mut analysis_graph, &caps, &local);
+
+        let report = rvs_check_offline_caps_M(&mut graph, &caps, &local);
+        let output = format!("contract_diffs={}\n{}", analysis.diffs.len(), report);
+        rvs_snapshot_BIS(
+            "test_20260713_port_trait_impl_offline_checked_without_contract_diff",
+            &output,
+        );
+
+        assert!(analysis.diffs.is_empty());
+        assert!(
+            report
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.kind == OfflineCapsKind::CallViolation)
+        );
+        assert!(
+            !report
+                .diagnostics
+                .iter()
+                .any(|diagnostic| matches!(diagnostic.kind, OfflineCapsKind::Contract(_)))
+        );
+    }
+
+    #[test]
     fn test_20260713_offline_caps_single_context_emits_all_diagnostic_families() {
         let mut graph = FnGraph::rvs_new();
         let mut node = rvs_node(&["dep::effect"]);

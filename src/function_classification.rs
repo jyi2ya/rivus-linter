@@ -1,12 +1,11 @@
 use std::collections::BTreeSet;
 
 use crate::artifacts::FnNode;
-use crate::symbols::{CrateName, DefPath, DefPathPrefix, FnName};
+use crate::symbols::{CrateName, DefPath, DefPathPrefix};
 
 #[derive(Debug)]
 pub(crate) struct LocalScope {
     prefixes: Vec<DefPathPrefix>,
-    root_main_paths: BTreeSet<DefPath>,
 }
 
 impl LocalScope {
@@ -15,14 +14,7 @@ impl LocalScope {
             .iter()
             .map(CrateName::rvs_prefix)
             .collect();
-        let root_main_paths = prefixes
-            .iter()
-            .map(|prefix| prefix.rvs_join_name(&FnName::rvs_new("main")))
-            .collect();
-        Self {
-            prefixes,
-            root_main_paths,
-        }
+        Self { prefixes }
     }
 
     pub(crate) fn rvs_contains(&self, def_path: &DefPath) -> bool {
@@ -34,47 +26,44 @@ impl LocalScope {
             .iter()
             .any(|prefix| def_path.starts_with(prefix.rvs_as_str()))
     }
-
-    pub(crate) fn rvs_is_root_main(&self, def_path: &DefPath) -> bool {
-        self.root_main_paths.contains(def_path)
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct FunctionClassification {
     is_local: bool,
-    is_root_main: bool,
+    is_entrypoint: bool,
     is_test: bool,
     is_trait_impl: bool,
     is_port_method: bool,
     has_source: bool,
-    is_generated_helper: bool,
 }
 
 impl FunctionClassification {
     pub(crate) fn rvs_new(scope: &LocalScope, def_path: &DefPath, node: &FnNode) -> Self {
         Self {
             is_local: scope.rvs_contains(def_path),
-            is_root_main: scope.rvs_is_root_main(def_path),
+            is_entrypoint: node.is_entrypoint,
             is_test: node.is_test,
             is_trait_impl: node.is_trait_impl,
             is_port_method: node.facts.is_port_method,
             has_source: !node.sources.is_empty(),
-            is_generated_helper: rvs_is_generated_snafu_helper(def_path),
         }
     }
 
     pub(crate) fn rvs_is_contract_enforced(self) -> bool {
-        self.is_local && !self.is_root_main && !self.is_test && !self.is_trait_impl
+        self.is_local
+            && !self.is_entrypoint
+            && !self.is_test
+            && !self.is_trait_impl
+            && self.has_source
     }
 
     pub(crate) fn rvs_is_offline_checked(self) -> bool {
         self.is_local
-            && !self.is_root_main
+            && !self.is_entrypoint
             && !self.is_test
             && (!self.is_trait_impl || self.is_port_method)
             && self.has_source
-            && !self.is_generated_helper
     }
 
     pub(crate) fn rvs_is_report_candidate(self) -> bool {
@@ -84,13 +73,6 @@ impl FunctionClassification {
     pub(crate) fn rvs_is_strip_candidate(self) -> bool {
         self.is_local && !self.is_trait_impl
     }
-}
-
-fn rvs_is_generated_snafu_helper(def_path: &DefPath) -> bool {
-    let path = def_path.rvs_as_str();
-    let fn_name = def_path.rvs_fn_name();
-    matches!(fn_name.rvs_as_str(), "build" | "fail")
-        && path.split("::").any(|segment| segment.ends_with("Snafu"))
 }
 
 #[cfg(test)]
@@ -103,8 +85,25 @@ mod tests {
     fn test_20260711_function_classification_policy_matrix() {
         let scope = LocalScope::rvs_new(&BTreeSet::from([CrateName::from("demo")]));
         let cases = [
-            ("ordinary", "demo::rvs_run", false, false, false, true),
-            ("root_main", "demo::main", false, false, false, false),
+            (
+                "ordinary",
+                "demo::rvs_run",
+                false,
+                false,
+                false,
+                false,
+                true,
+            ),
+            ("entry_main", "demo::main", false, false, false, true, true),
+            (
+                "library_main",
+                "demo::main",
+                false,
+                false,
+                false,
+                false,
+                true,
+            ),
             (
                 "external",
                 "dependency::rvs_run",
@@ -112,13 +111,15 @@ mod tests {
                 false,
                 false,
                 false,
+                false,
             ),
-            ("test", "demo::rvs_test", true, false, false, true),
+            ("test", "demo::rvs_test", true, false, false, false, true),
             (
                 "trait_impl",
                 "demo::Adapter::rvs_run@demo::Trait",
                 false,
                 true,
+                false,
                 false,
                 true,
             ),
@@ -128,11 +129,22 @@ mod tests {
                 false,
                 true,
                 true,
+                false,
                 true,
             ),
             (
-                "snafu",
+                "generated_snafu",
                 "demo::ErrorSnafu::build",
+                false,
+                false,
+                false,
+                false,
+                false,
+            ),
+            (
+                "user_snafu",
+                "demo::UserSnafu::build",
+                false,
                 false,
                 false,
                 false,
@@ -140,10 +152,12 @@ mod tests {
             ),
         ];
         let mut output = String::new();
-        for (name, path, is_test, is_trait_impl, is_port_method, has_source) in cases {
+        for (name, path, is_test, is_trait_impl, is_port_method, is_entrypoint, has_source) in cases
+        {
             let mut node = FnNode {
                 is_test,
                 is_trait_impl,
+                is_entrypoint,
                 ..FnNode::default()
             };
             node.facts.is_port_method = is_port_method;

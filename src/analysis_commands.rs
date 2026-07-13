@@ -450,11 +450,19 @@ mod tests {
     }
 
     #[test]
-    fn test_20260703_why_contract_summary_skips_root_main() {
+    fn test_20260703_why_contract_summary_skips_executable_entry() {
         let mut graph = FnGraph::rvs_new();
         graph.rvs_insert_M(
             DefPath::from("demo::main"),
-            crate::artifacts::FnNode::default(),
+            crate::artifacts::FnNode {
+                is_entrypoint: true,
+                sources: std::collections::BTreeSet::from([FnSource::rvs_new(
+                    std::path::PathBuf::from("src/main.rs"),
+                    3,
+                    7,
+                )]),
+                ..crate::artifacts::FnNode::default()
+            },
         );
         let analysis = PreparedLocalAnalysis::rvs_prepare_M(
             &mut graph,
@@ -463,7 +471,7 @@ mod tests {
         );
         let lines = rvs_format_enforced_contract_diff_summary(&analysis.diffs, "demo::main");
         rvs_snapshot_BIS(
-            "test_20260703_why_contract_summary_skips_root_main",
+            "test_20260703_why_contract_summary_skips_executable_entry",
             &format!("lines={lines:?}\n"),
         );
 
@@ -986,6 +994,32 @@ path = "src/main.rs"
         assert!(lib_source.contains("pub fn rvs_parse()"));
         assert!(main_source.contains("fn rvs_parse()"));
         assert!(main_source.contains("rvs_parse();"));
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260713_annotate_renames_library_main_but_preserves_binary_entry() {
+        let dir = rvs_make_cargo_project_BIS(
+            "annotate-library-and-binary-main",
+            "annotate-main-identity-demo",
+            &[
+                ("src/lib.rs", "pub fn main() -> i32 { 1 }\n"),
+                ("src/main.rs", "fn main() {}\n"),
+            ],
+        );
+
+        let result = rvs_run_annotate_BIMPS(&dir);
+        let lib_source = std::fs::read_to_string(dir.join("src/lib.rs")).unwrap();
+        let bin_source = std::fs::read_to_string(dir.join("src/main.rs")).unwrap();
+        rvs_snapshot_BIS(
+            "test_20260713_annotate_renames_library_main_but_preserves_binary_entry",
+            &format!("lib:\n{lib_source}\nbin:\n{bin_source}"),
+        );
+
+        assert!(result.is_ok(), "annotate should succeed: {result:?}");
+        assert!(lib_source.contains("pub fn rvs_main()"));
+        assert_eq!(bin_source, "fn main() {}\n");
 
         std::fs::remove_dir_all(dir).unwrap();
     }

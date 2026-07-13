@@ -5,9 +5,9 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::capability::CapabilityFacts;
-use crate::symbols::DefPath;
+use crate::symbols::{CrateName, DefPath};
 
-pub(crate) const CALLGRAPH_SCHEMA_VERSION: u32 = 1;
+pub(crate) const CALLGRAPH_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Serialize)]
 struct CallgraphArtifactRef<'a> {
@@ -63,6 +63,8 @@ impl FnSource {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FnNode {
     pub calls: BTreeSet<DefPath>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub entry_calls: BTreeSet<DefPath>,
     #[serde(flatten)]
     pub facts: CapabilityFacts,
     pub has_body: bool,
@@ -70,6 +72,10 @@ pub struct FnNode {
     pub is_trait_impl: bool,
     #[serde(default)]
     pub is_test: bool,
+    #[serde(default, skip_serializing_if = "rvs_is_false")]
+    pub is_entrypoint: bool,
+    #[serde(default, skip_serializing_if = "rvs_is_false")]
+    pub is_test_compilation: bool,
     #[serde(default)]
     pub sources: BTreeSet<FnSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -82,10 +88,13 @@ impl Default for FnNode {
     fn default() -> Self {
         Self {
             calls: BTreeSet::new(),
+            entry_calls: BTreeSet::new(),
             facts: CapabilityFacts::default(),
             has_body: true,
             is_trait_impl: false,
             is_test: false,
+            is_entrypoint: false,
+            is_test_compilation: false,
             sources: BTreeSet::new(),
             report_line_count: None,
             allows_dead_code: false,
@@ -97,6 +106,7 @@ impl FnNode {
     /// Merge another callgraph entry for the same function into this one.
     pub fn rvs_merge_M(&mut self, other: &Self) {
         self.calls.extend(other.calls.iter().cloned());
+        self.entry_calls.extend(other.entry_calls.iter().cloned());
         self.facts.has_async |= other.facts.has_async;
         self.facts.is_unsafe_fn |= other.facts.is_unsafe_fn;
         self.facts.has_mut_param |= other.facts.has_mut_param;
@@ -107,9 +117,27 @@ impl FnNode {
         self.has_body |= other.has_body;
         self.is_trait_impl |= other.is_trait_impl;
         self.is_test |= other.is_test;
+        self.is_entrypoint |= other.is_entrypoint;
+        self.is_test_compilation |= other.is_test_compilation;
         self.sources.extend(other.sources.iter().cloned());
         self.report_line_count = self.report_line_count.or(other.report_line_count);
         self.allows_dead_code |= other.allows_dead_code;
+    }
+
+    pub(crate) fn rvs_dependency_calls(&self) -> impl Iterator<Item = &DefPath> {
+        self.calls.iter().chain(&self.entry_calls)
+    }
+
+    fn rvs_has_same_merge_behavior(&self, other: &Self) -> bool {
+        self.calls == other.calls
+            && self.entry_calls == other.entry_calls
+            && self.facts == other.facts
+            && self.has_body == other.has_body
+            && self.is_trait_impl == other.is_trait_impl
+            && self.is_test == other.is_test
+            && self.is_entrypoint == other.is_entrypoint
+            && self.report_line_count == other.report_line_count
+            && self.allows_dead_code == other.allows_dead_code
     }
 }
 
@@ -167,10 +195,96 @@ impl FnGraph {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn rvs_merge_from_M(&mut self, other: Self) {
         for (path, node) in other.nodes {
             self.rvs_merge_node_M(path, node);
         }
+    }
+
+    pub(crate) fn rvs_merge_artifacts(
+        artifacts: Vec<Self>,
+        local_crate_names: &BTreeSet<CrateName>,
+    ) -> Result<Self, String> {
+        let mut variants: BTreeMap<DefPath, Vec<FnNode>> = BTreeMap::new();
+        for artifact in artifacts {
+            for (path, node) in artifact.nodes {
+                variants.entry(path).or_default().push(node);
+            }
+        }
+
+        let mut merged = Self::rvs_new();
+        for (path, nodes) in variants {
+            let is_local = local_crate_names.iter().any(|crate_name| {
+                path.rvs_as_str()
+                    .starts_with(crate_name.rvs_prefix().rvs_as_str())
+            });
+            let has_production_entry = nodes.iter().any(|node| node.is_entrypoint);
+            let non_test_sources: BTreeSet<FnSource> = nodes
+                .iter()
+                .filter(|node| !node.is_test_compilation)
+                .flat_map(|node| node.sources.iter().cloned())
+                .collect();
+            let retained: Vec<FnNode> = nodes
+                .into_iter()
+                .filter(|node| {
+                    !node.is_test_compilation
+                        || (!node.sources.is_empty()
+                            && !node
+                                .sources
+                                .iter()
+                                .any(|source| non_test_sources.contains(source)))
+                        || (node.sources.is_empty() && !has_production_entry)
+                })
+                .collect();
+            let (mut entries, mut ordinary): (Vec<_>, Vec<_>) =
+                retained.into_iter().partition(|node| node.is_entrypoint);
+
+            let entry_sources: BTreeSet<FnSource> = entries
+                .iter()
+                .flat_map(|node| node.sources.iter().cloned())
+                .collect();
+            if ordinary.iter().any(|node| {
+                node.sources
+                    .iter()
+                    .any(|source| entry_sources.contains(source))
+            }) {
+                return Err(format!(
+                    "function {path} is both an executable entry point and an ordinary function at the same source location"
+                ));
+            }
+
+            let mut selected = if ordinary.is_empty() {
+                entries
+                    .pop()
+                    .expect("never: every merged path has at least one retained node")
+            } else {
+                ordinary
+                    .pop()
+                    .expect("never: checked ordinary variants are non-empty")
+            };
+            if selected.is_entrypoint {
+                for entry in entries {
+                    selected.rvs_merge_M(&entry);
+                }
+            } else {
+                for node in ordinary {
+                    if is_local && !selected.rvs_has_same_merge_behavior(&node) {
+                        return Err(format!(
+                            "function {path} has conflicting ordinary definitions across Cargo targets"
+                        ));
+                    }
+                    selected.rvs_merge_M(&node);
+                }
+                for entry in entries {
+                    selected
+                        .entry_calls
+                        .extend(entry.rvs_dependency_calls().cloned());
+                }
+            }
+            merged.nodes.insert(path, selected);
+        }
+        Ok(merged)
     }
 
     #[cfg(test)]
@@ -231,7 +345,7 @@ pub fn rvs_parse_callgraph_json_S(json: &str) -> Result<FnGraph, String> {
         if path.rvs_as_str().is_empty() {
             return Err("invalid callgraph JSON: function path is empty".into());
         }
-        for callee in &node.calls {
+        for callee in node.rvs_dependency_calls() {
             if callee.rvs_as_str().is_empty() {
                 return Err(format!(
                     "invalid callgraph JSON: callee path for {path} is empty"
@@ -334,9 +448,10 @@ mod tests {
 
         let json = rvs_serialize_callgraph_json_S(&graph).unwrap();
         let parsed = rvs_parse_callgraph_json_S(&json).unwrap();
+        let version_marker = format!(r#""schema_version":{CALLGRAPH_SCHEMA_VERSION}"#);
         let output = format!(
             "schema_version={CALLGRAPH_SCHEMA_VERSION}\ncontains_version={}\nnodes={}\n",
-            json.contains(r#""schema_version":1"#),
+            json.contains(&version_marker),
             parsed.rvs_len(),
         );
         rvs_snapshot_BIS(
@@ -351,9 +466,9 @@ mod tests {
     #[test]
     fn test_20260710_callgraph_artifact_schema_validation() {
         let cases = [
-            ("unknown", r#"{"schema_version":2,"nodes":{}}"#),
+            ("unknown", r#"{"schema_version":3,"nodes":{}}"#),
             ("missing", r#"{"nodes":{}}"#),
-            ("string", r#"{"schema_version":"1","nodes":{}}"#),
+            ("string", r#"{"schema_version":"2","nodes":{}}"#),
         ];
         let mut output = String::new();
         for (name, json) in cases {
@@ -366,7 +481,7 @@ mod tests {
             &output,
         );
 
-        assert!(output.contains("unsupported callgraph schema version 2"));
+        assert!(output.contains("unsupported callgraph schema version 3"));
         assert!(output.contains("schema_version must be an unsigned integer"));
     }
 
@@ -400,6 +515,119 @@ mod tests {
                 .unwrap_or(0),
             1
         );
+    }
+
+    #[test]
+    fn test_20260713_artifact_merge_resolves_entrypoint_roles() {
+        let local_crate_names = BTreeSet::from([CrateName::from("demo")]);
+        let ordinary_source = FnSource::rvs_new(PathBuf::from("src/lib.rs"), 7, 11);
+        let entry_source = FnSource::rvs_new(PathBuf::from("src/main.rs"), 3, 7);
+        let mut ordinary = FnNode {
+            sources: BTreeSet::from([ordinary_source.clone()]),
+            ..FnNode::default()
+        };
+        ordinary
+            .calls
+            .insert(DefPath::from("std::fs::read_to_string"));
+        let mut entry = FnNode {
+            is_entrypoint: true,
+            sources: BTreeSet::from([entry_source]),
+            ..FnNode::default()
+        };
+        entry.calls.insert(DefPath::from("std::process::exit"));
+
+        let mut ordinary_graph = FnGraph::rvs_new();
+        ordinary_graph.rvs_insert_M(DefPath::from("demo::main"), ordinary.clone());
+        let mut entry_graph = FnGraph::rvs_new();
+        entry_graph.rvs_insert_M(DefPath::from("demo::main"), entry.clone());
+        let mut test_copy_graph = FnGraph::rvs_new();
+        let mut test_copy = FnNode {
+            is_test_compilation: true,
+            sources: entry.sources.clone(),
+            ..FnNode::default()
+        };
+        test_copy
+            .calls
+            .insert(DefPath::from("test::test_main_static"));
+        test_copy_graph.rvs_insert_M(DefPath::from("demo::main"), test_copy);
+        let merged = FnGraph::rvs_merge_artifacts(
+            vec![ordinary_graph, entry_graph.clone(), test_copy_graph.clone()],
+            &local_crate_names,
+        )
+        .unwrap();
+        let retained = merged.rvs_get("demo::main").unwrap();
+
+        let mut incoming_ordinary = FnGraph::rvs_new();
+        incoming_ordinary.rvs_insert_M(DefPath::from("demo::main"), ordinary.clone());
+        let reverse = FnGraph::rvs_merge_artifacts(
+            vec![test_copy_graph, entry_graph, incoming_ordinary],
+            &local_crate_names,
+        )
+        .unwrap();
+        let reverse_retained = reverse.rvs_get("demo::main").unwrap();
+
+        let mut shared_entry = FnNode {
+            is_entrypoint: true,
+            sources: BTreeSet::from([ordinary_source]),
+            ..FnNode::default()
+        };
+        shared_entry
+            .calls
+            .insert(DefPath::from("std::process::exit"));
+        let mut conflict = FnGraph::rvs_new();
+        conflict.rvs_insert_M(DefPath::from("demo::main"), ordinary);
+        let mut conflicting_artifact = FnGraph::rvs_new();
+        conflicting_artifact.rvs_insert_M(DefPath::from("demo::main"), shared_entry);
+        let conflict_result =
+            FnGraph::rvs_merge_artifacts(vec![conflict, conflicting_artifact], &local_crate_names);
+
+        let mut first_ordinary = FnGraph::rvs_new();
+        first_ordinary.rvs_insert_M(
+            DefPath::from("demo::rvs_run"),
+            FnNode {
+                sources: BTreeSet::from([FnSource::rvs_new(PathBuf::from("src/lib.rs"), 20, 27)]),
+                ..FnNode::default()
+            },
+        );
+        let mut conflicting_ordinary_node = FnNode {
+            sources: BTreeSet::from([FnSource::rvs_new(PathBuf::from("src/main.rs"), 20, 27)]),
+            ..FnNode::default()
+        };
+        conflicting_ordinary_node
+            .calls
+            .insert(DefPath::from("dep::effect_S"));
+        let mut second_ordinary = FnGraph::rvs_new();
+        second_ordinary.rvs_insert_M(DefPath::from("demo::rvs_run"), conflicting_ordinary_node);
+        let ordinary_conflict =
+            FnGraph::rvs_merge_artifacts(vec![first_ordinary, second_ordinary], &local_crate_names);
+
+        let output = format!(
+            "retained_entry={}\nretained_sources={:?}\nretained_calls={:?}\nentry_calls={:?}\nreverse_equal={}\nentry_conflict={conflict_result:?}\nordinary_conflict={ordinary_conflict:?}\n",
+            retained.is_entrypoint,
+            retained.sources,
+            retained.calls,
+            retained.entry_calls,
+            retained.sources == reverse_retained.sources
+                && retained.calls == reverse_retained.calls
+                && retained.entry_calls == reverse_retained.entry_calls
+                && retained.is_entrypoint == reverse_retained.is_entrypoint,
+        );
+        rvs_snapshot_BIS(
+            "test_20260713_artifact_merge_resolves_entrypoint_roles",
+            &output,
+        );
+
+        assert!(!retained.is_entrypoint);
+        assert_eq!(retained.sources.len(), 1);
+        assert!(retained.calls.contains("std::fs::read_to_string"));
+        assert!(!retained.calls.contains("std::process::exit"));
+        assert!(retained.entry_calls.contains("std::process::exit"));
+        assert!(!retained.entry_calls.contains("test::test_main_static"));
+        assert_eq!(retained.sources, reverse_retained.sources);
+        assert_eq!(retained.calls, reverse_retained.calls);
+        assert_eq!(retained.entry_calls, reverse_retained.entry_calls);
+        assert!(conflict_result.is_err());
+        assert!(ordinary_conflict.is_err());
     }
 
     #[test]

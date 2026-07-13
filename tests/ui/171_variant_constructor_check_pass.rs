@@ -13,7 +13,3 @@ enum Outcome {
 fn rvs_make() -> Outcome {
     Outcome::Ready(1)
 }
-
-fn main() {
-    let _ = rvs_make();
-}

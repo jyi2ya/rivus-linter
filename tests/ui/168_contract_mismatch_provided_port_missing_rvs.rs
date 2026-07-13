@@ -6,5 +6,3 @@ trait ApiClient {
         1
     }
 }
-
-fn main() {}

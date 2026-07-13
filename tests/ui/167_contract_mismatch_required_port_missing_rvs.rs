@@ -4,5 +4,3 @@
 trait ApiClient {
     fn fetch(&self) -> i32;
 }
-
-fn main() {}

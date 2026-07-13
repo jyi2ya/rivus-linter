@@ -1,0 +1,7 @@
+retained_entry=false
+retained_sources={FnSource { file: "src/lib.rs", base: None, name_start: 7, name_end: 11 }}
+retained_calls={DefPath("std::fs::read_to_string")}
+entry_calls={DefPath("std::process::exit")}
+reverse_equal=true
+entry_conflict=Err("function demo::main is both an executable entry point and an ordinary function at the same source location")
+ordinary_conflict=Err("function demo::rvs_run has conflicting ordinary definitions across Cargo targets")

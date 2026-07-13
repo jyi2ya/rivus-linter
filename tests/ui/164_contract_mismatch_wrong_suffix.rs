@@ -18,5 +18,3 @@ impl ApiClient for Api {}
 fn test_20260703_fetch_default() {
     let _ = Api.rvs_fetch_BI();
 }
-
-fn main() {}

@@ -1,0 +1,3 @@
+entry=true
+source_files=["main.rs"]
+contract_diff=false

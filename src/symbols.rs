@@ -56,11 +56,6 @@ impl DefPathPrefix {
     pub fn rvs_as_str(&self) -> &str {
         &self.0
     }
-
-    /// Append a function name onto the prefix to form a complete def-path.
-    pub fn rvs_join_name(&self, fn_name: &FnName) -> DefPath {
-        DefPath(format!("{}{fn_name}", self.0))
-    }
 }
 
 impl AsRef<str> for DefPathPrefix {
@@ -344,14 +339,11 @@ mod tests {
     }
 
     #[test]
-    fn test_20260712_def_path_builds_root_main() {
+    fn test_20260712_def_path_extracts_nested_main_name() {
         let def_path = DefPath::rvs_new("cargo_rivus::cli::main");
-        let prefix = CrateName::rvs_from_manifest_name("cargo-rivus").rvs_prefix();
-        let root_main = prefix.rvs_join_name(&FnName::from("main"));
-        let output = format!("fn={}\nroot_main={}\n", def_path.rvs_fn_name(), root_main);
-        rvs_snapshot_BIS("test_20260712_def_path_builds_root_main", &output);
+        let output = format!("fn={}\n", def_path.rvs_fn_name());
+        rvs_snapshot_BIS("test_20260712_def_path_extracts_nested_main_name", &output);
         assert_eq!(def_path.rvs_fn_name().rvs_as_str(), "main");
-        assert_eq!(root_main.rvs_as_str(), "cargo_rivus::main");
     }
 
     #[test]
