@@ -1,0 +1,2 @@
+result=Err("std capsmap output must be a file: $TMP/std-output")
+callgraph_exists=false

@@ -36,8 +36,7 @@ pub(crate) fn rvs_run_infer_capsmap_BIMPS(path: &Path, output: &Path) -> Result<
     }
     let seed = CapsMap::rvs_load_dir_excluding_BIS(&abs_seed, &["deps"])
         .map_err(|e| format!("caps: {e}"))?;
-    let resolved_output = rvs_resolve_output_path(&project_path, output);
-    rvs_preflight_capsmap_file_BIS(&resolved_output, "deps capsmap")?;
+    let resolved_output = rvs_prepare_output_path_BIS(&project_path, output, "deps capsmap")?;
 
     let mut callgraph = rvs_collect_callgraph_BIMS(&project_path, false, false, vec![])?;
     let inference = PreparedInference::rvs_prepare_M(&mut callgraph, &seed, &local_crate_names);
@@ -74,6 +73,7 @@ pub(crate) fn rvs_run_infer_std_BIMPS(path: &Path, output: &Path) -> Result<(), 
     rvs_validate_optional_capsmap_dir_BIS(&caps_dir)?;
     let seed = CapsMap::rvs_load_dir_layers_BIS(&caps_dir, &["seed", "suppress"])
         .map_err(|e| format!("caps: {e}"))?;
+    let resolved_output = rvs_prepare_output_path_BIS(&project_path, output, "std capsmap")?;
     let mut callgraph = rvs_collect_callgraph_BIMS(&project_path, true, false, vec![])?;
     rvs_scope_port_methods_M(&mut callgraph, &local_crate_names);
 
@@ -120,8 +120,17 @@ pub(crate) fn rvs_run_infer_std_BIMPS(path: &Path, output: &Path) -> Result<(), 
     }
 
     let result = rvs_format_capsmap(&std_only);
-    let resolved_output = rvs_resolve_output_path(&project_path, output);
     rvs_write_capsmap_result_BIS(&result, &resolved_output, "std capsmap")
+}
+
+fn rvs_prepare_output_path_BIS(
+    project_path: &Path,
+    output_path: &Path,
+    label: &str,
+) -> Result<PathBuf, String> {
+    let resolved = rvs_resolve_output_path(project_path, output_path);
+    rvs_preflight_capsmap_file_BIS(&resolved, label)?;
+    Ok(resolved)
 }
 
 fn rvs_resolve_output_path(project_path: &Path, output_path: &Path) -> PathBuf {
@@ -315,6 +324,31 @@ mod tests {
             .replace(&dir.to_string_lossy().into_owned(), "$TMP");
         rvs_snapshot_BIS(
             "test_20260707_infer_std_rejects_invalid_seed_before_callgraph",
+            &output,
+        );
+
+        assert!(result.is_err());
+        assert!(!callgraph_exists);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260713_infer_std_rejects_output_directory_before_callgraph() {
+        let dir = rvs_make_cargo_project_BIS(
+            "infer-std-output-dir-preflight",
+            "infer-std-output-dir",
+            &[("src/lib.rs", "pub fn rvs_add() -> i32 { 1 }\n")],
+        );
+        std::fs::create_dir_all(dir.join("caps")).unwrap();
+        let output_path = dir.join("std-output");
+        std::fs::create_dir_all(&output_path).unwrap();
+
+        let result = rvs_run_infer_std_BIMPS(&dir, &output_path);
+        let callgraph_exists = dir.join("target/rivus-callgraph-std").exists();
+        let output = format!("result={result:?}\ncallgraph_exists={callgraph_exists}\n",)
+            .replace(&dir.to_string_lossy().into_owned(), "$TMP");
+        rvs_snapshot_BIS(
+            "test_20260713_infer_std_rejects_output_directory_before_callgraph",
             &output,
         );
 
