@@ -185,6 +185,10 @@ fn rvs_prepare_cargo_check_command_BIMS(
         .extra_env
         .iter()
         .any(|(key, _)| *key == "RIVUS_CAPSMAP");
+    let offline_caps_env = config
+        .extra_env
+        .iter()
+        .any(|(key, value)| *key == "RIVUS_OFFLINE_CAPS" && value == "1");
     if has_capsmap_env {
         for (_, value) in config
             .extra_env
@@ -201,7 +205,7 @@ fn rvs_prepare_cargo_check_command_BIMS(
             cmd.env("RIVUS_CAPSMAP", resolved);
         }
     }
-    if !has_callgraph_env && !has_capsmap_env {
+    if !has_callgraph_env && !has_capsmap_env && !offline_caps_env {
         rvs_resolve_capsmap_BIMS(&mut cmd, &project_path).map_err(CargoCheckError::Message)?;
     }
 
@@ -253,6 +257,13 @@ pub(crate) fn rvs_run_cargo_check_BIMS(extra_args: &[String]) -> Result<(), i32>
     }
     let project_path = Path::new(".");
     let extra_args_ref: Vec<&str> = extra_args.iter().map(|arg| arg.as_str()).collect();
+    let caps = match rvs_load_project_caps_BIS(project_path) {
+        Ok(caps) => caps,
+        Err(e) => {
+            eprintln!("offline caps check cannot load caps/: {e}");
+            return Err(1);
+        }
+    };
     match rvs_run_cargo_check_impl_BIMS(&CargoCheckConfig {
         project_path,
         wrap_all_crates: false,
@@ -279,13 +290,6 @@ pub(crate) fn rvs_run_cargo_check_BIMS(extra_args: &[String]) -> Result<(), i32>
         Ok(callgraph) => callgraph,
         Err(e) => {
             eprintln!("offline caps check unavailable: {e}");
-            return Err(1);
-        }
-    };
-    let caps = match rvs_load_project_caps_BIS(project_path) {
-        Ok(caps) => caps,
-        Err(e) => {
-            eprintln!("offline caps check cannot load caps/: {e}");
             return Err(1);
         }
     };
@@ -1574,6 +1578,40 @@ name = "throughput-bench"
         );
 
         assert!(matches!(result, Err(CargoCheckError::Message(_))));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260713_prepare_offline_cargo_check_defers_caps_to_parent() {
+        let dir = rvs_make_workspace_temp_dir_BIS("offline-caps-parent-snapshot");
+        std::fs::write(dir.join("caps"), "bad=Z\n").unwrap();
+        let config = CargoCheckConfig {
+            project_path: &dir,
+            wrap_all_crates: false,
+            with_tests: true,
+            build_std: false,
+            extra_env: vec![("RIVUS_OFFLINE_CAPS", "1".into())],
+            extra_args: vec![],
+            target_subdir: None,
+        };
+
+        let result = rvs_prepare_cargo_check_command_BIMS(&config);
+        let capsmap_env = result
+            .as_ref()
+            .ok()
+            .and_then(|command| rvs_command_env_value(command, "RIVUS_CAPSMAP"))
+            .flatten();
+        let output = format!(
+            "result_is_ok={}\ncapsmap_env={capsmap_env:?}\n",
+            result.is_ok()
+        );
+        rvs_snapshot_BIS(
+            "test_20260713_prepare_offline_cargo_check_defers_caps_to_parent",
+            &output,
+        );
+
+        assert!(result.is_ok());
+        assert!(capsmap_env.is_none());
         std::fs::remove_dir_all(dir).unwrap();
     }
 
