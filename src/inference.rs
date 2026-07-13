@@ -176,29 +176,19 @@ impl FnContractDiff {
                     .as_ref()
                     .is_some_and(|caps| caps.rvs_contains(cap))
             };
-            if expected_caps.rvs_contains(Capability::A) && !declared_has(Capability::A) {
-                mismatches.push(FnContractMismatchKind::MissingAsync);
-            }
-            if expected_caps.rvs_contains(Capability::B) && !declared_has(Capability::B) {
-                mismatches.push(FnContractMismatchKind::MissingBlocking);
-            }
-            if expected_caps.rvs_contains(Capability::I) && !declared_has(Capability::I) {
-                mismatches.push(FnContractMismatchKind::MissingIo);
-            }
-            if expected_caps.rvs_contains(Capability::M) && !declared_has(Capability::M) {
-                mismatches.push(FnContractMismatchKind::MissingMutable);
-            }
-            if expected_caps.rvs_contains(Capability::P) && !declared_has(Capability::P) {
-                mismatches.push(FnContractMismatchKind::MissingPort);
-            }
-            if expected_caps.rvs_contains(Capability::S) && !declared_has(Capability::S) {
-                mismatches.push(FnContractMismatchKind::MissingSideEffect);
-            }
-            if expected_caps.rvs_contains(Capability::T) && !declared_has(Capability::T) {
-                mismatches.push(FnContractMismatchKind::MissingThreadLocal);
-            }
-            if expected_caps.rvs_contains(Capability::U) && !declared_has(Capability::U) {
-                mismatches.push(FnContractMismatchKind::MissingUnsafe);
+            for (cap, kind) in [
+                (Capability::A, FnContractMismatchKind::MissingAsync),
+                (Capability::B, FnContractMismatchKind::MissingBlocking),
+                (Capability::I, FnContractMismatchKind::MissingIo),
+                (Capability::M, FnContractMismatchKind::MissingMutable),
+                (Capability::P, FnContractMismatchKind::MissingPort),
+                (Capability::S, FnContractMismatchKind::MissingSideEffect),
+                (Capability::T, FnContractMismatchKind::MissingThreadLocal),
+                (Capability::U, FnContractMismatchKind::MissingUnsafe),
+            ] {
+                if expected_caps.rvs_contains(cap) && !declared_has(cap) {
+                    mismatches.push(kind);
+                }
             }
         }
         mismatches
@@ -2148,23 +2138,40 @@ mod tests {
 
     #[test]
     fn test_20260703_contract_diff_mismatch_kinds() {
-        let diff = FnContractDiff {
-            def_path: DefPath::from("demo::rvs_fetch_BI"),
-            actual_name: FnName::from("rvs_fetch_BI"),
-            expected_name: Some(FnName::from("rvs_fetch_P")),
-            declared_public_caps: Some(CapabilitySet::rvs_from_validated("BI")),
-            expected_public_caps: Some(CapabilitySet::rvs_from_validated("AP")),
+        let missing_all = FnContractDiff {
+            def_path: DefPath::from("demo::rvs_fetch"),
+            actual_name: FnName::from("rvs_fetch"),
+            expected_name: Some(FnName::from("rvs_fetch_ABIMPSTU")),
+            declared_public_caps: Some(CapabilitySet::rvs_new()),
+            expected_public_caps: Some(CapabilitySet::rvs_from_validated("ABIMPSTU")),
         };
-        let mismatches = diff.rvs_mismatch_kinds();
+        let declared_all = FnContractDiff {
+            actual_name: FnName::from("rvs_fetch_ABIMPSTU"),
+            declared_public_caps: missing_all.expected_public_caps.clone(),
+            ..missing_all.clone()
+        };
+        let mismatches = missing_all.rvs_mismatch_kinds();
+        let no_mismatches = declared_all.rvs_mismatch_kinds();
         rvs_snapshot_BIS(
             "test_20260703_contract_diff_mismatch_kinds",
-            &format!("mismatches={mismatches:?}\n"),
+            &format!("mismatches={mismatches:?}\ndeclared_all={no_mismatches:?}\n"),
         );
 
-        assert!(mismatches.contains(&FnContractMismatchKind::NameMismatch));
-        assert!(mismatches.contains(&FnContractMismatchKind::MissingAsync));
-        assert!(mismatches.contains(&FnContractMismatchKind::MissingPort));
-        assert!(!mismatches.contains(&FnContractMismatchKind::MissingRvsPrefix));
+        assert_eq!(
+            mismatches,
+            vec![
+                FnContractMismatchKind::NameMismatch,
+                FnContractMismatchKind::MissingAsync,
+                FnContractMismatchKind::MissingBlocking,
+                FnContractMismatchKind::MissingIo,
+                FnContractMismatchKind::MissingMutable,
+                FnContractMismatchKind::MissingPort,
+                FnContractMismatchKind::MissingSideEffect,
+                FnContractMismatchKind::MissingThreadLocal,
+                FnContractMismatchKind::MissingUnsafe,
+            ]
+        );
+        assert!(no_mismatches.is_empty());
         assert_eq!(
             FnContractMismatchKind::MissingAsync.rvs_as_str(),
             "missing_async"
