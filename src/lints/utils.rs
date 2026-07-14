@@ -1,8 +1,8 @@
-use std::collections::{BTreeSet, HashSet};
+use std::collections::BTreeSet;
 
 use rustc_hir::{
-    self, Block, Body, Expr, ExprKind, GenericArg, HirId, Mutability, QPath, TyKind,
-    attrs::AttributeKind, def::DefKind, def_id::DefId,
+    self, Block, Body, Expr, ExprKind, HirId, Mutability, QPath, TyKind, attrs::AttributeKind,
+    def::DefKind, def_id::DefId,
 };
 use rustc_lint::LateContext;
 use rustc_span::{Span, Symbol};
@@ -24,6 +24,7 @@ pub(crate) const SPAWN_FUNCTIONS: &[&str] = &[
     "async_std::task::spawn",
     "async_std::task::spawn_blocking",
     "smol::spawn",
+    "kovi::task::spawn",
 ];
 
 pub(crate) const REFLECTION_PATHS: &[&str] = &[
@@ -33,11 +34,9 @@ pub(crate) const REFLECTION_PATHS: &[&str] = &[
     "core::any::Any::type_id",
 ];
 
-pub(crate) const ERROR_SWALLOW_METHODS: &[&str] = &["ok", "unwrap_or_default"];
 pub(crate) const CATCH_ALL_VARIANT_NAMES: &[&str] =
     &["Unknown", "Other", "UnknownError", "OtherError"];
 pub(crate) const VALIDATE_PREFIXES: &[&str] = &["validate", "check", "verify"];
-pub(crate) const BORROWED_TYPES: &[&str] = &["String", "Vec", "Box"];
 
 pub(crate) fn rvs_is_spawn_S(path: &str) -> bool {
     SPAWN_FUNCTIONS.iter().any(|sf| *sf == path)
@@ -245,11 +244,14 @@ fn rvs_for_each_expr_child_M<'tcx>(e: &'tcx Expr<'tcx>, f: &mut impl FnMut(&'tcx
             f(l);
             f(r);
         }
+        ExprKind::Index(value, index, _) => {
+            f(value);
+            f(index);
+        }
         ExprKind::Unary(_, x)
         | ExprKind::Cast(x, _)
         | ExprKind::Type(x, _)
         | ExprKind::Field(x, _)
-        | ExprKind::Index(x, _, _)
         | ExprKind::AddrOf(_, _, x)
         | ExprKind::Repeat(x, _)
         | ExprKind::Yield(x, _)
@@ -515,6 +517,7 @@ pub(crate) enum CallTarget {
     Resolved {
         def_path: DefPath,
         def_kind: DefKind,
+        crate_id: u64,
     },
     UnresolvedPath {
         path: String,
@@ -528,6 +531,7 @@ pub(crate) enum CallTarget {
 pub(crate) struct CallObservation {
     pub syntax: CallSyntax,
     pub target: CallTarget,
+    pub hir_id: HirId,
     pub span: Span,
 }
 
@@ -541,7 +545,9 @@ pub(crate) fn rvs_resolve_call(cx: &LateContext<'_>, expr: &Expr<'_>) -> Option<
                 rustc_hir::def::Res::Def(def_kind, def_id) => CallTarget::Resolved {
                     def_path: DefPath::rvs_new(rvs_def_path(cx, def_id)),
                     def_kind,
+                    crate_id: cx.tcx.stable_crate_id(def_id.krate).as_u64(),
                 },
+                rustc_hir::def::Res::Local(_) => return None,
                 _ => CallTarget::UnresolvedPath {
                     path: rvs_qp(qpath),
                 },
@@ -549,6 +555,7 @@ pub(crate) fn rvs_resolve_call(cx: &LateContext<'_>, expr: &Expr<'_>) -> Option<
             Some(CallObservation {
                 syntax: CallSyntax::Function,
                 target,
+                hir_id: expr.hir_id,
                 span: expr.span,
             })
         }
@@ -559,11 +566,13 @@ pub(crate) fn rvs_resolve_call(cx: &LateContext<'_>, expr: &Expr<'_>) -> Option<
                 (
                     DefPath::rvs_new(rvs_def_path(cx, def_id)),
                     cx.tcx.def_kind(def_id),
+                    cx.tcx.stable_crate_id(def_id.krate).as_u64(),
                 )
             });
             Some(CallObservation {
                 syntax: CallSyntax::Method,
                 target: rvs_method_call_target(resolved, path.ident.name.as_str()),
+                hir_id: expr.hir_id,
                 span: expr.span,
             })
         }
@@ -571,12 +580,19 @@ pub(crate) fn rvs_resolve_call(cx: &LateContext<'_>, expr: &Expr<'_>) -> Option<
     }
 }
 
-fn rvs_method_call_target(resolved: Option<(DefPath, DefKind)>, method_name: &str) -> CallTarget {
+fn rvs_method_call_target(
+    resolved: Option<(DefPath, DefKind, u64)>,
+    method_name: &str,
+) -> CallTarget {
     resolved.map_or_else(
         || CallTarget::UnresolvedMethod {
             name: method_name.to_string(),
         },
-        |(def_path, def_kind)| CallTarget::Resolved { def_path, def_kind },
+        |(def_path, def_kind, crate_id)| CallTarget::Resolved {
+            def_path,
+            def_kind,
+            crate_id,
+        },
     )
 }
 
@@ -685,37 +701,6 @@ fn rvs_impl_type_name(cx: &LateContext<'_>, impl_def_id: DefId) -> Option<String
     }
 }
 
-pub(crate) fn rvs_ty_last_ident(ty: &rustc_hir::Ty<'_>) -> Option<String> {
-    match &ty.kind {
-        TyKind::Path(q) => rvs_plast(q),
-        TyKind::Ref(_, mt) => rvs_ty_last_ident(mt.ty),
-        _ => None,
-    }
-}
-
-pub(crate) fn rvs_collect_type_idents_M(ty: &rustc_hir::Ty<'_>, out: &mut HashSet<String>) {
-    match &ty.kind {
-        TyKind::Path(q) => {
-            if let Some(name) = rvs_plast(q) {
-                out.insert(name);
-            }
-            if let QPath::Resolved(_, p) = q {
-                for seg in p.segments {
-                    if let Some(ga) = seg.args {
-                        for a in ga.args {
-                            if let GenericArg::Type(t) = a {
-                                rvs_collect_type_idents_M(t.as_unambig_ty(), out);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        TyKind::Ref(_, mt) => rvs_collect_type_idents_M(mt.ty, out),
-        _ => {}
-    }
-}
-
 // ─── Utility ─────────────────────────────────────────────────────────────
 
 pub(crate) fn rvs_valid_test(n: &str) -> bool {
@@ -754,7 +739,11 @@ mod tests {
     #[test]
     fn test_20260712_resolved_call_keeps_typed_def_path() {
         let target = rvs_method_call_target(
-            Some((DefPath::from("demo::Client::rvs_fetch_P"), DefKind::AssocFn)),
+            Some((
+                DefPath::from("demo::Client::rvs_fetch_P"),
+                DefKind::AssocFn,
+                7,
+            )),
             "fetch",
         );
         rvs_snapshot_BIS(
@@ -767,8 +756,29 @@ mod tests {
             CallTarget::Resolved {
                 ref def_path,
                 def_kind: DefKind::AssocFn,
+                crate_id: 7,
             } if def_path.rvs_as_str() == "demo::Client::rvs_fetch_P"
         ));
+    }
+
+    #[test]
+    fn test_20260714_spawn_paths_include_kovi_wrapper() {
+        let cases = [
+            ("tokio::task::spawn", true),
+            ("kovi::task::spawn", true),
+            ("demo::task::spawn", false),
+        ];
+        let output = cases
+            .iter()
+            .map(|(path, _)| format!("{path}={}", rvs_is_spawn_S(path)))
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        rvs_snapshot_BIS("test_20260714_spawn_paths_include_kovi_wrapper", &output);
+
+        for (path, expected) in cases {
+            assert_eq!(rvs_is_spawn_S(path), expected, "{path}");
+        }
     }
 
     #[test]
@@ -792,7 +802,6 @@ mod tests {
             let _ty: &rustc_hir::Ty<'_> = unreachable!();
             let _tcx: rustc_middle::ty::TyCtxt<'_> = unreachable!();
             let mut set = BTreeSet::new();
-            let mut refs = HashSet::new();
             let mut in_comment = false;
 
             rvs_has_attr(_attrs, "test");
@@ -819,8 +828,7 @@ mod tests {
             rvs_plast(_qpath);
             rvs_def_path(_cx, _def_id);
             rvs_impl_type_name(_cx, _def_id);
-            rvs_ty_last_ident(_ty);
-            rvs_collect_type_idents_M(_ty, &mut refs);
+            rvs_resolve_call(_cx, _expr);
         }
     }
 }

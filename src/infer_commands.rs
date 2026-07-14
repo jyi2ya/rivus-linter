@@ -28,14 +28,12 @@ pub(crate) fn rvs_run_infer_capsmap_BIMPS(path: &Path, output: &Path) -> Result<
     let local_crate_names = rvs_detect_local_crate_prefixes_BIS(&project_path, target_scope)?;
 
     let abs_seed = project_path.join("caps");
-    if !rvs_validate_optional_capsmap_dir_BIS(&abs_seed)? {
-        return Err(format!(
-            "capsmap path must be a directory: {}",
-            abs_seed.display()
-        ));
-    }
-    let seed = CapsMap::rvs_load_dir_excluding_BIS(&abs_seed, &["deps"])
-        .map_err(|e| format!("caps: {e}"))?;
+    let seed = if rvs_validate_optional_capsmap_dir_BIS(&abs_seed)? {
+        CapsMap::rvs_load_dir_excluding_BIS(&abs_seed, &["deps"])
+            .map_err(|e| format!("caps: {e}"))?
+    } else {
+        CapsMap::rvs_new()
+    };
     let resolved_output = rvs_prepare_output_path_BIS(&project_path, output, "deps capsmap")?;
 
     let mut callgraph = rvs_collect_callgraph_BIMS(
@@ -467,6 +465,27 @@ mod tests {
         let output = format!("result={result:?}\ndeps={deps:?}\n");
         rvs_snapshot_BIS("test_20260710_infer_capsmap_replaces_invalid_deps", &output);
 
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260714_infer_capsmap_creates_missing_caps_dir() {
+        let dir = rvs_make_cargo_project_BIS(
+            "infer-capsmap-missing-caps-dir",
+            "infer-capsmap-missing-caps-dir",
+            &[("src/lib.rs", "pub fn rvs_add() -> i32 { 1 }\n")],
+        );
+
+        let result = rvs_run_infer_capsmap_BIMPS(&dir, Path::new("caps/deps"));
+        let output_exists = dir.join("caps/deps").is_file();
+        let output = format!("result={result:?}\noutput_exists={output_exists}\n");
+        rvs_snapshot_BIS(
+            "test_20260714_infer_capsmap_creates_missing_caps_dir",
+            &output,
+        );
+
+        assert!(result.is_ok());
+        assert!(output_exists);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

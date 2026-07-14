@@ -94,7 +94,7 @@ pub(crate) fn rvs_render_atomic_write_failure(
 pub(crate) fn rvs_write_atomic_BIS(
     final_path: &Path,
     content: &[u8],
-    mut temp_path_for_attempt: impl FnMut(usize) -> PathBuf,
+    temp_path_for_attempt: &impl Fn(usize) -> PathBuf,
 ) -> Result<(), AtomicWriteFailure> {
     let mut temp_path = None;
     let mut file = None;

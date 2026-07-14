@@ -497,19 +497,25 @@ mod tests {
             ('T', Capability::T, "ThreadLocal"),
             ('U', Capability::U, "Unsafe"),
         ];
+        let mut output = String::new();
         for (letter, cap, description) in valid {
+            output.push_str(&format!(
+                "{letter}: description={description} display={cap}\n"
+            ));
             assert_eq!(Capability::rvs_from_char(letter), Some(cap), "{letter}");
             assert_eq!(cap.rvs_as_char(), letter, "{letter}");
             assert_eq!(cap.rvs_description(), description, "{letter}");
             assert_eq!(format!("{cap}"), format!("{letter}({description})"));
         }
         for letter in ['X', 'a', '1', '_'] {
+            output.push_str(&format!("{letter}: invalid\n"));
             assert_eq!(Capability::rvs_from_char(letter), None, "{letter}");
         }
         for letter in VALID_SUFFIX_CHARS.iter().copied() {
             let cap = Capability::rvs_from_char(letter).unwrap();
             assert_eq!(cap.rvs_as_char(), letter);
         }
+        rvs_snapshot_BIS("test_20260709_capability_metadata_table", &output);
     }
 
     #[test]
@@ -569,20 +575,20 @@ mod tests {
             ("port_propagates", "B", "BP", false, "P"),
             ("amu_excluded_from_missing", "B", "ABSTU", false, "ST"),
         ];
+        let mut output = String::new();
         for (name, caller, callee, expected_can_call, expected_missing) in cases {
             let caller = CapabilitySet::rvs_from_validated(caller);
             let callee = CapabilitySet::rvs_from_validated(callee);
-            assert_eq!(
-                CapabilityPolicy::rvs_can_call(&caller, &callee),
-                expected_can_call,
-                "{name}"
-            );
+            let can_call = CapabilityPolicy::rvs_can_call(&caller, &callee);
+            assert_eq!(can_call, expected_can_call, "{name}");
             let missing: String = CapabilityPolicy::rvs_missing_for(&caller, &callee)
                 .iter()
                 .map(|cap| cap.rvs_as_char())
                 .collect();
+            output.push_str(&format!("{name}: can_call={can_call} missing={missing}\n"));
             assert_eq!(missing, expected_missing, "{name}");
         }
+        rvs_snapshot_BIS("test_20260709_capability_call_rule_table", &output);
     }
 
     #[test]
@@ -641,9 +647,16 @@ mod tests {
             ("subset_false", "ABT", "ABM", false, false, false),
             ("empty_subset", "", "ABM", true, true, true),
         ];
+        let mut output = String::new();
         for (name, set, allowed, is_subset, is_good, is_ok) in subset_cases {
             let set = CapabilitySet::rvs_from_validated(set);
             let allowed = CapabilitySet::rvs_from_validated(allowed);
+            output.push_str(&format!(
+                "{name}: subset={} good={} ok={}\n",
+                set.rvs_is_subset_of(&allowed),
+                CapabilityPolicy::rvs_is_good(&set),
+                CapabilityPolicy::rvs_is_ok(&set),
+            ));
             assert_eq!(set.rvs_is_subset_of(&allowed), is_subset, "{name}");
             assert_eq!(CapabilityPolicy::rvs_is_good(&set), is_good, "{name}");
             assert_eq!(CapabilityPolicy::rvs_is_ok(&set), is_ok, "{name}");
@@ -653,6 +666,12 @@ mod tests {
         let ok = CapabilityPolicy::rvs_ok_caps();
         assert_eq!(rvs_caps_letters(&good), "ABM");
         assert_eq!(rvs_caps_letters(&ok), "ABMP");
+        output.push_str(&format!(
+            "policy: good={} ok={}\n",
+            rvs_caps_letters(&good),
+            rvs_caps_letters(&ok),
+        ));
+        rvs_snapshot_BIS("test_20260709_capability_set_classification_table", &output);
     }
 
     #[test]
@@ -758,13 +777,19 @@ mod tests {
             ),
             ("rvs_dep::module::plain_BI", None),
         ];
+        let mut output = format!(
+            "trait_segment={} trait_base={} trait_suffix={:?}\ninvalid_base={}\n",
+            parsed.segment,
+            parsed.rvs_base_name(),
+            parsed.rvs_raw_suffix(),
+            invalid_suffix.rvs_base_name(),
+        );
         for (input, expected) in raw_cases {
-            assert_eq!(
-                ParsedFunctionName::rvs_parse(input).rvs_raw_suffix(),
-                expected,
-                "{input}"
-            );
+            let actual = ParsedFunctionName::rvs_parse(input).rvs_raw_suffix();
+            output.push_str(&format!("{input}: {actual:?}\n"));
+            assert_eq!(actual, expected, "{input}");
         }
+        rvs_snapshot_BIS("test_20260709_split_and_suffix_table", &output);
     }
 
     #[test]
@@ -812,9 +837,13 @@ mod tests {
     #[test]
     fn test_20260709_capability_set_display_table() {
         let cases = [("BAM", "{A, B, M}"), ("", "{}")];
+        let mut output = String::new();
         for (input, expected) in cases {
             let set = CapabilitySet::rvs_from_validated(input);
-            assert_eq!(format!("{set}"), expected, "{input}");
+            let actual = format!("{set}");
+            output.push_str(&format!("{input:?}: {actual}\n"));
+            assert_eq!(actual, expected, "{input}");
         }
+        rvs_snapshot_BIS("test_20260709_capability_set_display_table", &output);
     }
 }

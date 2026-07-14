@@ -1,5 +1,3 @@
-use std::collections::BTreeSet;
-
 use std::path::PathBuf;
 
 use rustc_hir::HirId;
@@ -10,7 +8,7 @@ use super::super::ctx::FnSubject;
 use super::super::utils::{
     CallTarget, rvs_count_effective_lines_M, rvs_def_path, rvs_has_allow, rvs_has_mutable_params,
 };
-use crate::artifacts::{FnGraph, FnNode, FnSource};
+use crate::artifacts::{FnGraph, FnNode, FnSource, FunctionIdentity};
 use crate::capability::{CapabilityFacts, ParsedFunctionName};
 use crate::symbols::DefPath;
 
@@ -26,8 +24,6 @@ fn rvs_fn_node_from_signature(
     declaration_span: Span,
 ) -> FnNode {
     FnNode {
-        calls: BTreeSet::new(),
-        entry_calls: BTreeSet::new(),
         facts: CapabilityFacts::rvs_from_signature(
             sig,
             rvs_has_mutable_params(sig),
@@ -41,8 +37,7 @@ fn rvs_fn_node_from_signature(
         sources: rvs_fn_source(cx, ident, declaration_span)
             .into_iter()
             .collect(),
-        report_line_count: None,
-        allows_dead_code: false,
+        ..FnNode::default()
     }
 }
 
@@ -56,6 +51,7 @@ pub(crate) fn rvs_collect_callgraph_for_item_M<'tcx>(
     let caller_path = DefPath::rvs_new(rvs_def_path(cx, def_id));
     let is_entrypoint = rvs_is_executable_entry(cx, def_id);
     let is_test_compilation = cx.tcx.sess.opts.test;
+    let crate_id = cx.tcx.stable_crate_id(def_id.krate).as_u64();
     let attrs = cx.tcx.hir_attrs(subject.hir_id);
     let mut node = rvs_fn_node_from_signature(
         cx,
@@ -69,7 +65,7 @@ pub(crate) fn rvs_collect_callgraph_for_item_M<'tcx>(
         subject.span,
     );
 
-    let calls: BTreeSet<DefPath> = subject
+    let resolved_calls: Vec<(DefPath, FunctionIdentity)> = subject
         .body_facts
         .calls
         .iter()
@@ -77,9 +73,16 @@ pub(crate) fn rvs_collect_callgraph_for_item_M<'tcx>(
             if let CallTarget::Resolved {
                 def_path,
                 def_kind: rustc_hir::def::DefKind::Fn | rustc_hir::def::DefKind::AssocFn,
+                crate_id,
             } = &observation.target
             {
-                Some(def_path.clone())
+                Some((
+                    def_path.clone(),
+                    FunctionIdentity {
+                        crate_id: *crate_id,
+                        def_path: def_path.clone(),
+                    },
+                ))
             } else {
                 None
             }
@@ -91,18 +94,51 @@ pub(crate) fn rvs_collect_callgraph_for_item_M<'tcx>(
         subject.body_facts.has_static_mut_ref,
         subject.body_facts.has_thread_local_ref,
     );
+    let allows_dead_code = rvs_has_allow(attrs, "dead_code") || rvs_has_allow(attrs, "unused");
     let is_reportable = subject.is_port_method
         || ParsedFunctionName::rvs_parse(subject.rvs_name()).rvs_has_rvs_prefix();
-    let report_line_count = if is_reportable {
-        Some(rvs_count_effective_lines_M(cx, subject.body))
-    } else {
-        None
-    };
-    let allows_dead_code = rvs_has_allow(attrs, "dead_code") || rvs_has_allow(attrs, "unused");
+    let report_line_count =
+        if is_reportable && !subject.is_test && !is_test_compilation && !allows_dead_code {
+            Some(rvs_count_effective_lines_M(cx, subject.body))
+        } else {
+            None
+        };
 
-    node.calls = calls;
+    node.calls = resolved_calls
+        .iter()
+        .map(|(def_path, _)| def_path.clone())
+        .collect();
+    node.coverage_calls.insert(
+        crate_id,
+        resolved_calls
+            .into_iter()
+            .map(|(_, identity)| identity)
+            .collect(),
+    );
+    node.sources_by_crate.insert(crate_id, node.sources.clone());
+    if subject.is_test {
+        node.test_crate_ids.insert(crate_id);
+        node.unresolved_test_calls = subject
+            .body_facts
+            .calls
+            .iter()
+            .filter_map(|observation| match &observation.target {
+                CallTarget::UnresolvedPath { path } => path.rsplit("::").next().map(str::to_string),
+                CallTarget::UnresolvedMethod { name } => Some(name.clone()),
+                CallTarget::Resolved { .. } => None,
+            })
+            .filter(|name| name.starts_with("rvs_"))
+            .collect();
+    }
+    if !is_test_compilation {
+        node.production_crate_ids.insert(crate_id);
+        if !is_entrypoint && !subject.is_test && !subject.is_trait_impl && !allows_dead_code {
+            node.coverage_candidate_crate_ids.insert(crate_id);
+        }
+    }
     node.has_body = true;
     node.report_line_count = report_line_count;
+    node.report_function_count = usize::from(report_line_count.is_some());
     node.allows_dead_code = allows_dead_code;
     callgraph.rvs_merge_node_M(caller_path.clone(), node);
     caller_path

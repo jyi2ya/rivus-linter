@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use rustc_lint::{LateContext, LateLintPass, LintPass};
 use rustc_session::declare_tool_lint;
-use rustc_span::Span;
+use rustc_span::{DUMMY_SP, Span};
 
 use crate::capability::{CapabilityPolicy, ParsedFunctionName};
 use crate::capsmap::CapsMap;
@@ -218,14 +218,21 @@ pub struct RivusLintPass {
     should_emit_lints: bool,
     should_emit_caps_report: bool,
     test_fn_names: HashSet<String>,
+    untested_functions: Option<BTreeSet<crate::artifacts::FunctionIdentity>>,
+    untested_functions_error: Option<String>,
 }
 
 impl RivusLintPass {
     /// Create a lint pass configured from the current process environment.
-    pub fn rvs_new_BS() -> Self {
+    pub fn rvs_new_BIS() -> Self {
         let collect_callgraph = rvs_env_flag_enabled_BS("RIVUS_CALLGRAPH");
         let offline_caps_check = rvs_env_flag_enabled_BS("RIVUS_OFFLINE_CAPS");
         let should_emit_caps_report = !collect_callgraph && !offline_caps_check;
+        let (untested_functions, untested_functions_error) = match rvs_load_untested_functions_BIS()
+        {
+            Ok(functions) => (functions, None),
+            Err(error) => (None, Some(error)),
+        };
         Self {
             capsmap: None,
             test_names: BTreeMap::new(),
@@ -240,6 +247,8 @@ impl RivusLintPass {
             should_emit_lints: !collect_callgraph,
             should_emit_caps_report,
             test_fn_names: HashSet::new(),
+            untested_functions,
+            untested_functions_error,
         }
     }
 
@@ -262,6 +271,40 @@ impl RivusLintPass {
     }
 }
 
+fn rvs_fulfill_collection_expectations_S(
+    cx: &LateContext<'_>,
+    hir_id: rustc_hir::HirId,
+    span: Span,
+) {
+    for lint in RIVUS_LINTS {
+        if cx.tcx.lint_level_at_node(lint, hir_id).level.as_str() == "expect" {
+            cx.tcx.emit_node_span_lint(
+                lint,
+                hir_id,
+                span,
+                msg::Msg::rvs_new(span, "collection-only expectation marker"),
+            );
+        }
+    }
+}
+
+fn rvs_load_untested_functions_BIS()
+-> Result<Option<BTreeSet<crate::artifacts::FunctionIdentity>>, String> {
+    let Some(path) = std::env::var_os("RIVUS_UNTESTED_PATHS") else {
+        return Ok(None);
+    };
+    let path = std::path::PathBuf::from(path);
+    let json = std::fs::read_to_string(&path).map_err(|error| {
+        format!(
+            "cannot read untested-function selection {}: {error}",
+            path.display()
+        )
+    })?;
+    crate::artifacts::rvs_parse_function_identities_json_S(&json)
+        .map(Some)
+        .map_err(|error| format!("{}: {error}", path.display()))
+}
+
 fn rvs_env_flag_enabled_BS(name: &str) -> bool {
     match std::env::var(name) {
         Ok(value) => rvs_env_flag_value_enabled(Some(value.as_str())),
@@ -277,7 +320,7 @@ fn rvs_env_flag_value_enabled(value: Option<&str>) -> bool {
 
 impl Default for RivusLintPass {
     fn default() -> Self {
-        Self::rvs_new_BS()
+        Self::rvs_new_BIS()
     }
 }
 
@@ -292,6 +335,12 @@ impl LintPass for RivusLintPass {
 
 impl<'tcx> LateLintPass<'tcx> for RivusLintPass {
     fn check_crate(&mut self, cx: &LateContext<'tcx>) {
+        if self.collect_callgraph {
+            rvs_fulfill_collection_expectations_S(cx, rustc_hir::CRATE_HIR_ID, DUMMY_SP);
+        }
+        if let Some(error) = self.untested_functions_error.take() {
+            cx.tcx.dcx().err(error);
+        }
         if self.should_emit_caps_report {
             self.rvs_ensure_capsmap_BIMS();
         }
@@ -352,12 +401,17 @@ impl<'tcx> LateLintPass<'tcx> for RivusLintPass {
             &self.good_fns,
             &self.ok_fns,
             &self.test_calls,
+            self.untested_functions.as_ref(),
             &self.callgraph,
             self.collect_callgraph,
+            self.should_emit_caps_report,
         );
     }
 
     fn check_item(&mut self, cx: &LateContext<'tcx>, item: &'tcx rustc_hir::Item<'tcx>) {
+        if self.collect_callgraph {
+            rvs_fulfill_collection_expectations_S(cx, item.hir_id(), item.span);
+        }
         let mut data = FnCheckData {
             good_fns: &mut self.good_fns,
             ok_fns: &mut self.ok_fns,
@@ -381,6 +435,9 @@ impl<'tcx> LateLintPass<'tcx> for RivusLintPass {
         cx: &LateContext<'tcx>,
         impl_item: &'tcx rustc_hir::ImplItem<'tcx>,
     ) {
+        if self.collect_callgraph {
+            rvs_fulfill_collection_expectations_S(cx, impl_item.hir_id(), impl_item.span);
+        }
         let mut data = FnCheckData {
             good_fns: &mut self.good_fns,
             ok_fns: &mut self.ok_fns,
@@ -404,6 +461,9 @@ impl<'tcx> LateLintPass<'tcx> for RivusLintPass {
         cx: &LateContext<'tcx>,
         trait_item: &'tcx rustc_hir::TraitItem<'tcx>,
     ) {
+        if self.collect_callgraph {
+            rvs_fulfill_collection_expectations_S(cx, trait_item.hir_id(), trait_item.span);
+        }
         let mut data = FnCheckData {
             good_fns: &mut self.good_fns,
             ok_fns: &mut self.ok_fns,
@@ -413,6 +473,32 @@ impl<'tcx> LateLintPass<'tcx> for RivusLintPass {
             should_emit_lints: self.should_emit_lints,
         };
         rvs_check_trait_item_MS(cx, trait_item, &mut data);
+    }
+
+    fn check_stmt(&mut self, cx: &LateContext<'tcx>, statement: &'tcx rustc_hir::Stmt<'tcx>) {
+        if self.collect_callgraph {
+            rvs_fulfill_collection_expectations_S(cx, statement.hir_id, statement.span);
+        }
+    }
+
+    fn check_body(&mut self, cx: &LateContext<'tcx>, body: &rustc_hir::Body<'tcx>) {
+        if self.collect_callgraph {
+            for param in body.params {
+                rvs_fulfill_collection_expectations_S(cx, param.hir_id, param.span);
+            }
+        }
+    }
+
+    fn check_expr(&mut self, cx: &LateContext<'tcx>, expression: &'tcx rustc_hir::Expr<'tcx>) {
+        if self.collect_callgraph {
+            rvs_fulfill_collection_expectations_S(cx, expression.hir_id, expression.span);
+        }
+    }
+
+    fn check_field_def(&mut self, cx: &LateContext<'tcx>, field: &'tcx rustc_hir::FieldDef<'tcx>) {
+        if self.collect_callgraph {
+            rvs_fulfill_collection_expectations_S(cx, field.hir_id, field.span);
+        }
     }
 }
 
@@ -498,8 +584,8 @@ fn rvs_run_fn_checks_MS<'tcx>(
 
         if subject.has_body && !is_stub {
             debug_assert::rvs_check_fn_MS(cx, subject.body, subject.body_facts);
-            borrowed_param::rvs_check_fn_params_S(cx, subject.sig);
-            consumed_arg::rvs_check_fn_MS(cx, subject.sig, name);
+            borrowed_param::rvs_check_fn_params_S(cx, subject.sig, subject.body.params);
+            consumed_arg::rvs_check_fn_MS(cx, subject.sig, subject.body.params, name);
             validate::rvs_check_fn_S(cx, name, subject.sig);
         }
 
@@ -514,11 +600,18 @@ fn rvs_run_fn_checks_MS<'tcx>(
             && !utils::rvs_has_allow(attrs, "unused")
         {
             data.good_fns.push(ctx::CoverageFn {
-                def_path: DefPath::rvs_new(utils::rvs_def_path(
-                    cx,
-                    subject.hir_id.owner.def_id.to_def_id(),
-                )),
+                identity: crate::artifacts::FunctionIdentity {
+                    crate_id: cx
+                        .tcx
+                        .stable_crate_id(subject.hir_id.owner.def_id.to_def_id().krate)
+                        .as_u64(),
+                    def_path: DefPath::rvs_new(utils::rvs_def_path(
+                        cx,
+                        subject.hir_id.owner.def_id.to_def_id(),
+                    )),
+                },
                 name: name.to_string(),
+                hir_id: subject.hir_id,
                 span: subject.span,
             });
         }
@@ -534,11 +627,18 @@ fn rvs_run_fn_checks_MS<'tcx>(
             && !utils::rvs_has_allow(attrs, "unused")
         {
             data.ok_fns.push(ctx::CoverageFn {
-                def_path: DefPath::rvs_new(utils::rvs_def_path(
-                    cx,
-                    subject.hir_id.owner.def_id.to_def_id(),
-                )),
+                identity: crate::artifacts::FunctionIdentity {
+                    crate_id: cx
+                        .tcx
+                        .stable_crate_id(subject.hir_id.owner.def_id.to_def_id().krate)
+                        .as_u64(),
+                    def_path: DefPath::rvs_new(utils::rvs_def_path(
+                        cx,
+                        subject.hir_id.owner.def_id.to_def_id(),
+                    )),
+                },
                 name: name.to_string(),
+                hir_id: subject.hir_id,
                 span: subject.span,
             });
         }

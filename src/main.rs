@@ -10,6 +10,7 @@ extern crate rustc_ast;
 extern crate rustc_driver;
 extern crate rustc_errors;
 extern crate rustc_hir;
+extern crate rustc_hir_analysis;
 extern crate rustc_hir_id;
 extern crate rustc_interface;
 extern crate rustc_lint;
@@ -62,7 +63,7 @@ impl Callbacks for RivusCallbacks {
                 previous(_sess, lint_store);
             }
             lint_store.register_lints(lints::RIVUS_LINTS);
-            lint_store.register_late_pass(|_| Box::new(lints::RivusLintPass::rvs_new_BS()));
+            lint_store.register_late_pass(|_| Box::new(lints::RivusLintPass::rvs_new_BIS()));
         }));
         config.opts.unstable_opts.mir_opt_level = Some(0);
     }
@@ -101,11 +102,18 @@ fn rvs_run_driver_BIMPS() -> ExitCode {
         // allow for them, which causes rustc to skip the lint pass entirely).
         // Using --cap-lints warn (not removing entirely) prevents compilation
         // failures from std's #[deny(...)] attributes.
-        if wrapper_mode && rvs_rivus_enabled_BS() {
+        let rivus_enabled = wrapper_mode && rvs_rivus_enabled_BS();
+        if rivus_enabled {
             rvs_rewrite_cap_lints_allow_M(&mut args);
         }
+        let callgraph_lint_mode = rvs_callgraph_lint_mode(
+            wrapper_mode,
+            rivus_enabled,
+            rvs_env_flag_is_one_BS("RIVUS_CALLGRAPH"),
+        );
+        rvs_add_callgraph_lint_args_M(&mut args, callgraph_lint_mode);
 
-        if wrapper_mode && rvs_rivus_enabled_BS() {
+        if rivus_enabled {
             rustc_driver::run_compiler(&args, &mut RivusCallbacks)
         } else {
             rustc_driver::run_compiler(&args, &mut DefaultCallbacks)
@@ -117,6 +125,34 @@ fn rvs_rivus_enabled_BS() -> bool {
     match env::var("RIVUS_ENABLED") {
         Ok(value) => rvs_rivus_enabled_value(&value),
         Err(env::VarError::NotPresent) | Err(env::VarError::NotUnicode(_)) => false,
+    }
+}
+
+fn rvs_env_flag_is_one_BS(name: &str) -> bool {
+    std::env::var_os(name).is_some_and(|value| value == "1")
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CallgraphLintMode {
+    Normal,
+    Collect,
+}
+
+fn rvs_callgraph_lint_mode(
+    wrapper_mode: bool,
+    rivus_enabled: bool,
+    collection_requested: bool,
+) -> CallgraphLintMode {
+    if wrapper_mode && rivus_enabled && collection_requested {
+        CallgraphLintMode::Collect
+    } else {
+        CallgraphLintMode::Normal
+    }
+}
+
+fn rvs_add_callgraph_lint_args_M(args: &mut Vec<String>, mode: CallgraphLintMode) {
+    if mode == CallgraphLintMode::Collect {
+        args.push("-Aunfulfilled_lint_expectations".to_string());
     }
 }
 
@@ -247,6 +283,37 @@ mod tests {
         );
 
         assert_eq!(args[1], "--cap-lints=allow");
+    }
+
+    #[test]
+    fn test_20260714_callgraph_suppresses_intermediate_expectations() {
+        let mut enabled = vec!["rustc".to_string()];
+        let mut disabled = enabled.clone();
+        rvs_add_callgraph_lint_args_M(&mut enabled, CallgraphLintMode::Collect);
+        rvs_add_callgraph_lint_args_M(&mut disabled, CallgraphLintMode::Normal);
+        let output = format!(
+            "enabled={}\ndisabled={}\n",
+            enabled.join(" "),
+            disabled.join(" ")
+        );
+        rvs_snapshot_BIS(
+            "test_20260714_callgraph_suppresses_intermediate_expectations",
+            &output,
+        );
+
+        assert_eq!(
+            enabled.last().map(String::as_str),
+            Some("-Aunfulfilled_lint_expectations")
+        );
+        assert_eq!(disabled, ["rustc"]);
+        assert_eq!(
+            rvs_callgraph_lint_mode(true, false, true),
+            CallgraphLintMode::Normal
+        );
+        assert_eq!(
+            rvs_callgraph_lint_mode(true, true, true),
+            CallgraphLintMode::Collect
+        );
     }
 }
 

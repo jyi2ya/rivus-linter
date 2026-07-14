@@ -2,3 +2,5 @@ callgraph=Some(None)
 capsmap=removed
 rustc=Some(None)
 rivus_enabled=Some(Some("1"))
+ui_testing=Some(None)
+untested_paths=Some(None)

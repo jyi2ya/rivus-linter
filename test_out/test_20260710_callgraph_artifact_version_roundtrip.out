@@ -1,3 +1,4 @@
-schema_version=2
+schema_version=3
 contains_version=true
 nodes=1
+version_two_nodes=1

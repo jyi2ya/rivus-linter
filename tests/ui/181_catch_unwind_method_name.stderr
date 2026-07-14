@@ -1,21 +1,3 @@
-error: type 'Guard' missing #[derive(Debug)]
-  --> $DIR/tests/ui/181_catch_unwind_method_name.rs:3:1
-   |
-LL | struct Guard;
-   | ^^^^^^^^^^^^^
-   |
-   = note: `-D rivus::rvs-missing-debug-derive` implied by `-D warnings`
-   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_debug_derive)]`
-
-error: catch_unwind — fix panic source instead
-  --> $DIR/tests/ui/181_catch_unwind_method_name.rs:10:5
-   |
-LL |     Guard.catch_unwind();
-   |     ^^^^^^^^^^^^^^^^^^^^
-   |
-   = note: `-D rivus::rvs-catch-unwind` implied by `-D warnings`
-   = help: to override `-D warnings` add `#[allow(rivus::rvs_catch_unwind)]`
-
 error: 'catch_unwind' is missing the rvs_ prefix; expected name: rvs_catch_unwind; declared caps: unknown; inferred caps: pure
   --> $DIR/tests/ui/181_catch_unwind_method_name.rs:6:5
    |
@@ -36,4 +18,4 @@ LL | | }
    = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
 
-error: aborting due to 4 previous errors
+error: aborting due to 2 previous errors

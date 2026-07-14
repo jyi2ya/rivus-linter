@@ -1,4 +1,4 @@
-use rustc_lint::{LateContext, LintContext};
+use rustc_lint::LateContext;
 
 use super::super::RVS_SPAWN_WARNING;
 use super::super::msg::Msg;
@@ -18,8 +18,9 @@ pub(crate) fn rvs_check_fn_S<'tcx>(cx: &LateContext<'tcx>, facts: &BodyFacts, is
                 }
                 CallSyntax::Method => format!("spawn: {path}"),
             };
-            cx.emit_span_lint(
+            cx.tcx.emit_node_span_lint(
                 RVS_SPAWN_WARNING,
+                observation.hir_id,
                 observation.span,
                 Msg::rvs_new(observation.span, message),
             );

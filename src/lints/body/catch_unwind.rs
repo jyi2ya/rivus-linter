@@ -1,33 +1,29 @@
-use rustc_lint::{LateContext, LintContext};
+use rustc_lint::LateContext;
 
 use super::super::RVS_CATCH_UNWIND;
 use super::super::msg::Msg;
-use super::super::utils::{CallSyntax, CallTarget};
+use super::super::utils::CallTarget;
 use super::BodyFacts;
+
+const CATCH_UNWIND_PATHS: &[&str] = &[
+    "core::intrinsics::catch_unwind",
+    "std::panic::catch_unwind",
+    "std::panicking::catch_unwind",
+];
 
 /// Walk function body looking for `catch_unwind` calls.
 pub(crate) fn rvs_check_fn_S<'tcx>(cx: &LateContext<'tcx>, facts: &BodyFacts) {
     for observation in &facts.calls {
-        let is_catch_unwind = match (observation.syntax, &observation.target) {
-            (CallSyntax::Method, CallTarget::Resolved { def_path, .. }) => {
-                def_path.rvs_fn_name_str() == "catch_unwind"
+        let is_catch_unwind = match &observation.target {
+            CallTarget::Resolved { def_path, .. } => {
+                CATCH_UNWIND_PATHS.contains(&def_path.rvs_as_str())
             }
-            (CallSyntax::Method, CallTarget::UnresolvedMethod { name }) => name == "catch_unwind",
-            (
-                CallSyntax::Function,
-                CallTarget::Resolved {
-                    def_path,
-                    def_kind:
-                        rustc_hir::def::DefKind::Fn
-                        | rustc_hir::def::DefKind::AssocFn
-                        | rustc_hir::def::DefKind::Variant,
-                },
-            ) => def_path.rvs_fn_name_str() == "catch_unwind",
-            _ => false,
+            CallTarget::UnresolvedMethod { .. } | CallTarget::UnresolvedPath { .. } => false,
         };
         if is_catch_unwind {
-            cx.emit_span_lint(
+            cx.tcx.emit_node_span_lint(
                 RVS_CATCH_UNWIND,
+                observation.hir_id,
                 observation.span,
                 Msg::rvs_new(observation.span, "catch_unwind — fix panic source instead"),
             );

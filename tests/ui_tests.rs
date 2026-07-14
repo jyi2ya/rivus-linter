@@ -33,8 +33,7 @@ fn rvs_normalize_stderr_S(raw: &str) -> String {
     let dir_str = dir.to_string_lossy().to_string();
     let mut out = raw.to_string();
     out = out.replace(&dir_str, "$DIR");
-    let lines: Vec<&str> = out.lines().filter(|l| !l.contains("generated")).collect();
-    lines.join("\n").trim_end().to_string()
+    out.trim_end().to_string()
 }
 
 fn rvs_run_one_test_BIS(fixture: &Path, stderr_path: &Path) -> Result<(), String> {
@@ -108,22 +107,33 @@ fn rvs_run_one_test_BIS(fixture: &Path, stderr_path: &Path) -> Result<(), String
     let actual = rvs_normalize_stderr_S(&raw_stderr);
 
     if check_pass {
-        if !actual.is_empty() {
+        if !output.status.success() || !actual.is_empty() {
             return Err(format!(
-                "{:?}: check-pass but got output:\n{}",
+                "{:?}: check-pass failed with status {}:\n{}",
                 fixture.file_name().unwrap(),
+                output.status,
                 actual
             ));
         }
         if bless && stderr_path.exists() {
-            let _ = fs::remove_file(stderr_path);
+            fs::remove_file(stderr_path).map_err(|e| format!("remove {:?}: {e}", stderr_path))?;
         }
         return Ok(());
     }
 
     if bless {
+        if !output.status.success() && actual.is_empty() {
+            return Err(format!(
+                "{:?}: compiler failed with status {} and no diagnostic output",
+                fixture.file_name().unwrap(),
+                output.status
+            ));
+        }
         if actual.is_empty() {
-            let _ = fs::remove_file(stderr_path);
+            return Err(format!(
+                "{:?}: non-check-pass fixture produced no diagnostics; add // check-pass if this is intentional",
+                fixture.file_name().unwrap()
+            ));
         } else {
             fs::write(stderr_path, actual + "\n").map_err(|e| format!("write: {e}"))?;
         }
@@ -140,6 +150,19 @@ fn rvs_run_one_test_BIS(fixture: &Path, stderr_path: &Path) -> Result<(), String
     };
 
     let actual_trimmed = actual.trim_end().to_string();
+    if !expected.is_empty() && output.status.success() {
+        return Err(format!(
+            "{:?}: expected diagnostics but compiler exited successfully",
+            fixture.file_name().unwrap()
+        ));
+    }
+    if expected.is_empty() && !output.status.success() && actual_trimmed.is_empty() {
+        return Err(format!(
+            "{:?}: compiler failed with status {} and no diagnostic output",
+            fixture.file_name().unwrap(),
+            output.status
+        ));
+    }
     if actual_trimmed != expected {
         Err(format!(
             "stderr mismatch for {:?}\n\n--- expected ---\n{}\n\n--- actual ---\n{}\n",
@@ -165,10 +188,10 @@ fn test_20260630_ui_tests_BIS() {
     let mut failures = Vec::new();
     for fixture in &fixtures {
         let name = fixture.file_stem().unwrap().to_string_lossy().to_string();
-        if let Some(ref f) = filter {
-            if !name.contains(f.as_str()) {
-                continue;
-            }
+        if let Some(ref f) = filter
+            && !name.contains(f.as_str())
+        {
+            continue;
         }
         let stderr_path = fixture.with_extension("stderr");
         if let Err(e) = rvs_run_one_test_BIS(fixture, &stderr_path) {

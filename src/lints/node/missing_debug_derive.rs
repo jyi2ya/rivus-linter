@@ -7,6 +7,9 @@ use super::super::utils::rvs_has_debug_derive;
 
 /// Check pub struct/enum missing `#[derive(Debug)]`.
 pub(crate) fn rvs_check_struct_or_enum_S<'tcx>(cx: &LateContext<'tcx>, item: &'tcx Item<'tcx>) {
+    if !cx.tcx.visibility(item.owner_id.def_id).is_public() {
+        return;
+    }
     let name = cx.tcx.item_name(item.owner_id.def_id);
     if !rvs_has_debug_derive(cx, item.owner_id.def_id.into()) {
         cx.emit_span_lint(

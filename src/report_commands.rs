@@ -107,6 +107,7 @@ impl fmt::Display for Report {
 #[derive(Debug)]
 struct FnEntry {
     capabilities: CapabilitySet,
+    function_count: usize,
     line_count: usize,
     is_test: bool,
     allows_dead_code: bool,
@@ -129,19 +130,25 @@ fn rvs_build_report(entries: &[FnEntry]) -> Result<Report, String> {
         if func.line_count == 0 {
             return Err("report entry line count must be positive".into());
         }
-        total_fn_count = rvs_checked_report_sum(total_fn_count, 1, "total function count")?;
+        debug_assert!(func.function_count > 0, "report functions are non-empty");
+        total_fn_count =
+            rvs_checked_report_sum(total_fn_count, func.function_count, "total function count")?;
         total_line_count =
             rvs_checked_report_sum(total_line_count, func.line_count, "total report line count")?;
 
         if func.capabilities.rvs_is_empty() {
-            pure_fn_count = rvs_checked_report_sum(pure_fn_count, 1, "pure function count")?;
+            pure_fn_count =
+                rvs_checked_report_sum(pure_fn_count, func.function_count, "pure function count")?;
             pure_line_count =
                 rvs_checked_report_sum(pure_line_count, func.line_count, "pure report line count")?;
         } else {
             for cap in func.capabilities.rvs_iter() {
                 let stats = by_capability.entry(cap).or_default();
-                stats.fn_count =
-                    rvs_checked_report_sum(stats.fn_count, 1, "capability function count")?;
+                stats.fn_count = rvs_checked_report_sum(
+                    stats.fn_count,
+                    func.function_count,
+                    "capability function count",
+                )?;
                 stats.line_count = rvs_checked_report_sum(
                     stats.line_count,
                     func.line_count,
@@ -151,13 +158,15 @@ fn rvs_build_report(entries: &[FnEntry]) -> Result<Report, String> {
         }
 
         if CapabilityPolicy::rvs_is_good(&func.capabilities) {
-            good_fn_count = rvs_checked_report_sum(good_fn_count, 1, "good function count")?;
+            good_fn_count =
+                rvs_checked_report_sum(good_fn_count, func.function_count, "good function count")?;
             good_line_count =
                 rvs_checked_report_sum(good_line_count, func.line_count, "good report line count")?;
         }
 
         if CapabilityPolicy::rvs_is_ok(&func.capabilities) {
-            ok_fn_count = rvs_checked_report_sum(ok_fn_count, 1, "ok function count")?;
+            ok_fn_count =
+                rvs_checked_report_sum(ok_fn_count, func.function_count, "ok function count")?;
             ok_line_count =
                 rvs_checked_report_sum(ok_line_count, func.line_count, "ok report line count")?;
         }
@@ -194,6 +203,13 @@ fn rvs_report_entries_from_callgraph(
         if !FunctionClassification::rvs_new(&scope, def_path, node).rvs_is_report_candidate() {
             continue;
         }
+        let has_per_definition_metadata = node.report_function_count > 0;
+        if node.is_test || node.is_test_compilation {
+            continue;
+        }
+        if !has_per_definition_metadata && node.allows_dead_code {
+            continue;
+        }
         let parsed = ParsedFunctionName::rvs_parse(def_path.rvs_as_str());
         let capabilities = if node.facts.is_port_method {
             CapabilityPolicy::rvs_port_method_caps()
@@ -212,9 +228,10 @@ fn rvs_report_entries_from_callgraph(
         }
         entries.push(FnEntry {
             capabilities,
+            function_count: node.report_function_count.max(1),
             line_count,
-            is_test: node.is_test,
-            allows_dead_code: node.allows_dead_code,
+            is_test: false,
+            allows_dead_code: false,
         });
     }
     Ok(entries)
@@ -276,6 +293,7 @@ mod tests {
                 "pure_only",
                 vec![FnEntry {
                     capabilities: CapabilitySet::rvs_new(),
+                    function_count: 1,
                     line_count: 10,
                     is_test: false,
                     allows_dead_code: false,
@@ -287,18 +305,21 @@ mod tests {
                 vec![
                     FnEntry {
                         capabilities: CapabilitySet::rvs_new(),
+                        function_count: 1,
                         line_count: 100,
                         is_test: false,
                         allows_dead_code: false,
                     },
                     FnEntry {
                         capabilities: CapabilitySet::rvs_from_validated("BI"),
+                        function_count: 1,
                         line_count: 50,
                         is_test: false,
                         allows_dead_code: false,
                     },
                     FnEntry {
                         capabilities: CapabilitySet::rvs_from_validated("M"),
+                        function_count: 1,
                         line_count: 30,
                         is_test: false,
                         allows_dead_code: false,
@@ -307,22 +328,36 @@ mod tests {
                 (3, 1, 2, 2, 180),
             ),
             (
+                "aggregated_targets",
+                vec![FnEntry {
+                    capabilities: CapabilitySet::rvs_new(),
+                    function_count: 2,
+                    line_count: 25,
+                    is_test: false,
+                    allows_dead_code: false,
+                }],
+                (2, 2, 2, 2, 25),
+            ),
+            (
                 "skips_test_and_dead_code",
                 vec![
                     FnEntry {
                         capabilities: CapabilitySet::rvs_new(),
+                        function_count: 1,
                         line_count: 10,
                         is_test: false,
                         allows_dead_code: false,
                     },
                     FnEntry {
                         capabilities: CapabilitySet::rvs_new(),
+                        function_count: 1,
                         line_count: 20,
                         is_test: true,
                         allows_dead_code: false,
                     },
                     FnEntry {
                         capabilities: CapabilitySet::rvs_new(),
+                        function_count: 1,
                         line_count: 30,
                         is_test: false,
                         allows_dead_code: true,
@@ -348,6 +383,57 @@ mod tests {
             );
         }
         rvs_snapshot_BIS("test_20260709_build_report_table", &output);
+    }
+
+    #[test]
+    fn test_20260714_report_excludes_test_compilation_only_helpers() {
+        let mut graph = FnGraph::rvs_new();
+        let mut production = FnNode {
+            report_line_count: Some(3),
+            ..FnNode::default()
+        };
+        production
+            .sources
+            .insert(FnSource::rvs_new("src/lib.rs".into(), 1, 2));
+        graph.rvs_insert_M(DefPath::from("demo::rvs_production"), production);
+
+        let mut test_helper = FnNode {
+            is_test_compilation: true,
+            report_line_count: Some(0),
+            report_function_count: 1,
+            ..FnNode::default()
+        };
+        test_helper
+            .sources
+            .insert(FnSource::rvs_new("src/lib.rs".into(), 3, 4));
+        graph.rvs_insert_M(DefPath::from("demo::rvs_test_helper"), test_helper);
+
+        let mut partially_allowed = FnNode {
+            allows_dead_code: true,
+            report_line_count: Some(2),
+            report_function_count: 1,
+            ..FnNode::default()
+        };
+        partially_allowed
+            .sources
+            .insert(FnSource::rvs_new("src/main.rs".into(), 5, 6));
+        graph.rvs_insert_M(
+            DefPath::from("demo::rvs_partially_allowed"),
+            partially_allowed,
+        );
+
+        let entries =
+            rvs_report_entries_from_callgraph(&graph, &BTreeSet::from([CrateName::from("demo")]))
+                .unwrap();
+        let report = rvs_build_report(&entries).unwrap();
+        let output = report.to_string();
+        rvs_snapshot_BIS(
+            "test_20260714_report_excludes_test_compilation_only_helpers",
+            &output,
+        );
+
+        assert_eq!(report.total_fn_count, 2);
+        assert_eq!(report.total_line_count, 5);
     }
 
     #[test]
@@ -872,6 +958,7 @@ mod tests {
     fn test_20260709_report_error_table() {
         let build_zero = rvs_build_report(&[FnEntry {
             capabilities: CapabilitySet::rvs_new(),
+            function_count: 1,
             line_count: 0,
             is_test: false,
             allows_dead_code: false,
@@ -879,12 +966,14 @@ mod tests {
         let build_overflow = rvs_build_report(&[
             FnEntry {
                 capabilities: CapabilitySet::rvs_new(),
+                function_count: 1,
                 line_count: usize::MAX,
                 is_test: false,
                 allows_dead_code: false,
             },
             FnEntry {
                 capabilities: CapabilitySet::rvs_new(),
+                function_count: 1,
                 line_count: 1,
                 is_test: false,
                 allows_dead_code: false,

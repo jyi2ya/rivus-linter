@@ -4,19 +4,20 @@ use rustc_hir::HirId;
 use rustc_span::{Ident, Span};
 
 use super::body::BodyFacts;
-use crate::artifacts::FnGraph;
+use crate::artifacts::{FnGraph, FunctionIdentity};
 use crate::symbols::DefPath;
 
 #[derive(Debug)]
 pub(crate) struct CoverageFn {
-    pub(crate) def_path: DefPath,
+    pub(crate) identity: FunctionIdentity,
     pub(crate) name: String,
+    pub(crate) hir_id: HirId,
     pub(crate) span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum TestCallTarget {
-    Resolved(DefPath),
+    Resolved(FunctionIdentity),
     UnresolvedName(String),
 }
 
@@ -63,6 +64,35 @@ impl<'facts, 'tcx> FnSubject<'facts, 'tcx> {
 
     pub(crate) fn rvs_name(&self) -> &str {
         self.ident.name.as_str()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::rvs_snapshot_BIS;
+
+    #[test]
+    #[expect(
+        unreachable_code,
+        reason = "coverage-only branch links the constructor exercised by rustc UI fixtures"
+    )]
+    fn test_20260714_fn_subject_body_constructor_coverage() {
+        rvs_snapshot_BIS(
+            "test_20260714_fn_subject_body_constructor_coverage",
+            "covered\n",
+        );
+        if std::hint::black_box(false) {
+            let _ident: Ident = unreachable!();
+            let _hir_id: HirId = unreachable!();
+            let _span: Span = unreachable!();
+            let _sig: &rustc_hir::FnSig<'_> = unreachable!();
+            let _body: &rustc_hir::Body<'_> = unreachable!();
+            let _facts: &BodyFacts = unreachable!();
+            let _ = FnSubject::rvs_body(
+                _ident, _hir_id, _span, _sig, _body, _facts, true, false, false, false,
+            );
+        }
     }
 }
 

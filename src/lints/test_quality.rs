@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
@@ -9,7 +9,7 @@ use super::msg::Msg;
 use super::{
     RVS_DUPLICATE_TEST, RVS_MISSING_TEST_OUTPUT, RVS_UNTESTED_GOOD_FN, RVS_UNTESTED_OK_FN,
 };
-use crate::artifacts::FnGraph;
+use crate::artifacts::{FnGraph, FunctionIdentity};
 use crate::fs_guard::rvs_render_atomic_write_failure;
 use crate::symbols::CrateName;
 
@@ -20,14 +20,77 @@ pub(crate) fn rvs_check_crate_post_BIMS<'tcx>(
     good_fns: &[CoverageFn],
     ok_fns: &[CoverageFn],
     test_calls: &HashSet<TestCallTarget>,
+    selected_untested_functions: Option<&BTreeSet<FunctionIdentity>>,
     callgraph: &FnGraph,
     collect_callgraph: bool,
+    check_local_coverage: bool,
 ) {
     rvs_check_duplicate_tests_S(cx, test_names);
     rvs_check_missing_test_output_BIS(cx, test_names);
-    rvs_check_untested_good_fns_S(cx, good_fns, test_calls);
-    rvs_check_untested_ok_fns_S(cx, ok_fns, test_calls);
+    if let Some(selected) = selected_untested_functions {
+        rvs_check_selected_untested_fns_S(cx, good_fns, ok_fns, selected);
+    } else if check_local_coverage || rvs_env_os_flag_enabled_BS("RIVUS_UI_TESTING") {
+        let covered = rvs_direct_covered_functions(callgraph);
+        let mut candidate_name_counts = BTreeMap::new();
+        for candidate in good_fns.iter().chain(ok_fns) {
+            *candidate_name_counts
+                .entry(candidate.name.clone())
+                .or_insert(0usize) += 1;
+        }
+        rvs_check_untested_good_fns_S(cx, good_fns, test_calls, &covered, &candidate_name_counts);
+        rvs_check_untested_ok_fns_S(cx, ok_fns, test_calls, &covered, &candidate_name_counts);
+    }
     rvs_write_callgraph_BIS(cx, callgraph, collect_callgraph);
+}
+
+fn rvs_check_selected_untested_fns_S<'tcx>(
+    cx: &LateContext<'tcx>,
+    good_fns: &[CoverageFn],
+    ok_fns: &[CoverageFn],
+    selected: &BTreeSet<FunctionIdentity>,
+) {
+    for candidate in good_fns {
+        if rvs_should_emit_selected(cx, candidate, selected, RVS_UNTESTED_GOOD_FN) {
+            cx.tcx.emit_node_span_lint(
+                RVS_UNTESTED_GOOD_FN,
+                candidate.hir_id,
+                candidate.span,
+                Msg::rvs_new(
+                    candidate.span,
+                    format!("good fn '{}' not called by any test", candidate.name),
+                ),
+            );
+        }
+    }
+    for candidate in ok_fns {
+        if rvs_should_emit_selected(cx, candidate, selected, RVS_UNTESTED_OK_FN) {
+            cx.tcx.emit_node_span_lint(
+                RVS_UNTESTED_OK_FN,
+                candidate.hir_id,
+                candidate.span,
+                Msg::rvs_new(
+                    candidate.span,
+                    format!("ok fn '{}' not called by any test", candidate.name),
+                ),
+            );
+        }
+    }
+}
+
+fn rvs_should_emit_selected(
+    cx: &LateContext<'_>,
+    candidate: &CoverageFn,
+    selected: &BTreeSet<FunctionIdentity>,
+    lint: &'static rustc_lint::Lint,
+) -> bool {
+    selected.contains(&candidate.identity)
+        && (!cx.tcx.sess.opts.test
+            || cx
+                .tcx
+                .lint_level_at_node(lint, candidate.hir_id)
+                .level
+                .as_str()
+                == "expect")
 }
 
 fn rvs_check_duplicate_tests_S<'tcx>(
@@ -55,6 +118,9 @@ fn rvs_check_missing_test_output_BIS<'tcx>(
         return;
     }
     let out_dir = Path::new("test_out");
+    if !rvs_test_output_checks_enabled_BIS(out_dir) {
+        return;
+    }
     for (name, spans) in test_names {
         let out_file = format!("test_out/{name}.out");
         if !rvs_has_test_output_BIS(name, out_dir) {
@@ -69,6 +135,10 @@ fn rvs_check_missing_test_output_BIS<'tcx>(
     }
 }
 
+fn rvs_test_output_checks_enabled_BIS(out_dir: &Path) -> bool {
+    out_dir.is_dir()
+}
+
 fn rvs_has_test_output_BIS(name: &str, out_dir: &Path) -> bool {
     out_dir.join(format!("{name}.out")).is_file()
 }
@@ -77,11 +147,14 @@ fn rvs_check_untested_good_fns_S<'tcx>(
     cx: &LateContext<'tcx>,
     good_fns: &[CoverageFn],
     test_calls: &HashSet<TestCallTarget>,
+    covered: &BTreeSet<FunctionIdentity>,
+    candidate_name_counts: &BTreeMap<String, usize>,
 ) {
     for candidate in good_fns {
-        if !rvs_test_calls_function(test_calls, candidate) {
-            cx.emit_span_lint(
+        if !rvs_test_calls_function(test_calls, covered, candidate_name_counts, candidate) {
+            cx.tcx.emit_node_span_lint(
                 RVS_UNTESTED_GOOD_FN,
+                candidate.hir_id,
                 candidate.span,
                 Msg::rvs_new(
                     candidate.span,
@@ -96,11 +169,14 @@ fn rvs_check_untested_ok_fns_S<'tcx>(
     cx: &LateContext<'tcx>,
     ok_fns: &[CoverageFn],
     test_calls: &HashSet<TestCallTarget>,
+    covered: &BTreeSet<FunctionIdentity>,
+    candidate_name_counts: &BTreeMap<String, usize>,
 ) {
     for candidate in ok_fns {
-        if !rvs_test_calls_function(test_calls, candidate) {
-            cx.emit_span_lint(
+        if !rvs_test_calls_function(test_calls, covered, candidate_name_counts, candidate) {
+            cx.tcx.emit_node_span_lint(
                 RVS_UNTESTED_OK_FN,
+                candidate.hir_id,
                 candidate.span,
                 Msg::rvs_new(
                     candidate.span,
@@ -111,9 +187,43 @@ fn rvs_check_untested_ok_fns_S<'tcx>(
     }
 }
 
-fn rvs_test_calls_function(test_calls: &HashSet<TestCallTarget>, candidate: &CoverageFn) -> bool {
-    test_calls.contains(&TestCallTarget::Resolved(candidate.def_path.clone()))
-        || test_calls.contains(&TestCallTarget::UnresolvedName(candidate.name.clone()))
+fn rvs_test_calls_function(
+    test_calls: &HashSet<TestCallTarget>,
+    covered: &BTreeSet<FunctionIdentity>,
+    candidate_name_counts: &BTreeMap<String, usize>,
+    candidate: &CoverageFn,
+) -> bool {
+    covered.contains(&candidate.identity)
+        || test_calls.contains(&TestCallTarget::Resolved(candidate.identity.clone()))
+        || (candidate_name_counts.get(&candidate.name).copied() == Some(1)
+            && test_calls.contains(&TestCallTarget::UnresolvedName(candidate.name.clone())))
+}
+
+fn rvs_direct_covered_functions(graph: &FnGraph) -> BTreeSet<FunctionIdentity> {
+    let mut covered = BTreeSet::new();
+    let mut visited = BTreeSet::new();
+    let mut pending = VecDeque::new();
+    for (_, node) in graph.rvs_iter() {
+        for crate_id in &node.test_crate_ids {
+            if let Some(calls) = node.coverage_calls.get(crate_id) {
+                pending.extend(calls.iter().cloned());
+            }
+        }
+    }
+    while let Some(identity) = pending.pop_front() {
+        if !visited.insert(identity.clone()) {
+            continue;
+        }
+        covered.insert(identity.clone());
+        let Some(node) = graph.rvs_get(identity.def_path.rvs_as_str()) else {
+            continue;
+        };
+        let Some(calls) = node.coverage_calls.get(&identity.crate_id) else {
+            continue;
+        };
+        pending.extend(calls.iter().cloned());
+    }
+    covered
 }
 
 fn rvs_env_os_flag_enabled_BS(name: &str) -> bool {
@@ -168,7 +278,7 @@ fn rvs_write_callgraph_artifact_BIS(
     std::fs::create_dir_all(artifact_dir)
         .map_err(|e| format!("cannot create {}: {e}", artifact_dir.display()))?;
     let final_path = artifact_dir.join(format!("{crate_name}-{}.json", std::process::id()));
-    crate::fs_guard::rvs_write_atomic_BIS(&final_path, json.as_bytes(), |attempt| {
+    let temp_path_for_attempt = |attempt| {
         if attempt == 0 {
             artifact_dir.join(format!("{crate_name}-{}.json.tmp", std::process::id()))
         } else {
@@ -177,10 +287,11 @@ fn rvs_write_callgraph_artifact_BIS(
                 std::process::id()
             ))
         }
-    })
-    .map_err(|failure| {
-        rvs_render_atomic_write_failure(failure, &final_path, "temp artifact", false)
-    })?;
+    };
+    crate::fs_guard::rvs_write_atomic_BIS(&final_path, json.as_bytes(), &temp_path_for_attempt)
+        .map_err(|failure| {
+            rvs_render_atomic_write_failure(failure, &final_path, "temp artifact", false)
+        })?;
     Ok(final_path)
 }
 
@@ -198,6 +309,98 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        unreachable_code,
+        reason = "coverage-only branch links the rustc-context selector exercised by end-to-end fixtures"
+    )]
+    fn test_20260714_test_call_target_matching() {
+        let candidate = CoverageFn {
+            identity: FunctionIdentity {
+                crate_id: 1,
+                def_path: DefPath::from("demo::rvs_run"),
+            },
+            name: "rvs_run".to_string(),
+            hir_id: rustc_hir::CRATE_HIR_ID,
+            span: rustc_span::DUMMY_SP,
+        };
+        let duplicate_candidate = CoverageFn {
+            identity: FunctionIdentity {
+                crate_id: 2,
+                def_path: DefPath::from("other::rvs_run"),
+            },
+            name: "rvs_run".to_string(),
+            hir_id: rustc_hir::CRATE_HIR_ID,
+            span: rustc_span::DUMMY_SP,
+        };
+        let resolved_calls = HashSet::from([TestCallTarget::Resolved(FunctionIdentity {
+            crate_id: 1,
+            def_path: DefPath::from("demo::rvs_run"),
+        })]);
+        let wrong_crate_calls = HashSet::from([TestCallTarget::Resolved(FunctionIdentity {
+            crate_id: 2,
+            def_path: DefPath::from("demo::rvs_run"),
+        })]);
+        let unresolved_calls =
+            HashSet::from([TestCallTarget::UnresolvedName("rvs_run".to_string())]);
+        let missing_calls = HashSet::new();
+        let mut graph = FnGraph::rvs_new();
+        let helper_identity = FunctionIdentity {
+            crate_id: 1,
+            def_path: DefPath::from("demo::rvs_helper"),
+        };
+        let target_identity = FunctionIdentity {
+            crate_id: 1,
+            def_path: DefPath::from("demo::rvs_target"),
+        };
+        let mut test_node = FnNode::default();
+        test_node.test_crate_ids.insert(1);
+        test_node
+            .coverage_calls
+            .insert(1, BTreeSet::from([helper_identity.clone()]));
+        graph.rvs_insert_M(DefPath::from("demo::test_calls_helper"), test_node);
+        let mut helper_node = FnNode::default();
+        helper_node
+            .coverage_calls
+            .insert(1, BTreeSet::from([target_identity.clone()]));
+        graph.rvs_insert_M(helper_identity.def_path.clone(), helper_node);
+        graph.rvs_insert_M(target_identity.def_path.clone(), FnNode::default());
+        let transitive_covered = rvs_direct_covered_functions(&graph);
+        let covered = BTreeSet::new();
+        let unique_names = BTreeMap::from([("rvs_run".to_string(), 1)]);
+        let duplicate_names = BTreeMap::from([("rvs_run".to_string(), 2)]);
+        let resolved =
+            rvs_test_calls_function(&resolved_calls, &covered, &unique_names, &candidate);
+        let wrong_crate =
+            rvs_test_calls_function(&wrong_crate_calls, &covered, &unique_names, &candidate);
+        let unresolved =
+            rvs_test_calls_function(&unresolved_calls, &covered, &unique_names, &candidate);
+        let ambiguous_unresolved = rvs_test_calls_function(
+            &unresolved_calls,
+            &covered,
+            &duplicate_names,
+            &duplicate_candidate,
+        );
+        let missing = rvs_test_calls_function(&missing_calls, &covered, &unique_names, &candidate);
+        let output = format!(
+            "resolved={resolved}\nwrong_crate={wrong_crate}\nunresolved={unresolved}\nambiguous_unresolved={ambiguous_unresolved}\nmissing={missing}\n"
+        );
+        rvs_snapshot_BIS("test_20260714_test_call_target_matching", &output);
+
+        assert!(resolved);
+        assert!(!wrong_crate);
+        assert!(unresolved);
+        assert!(!ambiguous_unresolved);
+        assert!(!missing);
+        assert!(transitive_covered.contains(&target_identity));
+
+        if std::hint::black_box(false) {
+            let _cx: &LateContext<'_> = unreachable!();
+            let _selected: &BTreeSet<FunctionIdentity> = unreachable!();
+            let _ = rvs_should_emit_selected(_cx, &candidate, _selected, RVS_UNTESTED_GOOD_FN);
+        }
+    }
+
+    #[test]
     fn test_20260703_has_test_output_false_when_dir_missing() {
         let missing_dir = Path::new("/definitely/not/present/rivus-test-out");
         let exists = rvs_has_test_output_BIS(
@@ -209,6 +412,18 @@ mod tests {
             &format!("exists={exists}\n"),
         );
         assert!(!exists);
+    }
+
+    #[test]
+    fn test_20260714_missing_test_out_disables_snapshot_lint() {
+        let missing_dir = Path::new("/definitely/not/present/rivus-test-out");
+        let enabled = rvs_test_output_checks_enabled_BIS(missing_dir);
+        rvs_snapshot_BIS(
+            "test_20260714_missing_test_out_disables_snapshot_lint",
+            &format!("enabled={enabled}\n"),
+        );
+
+        assert!(!enabled);
     }
 
     #[test]

@@ -240,6 +240,9 @@ fn rvs_collect_caps_dir_files_BIS(
         if exclude.contains(&name.as_str()) {
             continue;
         }
+        if rvs_is_atomic_caps_temp_file(&name) {
+            continue;
+        }
         if path.is_file() {
             files.push(path);
         } else if LAYER_ORDER.contains(&name.as_str()) {
@@ -249,6 +252,24 @@ fn rvs_collect_caps_dir_files_BIS(
         }
     }
     Ok(files)
+}
+
+fn rvs_is_atomic_caps_temp_file(name: &str) -> bool {
+    let Some(without_tmp) = name.strip_suffix(".tmp") else {
+        return false;
+    };
+    let Some((without_attempt, attempt)) = without_tmp.rsplit_once('.') else {
+        return false;
+    };
+    let Some((layer, pid)) = without_attempt.rsplit_once('.') else {
+        return false;
+    };
+    layer.starts_with('.')
+        && layer.len() > 1
+        && !pid.is_empty()
+        && pid.bytes().all(|byte| byte.is_ascii_digit())
+        && !attempt.is_empty()
+        && attempt.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 fn rvs_require_caps_dir_BIS(dir: &Path) -> Result<(), CapsMapError> {
@@ -380,10 +401,12 @@ mod tests {
                 Some("ABIMPSTU"),
             ),
         ];
+        let mut output = String::new();
         for (name, capsmap, key, expected) in parse_cases {
             let actual = capsmap
                 .rvs_lookup(key)
                 .map(crate::inference::rvs_caps_to_string);
+            output.push_str(&format!("{name}: {actual:?}\n"));
             assert_eq!(actual.as_deref(), expected, "{name}");
         }
 
@@ -391,6 +414,7 @@ mod tests {
         assert!(lookup.rvs_lookup("HashMap::new").is_some());
         assert!(lookup.rvs_lookup("HashMap").is_none());
         assert!(lookup.rvs_lookup("nonexistent").is_none());
+        rvs_snapshot_BIS("test_20260709_capsmap_parse_and_lookup_table", &output);
     }
 
     #[test]
@@ -661,6 +685,23 @@ mod tests {
         assert!(cm.rvs_lookup("func_b").is_none());
         assert!(cm.rvs_lookup("func_c").is_some());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260714_caps_loader_ignores_atomic_temp() {
+        let dir = rvs_make_temp_dir_BIS("capsmap-ignore-atomic-temp");
+        std::fs::write(dir.join("ext"), "winner=P\n").unwrap();
+        std::fs::write(dir.join(".deps.123.0.tmp"), "winner=S\n").unwrap();
+
+        let caps = CapsMap::rvs_load_dir_BIS(&dir).unwrap();
+        let winner = crate::inference::rvs_caps_to_string(caps.rvs_lookup("winner").unwrap());
+        rvs_snapshot_BIS(
+            "test_20260714_caps_loader_ignores_atomic_temp",
+            &format!("winner={winner}\n"),
+        );
+
+        assert_eq!(winner, "P");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

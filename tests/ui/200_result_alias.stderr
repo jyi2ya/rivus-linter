@@ -1,0 +1,55 @@
+error: owned param 'String' consumed but not preserved in error type of rvs_validate
+  --> $DIR/tests/ui/200_result_alias.rs:15:24
+   |
+LL | fn rvs_validate(value: String) -> Result<(), ParseError> {
+   |                        ^^^^^^
+   |
+   = note: `-D rivus::rvs-consumed-arg-on-error` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_consumed_arg_on_error)]`
+
+error: rvs_validate: validate returning Result<(),E> — use TryFrom returning Result<T,E>
+  --> $DIR/tests/ui/200_result_alias.rs:15:1
+   |
+LL | fn rvs_validate(value: String) -> Result<(), ParseError> {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-validate-returns-unit` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_validate_returns_unit)]`
+
+error: owned param 'String' consumed but not preserved in error type of rvs_validate_unit_alias
+  --> $DIR/tests/ui/200_result_alias.rs:20:35
+   |
+LL | fn rvs_validate_unit_alias(value: String) -> UnitResult<ParseError> {
+   |                                   ^^^^^^
+
+error: rvs_validate_unit_alias: validate returning Result<(),E> — use TryFrom returning Result<T,E>
+  --> $DIR/tests/ui/200_result_alias.rs:20:1
+   |
+LL | fn rvs_validate_unit_alias(value: String) -> UnitResult<ParseError> {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: owned param 'String' consumed but not preserved in error type of rvs_validate_flipped_alias
+  --> $DIR/tests/ui/200_result_alias.rs:25:38
+   |
+LL | fn rvs_validate_flipped_alias(value: String) -> FlippedResult<ParseError, ()> {
+   |                                      ^^^^^^
+
+error: rvs_validate_flipped_alias: validate returning Result<(),E> — use TryFrom returning Result<T,E>
+  --> $DIR/tests/ui/200_result_alias.rs:25:1
+   |
+LL | fn rvs_validate_flipped_alias(value: String) -> FlippedResult<ParseError, ()> {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: owned param 'String' consumed but not preserved in error type of rvs_validate_async_A
+  --> $DIR/tests/ui/200_result_alias.rs:30:38
+   |
+LL | async fn rvs_validate_async_A(value: String) -> Result<(), ParseError> {
+   |                                      ^^^^^^
+
+error: rvs_validate_async_A: validate returning Result<(),E> — use TryFrom returning Result<T,E>
+  --> $DIR/tests/ui/200_result_alias.rs:30:1
+   |
+LL | async fn rvs_validate_async_A(value: String) -> Result<(), ParseError> {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: aborting due to 8 previous errors

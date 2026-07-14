@@ -1,5 +1,6 @@
 use rustc_hir::{Impl, Item};
 use rustc_lint::{LateContext, LintContext};
+use rustc_span::sym;
 
 use super::super::msg::Msg;
 use super::super::{RVS_DEREF_POLYMORPHISM, RVS_INTO_IMPL};
@@ -12,8 +13,7 @@ pub(crate) fn rvs_check_impl_S<'tcx>(
 ) {
     if let Some(trait_ref) = &imp.of_trait {
         if let Some(did) = trait_ref.trait_ref.trait_def_id() {
-            let trait_name = cx.tcx.item_name(did);
-            if trait_name.as_str() == "Into" {
+            if cx.tcx.is_diagnostic_item(sym::Into, did) {
                 cx.emit_span_lint(
                     RVS_INTO_IMPL,
                     item.span,
@@ -23,7 +23,7 @@ pub(crate) fn rvs_check_impl_S<'tcx>(
                     ),
                 );
             }
-            if trait_name.as_str() == "Deref" {
+            if cx.tcx.lang_items().deref_trait() == Some(did) {
                 cx.emit_span_lint(
                     RVS_DEREF_POLYMORPHISM,
                     item.span,

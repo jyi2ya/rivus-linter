@@ -1,12 +1,3 @@
-error: type 'MyBox' missing #[derive(Debug)]
-  --> $DIR/tests/ui/83_deref_smart_pointer.rs:3:1
-   |
-LL | struct MyBox<T>(T);
-   | ^^^^^^^^^^^^^^^^^^^
-   |
-   = note: `-D rivus::rvs-missing-debug-derive` implied by `-D warnings`
-   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_debug_derive)]`
-
 error: impl Deref — use composition instead of Deref polymorphism
   --> $DIR/tests/ui/83_deref_smart_pointer.rs:4:1
    |
@@ -21,4 +12,4 @@ LL | | }
    = note: `-D rivus::rvs-deref-polymorphism` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_deref_polymorphism)]`
 
-error: aborting due to 2 previous errors
+error: aborting due to 1 previous error

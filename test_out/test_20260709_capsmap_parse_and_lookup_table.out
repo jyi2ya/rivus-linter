@@ -1,0 +1,7 @@
+new_empty: None
+single: Some("BI")
+empty_value: Some("")
+comments: Some("BI")
+hash_in_key: Some("S")
+empty_content: None
+all_caps: Some("ABIMPSTU")

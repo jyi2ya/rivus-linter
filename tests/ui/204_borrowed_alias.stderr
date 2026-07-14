@@ -1,0 +1,22 @@
+error: &String — use &str instead
+  --> $DIR/tests/ui/204_borrowed_alias.rs:10:25
+   |
+LL | fn rvs_read_text(value: &Text) -> usize {
+   |                         ^^^^^
+   |
+   = note: `-D rivus::rvs-borrowed-param` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_borrowed_param)]`
+
+error: &Vec — use &[T] instead
+  --> $DIR/tests/ui/204_borrowed_alias.rs:14:26
+   |
+LL | fn rvs_read_bytes(value: &Bytes) -> usize {
+   |                          ^^^^^^
+
+error: &Box — use &T instead
+  --> $DIR/tests/ui/204_borrowed_alias.rs:18:25
+   |
+LL | fn rvs_read_heap(value: &Heap) -> u8 {
+   |                         ^^^^^
+
+error: aborting due to 3 previous errors

@@ -1,0 +1,12 @@
+A: description=Async display=A(Async)
+B: description=Blocking display=B(Blocking)
+I: description=IO display=I(IO)
+M: description=Mutable display=M(Mutable)
+P: description=Port display=P(Port)
+S: description=SideEffect display=S(SideEffect)
+T: description=ThreadLocal display=T(ThreadLocal)
+U: description=Unsafe display=U(Unsafe)
+X: invalid
+a: invalid
+1: invalid
+_: invalid

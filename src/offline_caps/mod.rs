@@ -1,8 +1,8 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::fmt;
 
-use crate::artifacts::{FnGraph, FnNode};
-use crate::capability::{Capability, CapabilitySet, ParsedFunctionName};
+use crate::artifacts::{FnGraph, FnNode, FunctionIdentity};
+use crate::capability::{Capability, CapabilityPolicy, CapabilitySet, ParsedFunctionName};
 use crate::capsmap::CapsMap;
 use crate::function_classification::{FunctionClassification, LocalScope};
 use crate::inference::{
@@ -75,13 +75,13 @@ impl OfflineCapsReport {
     pub(crate) fn rvs_is_empty(&self) -> bool {
         self.diagnostics.is_empty()
     }
-}
 
-impl fmt::Display for OfflineCapsReport {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    pub(crate) fn rvs_render_with_title(&self, title: &str) -> String {
+        let mut output = String::new();
+        use std::fmt::Write as _;
         if self.diagnostics.is_empty() {
-            writeln!(f, "Offline Caps Check: ok")?;
-            return Ok(());
+            writeln!(output, "{title}: ok").expect("never: writing to String cannot fail");
+            return output;
         }
 
         let error_count = self
@@ -91,24 +91,33 @@ impl fmt::Display for OfflineCapsReport {
             .count();
         let warning_count = self.diagnostics.len().saturating_sub(error_count);
         writeln!(
-            f,
-            "Offline Caps Check: {error_count} error(s), {warning_count} warning(s)"
-        )?;
-        writeln!(f, "{:-<60}", "")?;
+            output,
+            "{title}: {error_count} error(s), {warning_count} warning(s)"
+        )
+        .expect("never: writing to String cannot fail");
+        writeln!(output, "{:-<60}", "").expect("never: writing to String cannot fail");
         for diagnostic in &self.diagnostics {
             writeln!(
-                f,
+                output,
                 "{}[{}]: {}",
                 diagnostic.severity.rvs_as_str(),
                 diagnostic.kind.rvs_as_str(),
                 diagnostic.function
-            )?;
-            writeln!(f, "  {}", diagnostic.message)?;
+            )
+            .expect("never: writing to String cannot fail");
+            writeln!(output, "  {}", diagnostic.message)
+                .expect("never: writing to String cannot fail");
             for detail in &diagnostic.details {
-                writeln!(f, "  {detail}")?;
+                writeln!(output, "  {detail}").expect("never: writing to String cannot fail");
             }
         }
-        Ok(())
+        output
+    }
+}
+
+impl fmt::Display for OfflineCapsReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.rvs_render_with_title("Offline Caps Check"))
     }
 }
 
@@ -211,6 +220,157 @@ fn rvs_collect_contract_diagnostics_M(
             details,
         });
     }
+}
+
+pub(crate) fn rvs_uncovered_test_functions(
+    graph: &FnGraph,
+    local_crate_names: &BTreeSet<CrateName>,
+) -> BTreeSet<FunctionIdentity> {
+    let local_scope = LocalScope::rvs_new(local_crate_names);
+    let unresolved_test_calls: BTreeSet<&str> = graph
+        .rvs_iter()
+        .filter(|(_, node)| !node.test_crate_ids.is_empty())
+        .flat_map(|(_, node)| node.unresolved_test_calls.iter().map(String::as_str))
+        .collect();
+    let mut covered = BTreeSet::new();
+    let mut visited = BTreeSet::new();
+    let mut pending = VecDeque::new();
+    for (_, node) in graph.rvs_iter() {
+        for crate_id in &node.test_crate_ids {
+            if let Some(calls) = node.coverage_calls.get(crate_id) {
+                pending.extend(calls.iter().cloned());
+            }
+        }
+    }
+    while let Some(identity) = pending.pop_front() {
+        if !visited.insert(identity.clone()) {
+            continue;
+        }
+        covered.insert(rvs_normalize_coverage_identity(graph, &identity));
+        let Some(node) = graph.rvs_get(identity.def_path.rvs_as_str()) else {
+            continue;
+        };
+        let Some(calls) = node.coverage_calls.get(&identity.crate_id) else {
+            continue;
+        };
+        pending.extend(calls.iter().cloned());
+    }
+
+    let mut candidates = Vec::new();
+    for (def_path, node) in graph.rvs_iter() {
+        if !local_scope.rvs_contains(def_path)
+            || !node.has_body
+            || node.coverage_candidate_crate_ids.is_empty()
+        {
+            continue;
+        }
+        let parsed = ParsedFunctionName::rvs_parse(def_path.rvs_as_str());
+        if !parsed.rvs_has_rvs_prefix() {
+            continue;
+        }
+        let caps = if node.facts.is_port_method {
+            CapabilityPolicy::rvs_port_method_caps()
+        } else {
+            parsed.rvs_known_caps().clone()
+        };
+        if CapabilityPolicy::rvs_is_ok(&caps) {
+            candidates.extend(node.coverage_candidate_crate_ids.iter().map(|crate_id| {
+                FunctionIdentity {
+                    crate_id: *crate_id,
+                    def_path: def_path.clone(),
+                }
+            }));
+        }
+    }
+    let mut candidate_name_counts = HashMap::new();
+    for identity in &candidates {
+        *candidate_name_counts
+            .entry(identity.def_path.rvs_fn_name_str().to_string())
+            .or_insert(0usize) += 1;
+    }
+    let mut uncovered = BTreeSet::new();
+
+    for identity in candidates {
+        let name = identity.def_path.rvs_fn_name_str();
+        let uniquely_covered_by_name = unresolved_test_calls.contains(name)
+            && candidate_name_counts.get(name).copied() == Some(1);
+        if !covered.contains(&identity) && !uniquely_covered_by_name {
+            if let Some(node) = graph.rvs_get(identity.def_path.rvs_as_str()) {
+                uncovered.extend(rvs_test_compilation_aliases(node, &identity));
+            }
+            uncovered.insert(identity);
+        }
+    }
+    uncovered
+}
+
+fn rvs_test_compilation_aliases(
+    node: &FnNode,
+    production: &FunctionIdentity,
+) -> Vec<FunctionIdentity> {
+    let production_sources = node.sources_by_crate.get(&production.crate_id);
+    node.sources_by_crate
+        .iter()
+        .filter(|(crate_id, sources)| {
+            !node.production_crate_ids.contains(crate_id)
+                && production_sources.is_some_and(|production_sources| {
+                    (!production_sources.is_empty() && !production_sources.is_disjoint(sources))
+                        || (production_sources.is_empty()
+                            && sources.is_empty()
+                            && node.production_crate_ids.len() == 1)
+                })
+        })
+        .map(|(crate_id, _)| FunctionIdentity {
+            crate_id: *crate_id,
+            def_path: production.def_path.clone(),
+        })
+        .collect()
+}
+
+fn rvs_normalize_coverage_identity(
+    graph: &FnGraph,
+    identity: &FunctionIdentity,
+) -> FunctionIdentity {
+    let Some(node) = graph.rvs_get(identity.def_path.rvs_as_str()) else {
+        return identity.clone();
+    };
+    if node.production_crate_ids.contains(&identity.crate_id) {
+        return identity.clone();
+    }
+    let source_matches: Vec<u64> = node
+        .sources_by_crate
+        .get(&identity.crate_id)
+        .into_iter()
+        .flat_map(|sources| {
+            node.production_crate_ids
+                .iter()
+                .filter(|crate_id| {
+                    node.sources_by_crate
+                        .get(crate_id)
+                        .is_some_and(|production_sources| !sources.is_disjoint(production_sources))
+                })
+                .copied()
+        })
+        .collect();
+    let production_crate_id = match source_matches.as_slice() {
+        [crate_id] => Some(*crate_id),
+        [] if node
+            .sources_by_crate
+            .get(&identity.crate_id)
+            .is_none_or(BTreeSet::is_empty)
+            && node.production_crate_ids.len() == 1 =>
+        {
+            node.production_crate_ids.first().copied()
+        }
+        _ => None,
+    };
+    production_crate_id.map_or_else(
+        || identity.clone(),
+        |crate_id| FunctionIdentity {
+            crate_id,
+            def_path: identity.def_path.clone(),
+        },
+    )
 }
 
 fn rvs_collect_suffix_diagnostics_M(
@@ -405,6 +565,19 @@ mod tests {
         node.calls = calls.iter().map(|call| DefPath::from(*call)).collect();
         node.sources
             .insert(FnSource::rvs_new(PathBuf::from("src/lib.rs"), 1, 2));
+        node.coverage_calls.insert(
+            1,
+            calls
+                .iter()
+                .map(|call| FunctionIdentity {
+                    crate_id: 1,
+                    def_path: DefPath::from(*call),
+                })
+                .collect(),
+        );
+        node.production_crate_ids.insert(1);
+        node.coverage_candidate_crate_ids.insert(1);
+        node.sources_by_crate.insert(1, node.sources.clone());
         node
     }
 
@@ -426,6 +599,17 @@ mod tests {
         );
 
         assert!(report.rvs_has_errors());
+        assert!(!report.rvs_is_empty());
+        assert!(
+            report
+                .rvs_render_with_title("Custom Caps Check")
+                .starts_with("Custom Caps Check:")
+        );
+        assert_eq!(
+            OfflineCapsKind::CallViolation.rvs_as_str(),
+            "call_violation"
+        );
+        assert_eq!(OfflineCapsSeverity::Warning.rvs_as_str(), "warning");
         assert!(output.contains("error[call_violation]"));
         assert!(output.contains("warning[unknown_callee]"));
     }
@@ -525,5 +709,123 @@ mod tests {
                 "missing diagnostic family: {kind:?}"
             );
         }
+    }
+
+    #[test]
+    fn test_20260714_test_coverage_uses_merged_targets() {
+        let mut graph = FnGraph::rvs_new();
+        graph.rvs_insert_M(DefPath::from("demo::rvs_covered"), rvs_node(&[]));
+        graph.rvs_insert_M(
+            DefPath::from("demo::rvs_transitive"),
+            rvs_node(&["demo::rvs_transitive_helper"]),
+        );
+        graph.rvs_insert_M(DefPath::from("demo::rvs_transitive_helper"), rvs_node(&[]));
+        graph.rvs_insert_M(DefPath::from("demo::rvs_name_fallback"), rvs_node(&[]));
+        graph.rvs_insert_M(DefPath::from("demo::one::rvs_ambiguous"), rvs_node(&[]));
+        graph.rvs_insert_M(DefPath::from("demo::two::rvs_ambiguous"), rvs_node(&[]));
+        let mut cfg_wrapper = rvs_node(&["demo::rvs_cfg_production_only"]);
+        cfg_wrapper.coverage_calls.insert(
+            2,
+            BTreeSet::from([FunctionIdentity {
+                crate_id: 2,
+                def_path: DefPath::from("demo::rvs_cfg_test_only"),
+            }]),
+        );
+        cfg_wrapper
+            .sources_by_crate
+            .insert(2, cfg_wrapper.sources.clone());
+        graph.rvs_insert_M(DefPath::from("demo::rvs_cfg_wrapper"), cfg_wrapper);
+        graph.rvs_insert_M(
+            DefPath::from("demo::rvs_cfg_production_only"),
+            rvs_node(&[]),
+        );
+        let mut cfg_test_only = rvs_node(&[]);
+        cfg_test_only
+            .sources_by_crate
+            .insert(2, cfg_test_only.sources.clone());
+        graph.rvs_insert_M(DefPath::from("demo::rvs_cfg_test_only"), cfg_test_only);
+        let mut generated = rvs_node(&[]);
+        generated.sources.clear();
+        generated.sources_by_crate.insert(1, BTreeSet::new());
+        generated.sources_by_crate.insert(2, BTreeSet::new());
+        graph.rvs_insert_M(DefPath::from("demo::rvs_generated"), generated);
+        graph.rvs_insert_M(DefPath::from("demo::rvs_uncovered"), rvs_node(&[]));
+        let mut partially_allowed = rvs_node(&[]);
+        partially_allowed.allows_dead_code = true;
+        graph.rvs_insert_M(
+            DefPath::from("demo::rvs_partially_allowed"),
+            partially_allowed,
+        );
+        let mut test_only_helper = rvs_node(&[]);
+        test_only_helper.is_test_compilation = true;
+        test_only_helper.production_crate_ids.clear();
+        test_only_helper.coverage_candidate_crate_ids.clear();
+        graph.rvs_insert_M(
+            DefPath::from("demo::rvs_test_only_helper"),
+            test_only_helper,
+        );
+
+        let mut test_node = rvs_node(&["demo::rvs_covered", "demo::rvs_transitive"]);
+        test_node.is_test = true;
+        test_node.is_test_compilation = true;
+        test_node.test_crate_ids.insert(1);
+        test_node.production_crate_ids.clear();
+        test_node.coverage_candidate_crate_ids.clear();
+        test_node
+            .unresolved_test_calls
+            .insert("rvs_name_fallback".to_string());
+        test_node
+            .unresolved_test_calls
+            .insert("rvs_ambiguous".to_string());
+        test_node.coverage_calls.get_mut(&1).unwrap().extend([
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: DefPath::from("demo::rvs_generated"),
+            },
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: DefPath::from("demo::rvs_cfg_wrapper"),
+            },
+        ]);
+        graph.rvs_insert_M(
+            DefPath::from("integration_test::test_20260714_calls_library"),
+            test_node,
+        );
+        let local = BTreeSet::from([CrateName::from("demo"), CrateName::from("integration_test")]);
+
+        let uncovered = rvs_uncovered_test_functions(&graph, &local);
+        let output = uncovered
+            .iter()
+            .map(|identity| identity.def_path.rvs_as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        rvs_snapshot_BIS("test_20260714_test_coverage_uses_merged_targets", &output);
+
+        assert_eq!(
+            uncovered,
+            BTreeSet::from([
+                FunctionIdentity {
+                    crate_id: 1,
+                    def_path: DefPath::from("demo::one::rvs_ambiguous"),
+                },
+                FunctionIdentity {
+                    crate_id: 1,
+                    def_path: DefPath::from("demo::rvs_cfg_production_only"),
+                },
+                FunctionIdentity {
+                    crate_id: 1,
+                    def_path: DefPath::from("demo::rvs_uncovered"),
+                },
+                FunctionIdentity {
+                    crate_id: 1,
+                    def_path: DefPath::from("demo::rvs_partially_allowed"),
+                },
+                FunctionIdentity {
+                    crate_id: 1,
+                    def_path: DefPath::from("demo::two::rvs_ambiguous"),
+                },
+            ])
+        );
     }
 }

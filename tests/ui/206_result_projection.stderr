@@ -1,0 +1,19 @@
+error: owned param 'String' consumed but not preserved in error type of rvs_validate_projection
+  --> $DIR/tests/ui/206_result_projection.rs:21:35
+   |
+LL | fn rvs_validate_projection(value: String) -> <Marker as Outcome>::Return {
+   |                                   ^^^^^^
+   |
+   = note: `-D rivus::rvs-consumed-arg-on-error` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_consumed_arg_on_error)]`
+
+error: rvs_validate_projection: validate returning Result<(),E> — use TryFrom returning Result<T,E>
+  --> $DIR/tests/ui/206_result_projection.rs:21:1
+   |
+LL | fn rvs_validate_projection(value: String) -> <Marker as Outcome>::Return {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-validate-returns-unit` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_validate_returns_unit)]`
+
+error: aborting due to 2 previous errors

@@ -44,17 +44,17 @@
 
 ## `cargo rivus check [OPTIONS] [ARGS]`
 
-基于 rustc-driver 的 HIR 分析。第一阶段运行非能力 HIR lint，第二阶段收集全项目函数图，并由统一的离线能力引擎检查命名契约、后缀、静态状态和调用链合规性。
+基于 rustc-driver 的 HIR 分析。第一阶段只为工作区 crate 收集全项目函数图，第二阶段运行非能力 HIR lint 并按合并后的覆盖结果发出测试质量诊断，最后由统一的离线能力引擎检查命名契约、后缀、静态状态和调用链合规性。第三方依赖不重新启用其编译 warning，而是通过本地调用边和项目 `caps/` 参与分析。
 
 ```bash
 cargo rivus check                    # 使用项目 caps/（若存在）
 cargo rivus check -- --features foo  # 传递额外 cargo check 参数
 ```
 
-注意：capsmap 只从项目 `caps/` 目录加载。CLI 不再支持 `-m/--capsmap`，也不再读取或生成 `target/rivus-std-capsmap.txt`、`target/rivus-inferred-capsmap.txt`、`target/rivus-deps-capsmap.txt`、`target/rivus-effective-capsmap/`。目录不存在时统一能力引擎使用空 capsmap。caps 目录使用统一的层级加载器（`CapsMap::rvs_load_dir_BIS`），按 `std → deps → seed → suppress → ext → 其余字母序` 的固定顺序合并。
+注意：capsmap 只从项目 `caps/` 目录加载。CLI 不再支持 `-m/--capsmap`，也不再读取或生成 `target/rivus-std-capsmap.txt`、`target/rivus-inferred-capsmap.txt`、`target/rivus-deps-capsmap.txt`、`target/rivus-effective-capsmap/`。目录不存在时统一能力引擎使用空 capsmap。caps 目录使用统一的层级加载器（`CapsMap::rvs_load_dir_BIS`），按 `std → deps → seed → suppress → ext → 其余字母序` 的固定顺序合并；原子写入遗留的 `.层名.PID.序号.tmp` 临时文件会被忽略。
 
 
-注意：`check` 默认编译 `--all-targets`，因此测试、示例和 benchmark 中的函数也会被分析。`infer-capsmap` 和 `infer-std` 只编译 production targets。
+注意：`check` 默认编译 `--all-targets`，因此测试、示例和 benchmark 中的函数也会被分析。未测试 good/ok 函数在所有 target 的 callgraph 合并后统一判断；从 unit test 或 integration test 沿测试编译实际产生的调用边可达即视为覆盖，不要求测试直接调用每个 helper，`cfg(test)` 改写函数体时也不会误用 production 调用边。覆盖身份同时包含稳定 crate ID 和 `DefPath`，因此同名 library/binary target 不会互相借用覆盖；无法解析的同名调用只有在候选唯一时才作为回退，局部 closure 或函数指针 binding 不参与该回退。不同本地 target 若产生相同 `DefPath`，能力分析对兼容角色的事实和调用边取保守并集，报告仍按不同源码定义分别统计函数数和有效行数；Port/普通函数、test/production 或 trait impl/普通函数等不兼容角色不会被静默合并。测试覆盖候选和 report 排除项按每个 target 定义记录，不会因另一个同路径定义带有 `allow(dead_code)` 而整体消失。结果在最终 rustc lint 阶段发出，因此函数、参数、statement、expression、field、模块和 crate 上的 `allow`/`expect`/`deny` 等级仍然生效；中间 artifact 收集不会因任一 HIR 作用域中的 Rivus expectation 或 `forbid(unfulfilled_lint_expectations)` 提前失败。任一 target 编译失败时不会根据部分图输出覆盖结论。直接 rustc/UI 模式使用当前 crate 内存图做传递可达性判断，并采用相同的稳定 crate ID 和唯一名称回退规则。`infer-capsmap` 和 `infer-std` 只编译 production targets。
 
 退出码：`check` 成功时返回 `0`；失败时透传底层 `cargo check` 的退出码。其他子命令成功时返回 `0`，工具自身运行失败时返回 `2`。warning 不影响退出码。
 
@@ -79,7 +79,7 @@ cargo rivus report /path/to  # 指定目录
 
 **严禁注水**：为了提高好函数率而注入无实际业务价值的纯函数是被禁止的。好函数率的提升必须来自有意义的重构。
 
-**以下函数被排除在统计之外**：`#[test]` 函数，以及 `#[allow(dead_code)]` 或 `#[allow(unused)]` 标记的函数。
+**以下函数被排除在统计之外**：`#[test]` 函数、只在 test compilation 中存在的 helper，以及 `#[allow(dead_code)]` 或 `#[allow(unused)]` 标记的函数。
 
 契约不一致摘要使用 callgraph 和本地 crate 前缀过滤，不参与能力分布的行数统计。
 
@@ -113,7 +113,7 @@ cargo rivus infer-capsmap -o caps/deps       # 从项目 caps/ 推断，并把 d
 选项：
 - `-o, --output <PATH>` — **必填**。direct external deps capsmap 输出路径；相对路径按目标项目目录解析。通常写到 `caps/deps`。命令只写这个显式输出，不再写入 `target/rivus-inferred-capsmap.txt` 或 `target/rivus-deps-capsmap.txt`。
 
-注意：种子始终从项目 `caps/` 加载（排除 `deps` 层，避免旧 deps 干扰重新推断）。
+注意：种子始终从项目 `caps/` 加载（排除 `deps` 层，避免旧 deps 干扰重新推断）。首次运行时允许 `caps/` 不存在，按空种子推断并创建 `-o` 指定输出的父目录。
 
 
 ---
@@ -277,15 +277,15 @@ std::process::exit=S           # 副作用：终止进程
 | `WildcardImportWarning` | `use xxx::*;` 通配导入（`super::*` 和 `*::prelude::*` 除外） |
 | `MissingSafetyDocWarning` | `unsafe fn` 缺少 `/// # Safety` 文档段 |
 | `BorrowedParamWarning` | 参数或结构体字段使用 `&String`/`&Vec<T>`/`&Box<T>`——应改用 `&str`/`&[T]`/`&T` |
-| `MissingDebugWarning` | struct/enum 缺少 `#[derive(Debug)]` |
+| `MissingDebugWarning` | public struct/enum 缺少 `#[derive(Debug)]` |
 | `IntoImplWarning` | 直接实现 `Into`——应实现 `From`，`Into` 会自动提供 |
-| `ConsumedArgOnErrorWarning` | 函数返回 `Result<(), E>` 时消费了 owned 参数但错误类型中未保留该参数。注意：仅检查错误类型名称中是否包含参数类型标识符（如 `RunError<Cli>` 包含 `Cli`），无法深入检查错误枚举的变体字段——如果参数确实被保留在变体中（如 `AppError::Failed { cli: Box<Cli> }`），属于误报 |
+| `ConsumedArgOnErrorWarning` | 函数返回标准库 `Result<(), E>` 时消费了非 `Copy` owned 参数但错误类型中未保留该参数。注意：仅检查错误类型名称中是否包含参数类型标识符（如 `RunError<Cli>` 包含 `Cli`），无法深入检查错误枚举的变体字段——如果参数确实被保留在变体中（如 `AppError::Failed { cli: Box<Cli> }`），属于误报 |
 | `DerefPolymorphismWarning` | 实现了 `Deref`——可能用 Deref 模拟继承，应改用组合 |
 | `ReflectionUsageWarning` | 使用了 `std::any::Any`/`type_name`/`type_id`——应改用 trait 分发 |
 | `TodoCommentWarning` | 代码中包含 `// TODO` 或 `// FIXME` 注释（含 `/* */` 块注释，仅检测以 `//` 或 `/*` 开头的行） |
 | `UntestedGoodFnWarning` | good 函数（能力 ≤ ABM）未被任何测试调用 |
 | `UntestedOkFnWarning` | ok 函数（能力 ≤ ABMP）未被任何测试调用 |
-| `ErrorSwallowWarning` | 调用 `.ok()` 或 `.unwrap_or_default()` 静默吞掉错误 |
+| `ErrorSwallowWarning` | 对标准库 `Result` 调用 `.ok()` 或 `.unwrap_or_default()` 静默吞掉错误；`Option::unwrap_or_default()` 和同名自定义方法不适用 |
 | `CatchUnwindWarning` | 使用 `catch_unwind`——应修 panic 源头而非捕获 |
 | `CatchAllErrorVariantWarning` | 错误枚举含 `Unknown`/`Other`/`UnknownError`/`OtherError` 兜底变体 |
 | `MissingTestOutputWarning` | `#[test]` 函数缺少对应的 `test_out/{name}.out` 快照文件（仅当 `test_out/` 目录存在时检查） |
@@ -330,4 +330,4 @@ std::process::exit=S           # 副作用：终止进程
 
 ## spawn 函数的识别
 
-linter 内置了一个 spawn 函数路径列表（`tokio::spawn`、`std::thread::spawn` 等），在 HIR 分析时自动识别这些调用并发出 `SpawnWarning`。spawn 函数的能力标注由 `infer-capsmap` 通过 callgraph 自动推断，不需要手动在 `caps/seed` 中注入条目。
+linter 内置了一个 spawn 函数路径列表（`tokio::spawn`、`std::thread::spawn`、`kovi::task::spawn` 等），在 HIR 分析时自动识别这些调用并发出 `SpawnWarning`。spawn 函数的能力标注由 `infer-capsmap` 通过 callgraph 自动推断，不需要手动在 `caps/seed` 中注入条目。

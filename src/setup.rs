@@ -187,14 +187,15 @@ fn rvs_write_file_atomic_BIS(path: &Path, content: &str) -> Result<(), String> {
         .file_name()
         .ok_or_else(|| format!("cannot determine file name for '{}'", path.display()))?
         .to_string_lossy();
-    crate::fs_guard::rvs_write_atomic_BIS(path, content.as_bytes(), |attempt| {
+    let temp_path_for_attempt = |attempt| {
         parent.join(format!(
             ".{file_name}.{}.{}.tmp",
             std::process::id(),
             attempt
         ))
-    })
-    .map_err(|failure| rvs_render_atomic_write_failure(failure, path, "temp file", true))
+    };
+    crate::fs_guard::rvs_write_atomic_BIS(path, content.as_bytes(), &temp_path_for_attempt)
+        .map_err(|failure| rvs_render_atomic_write_failure(failure, path, "temp file", true))
 }
 
 #[cfg(test)]

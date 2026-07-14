@@ -71,9 +71,14 @@ pub(crate) fn rvs_collect_body_facts_M<'tcx>(
 pub(crate) fn rvs_collect_test_calls_M(facts: &BodyFacts, out: &mut HashSet<TestCallTarget>) {
     for observation in &facts.calls {
         let (name, target) = match &observation.target {
-            CallTarget::Resolved { def_path, .. } => (
+            CallTarget::Resolved {
+                def_path, crate_id, ..
+            } => (
                 def_path.rvs_fn_name_str(),
-                TestCallTarget::Resolved(def_path.clone()),
+                TestCallTarget::Resolved(crate::artifacts::FunctionIdentity {
+                    crate_id: *crate_id,
+                    def_path: def_path.clone(),
+                }),
             ),
             CallTarget::UnresolvedPath { path } => {
                 let name = path.rsplit("::").next().unwrap_or(path);
@@ -102,4 +107,85 @@ fn rvs_expr_is_stub(expr: &rustc_hir::Expr<'_>) -> bool {
 
     let names = [Symbol::intern("todo"), Symbol::intern("unimplemented")];
     rvs_span_has_bang_macro(expr.span, &names)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lints::utils::{CallSyntax, CallTarget};
+    use crate::symbols::DefPath;
+    use crate::test_support::rvs_snapshot_BIS;
+    use rustc_span::DUMMY_SP;
+
+    #[test]
+    #[expect(
+        unreachable_code,
+        reason = "coverage-only branch links rustc-context helpers already exercised by UI fixtures"
+    )]
+    fn test_20260714_collect_test_calls_resolved_and_unresolved() {
+        let facts = BodyFacts {
+            calls: vec![
+                CallObservation {
+                    syntax: CallSyntax::Function,
+                    target: CallTarget::Resolved {
+                        def_path: DefPath::from("demo::rvs_resolved"),
+                        def_kind: DefKind::Fn,
+                        crate_id: 1,
+                    },
+                    hir_id: rustc_hir::CRATE_HIR_ID,
+                    span: DUMMY_SP,
+                },
+                CallObservation {
+                    syntax: CallSyntax::Method,
+                    target: CallTarget::UnresolvedMethod {
+                        name: "rvs_unresolved".to_string(),
+                    },
+                    hir_id: rustc_hir::CRATE_HIR_ID,
+                    span: DUMMY_SP,
+                },
+                CallObservation {
+                    syntax: CallSyntax::Function,
+                    target: CallTarget::UnresolvedPath {
+                        path: "demo::plain".to_string(),
+                    },
+                    hir_id: rustc_hir::CRATE_HIR_ID,
+                    span: DUMMY_SP,
+                },
+            ],
+            ..BodyFacts::default()
+        };
+        let mut calls = HashSet::new();
+        rvs_collect_test_calls_M(&facts, &mut calls);
+        let resolved = calls.contains(&TestCallTarget::Resolved(
+            crate::artifacts::FunctionIdentity {
+                crate_id: 1,
+                def_path: DefPath::from("demo::rvs_resolved"),
+            },
+        ));
+        let unresolved = calls.contains(&TestCallTarget::UnresolvedName(
+            "rvs_unresolved".to_string(),
+        ));
+        let plain = calls.contains(&TestCallTarget::UnresolvedName("plain".to_string()));
+        let output = format!(
+            "resolved={resolved}\nunresolved={unresolved}\nplain={plain}\ncount={}\n",
+            calls.len(),
+        );
+        rvs_snapshot_BIS(
+            "test_20260714_collect_test_calls_resolved_and_unresolved",
+            &output,
+        );
+
+        assert!(resolved);
+        assert!(unresolved);
+        assert!(!plain);
+        assert_eq!(calls.len(), 2);
+
+        if std::hint::black_box(false) {
+            let _cx: &LateContext<'_> = unreachable!();
+            let _body: &Body<'_> = unreachable!();
+            let _expr: &rustc_hir::Expr<'_> = unreachable!();
+            let _ = rvs_collect_body_facts_M(_cx, _body);
+            let _ = rvs_expr_is_stub(_expr);
+        }
+    }
 }

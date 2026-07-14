@@ -653,21 +653,13 @@ pub(crate) fn rvs_collect_signature_contract_diff_from_facts_M(
     rvs_collect_single_local_contract_diff_M(
         def_path,
         FnNode {
-            calls: BTreeSet::new(),
-            entry_calls: BTreeSet::new(),
             facts,
-            has_body: true,
-            is_trait_impl: false,
-            is_test: false,
-            is_entrypoint: false,
-            is_test_compilation: false,
             sources: BTreeSet::from([crate::artifacts::FnSource::rvs_new(
                 "src/lib.rs".into(),
                 1,
                 2,
             )]),
-            report_line_count: None,
-            allows_dead_code: false,
+            ..FnNode::default()
         },
         local_crate_names,
     )
@@ -793,21 +785,12 @@ mod tests {
     /// Helper: build a default `FnNode` with all flags false and no calls.
     fn rvs_make_behavior() -> FnNode {
         FnNode {
-            calls: BTreeSet::new(),
-            entry_calls: BTreeSet::new(),
-            facts: CapabilityFacts::default(),
-            has_body: true,
-            is_trait_impl: false,
-            is_test: false,
-            is_entrypoint: false,
-            is_test_compilation: false,
             sources: BTreeSet::from([crate::artifacts::FnSource::rvs_new(
                 "src/lib.rs".into(),
                 1,
                 2,
             )]),
-            report_line_count: None,
-            allows_dead_code: false,
+            ..FnNode::default()
         }
     }
 
@@ -1748,24 +1731,16 @@ mod tests {
         graph.rvs_insert_M(
             DefPath::from("demo::rvs_fetch_ABI"),
             FnNode {
-                calls: BTreeSet::new(),
-                entry_calls: BTreeSet::new(),
                 facts: CapabilityFacts {
                     is_port_method: true,
                     ..CapabilityFacts::default()
                 },
-                has_body: true,
-                is_trait_impl: false,
-                is_test: false,
-                is_entrypoint: false,
-                is_test_compilation: false,
                 sources: BTreeSet::from([crate::artifacts::FnSource::rvs_new(
                     "src/lib.rs".into(),
                     1,
                     2,
                 )]),
-                report_line_count: None,
-                allows_dead_code: false,
+                ..FnNode::default()
             },
         );
 
@@ -1793,21 +1768,13 @@ mod tests {
         graph.rvs_insert_M(
             DefPath::from("demo::Fetcher::rvs_fetch_BI"),
             FnNode {
-                calls: BTreeSet::new(),
-                entry_calls: BTreeSet::new(),
-                facts: CapabilityFacts::default(),
                 has_body: false,
-                is_trait_impl: false,
-                is_test: false,
-                is_entrypoint: false,
-                is_test_compilation: false,
                 sources: BTreeSet::from([crate::artifacts::FnSource::rvs_new(
                     "src/lib.rs".into(),
                     1,
                     2,
                 )]),
-                report_line_count: None,
-                allows_dead_code: false,
+                ..FnNode::default()
             },
         );
         graph.rvs_insert_M(
@@ -1955,25 +1922,17 @@ mod tests {
     #[test]
     fn test_20260703_collect_single_local_contract_diff_port_ignores_async() {
         let node = FnNode {
-            calls: BTreeSet::new(),
-            entry_calls: BTreeSet::new(),
             facts: CapabilityFacts {
                 has_async: true,
                 is_port_method: true,
                 ..CapabilityFacts::default()
             },
-            has_body: true,
-            is_trait_impl: false,
-            is_test: false,
-            is_entrypoint: false,
-            is_test_compilation: false,
             sources: BTreeSet::from([crate::artifacts::FnSource::rvs_new(
                 "src/lib.rs".into(),
                 1,
                 2,
             )]),
-            report_line_count: None,
-            allows_dead_code: false,
+            ..FnNode::default()
         };
         let diff = rvs_collect_single_local_contract_diff_M(
             DefPath::from("demo::rvs_fetch_P"),
@@ -2930,13 +2889,24 @@ mod tests {
 
         rvs_scope_port_methods_M(&mut graph, &BTreeSet::from([CrateName::from("app")]));
         let inferred = rvs_infer_caps(&graph, &seed);
+        let external_caps = inferred.get(&external_path).unwrap();
+        let caller_caps = inferred.get(&DefPath::from("app::rvs_run_BI")).unwrap();
+        let output = format!(
+            "external={}\ncaller={}\n",
+            rvs_caps_to_string(external_caps),
+            rvs_caps_to_string(caller_caps),
+        );
+        rvs_snapshot_BIS(
+            "test_20260710_external_port_fact_uses_capsmap_after_scoping",
+            &output,
+        );
 
         assert_eq!(
-            inferred.get(&external_path),
+            Some(external_caps),
             Some(&CapabilitySet::rvs_from_str("BI").unwrap())
         );
         assert_eq!(
-            inferred.get(&DefPath::from("app::rvs_run_BI")),
+            Some(caller_caps),
             Some(&CapabilitySet::rvs_from_str("BI").unwrap())
         );
     }

@@ -1,0 +1,10 @@
+error: owned param 'W' consumed but not preserved in error type of rvs_write
+  --> $DIR/tests/ui/199_consumed_generic_param.rs:11:25
+   |
+LL | fn rvs_write<W>(writer: W) -> Result<(), WriteError> {
+   |                         ^
+   |
+   = note: `-D rivus::rvs-consumed-arg-on-error` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_consumed_arg_on_error)]`
+
+error: aborting due to 1 previous error

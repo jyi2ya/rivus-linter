@@ -1,0 +1,22 @@
+error: caller lacks propagated capabilities required by callee; callee: 190_calls_in_index_expr::rvs_index_S; caller declared caps: pure; callee caps: S; missing propagated caps: S
+  --> $DIR/tests/ui/190_calls_in_index_expr.rs:10:1
+   |
+LL | / fn rvs_read(values: &[usize]) -> usize {
+LL | |     values[rvs_index_S()]
+LL | | }
+   | |_^
+   |
+   = note: `#[deny(rivus::rvs_call_violation)]` on by default
+
+error: 'rvs_read' is missing capability marker missing_side_effect; expected name: rvs_read_S; declared caps: pure; inferred caps: S
+  --> $DIR/tests/ui/190_calls_in_index_expr.rs:10:1
+   |
+LL | / fn rvs_read(values: &[usize]) -> usize {
+LL | |     values[rvs_index_S()]
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-missing-side-effect` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_side_effect)]`
+
+error: aborting due to 2 previous errors

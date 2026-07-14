@@ -1,0 +1,11 @@
+trait_segment=rvs_fetch_BI trait_base=fetch trait_suffix=Some("BI")
+invalid_base=write_db_ABI1
+rvs_write_db_ABI: Some("ABI")
+rvs_add: None
+foo_bar: None
+rvs_foo_MBA: Some("MBA")
+rvs_foo_BEIMS: Some("BEIMS")
+rvs_bar_E: Some("E")
+rvs_baz_AEIS: Some("AEIS")
+rvs_dep::module::rvs_fetch_BI@rvs_dep::ApiClient: Some("BI")
+rvs_dep::module::plain_BI: None

@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::capability::CapabilityFacts;
 use crate::symbols::{CrateName, DefPath};
 
-pub(crate) const CALLGRAPH_SCHEMA_VERSION: u32 = 2;
+pub(crate) const CALLGRAPH_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Serialize)]
 struct CallgraphArtifactRef<'a> {
@@ -29,6 +29,12 @@ pub struct FnSource {
     pub(crate) base: Option<PathBuf>,
     pub name_start: u32,
     pub name_end: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct FunctionIdentity {
+    pub(crate) crate_id: u64,
+    pub(crate) def_path: DefPath,
 }
 
 impl FnSource {
@@ -65,6 +71,18 @@ pub struct FnNode {
     pub calls: BTreeSet<DefPath>,
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub entry_calls: BTreeSet<DefPath>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub unresolved_test_calls: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) coverage_calls: BTreeMap<u64, BTreeSet<FunctionIdentity>>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub(crate) test_crate_ids: BTreeSet<u64>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub(crate) production_crate_ids: BTreeSet<u64>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub(crate) coverage_candidate_crate_ids: BTreeSet<u64>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) sources_by_crate: BTreeMap<u64, BTreeSet<FnSource>>,
     #[serde(flatten)]
     pub facts: CapabilityFacts,
     pub has_body: bool,
@@ -80,6 +98,8 @@ pub struct FnNode {
     pub sources: BTreeSet<FnSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub report_line_count: Option<usize>,
+    #[serde(default, skip_serializing_if = "rvs_is_zero")]
+    pub(crate) report_function_count: usize,
     #[serde(default, skip_serializing_if = "rvs_is_false")]
     pub allows_dead_code: bool,
 }
@@ -89,6 +109,12 @@ impl Default for FnNode {
         Self {
             calls: BTreeSet::new(),
             entry_calls: BTreeSet::new(),
+            unresolved_test_calls: BTreeSet::new(),
+            coverage_calls: BTreeMap::new(),
+            test_crate_ids: BTreeSet::new(),
+            production_crate_ids: BTreeSet::new(),
+            coverage_candidate_crate_ids: BTreeSet::new(),
+            sources_by_crate: BTreeMap::new(),
             facts: CapabilityFacts::default(),
             has_body: true,
             is_trait_impl: false,
@@ -97,16 +123,41 @@ impl Default for FnNode {
             is_test_compilation: false,
             sources: BTreeSet::new(),
             report_line_count: None,
+            report_function_count: 0,
             allows_dead_code: false,
         }
     }
 }
 
 impl FnNode {
+    fn rvs_merge_coverage_M(&mut self, other: &Self) {
+        for (crate_id, calls) in &other.coverage_calls {
+            self.coverage_calls
+                .entry(*crate_id)
+                .or_default()
+                .extend(calls.iter().cloned());
+        }
+        self.test_crate_ids
+            .extend(other.test_crate_ids.iter().copied());
+        self.production_crate_ids
+            .extend(other.production_crate_ids.iter().copied());
+        self.coverage_candidate_crate_ids
+            .extend(other.coverage_candidate_crate_ids.iter().copied());
+        for (crate_id, sources) in &other.sources_by_crate {
+            self.sources_by_crate
+                .entry(*crate_id)
+                .or_default()
+                .extend(sources.iter().cloned());
+        }
+    }
+
     /// Merge another callgraph entry for the same function into this one.
     pub fn rvs_merge_M(&mut self, other: &Self) {
         self.calls.extend(other.calls.iter().cloned());
         self.entry_calls.extend(other.entry_calls.iter().cloned());
+        self.unresolved_test_calls
+            .extend(other.unresolved_test_calls.iter().cloned());
+        self.rvs_merge_coverage_M(other);
         self.facts.has_async |= other.facts.has_async;
         self.facts.is_unsafe_fn |= other.facts.is_unsafe_fn;
         self.facts.has_mut_param |= other.facts.has_mut_param;
@@ -121,28 +172,21 @@ impl FnNode {
         self.is_test_compilation |= other.is_test_compilation;
         self.sources.extend(other.sources.iter().cloned());
         self.report_line_count = self.report_line_count.or(other.report_line_count);
+        self.report_function_count = self.report_function_count.max(other.report_function_count);
         self.allows_dead_code |= other.allows_dead_code;
     }
 
     pub(crate) fn rvs_dependency_calls(&self) -> impl Iterator<Item = &DefPath> {
         self.calls.iter().chain(&self.entry_calls)
     }
-
-    fn rvs_has_same_merge_behavior(&self, other: &Self) -> bool {
-        self.calls == other.calls
-            && self.entry_calls == other.entry_calls
-            && self.facts == other.facts
-            && self.has_body == other.has_body
-            && self.is_trait_impl == other.is_trait_impl
-            && self.is_test == other.is_test
-            && self.is_entrypoint == other.is_entrypoint
-            && self.report_line_count == other.report_line_count
-            && self.allows_dead_code == other.allows_dead_code
-    }
 }
 
 fn rvs_is_false(value: &bool) -> bool {
     !*value
+}
+
+fn rvs_is_zero(value: &usize) -> bool {
+    *value == 0
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -215,11 +259,15 @@ impl FnGraph {
 
         let mut merged = Self::rvs_new();
         for (path, nodes) in variants {
+            let mut coverage = FnNode::default();
+            for node in &nodes {
+                coverage.rvs_merge_coverage_M(node);
+            }
             let is_local = local_crate_names.iter().any(|crate_name| {
                 path.rvs_as_str()
                     .starts_with(crate_name.rvs_prefix().rvs_as_str())
             });
-            let has_production_entry = nodes.iter().any(|node| node.is_entrypoint);
+            let has_production_variant = nodes.iter().any(|node| !node.is_test_compilation);
             let non_test_sources: BTreeSet<FnSource> = nodes
                 .iter()
                 .filter(|node| !node.is_test_compilation)
@@ -234,11 +282,13 @@ impl FnGraph {
                                 .sources
                                 .iter()
                                 .any(|source| non_test_sources.contains(source)))
-                        || (node.sources.is_empty() && !has_production_entry)
+                        || (node.sources.is_empty() && !has_production_variant)
                 })
                 .collect();
             let (mut entries, mut ordinary): (Vec<_>, Vec<_>) =
                 retained.into_iter().partition(|node| node.is_entrypoint);
+            let entries_are_test_only = entries.iter().all(|node| node.is_test_compilation);
+            let ordinary_are_test_only = ordinary.iter().all(|node| node.is_test_compilation);
 
             let entry_sources: BTreeSet<FnSource> = entries
                 .iter()
@@ -267,21 +317,64 @@ impl FnGraph {
                 for entry in entries {
                     selected.rvs_merge_M(&entry);
                 }
+                selected.is_test_compilation = entries_are_test_only;
             } else {
                 for node in ordinary {
-                    if is_local && !selected.rvs_has_same_merge_behavior(&node) {
+                    if is_local
+                        && (selected.facts.is_port_method != node.facts.is_port_method
+                            || selected.is_trait_impl != node.is_trait_impl
+                            || selected.is_test != node.is_test)
+                    {
                         return Err(format!(
-                            "function {path} has conflicting ordinary definitions across Cargo targets"
+                            "function {path} has incompatible roles across Cargo targets"
                         ));
                     }
+                    let distinct_local_definition = is_local
+                        && !selected.sources.is_empty()
+                        && !node.sources.is_empty()
+                        && selected.sources.is_disjoint(&node.sources);
+                    let combined_line_count = if distinct_local_definition {
+                        match (selected.report_line_count, node.report_line_count) {
+                            (Some(left), Some(right)) => {
+                                Some(left.checked_add(right).ok_or_else(|| {
+                                    format!("report line count overflow while merging {path}")
+                                })?)
+                            }
+                            (left, right) => left.or(right),
+                        }
+                    } else {
+                        selected.report_line_count.or(node.report_line_count)
+                    };
+                    let combined_function_count = if distinct_local_definition {
+                        let left = selected
+                            .report_function_count
+                            .max(usize::from(selected.report_line_count.is_some()));
+                        let right = node
+                            .report_function_count
+                            .max(usize::from(node.report_line_count.is_some()));
+                        left.checked_add(right).ok_or_else(|| {
+                            format!("report function count overflow while merging {path}")
+                        })?
+                    } else {
+                        selected
+                            .report_function_count
+                            .max(node.report_function_count)
+                    };
                     selected.rvs_merge_M(&node);
+                    selected.report_line_count = combined_line_count;
+                    selected.report_function_count = combined_function_count;
+                }
+                if selected.report_line_count.is_some() && selected.report_function_count == 0 {
+                    selected.report_function_count = 1;
                 }
                 for entry in entries {
                     selected
                         .entry_calls
                         .extend(entry.rvs_dependency_calls().cloned());
                 }
+                selected.is_test_compilation = ordinary_are_test_only;
             }
+            selected.rvs_merge_coverage_M(&coverage);
             merged.nodes.insert(path, selected);
         }
         Ok(merged)
@@ -305,6 +398,19 @@ pub(crate) fn rvs_serialize_callgraph_json_S(graph: &FnGraph) -> Result<String, 
     serde_json::to_string(&artifact).map_err(|e| format!("cannot serialize callgraph JSON: {e}"))
 }
 
+pub(crate) fn rvs_serialize_function_identities_json_S(
+    functions: &BTreeSet<FunctionIdentity>,
+) -> Result<String, String> {
+    serde_json::to_string(functions)
+        .map_err(|error| format!("cannot serialize function identities: {error}"))
+}
+
+pub(crate) fn rvs_parse_function_identities_json_S(
+    json: &str,
+) -> Result<BTreeSet<FunctionIdentity>, String> {
+    serde_json::from_str(json).map_err(|error| format!("cannot parse function identities: {error}"))
+}
+
 /// Parse versioned or legacy callgraph JSON into shared callgraph records.
 pub fn rvs_parse_callgraph_json_S(json: &str) -> Result<FnGraph, String> {
     let value: serde_json::Value =
@@ -319,14 +425,17 @@ pub fn rvs_parse_callgraph_json_S(json: &str) -> Result<FnGraph, String> {
             .ok_or_else(|| {
                 "invalid callgraph artifact: schema_version must be an unsigned integer".to_string()
             })?;
-        if schema_version != u64::from(CALLGRAPH_SCHEMA_VERSION) {
+        if schema_version != 2 && schema_version != u64::from(CALLGRAPH_SCHEMA_VERSION) {
             return Err(format!(
-                "unsupported callgraph schema version {schema_version}; expected {CALLGRAPH_SCHEMA_VERSION}"
+                "unsupported callgraph schema version {schema_version}; expected 2 or {CALLGRAPH_SCHEMA_VERSION}"
             ));
         }
         let artifact: CallgraphArtifact = serde_json::from_value(value)
             .map_err(|e| format!("invalid callgraph artifact: {e}"))?;
-        debug_assert_eq!(artifact.schema_version, CALLGRAPH_SCHEMA_VERSION);
+        debug_assert!(matches!(
+            artifact.schema_version,
+            2 | CALLGRAPH_SCHEMA_VERSION
+        ));
         artifact.nodes
     } else {
         for (def_path, node) in object {
@@ -448,11 +557,18 @@ mod tests {
 
         let json = rvs_serialize_callgraph_json_S(&graph).unwrap();
         let parsed = rvs_parse_callgraph_json_S(&json).unwrap();
+        let version_two = json.replacen(
+            &format!(r#""schema_version":{CALLGRAPH_SCHEMA_VERSION}"#),
+            r#""schema_version":2"#,
+            1,
+        );
+        let parsed_version_two = rvs_parse_callgraph_json_S(&version_two).unwrap();
         let version_marker = format!(r#""schema_version":{CALLGRAPH_SCHEMA_VERSION}"#);
         let output = format!(
-            "schema_version={CALLGRAPH_SCHEMA_VERSION}\ncontains_version={}\nnodes={}\n",
+            "schema_version={CALLGRAPH_SCHEMA_VERSION}\ncontains_version={}\nnodes={}\nversion_two_nodes={}\n",
             json.contains(&version_marker),
             parsed.rvs_len(),
+            parsed_version_two.rvs_len(),
         );
         rvs_snapshot_BIS(
             "test_20260710_callgraph_artifact_version_roundtrip",
@@ -466,7 +582,7 @@ mod tests {
     #[test]
     fn test_20260710_callgraph_artifact_schema_validation() {
         let cases = [
-            ("unknown", r#"{"schema_version":3,"nodes":{}}"#),
+            ("unknown", r#"{"schema_version":4,"nodes":{}}"#),
             ("missing", r#"{"nodes":{}}"#),
             ("string", r#"{"schema_version":"2","nodes":{}}"#),
         ];
@@ -481,12 +597,37 @@ mod tests {
             &output,
         );
 
-        assert!(output.contains("unsupported callgraph schema version 3"));
+        assert!(output.contains("unsupported callgraph schema version 4"));
         assert!(output.contains("schema_version must be an unsigned integer"));
     }
 
     #[test]
+    fn test_20260714_def_path_selection_roundtrip() {
+        let functions = BTreeSet::from([
+            FunctionIdentity {
+                crate_id: 7,
+                def_path: DefPath::from("demo::rvs_alpha"),
+            },
+            FunctionIdentity {
+                crate_id: 9,
+                def_path: DefPath::from("demo::Worker::rvs_run_P"),
+            },
+        ]);
+
+        let json = rvs_serialize_function_identities_json_S(&functions).unwrap();
+        let parsed = rvs_parse_function_identities_json_S(&json).unwrap();
+        let output = format!("json={json}\nparsed={parsed:?}\n");
+        rvs_snapshot_BIS("test_20260714_def_path_selection_roundtrip", &output);
+
+        assert_eq!(parsed, functions);
+        assert!(rvs_is_false(&false));
+        assert!(!rvs_is_false(&true));
+    }
+
+    #[test]
     fn test_20260703_graph_extend_and_merge_helpers() {
+        assert!(rvs_is_zero(&0));
+        assert!(!rvs_is_zero(&1));
         let mut base = FnGraph::rvs_new();
         base.rvs_insert_M(DefPath::from("demo::rvs_a"), FnNode::default());
         let mut extended = FnGraph::rvs_new();
@@ -586,11 +727,15 @@ mod tests {
             DefPath::from("demo::rvs_run"),
             FnNode {
                 sources: BTreeSet::from([FnSource::rvs_new(PathBuf::from("src/lib.rs"), 20, 27)]),
+                report_line_count: Some(2),
+                report_function_count: 1,
                 ..FnNode::default()
             },
         );
         let mut conflicting_ordinary_node = FnNode {
             sources: BTreeSet::from([FnSource::rvs_new(PathBuf::from("src/main.rs"), 20, 27)]),
+            report_line_count: Some(3),
+            report_function_count: 1,
             ..FnNode::default()
         };
         conflicting_ordinary_node
@@ -598,11 +743,49 @@ mod tests {
             .insert(DefPath::from("dep::effect_S"));
         let mut second_ordinary = FnGraph::rvs_new();
         second_ordinary.rvs_insert_M(DefPath::from("demo::rvs_run"), conflicting_ordinary_node);
-        let ordinary_conflict =
+        let ordinary_merge =
             FnGraph::rvs_merge_artifacts(vec![first_ordinary, second_ordinary], &local_crate_names);
+        let ordinary_merged = ordinary_merge
+            .as_ref()
+            .unwrap()
+            .rvs_get("demo::rvs_run")
+            .unwrap();
+
+        let mut ordinary_variant = FnGraph::rvs_new();
+        ordinary_variant.rvs_insert_M(
+            DefPath::from("demo::rvs_fetch"),
+            FnNode {
+                sources: BTreeSet::from([FnSource::rvs_new(PathBuf::from("src/lib.rs"), 30, 39)]),
+                ..FnNode::default()
+            },
+        );
+        let mut port_variant_node = FnNode {
+            sources: BTreeSet::from([FnSource::rvs_new(PathBuf::from("src/main.rs"), 30, 39)]),
+            ..FnNode::default()
+        };
+        port_variant_node.facts.is_port_method = true;
+        let mut port_variant = FnGraph::rvs_new();
+        port_variant.rvs_insert_M(DefPath::from("demo::rvs_fetch"), port_variant_node);
+        let mixed_role =
+            FnGraph::rvs_merge_artifacts(vec![ordinary_variant, port_variant], &local_crate_names);
+
+        let mut source_less_ordinary = FnGraph::rvs_new();
+        source_less_ordinary
+            .rvs_insert_M(DefPath::from("demo::rvs_source_less"), FnNode::default());
+        let mut source_less_port_node = FnNode::default();
+        source_less_port_node.facts.is_port_method = true;
+        let mut source_less_port = FnGraph::rvs_new();
+        source_less_port.rvs_insert_M(
+            DefPath::from("demo::rvs_source_less"),
+            source_less_port_node,
+        );
+        let source_less_mixed_role = FnGraph::rvs_merge_artifacts(
+            vec![source_less_ordinary, source_less_port],
+            &local_crate_names,
+        );
 
         let output = format!(
-            "retained_entry={}\nretained_sources={:?}\nretained_calls={:?}\nentry_calls={:?}\nreverse_equal={}\nentry_conflict={conflict_result:?}\nordinary_conflict={ordinary_conflict:?}\n",
+            "retained_entry={}\nretained_sources={:?}\nretained_calls={:?}\nentry_calls={:?}\nreverse_equal={}\nentry_conflict={conflict_result:?}\nordinary_calls={:?}\nordinary_function_count={}\nordinary_line_count={:?}\nmixed_role={mixed_role:?}\nsource_less_mixed_role={source_less_mixed_role:?}\n",
             retained.is_entrypoint,
             retained.sources,
             retained.calls,
@@ -611,6 +794,9 @@ mod tests {
                 && retained.calls == reverse_retained.calls
                 && retained.entry_calls == reverse_retained.entry_calls
                 && retained.is_entrypoint == reverse_retained.is_entrypoint,
+            ordinary_merged.calls,
+            ordinary_merged.report_function_count,
+            ordinary_merged.report_line_count,
         );
         rvs_snapshot_BIS(
             "test_20260713_artifact_merge_resolves_entrypoint_roles",
@@ -627,7 +813,52 @@ mod tests {
         assert_eq!(retained.calls, reverse_retained.calls);
         assert_eq!(retained.entry_calls, reverse_retained.entry_calls);
         assert!(conflict_result.is_err());
-        assert!(ordinary_conflict.is_err());
+        assert!(ordinary_merge.is_ok());
+        assert!(ordinary_merged.calls.contains("dep::effect_S"));
+        assert_eq!(ordinary_merged.report_function_count, 2);
+        assert_eq!(ordinary_merged.report_line_count, Some(5));
+        assert!(mixed_role.is_err());
+        assert!(source_less_mixed_role.is_err());
+    }
+
+    #[test]
+    fn test_20260714_source_less_production_node_survives_test_merge() {
+        let local_crate_names = BTreeSet::from([CrateName::from("demo")]);
+        let mut production = FnNode::default();
+        production.production_crate_ids.insert(1);
+        production.coverage_candidate_crate_ids.insert(1);
+        production.sources_by_crate.insert(1, BTreeSet::new());
+        let mut test_copy = FnNode {
+            is_test_compilation: true,
+            ..FnNode::default()
+        };
+        test_copy
+            .calls
+            .insert(DefPath::from("demo::rvs_test_only_dependency"));
+        test_copy.sources_by_crate.insert(2, BTreeSet::new());
+        let mut production_graph = FnGraph::rvs_new();
+        production_graph.rvs_insert_M(DefPath::from("demo::rvs_generated"), production);
+        let mut test_graph = FnGraph::rvs_new();
+        test_graph.rvs_insert_M(DefPath::from("demo::rvs_generated"), test_copy);
+
+        let merged =
+            FnGraph::rvs_merge_artifacts(vec![production_graph, test_graph], &local_crate_names)
+                .unwrap();
+        let node = merged.rvs_get("demo::rvs_generated").unwrap();
+        let output = format!(
+            "is_test_compilation={}\nsources={}\nproduction_ids={:?}\n",
+            node.is_test_compilation,
+            node.sources.len(),
+            node.production_crate_ids,
+        );
+        rvs_snapshot_BIS(
+            "test_20260714_source_less_production_node_survives_test_merge",
+            &output,
+        );
+
+        assert!(!node.is_test_compilation);
+        assert!(node.sources.is_empty());
+        assert_eq!(node.production_crate_ids, BTreeSet::from([1]));
     }
 
     #[test]

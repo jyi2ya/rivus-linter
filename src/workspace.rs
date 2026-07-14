@@ -139,6 +139,8 @@ fn rvs_prepare_cargo_check_command_BIMS(
         "RIVUS_CALLGRAPH_DIR",
         "RIVUS_CAPSMAP",
         "RIVUS_OFFLINE_CAPS",
+        "RIVUS_UI_TESTING",
+        "RIVUS_UNTESTED_PATHS",
         "RIVUS_ENABLED",
         "RUSTC",
         "RUSTC_WRAPPER",
@@ -162,6 +164,11 @@ fn rvs_prepare_cargo_check_command_BIMS(
             return Err(CargoCheckError::Message(format!(
                 "driver-controlled env {key} must be set to 1 when provided"
             )));
+        }
+        if *key == "RIVUS_UI_TESTING" {
+            return Err(CargoCheckError::Message(
+                "driver-controlled env RIVUS_UI_TESTING cannot be forwarded to cargo".into(),
+            ));
         }
         cmd.env(key, val);
     }
@@ -265,22 +272,6 @@ pub(crate) fn rvs_run_cargo_check_BIMS(extra_args: &[String]) -> Result<(), i32>
             return Err(1);
         }
     };
-    match rvs_run_cargo_check_impl_BIMS(&CargoCheckConfig {
-        project_path,
-        wrap_all_crates: false,
-        target_scope,
-        build_std: false,
-        extra_env: vec![("RIVUS_OFFLINE_CAPS", "1".into())],
-        extra_args: extra_args_ref.clone(),
-        target_subdir: None,
-    }) {
-        Ok(()) => {}
-        Err(e) => {
-            eprintln!("{e}");
-            return Err(e.rvs_exit_code());
-        }
-    }
-
     let local_crate_names = match rvs_load_local_crate_prefixes_BIS(project_path, target_scope) {
         Ok(names) => names,
         Err(e) => {
@@ -288,20 +279,54 @@ pub(crate) fn rvs_run_cargo_check_BIMS(extra_args: &[String]) -> Result<(), i32>
             return Err(1);
         }
     };
-    let mut callgraph = match rvs_collect_callgraph_with_args_BIMS(
+    let callgraph_result = rvs_collect_callgraph_with_args_BIMS(
         project_path,
+        false,
         false,
         target_scope,
         vec![],
-        extra_args_ref,
+        extra_args_ref.clone(),
         &local_crate_names,
-    ) {
+    );
+    let mut callgraph = match callgraph_result {
         Ok(callgraph) => callgraph,
         Err(e) => {
             eprintln!("offline caps check unavailable: {e}");
+            if let Err(lint_error) =
+                rvs_run_project_lints_BIMS(project_path, target_scope, &extra_args_ref, None)
+            {
+                eprintln!("{lint_error}");
+                return Err(lint_error.rvs_exit_code());
+            }
             return Err(1);
         }
     };
+    let uncovered =
+        crate::offline_caps::rvs_uncovered_test_functions(&callgraph, &local_crate_names);
+    let selection_path = match rvs_write_untested_selection_BIS(project_path, &uncovered) {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("cannot prepare merged test coverage: {error}");
+            return Err(1);
+        }
+    };
+    let lint_result = rvs_run_project_lints_BIMS(
+        project_path,
+        target_scope,
+        &extra_args_ref,
+        Some(&selection_path),
+    );
+    if let Err(error) = std::fs::remove_file(&selection_path) {
+        eprintln!(
+            "warning: cannot remove merged test coverage selection {}: {error}",
+            selection_path.display()
+        );
+    }
+    if let Err(error) = lint_result {
+        eprintln!("{error}");
+        return Err(error.rvs_exit_code());
+    }
+
     let report =
         crate::offline_caps::rvs_check_offline_caps_M(&mut callgraph, &caps, &local_crate_names);
     if !report.rvs_is_empty() {
@@ -312,6 +337,54 @@ pub(crate) fn rvs_run_cargo_check_BIMS(extra_args: &[String]) -> Result<(), i32>
     } else {
         Ok(())
     }
+}
+
+fn rvs_run_project_lints_BIMS(
+    project_path: &Path,
+    target_scope: CargoTargetScope,
+    extra_args: &[&str],
+    untested_selection: Option<&Path>,
+) -> Result<(), CargoCheckError> {
+    rvs_clean_dir_BIS(&project_path.join("target/rivus-lint")).map_err(CargoCheckError::Message)?;
+    let mut extra_env = vec![("RIVUS_OFFLINE_CAPS", OsString::from("1"))];
+    if let Some(path) = untested_selection {
+        extra_env.push(("RIVUS_UNTESTED_PATHS", path.as_os_str().to_os_string()));
+    }
+    rvs_run_cargo_check_impl_BIMS(&CargoCheckConfig {
+        project_path,
+        wrap_all_crates: false,
+        target_scope,
+        build_std: false,
+        extra_env,
+        extra_args: extra_args.to_vec(),
+        target_subdir: Some("rivus-lint"),
+    })
+}
+
+fn rvs_write_untested_selection_BIS(
+    project_path: &Path,
+    functions: &BTreeSet<crate::artifacts::FunctionIdentity>,
+) -> Result<PathBuf, String> {
+    let project_path = rvs_absolute_path_BIS(project_path)?;
+    let target_dir = project_path.join("target");
+    std::fs::create_dir_all(&target_dir)
+        .map_err(|error| format!("cannot create {}: {error}", target_dir.display()))?;
+    let path = target_dir.join(format!(
+        "rivus-untested-functions-{}.json",
+        std::process::id()
+    ));
+    let json = crate::artifacts::rvs_serialize_function_identities_json_S(functions)?;
+    let temp_path_for_attempt = |attempt| {
+        target_dir.join(format!(
+            ".rivus-untested-functions-{}.{}.tmp",
+            std::process::id(),
+            attempt
+        ))
+    };
+    crate::fs_guard::rvs_write_atomic_BIS(&path, json.as_bytes(), &temp_path_for_attempt).map_err(
+        |failure| rvs_render_atomic_write_failure(failure, &path, "temp coverage selection", false),
+    )?;
+    Ok(path)
 }
 
 fn rvs_reject_forwarded_check_args(extra_args: &[String]) -> Result<(), String> {
@@ -348,6 +421,9 @@ fn rvs_reject_dangerous_forwarded_config(value: &str) -> Result<(), String> {
         "env.RIVUS_CAPSMAP",
         "env.RIVUS_CALLGRAPH",
         "env.RIVUS_CALLGRAPH_DIR",
+        "env.RIVUS_OFFLINE_CAPS",
+        "env.RIVUS_UI_TESTING",
+        "env.RIVUS_UNTESTED_PATHS",
         "env.RUSTC",
         "env.RUSTC_WRAPPER",
         "env.RUSTC_WORKSPACE_WRAPPER",
@@ -391,8 +467,8 @@ fn rvs_collect_config_key_paths_M(prefix: &str, item: &toml_edit::Item, out: &mu
 /// `cargo check` with the callgraph collection environment, and returns
 /// the merged callgraph.
 ///
-/// - `build_std=false` -> wraps all crates (RUSTC_WRAPPER), uses `target/rivus-build`
-/// - `build_std=true`  -> wraps all crates + `-Zbuild-std`, uses `target/rivus-build-std`
+/// Dependency and std inference wrap every crate. Project analysis uses the
+/// workspace-only collector below so third-party warnings stay capped.
 ///
 /// `extra_env` is merged into the cargo environment, useful for passing
 /// `RIVUS_CAPSMAP` to the lint subprocess.
@@ -410,6 +486,24 @@ pub(crate) fn rvs_collect_callgraph_BIMS(
     rvs_collect_callgraph_with_args_BIMS(
         path,
         build_std,
+        true,
+        target_scope,
+        extra_env,
+        vec![],
+        local_crate_names,
+    )
+}
+
+pub(crate) fn rvs_collect_workspace_callgraph_BIMS(
+    path: &Path,
+    target_scope: CargoTargetScope,
+    extra_env: Vec<(&str, OsString)>,
+    local_crate_names: &BTreeSet<CrateName>,
+) -> Result<FnGraph, String> {
+    rvs_collect_callgraph_with_args_BIMS(
+        path,
+        false,
+        false,
         target_scope,
         extra_env,
         vec![],
@@ -420,6 +514,7 @@ pub(crate) fn rvs_collect_callgraph_BIMS(
 pub(crate) fn rvs_collect_callgraph_with_args_BIMS(
     path: &Path,
     build_std: bool,
+    wrap_all_crates: bool,
     target_scope: CargoTargetScope,
     extra_env: Vec<(&str, OsString)>,
     extra_args: Vec<&str>,
@@ -441,7 +536,7 @@ pub(crate) fn rvs_collect_callgraph_with_args_BIMS(
 
     rvs_run_cargo_check_impl_BIMS(&CargoCheckConfig {
         project_path: path,
-        wrap_all_crates: true,
+        wrap_all_crates,
         target_scope,
         build_std,
         extra_env: env_vars,
@@ -532,7 +627,7 @@ fn rvs_collect_project_callgraph_with_optional_std_cache_BIMS(
     local_crate_names: &BTreeSet<CrateName>,
 ) -> Result<FnGraph, String> {
     let mut callgraph =
-        rvs_collect_callgraph_BIMS(path, false, target_scope, vec![], local_crate_names)?;
+        rvs_collect_workspace_callgraph_BIMS(path, target_scope, vec![], local_crate_names)?;
     let cg_std_dir = path.join("target").join("rivus-callgraph-std");
     if rvs_warn_optional_dir_BIS(&cg_std_dir, "std callgraph cache") {
         match rvs_merge_callgraph_dir_BIS(&cg_std_dir, &BTreeSet::new()) {
@@ -637,14 +732,16 @@ fn rvs_write_capsmap_file_BIS(path: &Path, result: &str, label: &str) -> Result<
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| "capsmap".into());
-    crate::fs_guard::rvs_write_atomic_BIS(path, result.as_bytes(), |attempt| {
+    let temp_path_for_attempt = |attempt| {
         path.with_file_name(format!(
             ".{file_name}.{}.{}.tmp",
             std::process::id(),
             attempt
         ))
-    })
-    .map_err(|failure| rvs_render_atomic_write_failure(failure, path, "temp capsmap file", false))
+    };
+    crate::fs_guard::rvs_write_atomic_BIS(path, result.as_bytes(), &temp_path_for_attempt).map_err(
+        |failure| rvs_render_atomic_write_failure(failure, path, "temp capsmap file", false),
+    )
 }
 
 pub(crate) fn rvs_load_local_crate_prefixes_BIS(
@@ -817,6 +914,272 @@ mod tests {
         );
         assert_eq!(recorded_name, "rvs_parse");
         std::fs::remove_dir_all(workspace).unwrap();
+    }
+
+    #[test]
+    fn test_20260714_project_callgraph_excludes_path_dependency_nodes() {
+        let dir = rvs_make_workspace_temp_dir_BIS("project-callgraph-local-only");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::create_dir_all(dir.join("fixture-dep/src")).unwrap();
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"local-app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nfixture-dep = { path = \"fixture-dep\" }\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("src/lib.rs"),
+            "pub fn rvs_local() { fixture_dep::dependency_helper(); }\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("fixture-dep/Cargo.toml"),
+            "[package]\nname = \"fixture-dep\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("fixture-dep/src/lib.rs"),
+            "pub fn dependency_helper() {}\n",
+        )
+        .unwrap();
+
+        let local = BTreeSet::from([CrateName::from("local-app")]);
+        let graph = rvs_collect_project_callgraph_with_optional_std_cache_BIMS(
+            &dir,
+            CargoTargetScope::Production,
+            &local,
+        )
+        .unwrap();
+        let paths = graph
+            .rvs_keys()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        let output = paths.join("\n") + "\n";
+        rvs_snapshot_BIS(
+            "test_20260714_project_callgraph_excludes_path_dependency_nodes",
+            &output,
+        );
+
+        assert!(paths.iter().any(|path| path == "local_app::rvs_local"));
+        assert!(!paths.iter().any(|path| path.starts_with("fixture_dep::")));
+        assert!(
+            graph
+                .rvs_get("local_app::rvs_local")
+                .is_some_and(|node| node.calls.contains("fixture_dep::dependency_helper"))
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260714_merged_coverage_honors_lint_levels() {
+        let dir = rvs_make_workspace_temp_dir_BIS("merged-coverage-lint-levels");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"coverage-levels\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("src/lib.rs"),
+            "#![feature(register_tool)]\n#![register_tool(rivus)]\n#![allow(non_snake_case)]\n#![forbid(unfulfilled_lint_expectations)]\n#![deny(rivus::rvs_untested_good_fn)]\n\n/// Allowed uncovered function.\n#[allow(rivus::rvs_untested_good_fn)]\npub fn rvs_allowed() -> i32 { 1 }\n\n/// Expected uncovered function.\n#[expect(rivus::rvs_untested_good_fn)]\npub fn rvs_expected() -> i32 { 2 }\n\n/// Denied uncovered function.\npub fn rvs_denied() -> i32 { 3 }\n",
+        )
+        .unwrap();
+
+        let output = Command::new(rvs_current_wrapper_exe_BIS().unwrap())
+            .arg("check")
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let summary = format!(
+            "success={}\nallowed_reported={}\nexpect_unfulfilled={}\ndenied_reported={}\n",
+            output.status.success(),
+            stderr.contains("good fn 'rvs_allowed' not called by any test"),
+            stderr.contains("unfulfilled_lint_expectations"),
+            stderr.contains("good fn 'rvs_denied' not called by any test"),
+        );
+        rvs_snapshot_BIS("test_20260714_merged_coverage_honors_lint_levels", &summary);
+
+        assert!(!output.status.success());
+        assert!(!stderr.contains("good fn 'rvs_allowed' not called by any test"));
+        assert!(!stderr.contains("unfulfilled_lint_expectations"));
+        assert!(stderr.contains("good fn 'rvs_denied' not called by any test"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260714_callgraph_collection_fulfills_statement_expectations() {
+        let dir = rvs_make_workspace_temp_dir_BIS("statement-expectation-collection");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"statement-expectation\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("src/lib.rs"),
+            "#![feature(register_tool)]\n#![register_tool(rivus)]\n#![allow(non_snake_case)]\n#![forbid(unfulfilled_lint_expectations)]\n\nstruct Holder {\n    #[expect(rivus::rvs_borrowed_param)]\n    value: &'static String,\n}\n\npub fn rvs_statement_expectation() {\n    #[expect(rivus::rvs_error_swallow)]\n    let _ = Result::<(), ()>::Err(()).ok();\n}\n",
+        )
+        .unwrap();
+        let local = BTreeSet::from([CrateName::from("statement-expectation")]);
+
+        let result = rvs_collect_workspace_callgraph_BIMS(
+            &dir,
+            CargoTargetScope::Production,
+            vec![],
+            &local,
+        );
+        let graph_has_function = result.as_ref().is_ok_and(|graph| {
+            graph
+                .rvs_get("statement_expectation::rvs_statement_expectation")
+                .is_some()
+        });
+        let output = format!(
+            "result_ok={}\ngraph_has_function={graph_has_function}\n",
+            result.is_ok(),
+        );
+        rvs_snapshot_BIS(
+            "test_20260714_callgraph_collection_fulfills_statement_expectations",
+            &output,
+        );
+
+        assert!(result.is_ok(), "{result:?}");
+        assert!(graph_has_function);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260714_merged_coverage_distinguishes_same_path_targets() {
+        let dir = rvs_make_workspace_temp_dir_BIS("merged-coverage-target-identity");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"same-target\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("src/lib.rs"),
+            "#![allow(non_snake_case)]\n\npub fn rvs_same() -> i32 { 1 }\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn test_20260714_calls_library_same() {\n        assert_eq!(super::rvs_same(), 1);\n    }\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("src/main.rs"),
+            "#![allow(non_snake_case)]\n\n#[allow(dead_code)]\nfn rvs_bin_value() -> i32 { 1 }\n\npub fn rvs_same() -> i32 { rvs_bin_value() }\n\nfn main() {\n    let _ = rvs_same();\n}\n",
+        )
+        .unwrap();
+
+        let output = Command::new(rvs_current_wrapper_exe_BIS().unwrap())
+            .arg("check")
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let warning = "good fn 'rvs_same' not called by any test";
+        let warning_count = stderr.matches(warning).count();
+        let report_output = Command::new(rvs_current_wrapper_exe_BIS().unwrap())
+            .arg("report")
+            .arg(&dir)
+            .output()
+            .unwrap();
+        let report_stdout = String::from_utf8_lossy(&report_output.stdout);
+        let report_counts_both = report_stdout.contains("Total: 2 functions, 2 lines");
+        let summary = format!(
+            "success={}\nwarning_count={warning_count}\nmerge_conflict={}\nreport_success={}\nreport_counts_both={report_counts_both}\n",
+            output.status.success(),
+            stderr.contains("conflicting ordinary definitions across Cargo targets"),
+            report_output.status.success(),
+        );
+        rvs_snapshot_BIS(
+            "test_20260714_merged_coverage_distinguishes_same_path_targets",
+            &summary,
+        );
+
+        assert!(output.status.success());
+        assert_eq!(warning_count, 1, "{stderr}");
+        assert!(!stderr.contains("conflicting ordinary definitions across Cargo targets"));
+        assert!(report_output.status.success(), "{report_stdout}");
+        assert!(report_counts_both, "{report_stdout}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260714_unresolved_local_callable_does_not_cover_function() {
+        let dir = rvs_make_workspace_temp_dir_BIS("coverage-local-callable");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"local-callable\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("src/lib.rs"),
+            "#![feature(register_tool)]\n#![register_tool(rivus)]\n#![allow(internal_features)]\n#![allow(non_snake_case)]\n#![warn(rivus::rvs_untested_good_fn)]\n\n/// Production function intentionally left uncovered.\npub fn rvs_target() -> i32 { 1 }\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn test_20260714_calls_local_callable() {\n        let rvs_target = || 2;\n        assert_eq!(rvs_target(), 2);\n    }\n}\n",
+        )
+        .unwrap();
+
+        let output = Command::new(rvs_current_wrapper_exe_BIS().unwrap())
+            .arg("check")
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let warning_count = stderr
+            .matches("good fn 'rvs_target' not called by any test")
+            .count();
+        let summary = format!(
+            "success={}\nwarning_count={warning_count}\n",
+            output.status.success(),
+        );
+        rvs_snapshot_BIS(
+            "test_20260714_unresolved_local_callable_does_not_cover_function",
+            &summary,
+        );
+
+        assert!(output.status.success(), "{stderr}");
+        assert_eq!(warning_count, 1, "{stderr}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260714_direct_driver_checks_local_test_coverage() {
+        let dir = rvs_make_workspace_temp_dir_BIS("direct-driver-coverage");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"direct-coverage\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("src/lib.rs"),
+            "#![feature(register_tool)]\n#![register_tool(rivus)]\n#![allow(internal_features)]\n#![allow(non_snake_case)]\n#![warn(rivus::rvs_untested_good_fn)]\n\n/// Function intentionally left uncovered.\npub fn rvs_uncovered() -> i32 { 1 }\n",
+        )
+        .unwrap();
+        let config = CargoCheckConfig {
+            project_path: &dir,
+            wrap_all_crates: false,
+            target_scope: CargoTargetScope::Production,
+            build_std: false,
+            extra_env: vec![],
+            extra_args: vec![],
+            target_subdir: Some("direct-driver-coverage"),
+        };
+        let output = rvs_prepare_cargo_check_command_BIMS(&config)
+            .unwrap()
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let reported = stderr.contains("good fn 'rvs_uncovered' not called by any test");
+        let summary = format!(
+            "success={}\nuntested_reported={reported}\n",
+            output.status.success(),
+        );
+        rvs_snapshot_BIS(
+            "test_20260714_direct_driver_checks_local_test_coverage",
+            &summary,
+        );
+
+        assert!(output.status.success(), "{stderr}");
+        assert!(reported, "{stderr}");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -1337,10 +1700,12 @@ name = "throughput-bench"
             None => "inherited",
         };
         let output = format!(
-            "callgraph={:?}\ncapsmap={capsmap_state}\nrustc={:?}\nrivus_enabled={:?}\n",
+            "callgraph={:?}\ncapsmap={capsmap_state}\nrustc={:?}\nrivus_enabled={:?}\nui_testing={:?}\nuntested_paths={:?}\n",
             rvs_command_env_value(&cmd, "RIVUS_CALLGRAPH"),
             rvs_command_env_value(&cmd, "RUSTC"),
             rvs_command_env_value(&cmd, "RIVUS_ENABLED"),
+            rvs_command_env_value(&cmd, "RIVUS_UI_TESTING"),
+            rvs_command_env_value(&cmd, "RIVUS_UNTESTED_PATHS"),
         );
         rvs_snapshot_BIS(
             "test_20260704_prepare_cargo_check_sanitizes_rivus_env",
@@ -1354,6 +1719,11 @@ name = "throughput-bench"
         );
         assert_eq!(rvs_command_env_value(&cmd, "RIVUS_CAPSMAP"), Some(None));
         assert_eq!(rvs_command_env_value(&cmd, "RUSTC"), Some(None));
+        assert_eq!(rvs_command_env_value(&cmd, "RIVUS_UI_TESTING"), Some(None));
+        assert_eq!(
+            rvs_command_env_value(&cmd, "RIVUS_UNTESTED_PATHS"),
+            Some(None)
+        );
         assert_eq!(
             rvs_command_env_value(&cmd, "RIVUS_ENABLED"),
             Some(Some("1".to_string()))
@@ -1732,15 +2102,19 @@ name = "throughput-bench"
             "--config".to_string(),
             "env.RIVUS_ENABLED={ value=\"0\", force=true }".to_string(),
         ];
+        let ui_env = vec!["--config=env.RIVUS_UI_TESTING.value=\"1\"".to_string()];
+        let coverage_env = vec!["--config=env.RIVUS_UNTESTED_PATHS.value=\"bad\"".to_string()];
         let rustc_env = vec!["--config=env.RUSTC_WRAPPER.value=\"bad\"".to_string()];
         let path_config = vec!["--config".to_string(), "ci-cargo-config.toml".to_string()];
         let harmless = vec!["--config=net.offline=true".to_string()];
 
         let output = format!(
-            "build_rustc={}\nwrapper={}\nrivus_env={}\nrustc_env={}\npath_config={}\nharmless={}\n",
+            "build_rustc={}\nwrapper={}\nrivus_env={}\nui_env={}\ncoverage_env={}\nrustc_env={}\npath_config={}\nharmless={}\n",
             rvs_reject_forwarded_check_args(&build_rustc).is_err(),
             rvs_reject_forwarded_check_args(&wrapper).is_err(),
             rvs_reject_forwarded_check_args(&rivus_env).is_err(),
+            rvs_reject_forwarded_check_args(&ui_env).is_err(),
+            rvs_reject_forwarded_check_args(&coverage_env).is_err(),
             rvs_reject_forwarded_check_args(&rustc_env).is_err(),
             rvs_reject_forwarded_check_args(&path_config).is_err(),
             rvs_reject_forwarded_check_args(&harmless).is_ok(),
@@ -1753,6 +2127,8 @@ name = "throughput-bench"
         assert!(rvs_reject_forwarded_check_args(&build_rustc).is_err());
         assert!(rvs_reject_forwarded_check_args(&wrapper).is_err());
         assert!(rvs_reject_forwarded_check_args(&rivus_env).is_err());
+        assert!(rvs_reject_forwarded_check_args(&ui_env).is_err());
+        assert!(rvs_reject_forwarded_check_args(&coverage_env).is_err());
         assert!(rvs_reject_forwarded_check_args(&rustc_env).is_err());
         assert!(rvs_reject_forwarded_check_args(&path_config).is_err());
         assert!(rvs_reject_forwarded_check_args(&harmless).is_ok());

@@ -1,12 +1,3 @@
-error: type 'Foo' missing #[derive(Debug)]
-  --> $DIR/tests/ui/35_into_impl.rs:3:1
-   |
-LL | struct Foo;
-   | ^^^^^^^^^^^
-   |
-   = note: `-D rivus::rvs-missing-debug-derive` implied by `-D warnings`
-   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_debug_derive)]`
-
 error: impl Into — implement From instead (Into is auto-provided)
   --> $DIR/tests/ui/35_into_impl.rs:5:1
    |
@@ -20,4 +11,4 @@ LL | | }
    = note: `-D rivus::rvs-into-impl` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_into_impl)]`
 
-error: aborting due to 2 previous errors
+error: aborting due to 1 previous error

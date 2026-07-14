@@ -1,1 +1,1 @@
-Resolved { def_path: DefPath("demo::Client::rvs_fetch_P"), def_kind: AssocFn }
+Resolved { def_path: DefPath("demo::Client::rvs_fetch_P"), def_kind: AssocFn, crate_id: 7 }

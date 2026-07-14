@@ -1,0 +1,16 @@
+error: ok(...) swallows errors
+  --> $DIR/tests/ui/203_error_swallow_ufcs.rs:8:13
+   |
+LL |     let _ = Result::ok(result);
+   |             ^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-error-swallow` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_error_swallow)]`
+
+error: unwrap_or_default(...) swallows errors
+  --> $DIR/tests/ui/203_error_swallow_ufcs.rs:11:13
+   |
+LL |     let _ = Result::unwrap_or_default(result);
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: aborting due to 2 previous errors
