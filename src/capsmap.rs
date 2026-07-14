@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
 
 use snafu::Snafu;
@@ -59,7 +60,7 @@ const LAYER_ORDER: &[&str] = &["std", "deps", "seed", "suppress", "ext"];
 enum CapsDirSelection<'a> {
     All,
     Include(&'a [&'a str]),
-    Exclude(&'a [&'a str]),
+    Exclude(&'a [&'a OsStr]),
 }
 
 impl CapsMap {
@@ -163,7 +164,17 @@ impl CapsMap {
 
     /// 加载目录中除指定层级外的所有文件。
     /// 例如 `&["deps"]` 加载 std/seed/suppress/ext 但不加载 deps。
+    #[cfg(test)]
     pub fn rvs_load_dir_excluding_BIS(dir: &Path, exclude: &[&str]) -> Result<Self, CapsMapError> {
+        let exclude = exclude.iter().map(OsStr::new).collect::<Vec<_>>();
+        rvs_load_caps_dir_BIS(dir, CapsDirSelection::Exclude(&exclude))
+    }
+
+    /// Load all caps files except exact raw layer names.
+    pub(crate) fn rvs_load_dir_excluding_names_BIS(
+        dir: &Path,
+        exclude: &[&OsStr],
+    ) -> Result<Self, CapsMapError> {
         rvs_load_caps_dir_BIS(dir, CapsDirSelection::Exclude(exclude))
     }
 
@@ -239,7 +250,7 @@ fn rvs_collect_selected_caps_dir_files_BIS(
 
 fn rvs_collect_caps_dir_files_BIS(
     dir: &Path,
-    exclude: &[&str],
+    exclude: &[&OsStr],
 ) -> Result<Vec<std::path::PathBuf>, CapsMapError> {
     let mut files = Vec::new();
     let entries = std::fs::read_dir(dir).map_err(|e| CapsMapError::DirRead {
@@ -249,20 +260,21 @@ fn rvs_collect_caps_dir_files_BIS(
         let entry = entry.map_err(|e| CapsMapError::DirRead {
             message: format!("{}: {e}", dir.display()),
         })?;
+        let file_type = entry.file_type().map_err(|e| CapsMapError::DirRead {
+            message: format!("{}: {e}", entry.path().display()),
+        })?;
         let path = entry.path();
-        let name = path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(String::new);
-        if exclude.contains(&name.as_str()) {
+        let raw_name = path.file_name().unwrap_or_else(|| OsStr::new(""));
+        if exclude.contains(&raw_name) {
             continue;
         }
+        let name = raw_name.to_string_lossy().into_owned();
         if rvs_is_atomic_caps_temp_file(&name) {
             continue;
         }
         if path.is_file() {
             files.push(path);
-        } else if LAYER_ORDER.contains(&name.as_str()) {
+        } else if file_type.is_symlink() || LAYER_ORDER.contains(&name.as_str()) {
             return Err(CapsMapError::PathMustBeFile {
                 path: path.display().to_string(),
             });
@@ -366,7 +378,9 @@ fn rvs_sort_by_layer_M(files: &mut [std::path::PathBuf]) {
             (Some(al), Some(bl)) => al.cmp(&bl),
             (Some(_), None) => std::cmp::Ordering::Less,
             (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => a_name.cmp(&b_name),
+            (None, None) => a_name
+                .cmp(&b_name)
+                .then_with(|| a.file_name().cmp(&b.file_name())),
         }
     });
 }
@@ -720,6 +734,53 @@ mod tests {
 
         assert_eq!(winner, "P");
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_20260714_caps_loader_rejects_broken_custom_layer_symlink() {
+        let dir = rvs_make_temp_dir_BIS("capsmap-broken-custom-layer");
+        let layer = dir.join("custom");
+        std::os::unix::fs::symlink(dir.join("missing"), &layer).unwrap();
+
+        let result = CapsMap::rvs_load_dir_BIS(&dir);
+        let output = format!("is_err={}\n", result.is_err());
+        rvs_snapshot_BIS(
+            "test_20260714_caps_loader_rejects_broken_custom_layer_symlink",
+            &output,
+        );
+
+        assert!(result.is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_20260714_caps_layer_sort_uses_raw_name_tiebreaker() {
+        use std::os::unix::ffi::{OsStrExt, OsStringExt};
+
+        let mut files = vec![
+            PathBuf::from(std::ffi::OsString::from_vec(vec![0x81])),
+            PathBuf::from(std::ffi::OsString::from_vec(vec![0x80])),
+        ];
+        rvs_sort_by_layer_M(&mut files);
+        let order = files
+            .iter()
+            .map(|path| {
+                *path
+                    .as_os_str()
+                    .as_bytes()
+                    .first()
+                    .expect("never: test path has one byte")
+            })
+            .collect::<Vec<_>>();
+        let output = format!("order={order:?}\n");
+        rvs_snapshot_BIS(
+            "test_20260714_caps_layer_sort_uses_raw_name_tiebreaker",
+            &output,
+        );
+
+        assert_eq!(order, [0x80, 0x81]);
     }
 
     #[test]

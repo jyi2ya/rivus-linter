@@ -93,7 +93,8 @@ fn rvs_run_driver_BIMPS() -> ExitCode {
             return rustc_driver::run_compiler(&args, &mut DefaultCallbacks);
         }
 
-        let wrapper_mode = args.get(1).is_some_and(|arg| rvs_is_rustc_arg(arg));
+        let wrapper_mode = args.get(1).is_some_and(|arg| rvs_is_rustc_arg(arg))
+            || rvs_env_flag_is_one_BS("RIVUS_WRAPPER");
         if wrapper_mode {
             args.remove(1);
         }
@@ -201,6 +202,43 @@ fn rvs_should_enter_driver(args: &[String]) -> bool {
         .is_some_and(|arg| arg == "--rustc" || rvs_is_rustc_arg(arg))
 }
 
+fn rvs_should_enter_driver_with_wrapper_marker(args: &[String], wrapper_marker: bool) -> bool {
+    rvs_should_enter_driver(args)
+        || (wrapper_marker
+            && args.get(1).is_some_and(|arg| !rvs_is_cli_entry_arg(arg))
+            && args
+                .get(2)
+                .is_some_and(|arg| rvs_is_cargo_rustc_leading_arg(arg)))
+}
+
+fn rvs_is_cli_entry_arg(arg: &str) -> bool {
+    matches!(
+        arg,
+        "rivus"
+            | "check"
+            | "report"
+            | "setup"
+            | "infer-capsmap"
+            | "strip"
+            | "annotate"
+            | "infer-std"
+            | "why"
+            | "usage"
+            | "help"
+            | "--help"
+            | "-h"
+            | "--version"
+            | "-V"
+    )
+}
+
+fn rvs_is_cargo_rustc_leading_arg(arg: &str) -> bool {
+    matches!(
+        arg,
+        "-" | "-vV" | "-V" | "--version" | "--crate-name" | "--print"
+    ) || arg.starts_with("--print=")
+}
+
 fn rvs_rewrite_cap_lints_allow_M(args: &mut [String]) {
     for arg in args.iter_mut() {
         if arg == "--cap-lints=allow" {
@@ -297,6 +335,56 @@ mod tests {
         assert!(rvs_is_rustc_arg("/toolchain/bin/rustc"));
         assert!(rvs_is_rustc_arg("rustc.exe"));
         assert!(!rvs_is_rustc_arg("rustc.json"));
+    }
+
+    #[test]
+    fn test_20260714_driver_gate_uses_wrapper_marker_for_custom_compiler() {
+        let custom_wrapper = vec![
+            "cargo-rivus".to_string(),
+            "/toolchain/bin/rustc-custom".to_string(),
+            "--crate-name".to_string(),
+            "demo".to_string(),
+        ];
+        let cli_named_compiler = vec![
+            "cargo-rivus".to_string(),
+            "/toolchain/bin/check".to_string(),
+            "--crate-name".to_string(),
+            "demo".to_string(),
+        ];
+        let marked = rvs_should_enter_driver_with_wrapper_marker(&custom_wrapper, true);
+        let unmarked = rvs_should_enter_driver_with_wrapper_marker(&custom_wrapper, false);
+        let cli_named = rvs_should_enter_driver_with_wrapper_marker(&cli_named_compiler, true);
+        let output = format!("marked={marked}\nunmarked={unmarked}\ncli_named={cli_named}\n");
+        rvs_snapshot_BIS(
+            "test_20260714_driver_gate_uses_wrapper_marker_for_custom_compiler",
+            &output,
+        );
+
+        assert!(marked);
+        assert!(!unmarked);
+        assert!(cli_named);
+    }
+
+    #[test]
+    fn test_20260714_driver_gate_ignores_inherited_wrapper_marker_for_cli() {
+        let usage = vec!["cargo-rivus".to_string(), "usage".to_string()];
+        let check = vec![
+            "cargo-rivus".to_string(),
+            "check".to_string(),
+            "--version".to_string(),
+        ];
+        let output = format!(
+            "usage={}\ncheck={}\n",
+            rvs_should_enter_driver_with_wrapper_marker(&usage, true),
+            rvs_should_enter_driver_with_wrapper_marker(&check, true),
+        );
+        rvs_snapshot_BIS(
+            "test_20260714_driver_gate_ignores_inherited_wrapper_marker_for_cli",
+            &output,
+        );
+
+        assert!(!rvs_should_enter_driver_with_wrapper_marker(&usage, true));
+        assert!(!rvs_should_enter_driver_with_wrapper_marker(&check, true));
     }
 
     #[test]
@@ -436,7 +524,10 @@ enum Commands {
 
 fn main() -> ExitCode {
     let raw_args: Vec<String> = env::args().collect();
-    if rvs_should_enter_driver(&raw_args) {
+    if rvs_should_enter_driver_with_wrapper_marker(
+        &raw_args,
+        rvs_env_flag_is_one_BS("RIVUS_WRAPPER"),
+    ) {
         return rvs_run_driver_BIMPS();
     }
 

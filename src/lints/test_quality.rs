@@ -2,9 +2,9 @@ use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
-use rustc_lint::{LateContext, LintContext};
+use rustc_lint::LateContext;
 
-use super::ctx::{CoverageFn, TestCallTarget};
+use super::ctx::{CoverageFn, TestCallTarget, TestSite};
 use super::msg::Msg;
 use super::{
     RVS_DUPLICATE_TEST, RVS_MISSING_TEST_OUTPUT, RVS_UNTESTED_GOOD_FN, RVS_UNTESTED_OK_FN,
@@ -16,7 +16,7 @@ use crate::symbols::CrateName;
 /// `check_crate_post` — cross-cutting test quality checks and output writing.
 pub(crate) fn rvs_check_crate_post_BIMS<'tcx>(
     cx: &LateContext<'tcx>,
-    test_names: &BTreeMap<String, Vec<rustc_span::Span>>,
+    test_names: &BTreeMap<String, Vec<TestSite>>,
     good_fns: &[CoverageFn],
     ok_fns: &[CoverageFn],
     test_calls: &HashSet<TestCallTarget>,
@@ -95,15 +95,16 @@ fn rvs_should_emit_selected(
 
 fn rvs_check_duplicate_tests_S<'tcx>(
     cx: &LateContext<'tcx>,
-    test_names: &BTreeMap<String, Vec<rustc_span::Span>>,
+    test_names: &BTreeMap<String, Vec<TestSite>>,
 ) {
     for (name, spans) in test_names {
         if spans.len() > 1 {
-            for sp in spans {
-                cx.emit_span_lint(
+            for site in spans {
+                cx.tcx.emit_node_span_lint(
                     RVS_DUPLICATE_TEST,
-                    *sp,
-                    Msg::rvs_new(*sp, format!("duplicate test '{name}'")),
+                    site.hir_id,
+                    site.span,
+                    Msg::rvs_new(site.span, format!("duplicate test '{name}'")),
                 );
             }
         }
@@ -112,7 +113,7 @@ fn rvs_check_duplicate_tests_S<'tcx>(
 
 fn rvs_check_missing_test_output_BIS<'tcx>(
     cx: &LateContext<'tcx>,
-    test_names: &BTreeMap<String, Vec<rustc_span::Span>>,
+    test_names: &BTreeMap<String, Vec<TestSite>>,
 ) {
     if rvs_env_os_flag_enabled_BS("RIVUS_UI_TESTING") {
         return;
@@ -124,11 +125,12 @@ fn rvs_check_missing_test_output_BIS<'tcx>(
     for (name, spans) in test_names {
         let out_file = format!("test_out/{name}.out");
         if !rvs_has_test_output_BIS(name, out_dir) {
-            if let Some(sp) = spans.first() {
-                cx.emit_span_lint(
+            if let Some(site) = spans.first() {
+                cx.tcx.emit_node_span_lint(
                     RVS_MISSING_TEST_OUTPUT,
-                    *sp,
-                    Msg::rvs_new(*sp, format!("test '{name}' missing {out_file}")),
+                    site.hir_id,
+                    site.span,
+                    Msg::rvs_new(site.span, format!("test '{name}' missing {out_file}")),
                 );
             }
         }

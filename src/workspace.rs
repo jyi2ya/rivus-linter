@@ -157,6 +157,7 @@ fn rvs_prepare_cargo_check_command_BIMS(
         "RIVUS_UI_TESTING",
         "RIVUS_UNTESTED_PATHS",
         "RIVUS_ENABLED",
+        "RIVUS_WRAPPER",
         "RUSTC",
         "RUSTC_WRAPPER",
         "RUSTC_WORKSPACE_WRAPPER",
@@ -190,6 +191,7 @@ fn rvs_prepare_cargo_check_command_BIMS(
 
     for key in [
         "RIVUS_ENABLED",
+        "RIVUS_WRAPPER",
         "RUSTC",
         "RUSTC_WRAPPER",
         "RUSTC_WORKSPACE_WRAPPER",
@@ -197,7 +199,9 @@ fn rvs_prepare_cargo_check_command_BIMS(
         cmd.env_remove(key);
     }
 
-    cmd.env(wrapper_env, &self_path).env("RIVUS_ENABLED", "1");
+    cmd.env(wrapper_env, &self_path)
+        .env("RIVUS_ENABLED", "1")
+        .env("RIVUS_WRAPPER", "1");
 
     let has_callgraph_env = config
         .extra_env
@@ -303,7 +307,7 @@ pub(crate) fn rvs_run_cargo_check_BIMS(extra_args: &[String]) -> Result<(), i32>
         extra_args_ref.clone(),
         &local_crate_names,
     );
-    let mut callgraph = match callgraph_result {
+    let callgraph = match callgraph_result {
         Ok(callgraph) => callgraph,
         Err(error) if rvs_callgraph_failure_exit_code(&error).is_some() => {
             eprintln!("offline caps check unavailable: {error}");
@@ -347,8 +351,7 @@ pub(crate) fn rvs_run_cargo_check_BIMS(extra_args: &[String]) -> Result<(), i32>
         return Err(error.rvs_exit_code());
     }
 
-    let report =
-        crate::offline_caps::rvs_check_offline_caps_M(&mut callgraph, &caps, &local_crate_names);
+    let report = crate::offline_caps::rvs_check_offline_caps(&callgraph, &caps, &local_crate_names);
     if !report.rvs_is_empty() {
         print!("{report}");
     }
@@ -505,6 +508,7 @@ fn rvs_reject_dangerous_forwarded_config(value: &str) -> Result<(), String> {
         "build.rustc-wrapper",
         "build.rustc-workspace-wrapper",
         "env.RIVUS_ENABLED",
+        "env.RIVUS_WRAPPER",
         "env.RIVUS_CAPSMAP",
         "env.RIVUS_CALLGRAPH",
         "env.RIVUS_CALLGRAPH_DIR",
@@ -1943,6 +1947,10 @@ name = "throughput-bench"
         );
         assert_eq!(
             rvs_command_env_value(&cmd, "RIVUS_ENABLED"),
+            Some(Some("1".to_string()))
+        );
+        assert_eq!(
+            rvs_command_env_value(&cmd, "RIVUS_WRAPPER"),
             Some(Some("1".to_string()))
         );
         assert_eq!(rvs_command_env_value(&cmd, "RUSTC_WRAPPER"), Some(None));
@@ -3429,6 +3437,12 @@ name = "throughput-bench"
             .env_remove("RUSTC")
             .env_remove("RUSTC_WRAPPER")
             .env_remove("RUSTC_WORKSPACE_WRAPPER")
+            .env_remove("RIVUS_CALLGRAPH")
+            .env_remove("RIVUS_CALLGRAPH_DIR")
+            .env_remove("RIVUS_OFFLINE_CAPS")
+            .env_remove("RIVUS_UI_TESTING")
+            .env_remove("RIVUS_UNTESTED_PATHS")
+            .env_remove("RIVUS_WRAPPER")
             .env("RUSTC_WRAPPER", rvs_current_wrapper_exe_BIS().unwrap())
             .env("RIVUS_ENABLED", "1")
             .env("RIVUS_CALLGRAPH", "1")
@@ -3454,6 +3468,61 @@ name = "throughput-bench"
             &snapshot,
         );
 
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260714_driver_capsmap_load_failure_is_fatal() {
+        let dir = rvs_make_workspace_temp_dir_BIS("driver-capsmap-load-failure");
+        let project = dir.join("project");
+        std::fs::create_dir_all(project.join("src")).unwrap();
+        std::fs::create_dir_all(project.join("caps")).unwrap();
+        std::fs::write(
+            project.join("Cargo.toml"),
+            "[package]\nname = \"capsmap-load-failure\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            project.join("src/lib.rs"),
+            "pub fn rvs_value() -> u32 { 1 }\n",
+        )
+        .unwrap();
+        std::fs::write(project.join("caps/seed"), "invalid capsmap line\n").unwrap();
+
+        let output = Command::new(rvs_cargo_command_from_env_BS())
+            .arg("check")
+            .arg("--quiet")
+            .current_dir(&project)
+            .env_remove("RUSTC")
+            .env_remove("RUSTC_WRAPPER")
+            .env_remove("RUSTC_WORKSPACE_WRAPPER")
+            .env_remove("RIVUS_CALLGRAPH")
+            .env_remove("RIVUS_CALLGRAPH_DIR")
+            .env_remove("RIVUS_OFFLINE_CAPS")
+            .env_remove("RIVUS_UI_TESTING")
+            .env_remove("RIVUS_UNTESTED_PATHS")
+            .env_remove("RIVUS_WRAPPER")
+            .env("RUSTC_WRAPPER", rvs_current_wrapper_exe_BIS().unwrap())
+            .env("RIVUS_ENABLED", "1")
+            .env("RIVUS_CAPSMAP", project.join("caps"))
+            .env("CARGO_TARGET_DIR", dir.join("target"))
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let has_error = stderr.contains("error: failed to load capsmap:");
+        let has_warning_fallback = stderr.contains("warning: failed to load capsmap:");
+        let snapshot = format!(
+            "success={}\nhas_error={has_error}\nhas_warning_fallback={has_warning_fallback}\n",
+            output.status.success()
+        );
+        rvs_snapshot_BIS(
+            "test_20260714_driver_capsmap_load_failure_is_fatal",
+            &snapshot,
+        );
+
+        assert!(!output.status.success(), "{snapshot}");
+        assert!(has_error, "{snapshot}");
+        assert!(!has_warning_fallback, "{snapshot}");
         std::fs::remove_dir_all(dir).unwrap();
     }
 

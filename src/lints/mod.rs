@@ -206,7 +206,7 @@ rvs_declare_lints!(
 #[derive(Debug)]
 pub struct RivusLintPass {
     capsmap: Option<CapsMap>,
-    test_names: BTreeMap<String, Vec<Span>>,
+    test_names: BTreeMap<String, Vec<ctx::TestSite>>,
     good_fns: Vec<ctx::CoverageFn>,
     ok_fns: Vec<ctx::CoverageFn>,
     test_calls: HashSet<ctx::TestCallTarget>,
@@ -254,22 +254,20 @@ impl RivusLintPass {
         }
     }
 
-    fn rvs_ensure_capsmap_BIMS(&mut self) {
+    fn rvs_ensure_capsmap_BIMS(&mut self) -> Result<(), String> {
         if self.capsmap.is_some() {
-            return;
+            return Ok(());
         }
-        if let Some(path_str) = std::env::var_os("RIVUS_CAPSMAP") {
-            let path = std::path::PathBuf::from(path_str);
-            self.capsmap = Some(match CapsMap::rvs_load_BIS(&path) {
-                Ok(cm) => cm,
-                Err(e) => {
-                    eprintln!("warning: {}: {e}", path.display());
-                    CapsMap::rvs_new()
-                }
-            });
-        } else {
-            self.capsmap = Some(CapsMap::rvs_new());
-        }
+        let path = std::env::var_os("RIVUS_CAPSMAP").map(std::path::PathBuf::from);
+        self.capsmap = Some(rvs_load_capsmap_path_BIS(path.as_deref())?);
+        Ok(())
+    }
+}
+
+fn rvs_load_capsmap_path_BIS(path: Option<&std::path::Path>) -> Result<CapsMap, String> {
+    match path {
+        Some(path) => CapsMap::rvs_load_BIS(path).map_err(|error| error.to_string()),
+        None => Ok(CapsMap::rvs_new()),
     }
 }
 
@@ -344,7 +342,10 @@ impl<'tcx> LateLintPass<'tcx> for RivusLintPass {
             cx.tcx.dcx().err(error);
         }
         if self.should_emit_caps_report {
-            self.rvs_ensure_capsmap_BIMS();
+            if let Err(error) = self.rvs_ensure_capsmap_BIMS() {
+                cx.tcx.dcx().err(format!("failed to load capsmap: {error}"));
+                self.should_emit_caps_report = false;
+            }
         }
 
         // Pre-scan: collect names of test functions
@@ -389,8 +390,8 @@ impl<'tcx> LateLintPass<'tcx> for RivusLintPass {
                 .capsmap
                 .as_ref()
                 .expect("never: direct caps report loads capsmap in check_crate");
-            let report = crate::offline_caps::rvs_check_offline_caps_M(
-                &mut self.callgraph,
+            let report = crate::offline_caps::rvs_check_offline_caps(
+                &self.callgraph,
                 caps,
                 &local_crate_names,
             );
@@ -675,7 +676,7 @@ fn rvs_check_item_MS<'tcx>(
     cx: &LateContext<'tcx>,
     item: &'tcx rustc_hir::Item<'tcx>,
     test_fn_names: &HashSet<String>,
-    test_names: &mut BTreeMap<String, Vec<Span>>,
+    test_names: &mut BTreeMap<String, Vec<ctx::TestSite>>,
     test_calls: &mut HashSet<ctx::TestCallTarget>,
     banned_import_statements: &mut HashSet<(rustc_span::StableSourceFileId, u32, String)>,
     data: &mut FnCheckData<'_>,
@@ -712,7 +713,10 @@ fn rvs_check_item_MS<'tcx>(
                     test_names
                         .entry(name.to_string())
                         .or_default()
-                        .push(item.span);
+                        .push(ctx::TestSite {
+                            hir_id: item.hir_id(),
+                            span: item.span,
+                        });
                     body::collector::rvs_collect_test_calls_M(&body_facts, test_calls);
                 }
                 let vis = cx.tcx.visibility(item.owner_id.def_id);
@@ -773,7 +777,7 @@ fn rvs_check_impl_item_MS<'tcx>(
     cx: &LateContext<'tcx>,
     impl_item: &'tcx rustc_hir::ImplItem<'tcx>,
     test_fn_names: &HashSet<String>,
-    test_names: &mut BTreeMap<String, Vec<Span>>,
+    test_names: &mut BTreeMap<String, Vec<ctx::TestSite>>,
     test_calls: &mut HashSet<ctx::TestCallTarget>,
     data: &mut FnCheckData<'_>,
 ) {
@@ -823,7 +827,10 @@ fn rvs_check_impl_item_MS<'tcx>(
                 test_names
                     .entry(name.to_string())
                     .or_default()
-                    .push(impl_item.span);
+                    .push(ctx::TestSite {
+                        hir_id: impl_item.hir_id(),
+                        span: impl_item.span,
+                    });
                 body::collector::rvs_collect_test_calls_M(&body_facts, test_calls);
             }
             if !is_test && is_pub {
@@ -932,6 +939,30 @@ fn rvs_check_trait_item_MS<'tcx>(
 mod tests {
     use super::*;
     use crate::test_support::rvs_snapshot_BIS;
+
+    #[test]
+    fn test_20260714_explicit_capsmap_load_failure_is_fatal() {
+        let path =
+            std::env::temp_dir().join("test_20260714_explicit_capsmap_load_failure_is_fatal");
+        std::fs::remove_dir_all(&path).ok();
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::write(path.join("seed"), "invalid capsmap line\n").unwrap();
+
+        let result = rvs_load_capsmap_path_BIS(Some(&path));
+        let output = match &result {
+            Ok(_) => "ok\n".to_string(),
+            Err(error) => {
+                format!("error={error}\n").replace(path.to_string_lossy().as_ref(), "CAPSMAP_PATH")
+            }
+        };
+        rvs_snapshot_BIS(
+            "test_20260714_explicit_capsmap_load_failure_is_fatal",
+            &output,
+        );
+        std::fs::remove_dir_all(&path).ok();
+
+        assert!(result.is_err());
+    }
 
     #[test]
     fn test_20260706_env_flag_value_requires_one() {

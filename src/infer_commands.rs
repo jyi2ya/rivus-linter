@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
 use crate::callgraph_cache::rvs_is_std_like_def_path;
@@ -28,13 +29,21 @@ pub(crate) fn rvs_run_infer_capsmap_BIMPS(path: &Path, output: &Path) -> Result<
     let local_crate_names = rvs_detect_local_crate_prefixes_BIS(&project_path, target_scope)?;
 
     let abs_seed = project_path.join("caps");
-    let seed = if rvs_validate_optional_capsmap_dir_BIS(&abs_seed)? {
-        CapsMap::rvs_load_dir_excluding_BIS(&abs_seed, &["deps"])
+    let resolved_output = rvs_prepare_output_path_BIS(&project_path, output, "deps capsmap")?;
+    let caps_dir_exists = rvs_validate_optional_capsmap_dir_BIS(&abs_seed)?;
+    let output_layer = rvs_caps_output_layer_BIS(&abs_seed, &resolved_output, caps_dir_exists)?;
+    let mut excluded_layers = vec![OsStr::new("deps")];
+    if let Some(layer) = output_layer.as_deref()
+        && layer != OsStr::new("deps")
+    {
+        excluded_layers.push(layer);
+    }
+    let seed = if caps_dir_exists {
+        CapsMap::rvs_load_dir_excluding_names_BIS(&abs_seed, &excluded_layers)
             .map_err(|e| format!("caps: {e}"))?
     } else {
         CapsMap::rvs_new()
     };
-    let resolved_output = rvs_prepare_output_path_BIS(&project_path, output, "deps capsmap")?;
 
     let mut callgraph = rvs_collect_callgraph_BIMS(
         &project_path,
@@ -149,6 +158,56 @@ fn rvs_resolve_output_path(project_path: &Path, output_path: &Path) -> PathBuf {
     } else {
         project_path.join(output_path)
     }
+}
+
+fn rvs_caps_output_layer_BIS(
+    caps_dir: &Path,
+    output_path: &Path,
+    caps_dir_exists: bool,
+) -> Result<Option<OsString>, String> {
+    let Some(parent) = output_path.parent() else {
+        return Ok(None);
+    };
+    if output_path.is_file() && caps_dir_exists {
+        let canonical_caps = caps_dir.canonicalize().map_err(|error| {
+            format!(
+                "cannot canonicalize caps directory '{}': {error}",
+                caps_dir.display()
+            )
+        })?;
+        let canonical_output = output_path.canonicalize().map_err(|error| {
+            format!(
+                "cannot canonicalize capsmap output '{}': {error}",
+                output_path.display()
+            )
+        })?;
+        return Ok(
+            (canonical_output.parent() == Some(canonical_caps.as_path()))
+                .then(|| canonical_output.file_name().map(OsStr::to_os_string))
+                .flatten(),
+        );
+    }
+    if parent == caps_dir {
+        return Ok(output_path.file_name().map(OsStr::to_os_string));
+    }
+    if !caps_dir_exists || !parent.is_dir() {
+        return Ok(None);
+    }
+    let canonical_caps = caps_dir.canonicalize().map_err(|error| {
+        format!(
+            "cannot canonicalize caps directory '{}': {error}",
+            caps_dir.display()
+        )
+    })?;
+    let canonical_parent = parent.canonicalize().map_err(|error| {
+        format!(
+            "cannot canonicalize capsmap output parent '{}': {error}",
+            parent.display()
+        )
+    })?;
+    Ok((canonical_parent == canonical_caps)
+        .then(|| output_path.file_name().map(OsStr::to_os_string))
+        .flatten())
 }
 
 fn rvs_collect_std_unknown_callees(
@@ -465,6 +524,82 @@ mod tests {
         let output = format!("result={result:?}\ndeps={deps:?}\n");
         rvs_snapshot_BIS("test_20260710_infer_capsmap_replaces_invalid_deps", &output);
 
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260714_infer_capsmap_replaces_invalid_custom_output() {
+        let dir = rvs_make_cargo_project_BIS(
+            "infer-capsmap-invalid-custom-output",
+            "infer-capsmap-invalid-custom-output",
+            &[("src/lib.rs", "pub fn rvs_add() -> i32 { 1 }\n")],
+        );
+        std::fs::create_dir_all(dir.join("caps")).unwrap();
+        std::fs::write(dir.join("caps/generated"), "broken=Z\n").unwrap();
+
+        let result = rvs_run_infer_capsmap_BIMPS(&dir, Path::new("caps/generated"));
+        assert!(
+            result.is_ok(),
+            "old custom output should not become its own seed: {result:?}"
+        );
+        let generated = std::fs::read_to_string(dir.join("caps/generated")).unwrap();
+        let output = format!("result={result:?}\ngenerated={generated:?}\n");
+        rvs_snapshot_BIS(
+            "test_20260714_infer_capsmap_replaces_invalid_custom_output",
+            &output,
+        );
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_20260714_infer_capsmap_replaces_invalid_output_through_symlink() {
+        let dir = rvs_make_cargo_project_BIS(
+            "infer-capsmap-invalid-symlink-output",
+            "infer-capsmap-invalid-symlink-output",
+            &[("src/lib.rs", "pub fn rvs_add() -> i32 { 1 }\n")],
+        );
+        std::fs::create_dir_all(dir.join("caps")).unwrap();
+        std::fs::write(dir.join("caps/generated"), "broken=Z\n").unwrap();
+        std::os::unix::fs::symlink(dir.join("caps"), dir.join("caps-alias")).unwrap();
+
+        let result = rvs_run_infer_capsmap_BIMPS(&dir, Path::new("caps-alias/generated"));
+        let generated = std::fs::read_to_string(dir.join("caps/generated")).unwrap();
+        let output = format!("result={result:?}\ngenerated={generated:?}\n");
+        rvs_snapshot_BIS(
+            "test_20260714_infer_capsmap_replaces_invalid_output_through_symlink",
+            &output,
+        );
+
+        assert!(result.is_ok());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_20260714_infer_capsmap_replaces_invalid_non_utf8_output() {
+        use std::os::unix::ffi::OsStringExt as _;
+
+        let dir = rvs_make_cargo_project_BIS(
+            "infer-capsmap-invalid-non-utf8-output",
+            "infer-capsmap-invalid-non-utf8-output",
+            &[("src/lib.rs", "pub fn rvs_add() -> i32 { 1 }\n")],
+        );
+        std::fs::create_dir_all(dir.join("caps")).unwrap();
+        let layer = std::ffi::OsString::from_vec(vec![b'g', 0x80]);
+        let output_path = PathBuf::from("caps").join(&layer);
+        std::fs::write(dir.join(&output_path), "broken=Z\n").unwrap();
+
+        let result = rvs_run_infer_capsmap_BIMPS(&dir, &output_path);
+        let generated = std::fs::read_to_string(dir.join(&output_path)).unwrap();
+        let output = format!("result={result:?}\ngenerated={generated:?}\n");
+        rvs_snapshot_BIS(
+            "test_20260714_infer_capsmap_replaces_invalid_non_utf8_output",
+            &output,
+        );
+
+        assert!(result.is_ok());
         std::fs::remove_dir_all(dir).unwrap();
     }
 

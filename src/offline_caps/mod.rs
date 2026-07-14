@@ -131,21 +131,22 @@ struct OfflineFnContext<'a> {
     contract_diff: Option<&'a FnContractDiff>,
 }
 
-pub(crate) fn rvs_check_offline_caps_M(
-    graph: &mut FnGraph,
+pub(crate) fn rvs_check_offline_caps(
+    graph: &FnGraph,
     caps: &CapsMap,
     local_crate_names: &BTreeSet<CrateName>,
 ) -> OfflineCapsReport {
     let mut report = OfflineCapsReport::default();
     let local_scope = LocalScope::rvs_new(local_crate_names);
-    let analysis = PreparedLocalAnalysis::rvs_prepare_M(graph, caps, local_crate_names);
+    let mut scoped_graph = graph.clone();
+    let analysis = PreparedLocalAnalysis::rvs_prepare_M(&mut scoped_graph, caps, local_crate_names);
     let diffs_by_path: HashMap<&str, &FnContractDiff> = analysis
         .diffs
         .iter()
         .map(|diff| (diff.def_path.rvs_as_str(), diff))
         .collect();
-    let resolver = analysis.rvs_resolver(graph, caps);
-    for (def_path, node) in graph.rvs_iter() {
+    let resolver = analysis.rvs_resolver(&scoped_graph, caps);
+    for (def_path, node) in scoped_graph.rvs_iter() {
         let classification = FunctionClassification::rvs_new(&local_scope, def_path, node);
         if !classification.rvs_is_offline_checked() {
             continue;
@@ -600,7 +601,7 @@ mod tests {
         let caps = CapsMap::rvs_parse("std::fs::read_to_string=BI\n").unwrap();
         let local = BTreeSet::from([CrateName::from("demo")]);
 
-        let report = rvs_check_offline_caps_M(&mut graph, &caps, &local);
+        let report = rvs_check_offline_caps(&graph, &caps, &local);
         let output = report.to_string();
         rvs_snapshot_BIS(
             "test_20260709_offline_caps_reports_call_violation_and_unknown",
@@ -634,7 +635,7 @@ mod tests {
         let caps = CapsMap::rvs_new();
         let local = BTreeSet::from([CrateName::from("demo")]);
 
-        let report = rvs_check_offline_caps_M(&mut graph, &caps, &local);
+        let report = rvs_check_offline_caps(&graph, &caps, &local);
         let output = report.to_string();
         rvs_snapshot_BIS(
             "test_20260714_offline_caps_unknown_std_callee_suggests_std_caps",
@@ -644,6 +645,37 @@ mod tests {
         assert!(output.contains("cargo rivus infer-std -o caps/std"));
         assert!(output.contains("add its exact def_path to caps/seed"));
         assert!(output.contains("use caps/ext only for a project-local check override"));
+    }
+
+    #[test]
+    fn test_20260714_offline_caps_preserves_port_facts() {
+        let mut graph = FnGraph::rvs_new();
+        let mut app = rvs_node(&[]);
+        app.facts.is_port_method = true;
+        let mut dependency = rvs_node(&[]);
+        dependency.facts.is_port_method = true;
+        graph.rvs_insert_M(DefPath::from("app::ApiClient::rvs_fetch_P"), app);
+        graph.rvs_insert_M(
+            DefPath::from("dependency::HttpClient::rvs_fetch_P"),
+            dependency,
+        );
+
+        let _ = rvs_check_offline_caps(
+            &graph,
+            &CapsMap::rvs_new(),
+            &BTreeSet::from([CrateName::from("app")]),
+        );
+        let app_port = graph
+            .rvs_get("app::ApiClient::rvs_fetch_P")
+            .is_some_and(|node| node.facts.is_port_method);
+        let dependency_port = graph
+            .rvs_get("dependency::HttpClient::rvs_fetch_P")
+            .is_some_and(|node| node.facts.is_port_method);
+        let output = format!("app={app_port}\ndependency={dependency_port}\n");
+        rvs_snapshot_BIS("test_20260714_offline_caps_preserves_port_facts", &output);
+
+        assert!(app_port);
+        assert!(dependency_port);
     }
 
     #[test]
@@ -658,7 +690,7 @@ mod tests {
         let caps = CapsMap::rvs_new();
         let local = BTreeSet::from([CrateName::from("demo")]);
 
-        let report = rvs_check_offline_caps_M(&mut graph, &caps, &local);
+        let report = rvs_check_offline_caps(&graph, &caps, &local);
         let output = report.to_string();
         rvs_snapshot_BIS(
             "test_20260709_offline_caps_reports_contract_and_static_ref",
@@ -684,7 +716,7 @@ mod tests {
         let mut analysis_graph = graph.clone();
         let analysis = PreparedLocalAnalysis::rvs_prepare_M(&mut analysis_graph, &caps, &local);
 
-        let report = rvs_check_offline_caps_M(&mut graph, &caps, &local);
+        let report = rvs_check_offline_caps(&graph, &caps, &local);
         let output = format!("contract_diffs={}\n{}", analysis.diffs.len(), report);
         rvs_snapshot_BIS(
             "test_20260713_port_trait_impl_offline_checked_without_contract_diff",
@@ -718,7 +750,7 @@ mod tests {
         let caps = CapsMap::rvs_parse("dep::effect=S\n").unwrap();
         let local = BTreeSet::from([CrateName::from("demo")]);
 
-        let report = rvs_check_offline_caps_M(&mut graph, &caps, &local);
+        let report = rvs_check_offline_caps(&graph, &caps, &local);
         let output = report.to_string();
         rvs_snapshot_BIS(
             "test_20260713_offline_caps_single_context_emits_all_diagnostic_families",

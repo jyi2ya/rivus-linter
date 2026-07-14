@@ -15,6 +15,14 @@ fn rvs_emit_banned_crate_S(cx: &LateContext<'_>, span: Span, crate_name: &str) {
     );
 }
 
+fn rvs_span_snippet_has_use_keyword(snippet: &str) -> bool {
+    let trimmed = snippet.trim_start();
+    trimmed.starts_with("use ")
+        || trimmed.starts_with("use\n")
+        || trimmed.starts_with("pub ")
+        || trimmed.starts_with("pub(")
+}
+
 /// Check an `extern crate` item using the resolved crate identity, not its alias.
 pub(crate) fn rvs_check_extern_crate_S(cx: &LateContext<'_>, item: &Item<'_>) {
     let Some(crate_num) = cx.tcx.extern_mod_stmt_cnum(item.owner_id.def_id) else {
@@ -49,6 +57,11 @@ pub(crate) fn rvs_check_item_MS<'tcx>(
             let source_map = cx.tcx.sess.source_map();
             let statement_span = if item.span.from_expansion() {
                 item.span.source_callsite()
+            } else if source_map
+                .span_to_snippet(item.span)
+                .is_ok_and(|snippet| rvs_span_snippet_has_use_keyword(&snippet))
+            {
+                item.span
             } else {
                 source_map
                     .span_extend_to_prev_str(item.span, "use", true, false)
@@ -83,6 +96,38 @@ pub(crate) fn rvs_check_item_MS<'tcx>(
                 item.span,
                 Msg::rvs_new(item.span, format!("wildcard import: {full}")),
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::rvs_snapshot_BIS;
+
+    #[test]
+    fn test_20260714_import_span_keyword_detection_table() {
+        let cases = [
+            ("use anyhow::Result;", true),
+            ("  pub use eyre::Report;", true),
+            ("pub(crate) use thiserror::Error;", true),
+            ("anyhow::{Context, Result}", false),
+        ];
+        let output = cases
+            .iter()
+            .map(|(snippet, expected)| {
+                format!(
+                    "{snippet:?}: actual={}, expected={expected}",
+                    rvs_span_snippet_has_use_keyword(snippet)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        rvs_snapshot_BIS("test_20260714_import_span_keyword_detection_table", &output);
+
+        for (snippet, expected) in cases {
+            assert_eq!(rvs_span_snippet_has_use_keyword(snippet), expected);
         }
     }
 }

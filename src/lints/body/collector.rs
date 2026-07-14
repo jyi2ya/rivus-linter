@@ -1,13 +1,13 @@
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{HashMap, HashSet};
 
-use rustc_hir::{Body, ExprKind, HirId, Mutability, def::DefKind};
+use rustc_hir::{Body, ExprKind, HirId, LocalSource, Mutability, PatKind, def::DefKind};
 use rustc_lint::LateContext;
 use rustc_middle::ty::TyKind;
 use rustc_span::{Span, Symbol, sym};
 
 use super::super::utils::{
-    CallObservation, CallTarget, rvs_collect_all_idents_M, rvs_resolve_call, rvs_root_body_expr,
-    rvs_static_is_thread_local, rvs_visit_body_exprs_M,
+    CallObservation, CallTarget, rvs_collect_local_bindings_M, rvs_resolve_call,
+    rvs_root_body_expr, rvs_static_is_thread_local, rvs_visit_body_exprs_M,
 };
 use super::macro_expansion::rvs_span_has_bang_macro;
 use crate::lints::ctx::TestCallTarget;
@@ -19,7 +19,7 @@ pub(crate) struct BodyFacts {
     pub(crate) has_static_mut_ref: bool,
     pub(crate) has_thread_local_ref: bool,
     pub(crate) has_stub: bool,
-    pub(crate) debug_assert_identifiers: BTreeSet<String>,
+    pub(crate) debug_assert_bindings: HashSet<HirId>,
     pub(crate) result_swallow_calls: Vec<(HirId, Span, super::super::utils::CallSyntax, String)>,
     pub(crate) result_drop_calls: Vec<(HirId, Span)>,
 }
@@ -35,6 +35,7 @@ pub(crate) fn rvs_collect_body_facts_M<'tcx>(
         Symbol::intern("debug_assert_ne"),
     ];
     let root_expr = rvs_root_body_expr(cx.tcx, body);
+    let async_param_aliases = rvs_async_param_aliases(cx, root_expr);
     rvs_visit_body_exprs_M(cx.tcx, root_expr, |expr, nested_body| {
         match &expr.kind {
             ExprKind::Path(qpath) => {
@@ -85,17 +86,59 @@ pub(crate) fn rvs_collect_body_facts_M<'tcx>(
             }
             facts.calls.push(observation);
         }
-        if !facts.has_stub && rvs_expr_is_stub(expr) {
+        if !facts.has_stub && rvs_expr_is_stub(cx, expr) {
             facts.has_stub = true;
         }
         if !nested_body
             && expr.span.from_expansion()
-            && rvs_span_has_bang_macro(expr.span, &debug_assert_macros)
+            && rvs_span_has_bang_macro(cx.tcx, expr.span, &debug_assert_macros)
         {
-            rvs_collect_all_idents_M(expr, &mut facts.debug_assert_identifiers);
+            let mut bindings = HashSet::new();
+            rvs_collect_local_bindings_M(cx, expr, &mut bindings);
+            facts
+                .debug_assert_bindings
+                .extend(bindings.into_iter().map(|binding| {
+                    async_param_aliases
+                        .get(&binding)
+                        .copied()
+                        .unwrap_or(binding)
+                }));
         }
     });
     facts
+}
+
+fn rvs_async_param_aliases(
+    cx: &LateContext<'_>,
+    root_expr: &rustc_hir::Expr<'_>,
+) -> HashMap<HirId, HirId> {
+    let ExprKind::Block(block, _) = root_expr.kind else {
+        return HashMap::new();
+    };
+    block
+        .stmts
+        .iter()
+        .filter_map(|statement| {
+            let rustc_hir::StmtKind::Let(local) = statement.kind else {
+                return None;
+            };
+            if !matches!(local.source, LocalSource::AsyncFn) {
+                return None;
+            }
+            let PatKind::Binding(_, alias_hir_id, _, _) = local.pat.kind else {
+                return None;
+            };
+            let ExprKind::Path(qpath) = local.init?.kind else {
+                return None;
+            };
+            let rustc_hir::def::Res::Local(parameter_hir_id) =
+                cx.qpath_res(&qpath, local.init?.hir_id)
+            else {
+                return None;
+            };
+            Some((alias_hir_id, parameter_hir_id))
+        })
+        .collect()
 }
 
 fn rvs_result_swallow_name(cx: &LateContext<'_>, target: &CallTarget) -> Option<&'static str> {
@@ -184,9 +227,9 @@ pub(crate) fn rvs_collect_test_calls_M(facts: &BodyFacts, out: &mut HashSet<Test
     }
 }
 
-fn rvs_expr_is_stub(expr: &rustc_hir::Expr<'_>) -> bool {
+fn rvs_expr_is_stub(cx: &LateContext<'_>, expr: &rustc_hir::Expr<'_>) -> bool {
     let names = [Symbol::intern("todo"), Symbol::intern("unimplemented")];
-    rvs_span_has_bang_macro(expr.span, &names)
+    rvs_span_has_bang_macro(cx.tcx, expr.span, &names)
 }
 
 #[cfg(test)]
@@ -265,7 +308,7 @@ mod tests {
             let _body: &Body<'_> = unreachable!();
             let _expr: &rustc_hir::Expr<'_> = unreachable!();
             let _ = rvs_collect_body_facts_M(_cx, _body);
-            let _ = rvs_expr_is_stub(_expr);
+            let _ = rvs_expr_is_stub(_cx, _expr);
         }
     }
 }

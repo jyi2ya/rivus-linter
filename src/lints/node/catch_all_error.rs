@@ -1,5 +1,5 @@
 use rustc_hir::{EnumDef, Item};
-use rustc_lint::{LateContext, LintContext};
+use rustc_lint::LateContext;
 
 use super::super::RVS_CATCH_ALL_ERROR_VARIANT;
 use super::super::msg::Msg;
@@ -18,8 +18,9 @@ pub(crate) fn rvs_check_enum_S<'tcx>(
         for v in enum_def.variants {
             let vn = v.ident.name.as_str();
             if CATCH_ALL_VARIANT_NAMES.contains(&vn) {
-                cx.emit_span_lint(
+                cx.tcx.emit_node_span_lint(
                     RVS_CATCH_ALL_ERROR_VARIANT,
+                    v.hir_id,
                     v.span,
                     Msg::rvs_new(v.span, format!("catch-all variant '{vn}' in {name_s}")),
                 );

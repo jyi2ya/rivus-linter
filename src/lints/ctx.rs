@@ -15,6 +15,12 @@ pub(crate) struct CoverageFn {
     pub(crate) span: Span,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TestSite {
+    pub(crate) hir_id: HirId,
+    pub(crate) span: Span,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum TestCallTarget {
     Resolved(FunctionIdentity),

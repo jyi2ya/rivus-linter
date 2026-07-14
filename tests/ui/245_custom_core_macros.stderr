@@ -1,0 +1,10 @@
+error: param 'value' missing debug_assert!
+  --> $DIR/tests/ui/245_custom_core_macros.rs:19:33
+   |
+LL | fn rvs_custom_core_debug_assert(value: u32) {
+   |                                 ^^^^^
+   |
+   = note: `-D rivus::rvs-missing-debug-assert` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_debug_assert)]`
+
+error: aborting due to 1 previous error

@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::HashSet;
 
 use rustc_hir::{
     self, Block, Body, Expr, ExprKind, HirId, Mutability, QPath, TyKind, attrs::AttributeKind,
@@ -181,57 +181,65 @@ pub(crate) fn rvs_is_empty_body<'tcx>(
     for s in block.stmts {
         match &s.kind {
             rustc_hir::StmtKind::Expr(e) | rustc_hir::StmtKind::Semi(e) => {
-                if !rvs_is_only_debug_asserts(e) {
+                let (only_debug_asserts, child_has_debug_assert) = rvs_debug_assert_only(tcx, e);
+                if !only_debug_asserts {
                     return (false, false);
                 }
-                found_debug_assert = true;
+                found_debug_assert |= child_has_debug_assert;
             }
             rustc_hir::StmtKind::Let(_) | rustc_hir::StmtKind::Item(_) => return (false, false),
         }
     }
     if let Some(e) = block.expr {
-        if !rvs_is_only_debug_asserts(e) {
+        let (only_debug_asserts, child_has_debug_assert) = rvs_debug_assert_only(tcx, e);
+        if !only_debug_asserts {
             return (false, false);
         }
-        found_debug_assert = true;
+        found_debug_assert |= child_has_debug_assert;
     }
     (true, found_debug_assert)
 }
 
-fn rvs_is_only_debug_asserts(e: &Expr<'_>) -> bool {
-    if rvs_expr_from_debug_assert_macro(e) {
-        return true;
+fn rvs_debug_assert_only(tcx: rustc_middle::ty::TyCtxt<'_>, e: &Expr<'_>) -> (bool, bool) {
+    if rvs_expr_from_debug_assert_macro(tcx, e) {
+        return (true, true);
     }
     match &e.kind {
         ExprKind::Block(b, _) => {
+            let mut found_debug_assert = false;
             for s in b.stmts {
                 match &s.kind {
                     rustc_hir::StmtKind::Expr(e2) | rustc_hir::StmtKind::Semi(e2) => {
-                        if !rvs_is_only_debug_asserts(e2) {
-                            return false;
+                        let (only_debug_asserts, child_has_debug_assert) =
+                            rvs_debug_assert_only(tcx, e2);
+                        if !only_debug_asserts {
+                            return (false, false);
                         }
+                        found_debug_assert |= child_has_debug_assert;
                     }
-                    _ => return false,
+                    _ => return (false, false),
                 }
             }
             if let Some(e) = b.expr {
-                if !rvs_is_only_debug_asserts(e) {
-                    return false;
+                let (only_debug_asserts, child_has_debug_assert) = rvs_debug_assert_only(tcx, e);
+                if !only_debug_asserts {
+                    return (false, false);
                 }
+                found_debug_assert |= child_has_debug_assert;
             }
-            true
+            (true, found_debug_assert)
         }
-        _ => false,
+        _ => (false, false),
     }
 }
 
-fn rvs_expr_from_debug_assert_macro(e: &Expr<'_>) -> bool {
+fn rvs_expr_from_debug_assert_macro(tcx: rustc_middle::ty::TyCtxt<'_>, e: &Expr<'_>) -> bool {
     let names = [
         Symbol::intern("debug_assert"),
         Symbol::intern("debug_assert_eq"),
         Symbol::intern("debug_assert_ne"),
     ];
-    rvs_span_has_bang_macro(e.span, &names)
+    rvs_span_has_bang_macro(tcx, e.span, &names)
 }
 
 fn rvs_for_each_expr_child_M<'tcx>(e: &'tcx Expr<'tcx>, f: &mut impl FnMut(&'tcx Expr<'tcx>)) {
@@ -311,42 +319,46 @@ fn rvs_for_each_expr_child_M<'tcx>(e: &'tcx Expr<'tcx>, f: &mut impl FnMut(&'tcx
     }
 }
 
-pub(crate) fn rvs_collect_all_idents_M(e: &Expr<'_>, out: &mut BTreeSet<String>) {
+pub(crate) fn rvs_collect_local_bindings_M(
+    cx: &LateContext<'_>,
+    e: &Expr<'_>,
+    out: &mut HashSet<HirId>,
+) {
     if let ExprKind::Path(q) = &e.kind
-        && let Some(name) = rvs_plast(q)
+        && let rustc_hir::def::Res::Local(binding_hir_id) = cx.qpath_res(q, e.hir_id)
     {
-        out.insert(name);
+        out.insert(binding_hir_id);
     }
     match &e.kind {
         ExprKind::Block(block, _) | ExprKind::Loop(block, ..) => {
-            rvs_collect_block_idents_M(block, out);
+            rvs_collect_block_bindings_M(cx, block, out);
         }
         ExprKind::Closure(_) => {}
         _ => rvs_for_each_expr_child_M(e, &mut |child| {
-            rvs_collect_all_idents_M(child, out);
+            rvs_collect_local_bindings_M(cx, child, out);
         }),
     }
 }
 
-fn rvs_collect_block_idents_M(block: &Block<'_>, out: &mut BTreeSet<String>) {
+fn rvs_collect_block_bindings_M(cx: &LateContext<'_>, block: &Block<'_>, out: &mut HashSet<HirId>) {
     for statement in block.stmts {
         match &statement.kind {
             rustc_hir::StmtKind::Expr(expr) | rustc_hir::StmtKind::Semi(expr) => {
-                rvs_collect_all_idents_M(expr, out);
+                rvs_collect_local_bindings_M(cx, expr, out);
             }
             rustc_hir::StmtKind::Let(local) => {
                 if let Some(initializer) = local.init {
-                    rvs_collect_all_idents_M(initializer, out);
+                    rvs_collect_local_bindings_M(cx, initializer, out);
                 }
                 if let Some(else_block) = local.els {
-                    rvs_collect_block_idents_M(else_block, out);
+                    rvs_collect_block_bindings_M(cx, else_block, out);
                 }
             }
             _ => {}
         }
     }
     if let Some(expr) = block.expr {
-        rvs_collect_all_idents_M(expr, out);
+        rvs_collect_local_bindings_M(cx, expr, out);
     }
 }
 
@@ -625,13 +637,21 @@ pub(crate) fn rvs_resolve_call(cx: &LateContext<'_>, expr: &Expr<'_>) -> Option<
     match &expr.kind {
         ExprKind::Call(func, _) => {
             let mut callee = *func;
-            while let ExprKind::Cast(inner, _)
-            | ExprKind::Type(inner, _)
-            | ExprKind::DropTemps(inner)
-            | ExprKind::Use(inner, _)
-            | ExprKind::UnsafeBinderCast(_, inner, _) = callee.kind
-            {
-                callee = inner;
+            loop {
+                match callee.kind {
+                    ExprKind::Cast(inner, _)
+                    | ExprKind::Type(inner, _)
+                    | ExprKind::DropTemps(inner)
+                    | ExprKind::Use(inner, _)
+                    | ExprKind::UnsafeBinderCast(_, inner, _) => callee = inner,
+                    ExprKind::Block(block, _) => {
+                        let Some(inner) = block.expr else {
+                            break;
+                        };
+                        callee = inner;
+                    }
+                    _ => break,
+                }
             }
             let ExprKind::Path(qpath) = &callee.kind else {
                 return None;
@@ -718,13 +738,6 @@ pub(crate) fn rvs_tys(t: &rustc_hir::Ty<'_>) -> String {
             }
         }
         _ => "_".into(),
-    }
-}
-
-pub(crate) fn rvs_plast(q: &QPath<'_>) -> Option<String> {
-    match q {
-        QPath::Resolved(_, p) => p.segments.last().map(|s| s.ident.name.to_string()),
-        QPath::TypeRelative(_, s) => Some(s.ident.name.to_string()),
     }
 }
 
@@ -926,7 +939,7 @@ mod tests {
             let _qpath: &QPath<'_> = unreachable!();
             let _ty: &rustc_hir::Ty<'_> = unreachable!();
             let _tcx: rustc_middle::ty::TyCtxt<'_> = unreachable!();
-            let mut set = BTreeSet::new();
+            let mut set = HashSet::new();
             let mut in_comment = false;
 
             rvs_has_attr(_attrs, "test");
@@ -937,9 +950,9 @@ mod tests {
             rvs_has_debug_derive(_cx, _def_id);
             rvs_has_mutable_params(_sig);
             rvs_is_empty_body(_tcx, _body);
-            rvs_is_only_debug_asserts(_expr);
-            rvs_expr_from_debug_assert_macro(_expr);
-            rvs_collect_all_idents_M(_expr, &mut set);
+            rvs_debug_assert_only(_tcx, _expr);
+            rvs_expr_from_debug_assert_macro(_tcx, _expr);
+            rvs_collect_local_bindings_M(_cx, _expr, &mut set);
             rvs_static_is_thread_local(_cx, _def_id);
             rvs_count_effective_lines_M(_cx, _body);
             rvs_root_body_expr(_tcx, _body);
@@ -952,7 +965,6 @@ mod tests {
             rvs_visit_body_exprs_M(_tcx, _expr, |_, _| {});
             rvs_qp(_qpath);
             rvs_tys(_ty);
-            rvs_plast(_qpath);
             rvs_def_path(_cx, _def_id);
             rvs_impl_type_name(_cx, _def_id);
             rvs_resolve_call(_cx, _expr);

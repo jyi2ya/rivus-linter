@@ -103,10 +103,17 @@ fn rvs_run_one_test_BIS(fixture: &Path, stderr_path: &Path) -> Result<(), String
     let mut check_pass = false;
     for line in source.lines() {
         let trimmed = line.trim();
-        if trimmed == "// check-pass" {
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Some(comment) = trimmed.strip_prefix("//") else {
+            break;
+        };
+        let directive = comment.trim();
+        if directive == "check-pass" {
             check_pass = true;
         }
-        if let Some(rest) = trimmed.strip_prefix("// compile-flags:") {
+        if let Some(rest) = directive.strip_prefix("compile-flags:") {
             for arg in rest.split_whitespace() {
                 if arg == "--test" {
                     use_test_crate = true;

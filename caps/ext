@@ -23,6 +23,7 @@ rustc_hir::hir::TraitRef::trait_def_id=
 rustc_hir::hir::Ty::as_unambig_ty=
 rustc_hir::lang_items::LanguageItems::deref_trait=
 rustc_hir::lang_items::LanguageItems::owned_box=
+rustc_hir::lang_items::LanguageItems::sized_trait=
 rustc_hir_analysis::lower_ty=
 rustc_lint::context::LateContext::qpath_res=
 rustc_lint::context::LateContext::typing_env=
