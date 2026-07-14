@@ -7,9 +7,9 @@ use crate::capsmap::{CapsMap, rvs_reserved_layer_name};
 use crate::cargo_targets::{CargoTargetScope, rvs_detect_local_crate_prefixes_BIS};
 use crate::function_classification::LocalScope;
 use crate::inference::{
-    PreparedInference, rvs_build_impl_index, rvs_collect_direct_external_deps, rvs_format_capsmap,
-    rvs_format_unknown_callees, rvs_generate_trait_aliases, rvs_infer_caps_with_index,
-    rvs_initial_caps, rvs_scope_port_methods_M,
+    PreparedInference, rvs_build_impl_index, rvs_collect_direct_external_deps,
+    rvs_format_def_path_capsmap, rvs_format_unknown_callees, rvs_generate_trait_aliases,
+    rvs_infer_caps_with_index, rvs_initial_caps, rvs_scope_port_methods_M,
 };
 use crate::symbols::{CapsMapKey, DefPath};
 use crate::workspace::{
@@ -70,7 +70,7 @@ pub(crate) fn rvs_run_infer_capsmap_BIMPS(path: &Path, output: &Path) -> Result<
         ));
     }
 
-    let deps_result = rvs_format_capsmap(&direct_external_calls);
+    let deps_result = rvs_format_def_path_capsmap(&direct_external_calls);
     rvs_write_capsmap_result_BIS(&deps_result, &resolved_output, "deps capsmap")
 }
 
@@ -142,7 +142,7 @@ pub(crate) fn rvs_run_infer_std_BIMPS(path: &Path, output: &Path) -> Result<(), 
         ));
     }
 
-    let result = rvs_format_capsmap(&std_only);
+    let result = rvs_format_def_path_capsmap(&std_only);
     rvs_write_capsmap_result_BIS(&result, &resolved_output, "std capsmap")?;
     rvs_publish_std_callgraph_cache_BIS(&project_path, &callgraph)
 }
@@ -335,7 +335,7 @@ fn rvs_collect_std_unknown_callees(
         }
         for callee in behavior.rvs_dependency_calls() {
             let callee_is_emitted_std = rvs_is_std_like_def_path(callee.rvs_as_str());
-            if seed.rvs_lookup(callee.rvs_as_str()).is_some()
+            if seed.rvs_lookup_def_path(callee).is_some()
                 || (callee_is_emitted_std && inferred.contains_key(callee))
             {
                 continue;

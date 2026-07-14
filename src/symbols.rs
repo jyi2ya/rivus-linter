@@ -1,4 +1,4 @@
-use std::borrow::Borrow;
+use std::borrow::{Borrow, Cow};
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
@@ -217,6 +217,11 @@ impl DefPath {
         &self.0
     }
 
+    /// Return the user-facing path without internal impl identity markers.
+    pub(crate) fn rvs_user_path(&self) -> Cow<'_, str> {
+        rvs_strip_impl_markers(&self.0)
+    }
+
     /// Return the last function-name segment of the def-path.
     pub fn rvs_fn_name(&self) -> FnName {
         FnName::rvs_new(self.rvs_fn_name_str())
@@ -234,13 +239,43 @@ impl DefPath {
 
     /// Return whether the def-path contains a substring.
     pub fn rvs_contains(&self, needle: &str) -> bool {
-        self.0.contains(needle)
+        self.rvs_user_path().contains(needle)
+    }
+}
+
+fn rvs_strip_impl_markers(path: &str) -> Cow<'_, str> {
+    const PREFIX: &str = "{impl#";
+    let mut cursor = 0usize;
+    let mut output = String::new();
+    let mut changed = false;
+    while let Some(relative_start) = path.get(cursor..).and_then(|rest| rest.find(PREFIX)) {
+        let start = cursor + relative_start;
+        let digits_start = start + PREFIX.len();
+        let Some(relative_end) = path.get(digits_start..).and_then(|rest| rest.find('}')) else {
+            break;
+        };
+        let end = digits_start + relative_end;
+        let digits = path.get(digits_start..end).unwrap_or("");
+        if !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            output.push_str(path.get(cursor..start).unwrap_or(""));
+            cursor = end + 1;
+            changed = true;
+        } else {
+            output.push_str(path.get(cursor..digits_start).unwrap_or(""));
+            cursor = digits_start;
+        }
+    }
+    if !changed {
+        Cow::Borrowed(path)
+    } else {
+        output.push_str(path.get(cursor..).unwrap_or(""));
+        Cow::Owned(output)
     }
 }
 
 impl fmt::Display for DefPath {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.rvs_as_str())
+        f.write_str(self.rvs_user_path().as_ref())
     }
 }
 
@@ -402,5 +437,29 @@ mod tests {
                 .iter()
                 .all(|path| path.rvs_trait_method_identity().is_none())
         );
+    }
+
+    #[test]
+    fn test_20260715_def_path_hides_impl_marker_from_users() {
+        let path = DefPath::rvs_new(
+            "demo::Worker{impl#64656d6f3a3a576f726b65723c75383e}::rvs_run_BI@demo::Runner",
+        );
+        let output = format!(
+            "raw={}\nuser={}\ncontains_user_path={}\n",
+            path.rvs_as_str(),
+            path,
+            path.rvs_contains("Worker::rvs_run_BI")
+        );
+        rvs_snapshot_BIS(
+            "test_20260715_def_path_hides_impl_marker_from_users",
+            &output,
+        );
+
+        assert_eq!(
+            path.rvs_user_path(),
+            "demo::Worker::rvs_run_BI@demo::Runner"
+        );
+        assert_eq!(path.rvs_fn_name_str(), "rvs_run_BI");
+        assert!(path.rvs_contains("Worker::rvs_run_BI"));
     }
 }

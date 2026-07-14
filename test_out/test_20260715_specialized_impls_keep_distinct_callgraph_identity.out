@@ -1,0 +1,7 @@
+method_nodes=2
+raw_paths_distinct=true
+display_paths_same=true
+call_targets_distinct=true
+nested_nodes=2
+nested_call_targets_distinct=true
+uncovered_methods=1

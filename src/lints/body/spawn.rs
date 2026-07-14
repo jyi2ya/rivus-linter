@@ -11,7 +11,7 @@ pub(crate) fn rvs_check_fn_S<'tcx>(cx: &LateContext<'tcx>, facts: &BodyFacts, is
         let Some(path) = rvs_path_lint_callable(&observation.target) else {
             continue;
         };
-        if !is_test && rvs_is_spawn_S(path) {
+        if !is_test && rvs_is_spawn_S(path.as_ref()) {
             let message = match observation.syntax {
                 CallSyntax::Function => {
                     format!("spawn: {path} — use structured concurrency")

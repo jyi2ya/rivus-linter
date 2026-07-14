@@ -1,0 +1,10 @@
+impl_methods=2
+readable_methods_distinct=true
+nominal_a_present=true
+nominal_b_present=true
+nested_nodes=2
+nested_trait_identities=0
+nested_call_targets_distinct=true
+generic_impl_methods=2
+generic_raw_paths_distinct=true
+generic_nested_nodes=2

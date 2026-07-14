@@ -1,0 +1,4 @@
+unknown:
+  dep::Worker::run=
+    called by: demo::rvs_call_u16
+    called by: demo::rvs_call_u8

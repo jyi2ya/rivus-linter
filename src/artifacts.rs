@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::capability::CapabilityFacts;
 use crate::symbols::{CrateName, DefPath};
 
-pub(crate) const CALLGRAPH_SCHEMA_VERSION: u32 = 3;
+pub(crate) const CALLGRAPH_SCHEMA_VERSION: u32 = 4;
 
 #[derive(Debug, Serialize)]
 struct CallgraphArtifactRef<'a> {
@@ -425,17 +425,14 @@ pub fn rvs_parse_callgraph_json_S(json: &str) -> Result<FnGraph, String> {
             .ok_or_else(|| {
                 "invalid callgraph artifact: schema_version must be an unsigned integer".to_string()
             })?;
-        if schema_version != 2 && schema_version != u64::from(CALLGRAPH_SCHEMA_VERSION) {
+        if schema_version != u64::from(CALLGRAPH_SCHEMA_VERSION) {
             return Err(format!(
-                "unsupported callgraph schema version {schema_version}; expected 2 or {CALLGRAPH_SCHEMA_VERSION}"
+                "unsupported callgraph schema version {schema_version}; expected {CALLGRAPH_SCHEMA_VERSION}"
             ));
         }
         let artifact: CallgraphArtifact = serde_json::from_value(value)
             .map_err(|e| format!("invalid callgraph artifact: {e}"))?;
-        debug_assert!(matches!(
-            artifact.schema_version,
-            2 | CALLGRAPH_SCHEMA_VERSION
-        ));
+        debug_assert_eq!(artifact.schema_version, CALLGRAPH_SCHEMA_VERSION);
         artifact.nodes
     } else {
         for (def_path, node) in object {
@@ -557,18 +554,17 @@ mod tests {
 
         let json = rvs_serialize_callgraph_json_S(&graph).unwrap();
         let parsed = rvs_parse_callgraph_json_S(&json).unwrap();
-        let version_two = json.replacen(
+        let previous_version = json.replacen(
             &format!(r#""schema_version":{CALLGRAPH_SCHEMA_VERSION}"#),
-            r#""schema_version":2"#,
+            r#""schema_version":3"#,
             1,
         );
-        let parsed_version_two = rvs_parse_callgraph_json_S(&version_two).unwrap();
+        let previous_version_error = rvs_parse_callgraph_json_S(&previous_version).unwrap_err();
         let version_marker = format!(r#""schema_version":{CALLGRAPH_SCHEMA_VERSION}"#);
         let output = format!(
-            "schema_version={CALLGRAPH_SCHEMA_VERSION}\ncontains_version={}\nnodes={}\nversion_two_nodes={}\n",
+            "schema_version={CALLGRAPH_SCHEMA_VERSION}\ncontains_version={}\nnodes={}\nprevious_version_error={previous_version_error}\n",
             json.contains(&version_marker),
             parsed.rvs_len(),
-            parsed_version_two.rvs_len(),
         );
         rvs_snapshot_BIS(
             "test_20260710_callgraph_artifact_version_roundtrip",
@@ -582,7 +578,7 @@ mod tests {
     #[test]
     fn test_20260710_callgraph_artifact_schema_validation() {
         let cases = [
-            ("unknown", r#"{"schema_version":4,"nodes":{}}"#),
+            ("unknown", r#"{"schema_version":5,"nodes":{}}"#),
             ("missing", r#"{"nodes":{}}"#),
             ("string", r#"{"schema_version":"2","nodes":{}}"#),
         ];
@@ -597,7 +593,7 @@ mod tests {
             &output,
         );
 
-        assert!(output.contains("unsupported callgraph schema version 4"));
+        assert!(output.contains("unsupported callgraph schema version 5"));
         assert!(output.contains("schema_version must be an unsigned integer"));
     }
 

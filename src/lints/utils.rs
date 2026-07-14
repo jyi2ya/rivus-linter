@@ -39,6 +39,13 @@ pub(crate) const CATCH_ALL_VARIANT_NAMES: &[&str] =
     &["Unknown", "Other", "UnknownError", "OtherError"];
 pub(crate) const VALIDATE_PREFIXES: &[&str] = &["validate", "check", "verify"];
 
+#[derive(Debug)]
+struct ImplTypeIdentity {
+    readable_path: String,
+    marker: String,
+    is_nominal_path: bool,
+}
+
 pub(crate) fn rvs_is_spawn_S(path: &str) -> bool {
     SPAWN_FUNCTIONS.iter().any(|sf| *sf == path)
 }
@@ -744,20 +751,8 @@ pub(crate) fn rvs_tys(t: &rustc_hir::Ty<'_>) -> String {
 pub(crate) fn rvs_def_path(cx: &LateContext<'_>, did: DefId) -> String {
     let tcx = cx.tcx;
     let dp = tcx.def_path(did);
-    let impl_ty: Option<String> = cx
-        .tcx
-        .opt_associated_item(did)
-        .map(|assoc| (assoc, assoc.container_id(cx.tcx)))
-        .and_then(|(_, impl_def_id)| {
-            if matches!(
-                cx.tcx.def_kind(impl_def_id),
-                rustc_hir::def::DefKind::Impl { .. }
-            ) {
-                rvs_impl_type_name(cx, impl_def_id)
-            } else {
-                None
-            }
-        });
+    let impl_def_id = rvs_enclosing_impl_def_id(cx, did);
+    let impl_ty = impl_def_id.and_then(|impl_def_id| rvs_impl_type_identity(cx, impl_def_id));
 
     let mut parts = vec![tcx.crate_name(dp.krate).to_string()];
     let mut has_impl = false;
@@ -769,8 +764,22 @@ pub(crate) fn rvs_def_path(cx: &LateContext<'_>, did: DefId) -> String {
                 parts.push(s.to_string());
             }
             rustc_hir::definitions::DefPathData::Impl => {
-                if let Some(ref ty_name) = impl_ty {
-                    parts.push(ty_name.clone());
+                if let Some(identity) = &impl_ty {
+                    if identity.is_nominal_path {
+                        parts = identity
+                            .readable_path
+                            .split("::")
+                            .map(str::to_string)
+                            .collect();
+                        if let Some(type_name) = parts.last_mut() {
+                            type_name.push_str(&format!("{{impl#{}}}", identity.marker));
+                        }
+                    } else {
+                        parts.push(format!(
+                            "{}{{impl#{}}}",
+                            identity.readable_path, identity.marker
+                        ));
+                    }
                 }
                 has_impl = true;
             }
@@ -798,15 +807,57 @@ pub(crate) fn rvs_def_path(cx: &LateContext<'_>, did: DefId) -> String {
     path
 }
 
-fn rvs_impl_type_name(cx: &LateContext<'_>, impl_def_id: DefId) -> Option<String> {
-    let self_ty = cx.tcx.type_of(impl_def_id).skip_binder();
-    let ty_str = self_ty.to_string();
-    match self_ty.kind() {
-        rustc_middle::ty::TyKind::Adt(adt_def, _) => {
-            cx.tcx.item_name(adt_def.did()).to_string().into()
+fn rvs_enclosing_impl_def_id(cx: &LateContext<'_>, did: DefId) -> Option<DefId> {
+    let mut current = did;
+    loop {
+        if matches!(
+            cx.tcx.def_kind(current),
+            rustc_hir::def::DefKind::Impl { .. }
+        ) {
+            return Some(current);
         }
-        _ => ty_str.rsplit("::").next().map(|s| s.to_string()),
+        if current.is_crate_root() {
+            return None;
+        }
+        current = cx.tcx.parent(current);
     }
+}
+
+fn rvs_impl_type_identity(cx: &LateContext<'_>, impl_def_id: DefId) -> Option<ImplTypeIdentity> {
+    let self_ty = cx.tcx.type_of(impl_def_id).skip_binder();
+    let self_type_text = rustc_middle::ty::print::with_resolve_crate_name!(
+        rustc_middle::ty::print::with_no_visible_paths!(
+            rustc_middle::ty::print::with_no_trimmed_paths!(self_ty.to_string())
+        )
+    );
+    let (readable_path, is_nominal_path) = match self_ty.kind() {
+        rustc_middle::ty::TyKind::Adt(adt_def, _) => (rvs_def_path(cx, adt_def.did()), true),
+        _ => (
+            self_type_text.rsplit("::").next().map(str::to_string)?,
+            false,
+        ),
+    };
+    let mut identity_text = self_type_text;
+    if let rustc_hir::def::DefKind::Impl { of_trait: true } = cx.tcx.def_kind(impl_def_id) {
+        let trait_ref = cx.tcx.impl_trait_ref(impl_def_id);
+        let trait_ref = trait_ref.skip_binder();
+        let trait_identity = rustc_middle::ty::print::with_resolve_crate_name!(
+            rustc_middle::ty::print::with_no_visible_paths!(
+                rustc_middle::ty::print::with_no_trimmed_paths!(trait_ref.to_string())
+            )
+        );
+        identity_text.push('@');
+        identity_text.push_str(&trait_identity);
+    }
+    let mut marker = String::new();
+    for byte in identity_text.bytes() {
+        marker.push_str(&format!("{byte:02x}"));
+    }
+    Some(ImplTypeIdentity {
+        readable_path,
+        marker,
+        is_nominal_path,
+    })
 }
 
 // ─── Utility ─────────────────────────────────────────────────────────────
@@ -966,7 +1017,8 @@ mod tests {
             rvs_qp(_qpath);
             rvs_tys(_ty);
             rvs_def_path(_cx, _def_id);
-            rvs_impl_type_name(_cx, _def_id);
+            rvs_enclosing_impl_def_id(_cx, _def_id);
+            rvs_impl_type_identity(_cx, _def_id);
             rvs_resolve_call(_cx, _expr);
         }
     }

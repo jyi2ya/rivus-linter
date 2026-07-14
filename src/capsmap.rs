@@ -5,7 +5,7 @@ use std::path::{Component, Path, PathBuf};
 use snafu::Snafu;
 
 use crate::capability::{CapabilityParseError, CapabilitySet};
-use crate::symbols::CapsMapKey;
+use crate::symbols::{CapsMapKey, DefPath};
 
 /// 能力之鉴：非 rvs 函数的品行录。
 /// 外人虽无 rvs 前缀，登记在册，亦知其能。
@@ -122,6 +122,14 @@ impl CapsMap {
     /// 精确匹配查找，不做后缀匹配。
     pub fn rvs_lookup(&self, name: &str) -> Option<&CapabilitySet> {
         self.entries.get(name)
+    }
+
+    /// Look up an exact internal path, then its user-facing wildcard path.
+    pub(crate) fn rvs_lookup_def_path(&self, path: &DefPath) -> Option<&CapabilitySet> {
+        self.rvs_lookup(path.rvs_as_str()).or_else(|| {
+            let user_path = path.rvs_user_path();
+            self.rvs_lookup(user_path.as_ref())
+        })
     }
 
     /// Insert one typed exact-key entry, replacing any existing value.
@@ -454,6 +462,32 @@ mod tests {
         assert!(lookup.rvs_lookup("HashMap").is_none());
         assert!(lookup.rvs_lookup("nonexistent").is_none());
         rvs_snapshot_BIS("test_20260709_capsmap_parse_and_lookup_table", &output);
+    }
+
+    #[test]
+    fn test_20260715_capsmap_lookup_applies_readable_impl_path_to_all_specializations() {
+        let capsmap = CapsMap::rvs_parse(
+            "demo::Worker::rvs_run=BI\ndemo::Worker{impl#64656d6f3a3a576f726b65723c7531363e}::rvs_run=S\n",
+        )
+        .unwrap();
+        let wildcard = capsmap
+            .rvs_lookup_def_path(&DefPath::from(
+                "demo::Worker{impl#64656d6f3a3a576f726b65723c75383e}::rvs_run",
+            ))
+            .map(crate::inference::rvs_caps_to_string);
+        let exact = capsmap
+            .rvs_lookup_def_path(&DefPath::from(
+                "demo::Worker{impl#64656d6f3a3a576f726b65723c7531363e}::rvs_run",
+            ))
+            .map(crate::inference::rvs_caps_to_string);
+        let output = format!("wildcard={wildcard:?}\nexact={exact:?}\n");
+        rvs_snapshot_BIS(
+            "test_20260715_capsmap_lookup_applies_readable_impl_path_to_all_specializations",
+            &output,
+        );
+
+        assert_eq!(wildcard.as_deref(), Some("BI"));
+        assert_eq!(exact.as_deref(), Some("S"));
     }
 
     #[test]

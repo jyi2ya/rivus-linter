@@ -8,11 +8,13 @@ pub(crate) mod reflection;
 pub(crate) mod spawn;
 pub(crate) mod stub_macro;
 
+use std::borrow::Cow;
+
 use super::utils::CallTarget;
 
 pub(crate) use collector::{BodyFacts, rvs_collect_body_facts_M};
 
-fn rvs_path_lint_callable(target: &CallTarget) -> Option<&str> {
+fn rvs_path_lint_callable<'a>(target: &'a CallTarget) -> Option<Cow<'a, str>> {
     match target {
         CallTarget::Resolved {
             def_path,
@@ -21,8 +23,8 @@ fn rvs_path_lint_callable(target: &CallTarget) -> Option<&str> {
                 | rustc_hir::def::DefKind::AssocFn
                 | rustc_hir::def::DefKind::Variant,
             ..
-        } => Some(def_path.rvs_as_str()),
-        CallTarget::UnresolvedPath { path } => Some(path),
+        } => Some(def_path.rvs_user_path()),
+        CallTarget::UnresolvedPath { path } => Some(Cow::Borrowed(path)),
         CallTarget::UnresolvedMethod { .. } | CallTarget::Resolved { .. } => None,
     }
 }
@@ -37,8 +39,8 @@ mod tests {
     #[test]
     fn test_20260714_path_lint_callable_table() {
         let resolved = CallTarget::Resolved {
-            def_path: DefPath::from("demo::rvs_run"),
-            def_kind: DefKind::Fn,
+            def_path: DefPath::from("demo::Worker{impl#64656d6f3a3a576f726b65723c75383e}::rvs_run"),
+            def_kind: DefKind::AssocFn,
             crate_id: 1,
         };
         let unresolved_path = CallTarget::UnresolvedPath {
@@ -55,9 +57,12 @@ mod tests {
         );
         rvs_snapshot_BIS("test_20260714_path_lint_callable_table", &output);
 
-        assert_eq!(rvs_path_lint_callable(&resolved), Some("demo::rvs_run"));
         assert_eq!(
-            rvs_path_lint_callable(&unresolved_path),
+            rvs_path_lint_callable(&resolved).as_deref(),
+            Some("demo::Worker::rvs_run")
+        );
+        assert_eq!(
+            rvs_path_lint_callable(&unresolved_path).as_deref(),
             Some("demo::rvs_path")
         );
         assert_eq!(rvs_path_lint_callable(&unresolved_method), None);

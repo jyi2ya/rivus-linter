@@ -3225,6 +3225,235 @@ name = "throughput-bench"
     }
 
     #[test]
+    fn test_20260715_specialized_impls_keep_distinct_callgraph_identity() {
+        let dir = rvs_make_cargo_project_BIS(
+            "specialized-impl-identity",
+            "specialized-impl-identity",
+            &[(
+                "src/lib.rs",
+                "#![allow(non_snake_case)]\n\npub struct Worker<T>(pub T);\n\n#[cfg(test)]\nimpl Worker<i8> {\n    pub fn rvs_test_only(&self) {}\n}\n\nimpl Worker<u8> {\n    pub fn rvs_run(&self) {\n        fn rvs_nested() {}\n        rvs_nested();\n    }\n}\n\nimpl Worker<u16> {\n    pub fn rvs_run(&self) {\n        fn rvs_nested() {}\n        rvs_nested();\n    }\n}\n\npub fn rvs_call_u8(worker: &Worker<u8>) { worker.rvs_run(); }\npub fn rvs_call_u16(worker: &Worker<u16>) { worker.rvs_run(); }\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn test_20260715_covers_only_u8_specialization() {\n        rvs_call_u8(&Worker(1u8));\n    }\n}\n",
+            )],
+        );
+        let local_crate_names = BTreeSet::from([CrateName::from("specialized_impl_identity")]);
+        let callgraph = rvs_collect_workspace_callgraph_BIMS(
+            &dir,
+            CargoTargetScope::WithTestExampleBench,
+            vec![],
+            &local_crate_names,
+        )
+        .unwrap();
+        let method_paths = callgraph
+            .rvs_keys()
+            .filter(|path| path.rvs_fn_name_str() == "rvs_run")
+            .cloned()
+            .collect::<Vec<_>>();
+        let nested_paths = callgraph
+            .rvs_keys()
+            .filter(|path| path.rvs_fn_name_str() == "rvs_nested")
+            .cloned()
+            .collect::<Vec<_>>();
+        let call_u8 = callgraph
+            .rvs_get("specialized_impl_identity::rvs_call_u8")
+            .unwrap();
+        let call_u16 = callgraph
+            .rvs_get("specialized_impl_identity::rvs_call_u16")
+            .unwrap();
+        let uncovered =
+            crate::offline_caps::rvs_uncovered_test_functions(&callgraph, &local_crate_names);
+        let uncovered_methods = uncovered
+            .iter()
+            .filter(|identity| identity.def_path.rvs_fn_name_str() == "rvs_run")
+            .map(|identity| &identity.def_path)
+            .collect::<BTreeSet<_>>()
+            .len();
+        let display_paths = method_paths
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        let nested_call_targets_distinct = method_paths
+            .iter()
+            .filter_map(|path| callgraph.rvs_get(path.rvs_as_str()))
+            .map(|node| &node.calls)
+            .collect::<BTreeSet<_>>()
+            .len()
+            == 2;
+        let output = format!(
+            "method_nodes={}\nraw_paths_distinct={}\ndisplay_paths_same={}\ncall_targets_distinct={}\nnested_nodes={}\nnested_call_targets_distinct={nested_call_targets_distinct}\nuncovered_methods={uncovered_methods}\n",
+            method_paths.len(),
+            method_paths.windows(2).all(|pair| pair[0] != pair[1]),
+            display_paths.windows(2).all(|pair| pair[0] == pair[1]),
+            call_u8.calls != call_u16.calls,
+            nested_paths.len(),
+        );
+        rvs_snapshot_BIS(
+            "test_20260715_specialized_impls_keep_distinct_callgraph_identity",
+            &output,
+        );
+
+        assert_eq!(method_paths.len(), 2);
+        assert!(method_paths.windows(2).all(|pair| pair[0] != pair[1]));
+        assert!(display_paths.windows(2).all(|pair| pair[0] == pair[1]));
+        assert_ne!(call_u8.calls, call_u16.calls);
+        assert_eq!(nested_paths.len(), 2);
+        assert!(nested_call_targets_distinct);
+        assert_eq!(uncovered_methods, 1);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260715_dependency_impl_identity_matches_consumer_call_target() {
+        let dir = rvs_make_workspace_temp_dir_BIS("dependency-impl-identity");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::create_dir_all(dir.join("fixture-dep/src")).unwrap();
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"local-app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nfixture-dep = { path = \"fixture-dep\" }\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("src/lib.rs"),
+            "#![allow(non_snake_case)]\n\nmod nested { pub struct Worker<T>(pub T); }\n\npub fn rvs_call_dependency(worker: &fixture_dep::nested::Worker<u8>) { worker.rvs_run(); }\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("fixture-dep/Cargo.toml"),
+            "[package]\nname = \"fixture-dep\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("fixture-dep/src/lib.rs"),
+            "#![allow(non_snake_case)]\n\npub mod nested {\n    pub struct Worker<T>(pub T);\n\n    impl Worker<u8> {\n        pub fn rvs_run(&self) {}\n    }\n}\n",
+        )
+        .unwrap();
+
+        let local_crate_names = BTreeSet::from([CrateName::from("local-app")]);
+        let callgraph = rvs_collect_callgraph_BIMS(
+            &dir,
+            false,
+            CargoTargetScope::Production,
+            vec![],
+            &local_crate_names,
+        )
+        .unwrap();
+        let dependency_methods = callgraph
+            .rvs_keys()
+            .filter(|path| {
+                path.rvs_as_str().starts_with("fixture_dep::")
+                    && path.rvs_fn_name_str() == "rvs_run"
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let dependency_method = dependency_methods
+            .first()
+            .expect("never: dependency method was collected");
+        let caller = callgraph.rvs_get("local_app::rvs_call_dependency").unwrap();
+        let output = format!(
+            "dependency_nodes={}\ncall_matches_dependency_node={}\nreadable_path={}\n",
+            dependency_methods.len(),
+            caller.calls.contains(dependency_method),
+            dependency_method,
+        );
+        rvs_snapshot_BIS(
+            "test_20260715_dependency_impl_identity_matches_consumer_call_target",
+            &output,
+        );
+
+        assert_eq!(dependency_methods.len(), 1);
+        assert!(caller.calls.contains(dependency_method));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260715_trait_impl_nested_paths_preserve_nominal_identity() {
+        let dir = rvs_make_cargo_project_BIS(
+            "trait-impl-nested-identity",
+            "trait-impl-nested-identity",
+            &[(
+                "src/lib.rs",
+                "#![allow(non_snake_case)]\n\npub mod a { pub struct Worker; }\npub mod b { pub struct Worker; }\n\npub trait Runner { fn rvs_run(&self); }\npub trait GenericRunner<T> { fn rvs_generic(&self); }\npub struct GenericWorker;\n\nmod implementations {\n    impl crate::Runner for crate::a::Worker {\n        fn rvs_run(&self) {\n            fn rvs_nested() {}\n            rvs_nested();\n        }\n    }\n\n    impl crate::Runner for crate::b::Worker {\n        fn rvs_run(&self) {\n            fn rvs_nested() {}\n            rvs_nested();\n        }\n    }\n\n    impl crate::GenericRunner<u8> for crate::GenericWorker {\n        fn rvs_generic(&self) {\n            fn rvs_generic_nested() {}\n            rvs_generic_nested();\n        }\n    }\n\n    impl crate::GenericRunner<u16> for crate::GenericWorker {\n        fn rvs_generic(&self) {\n            fn rvs_generic_nested() {}\n            rvs_generic_nested();\n        }\n    }\n}\n",
+            )],
+        );
+        let local_crate_names = BTreeSet::from([CrateName::from("trait_impl_nested_identity")]);
+        let callgraph = rvs_collect_workspace_callgraph_BIMS(
+            &dir,
+            CargoTargetScope::Production,
+            vec![],
+            &local_crate_names,
+        )
+        .unwrap();
+        let impl_methods = callgraph
+            .rvs_keys()
+            .filter(|path| path.rvs_fn_name_str() == "rvs_run")
+            .filter(|path| path.rvs_trait_method_identity().is_some())
+            .cloned()
+            .collect::<Vec<_>>();
+        let nested_paths = callgraph
+            .rvs_keys()
+            .filter(|path| path.rvs_fn_name_str() == "rvs_nested")
+            .cloned()
+            .collect::<Vec<_>>();
+        let generic_methods = callgraph
+            .rvs_keys()
+            .filter(|path| path.rvs_fn_name_str() == "rvs_generic")
+            .filter(|path| path.rvs_trait_method_identity().is_some())
+            .cloned()
+            .collect::<Vec<_>>();
+        let generic_nested_paths = callgraph
+            .rvs_keys()
+            .filter(|path| path.rvs_fn_name_str() == "rvs_generic_nested")
+            .cloned()
+            .collect::<Vec<_>>();
+        let readable_methods = impl_methods
+            .iter()
+            .map(ToString::to_string)
+            .collect::<BTreeSet<_>>();
+        let nested_call_targets_distinct = impl_methods
+            .iter()
+            .filter_map(|path| callgraph.rvs_get(path.rvs_as_str()))
+            .map(|node| &node.calls)
+            .collect::<BTreeSet<_>>()
+            .len()
+            == 2;
+        let output = format!(
+            "impl_methods={}\nreadable_methods_distinct={}\nnominal_a_present={}\nnominal_b_present={}\nnested_nodes={}\nnested_trait_identities={}\nnested_call_targets_distinct={nested_call_targets_distinct}\ngeneric_impl_methods={}\ngeneric_raw_paths_distinct={}\ngeneric_nested_nodes={}\n",
+            impl_methods.len(),
+            readable_methods.len() == 2,
+            readable_methods
+                .iter()
+                .any(|path| path.contains("::a::Worker::rvs_run")),
+            readable_methods
+                .iter()
+                .any(|path| path.contains("::b::Worker::rvs_run")),
+            nested_paths.len(),
+            nested_paths
+                .iter()
+                .filter(|path| path.rvs_trait_method_identity().is_some())
+                .count(),
+            generic_methods.len(),
+            generic_methods.windows(2).all(|pair| pair[0] != pair[1]),
+            generic_nested_paths.len(),
+        );
+        rvs_snapshot_BIS(
+            "test_20260715_trait_impl_nested_paths_preserve_nominal_identity",
+            &output,
+        );
+
+        assert_eq!(impl_methods.len(), 2);
+        assert_eq!(readable_methods.len(), 2);
+        assert_eq!(nested_paths.len(), 2);
+        assert!(
+            nested_paths
+                .iter()
+                .all(|path| path.rvs_trait_method_identity().is_none())
+        );
+        assert!(nested_call_targets_distinct);
+        assert_eq!(generic_methods.len(), 2);
+        assert!(generic_methods.windows(2).all(|pair| pair[0] != pair[1]));
+        assert_eq!(generic_nested_paths.len(), 2);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn test_20260715_published_std_callgraph_precedes_legacy_directory() {
         let dir = rvs_make_workspace_temp_dir_BIS("published-std-callgraph-precedence");
         let legacy_dir = dir.join("target/rivus-callgraph-std");

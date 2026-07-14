@@ -148,7 +148,8 @@ fn rvs_result_swallow_name(cx: &LateContext<'_>, target: &CallTarget) -> Option<
     else {
         return None;
     };
-    let name = match def_path.rvs_as_str() {
+    let path = def_path.rvs_user_path();
+    let name = match path.as_ref() {
         "core::result::Result::ok" => "ok",
         "core::result::Result::unwrap_or_default" => "unwrap_or_default",
         _ => return None,
@@ -174,7 +175,7 @@ fn rvs_is_result_drop<'tcx>(
     let Some(drop_def_id) = cx.tcx.get_diagnostic_item(sym::mem_drop) else {
         return false;
     };
-    if def_path.rvs_as_str() != "core::mem::drop"
+    if def_path.rvs_user_path() != "core::mem::drop"
         || *crate_id != cx.tcx.stable_crate_id(drop_def_id.krate).as_u64()
     {
         return false;

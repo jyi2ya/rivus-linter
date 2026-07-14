@@ -6,7 +6,7 @@
 
 - 一个节点代表一个函数、方法或 trait 方法。
 - 一条边代表一个函数直接调用另一个函数。
-- trait impl 方法具有实现方法路径和 trait 路径两部分身份。artifact 继续使用稳定的 `实现方法路径@trait 路径` 表示，内存分析必须先解析为结构化身份，再生成 impl 聚合键或 trait declaration alias，不能由各分析阶段分别拆解字符串。
+- trait impl 方法具有实现方法路径和 trait 路径两部分身份。artifact 继续使用稳定的 `实现方法路径@trait 路径` 表示，内存分析必须先解析为结构化身份，再生成 impl 聚合键或 trait declaration alias，不能由各分析阶段分别拆解字符串。实现路径还必须保留由 canonical、untrimmed、禁用 visible re-export 的完整 self type 与 trait identity 无损编码得到的内部 impl marker，使 `Worker<u8>` 与 `Worker<u16>` 等文本路径相同的 specialized impl 仍是两个节点；nested definition 继承 enclosing impl 的同一 marker，但只有真正的 associated method 才添加 `@trait` 后缀。不能使用会随 `cfg(test)` 或 target item 顺序变化的 rustc 序号 disambiguator。ADT 的可读路径使用 nominal type 的定义路径而非 impl block 的词法模块，避免不同类型共享 caps key；诊断和 capsmap 对外继续显示不含内部 marker 的可读路径，文本 capsmap key 对同一 nominal method 的所有对应精确实现生效
 
 ## 节点信息
 
@@ -35,7 +35,7 @@
 构建图时，只记录**事实**，不做规则裁决。
 
 - lint pass 负责从 HIR 收集节点和边
-- callgraph artifact 负责把这些节点持久化；artifact 使用显式 schema version，当前读取器兼容 version 2、当前版本以及没有 envelope 的旧图
+- callgraph artifact 负责把这些节点持久化；artifact 使用显式 schema version。节点身份规则改变时必须提升版本并拒绝旧 versioned cache，避免复用已经合并错误身份的图；没有 envelope 的旧目录图只保留只读兼容
 - 每个参与收集的 crate 都必须成功写出自己的 artifact；没有函数的 crate 仍写出合法的空图，只有完全没有 artifact 才表示 wrapper 未执行。任一写入失败都使本次收集失败，不能用其他 crate 的部分图继续分析。项目检查、报告和重命名只收集工作区 crate，第三方依赖通过调用边和 capsmap 表达；只有依赖能力推断与标准库推断才收集依赖 crate。artifact 收集阶段只保留编译错误并静默普通 warning，避免依赖推断泄漏第三方诊断
 - 每次命令必须在项目 `target/` 下原子预留自己的 generation。原始 artifact、Cargo target 和测试覆盖选择文件只属于该 generation；并发命令不能清理、读取或复用彼此的 generation。命令只在 Cargo 成功后合并自己的完整 artifact 集，正常结束时只清理自己的 generation，遗留 generation 不属于任何缓存且所有读取器必须忽略
 - 标准库函数图缓存是成功 generation 合并后的单个 versioned artifact。`infer-std` 只有在完整收集 `std`、`core`、`alloc`、完成推断并成功写出 caps 后才原子发布该缓存；收集、推断或输出失败必须保留上一个完整缓存。读取器优先读取该合并缓存，并只为已有用户保留旧目录格式的只读兼容

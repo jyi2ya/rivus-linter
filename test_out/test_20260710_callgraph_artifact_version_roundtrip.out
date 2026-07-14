@@ -1,4 +1,4 @@
-schema_version=3
+schema_version=4
 contains_version=true
 nodes=1
-version_two_nodes=1
+previous_version_error=unsupported callgraph schema version 3; expected 4

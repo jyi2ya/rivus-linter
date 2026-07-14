@@ -1,0 +1,5 @@
+Offline Caps Check: 0 error(s), 1 warning(s)
+------------------------------------------------------------
+warning[unknown_callee]: demo::rvs_handle
+  callee 'dep::Worker::run' has no rvs_ suffix and no caps/ entry
+  run `cargo rivus infer-capsmap -o caps/deps` to refresh dependency capabilities; if inference still reports this path, add its exact def_path to caps/ext

@@ -1,0 +1,3 @@
+dependency_nodes=1
+call_matches_dependency_node=true
+readable_path=fixture_dep::nested::Worker::rvs_run

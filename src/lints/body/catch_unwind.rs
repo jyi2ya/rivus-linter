@@ -16,7 +16,7 @@ pub(crate) fn rvs_check_fn_S<'tcx>(cx: &LateContext<'tcx>, facts: &BodyFacts) {
     for observation in &facts.calls {
         let is_catch_unwind = match &observation.target {
             CallTarget::Resolved { def_path, .. } => {
-                CATCH_UNWIND_PATHS.contains(&def_path.rvs_as_str())
+                CATCH_UNWIND_PATHS.contains(&def_path.rvs_user_path().as_ref())
             }
             CallTarget::UnresolvedMethod { .. } | CallTarget::UnresolvedPath { .. } => false,
         };

@@ -6,7 +6,7 @@ use crate::capability::{
 };
 use crate::capsmap;
 use crate::function_classification::{FunctionClassification, LocalScope};
-use crate::symbols::{CrateName, DefPath, FnName, TraitMethodKey};
+use crate::symbols::{CapsMapKey, CrateName, DefPath, FnName, TraitMethodKey};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FnContractDiff {
@@ -320,7 +320,7 @@ impl<'a> CalleeCapsResolver<'a> {
                 .rvs_get(callee.rvs_as_str())
                 .filter(|node| node.facts.is_port_method)
                 .map(|_| CapabilityPolicy::rvs_port_method_caps()),
-            CalleeCapsSource::ExactCapsMap => self.caps.rvs_lookup(callee.rvs_as_str()).cloned(),
+            CalleeCapsSource::ExactCapsMap => self.caps.rvs_lookup_def_path(callee).cloned(),
             CalleeCapsSource::BodylessImplWithSignature => {
                 self.rvs_bodyless_impl_caps_with_signature(callee)
             }
@@ -378,8 +378,15 @@ pub(crate) fn rvs_format_unknown_callees(
     unknown: &BTreeMap<DefPath, BTreeSet<DefPath>>,
     header: &str,
 ) -> String {
-    let mut msg = String::from(header);
+    let mut normalized: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for (callee, callers) in unknown {
+        normalized
+            .entry(callee.rvs_user_path().into_owned())
+            .or_default()
+            .extend(callers.iter().map(ToString::to_string));
+    }
+    let mut msg = String::from(header);
+    for (callee, callers) in normalized {
         msg.push_str(&format!("  {callee}=\n"));
         for caller in callers.iter().take(3) {
             msg.push_str(&format!("    called by: {caller}\n"));
@@ -437,7 +444,7 @@ pub(crate) fn rvs_infer_caps_with_index(
     for (_, behavior) in graph.rvs_iter() {
         for callee in &behavior.calls {
             if !inferred.contains_key(callee)
-                && let Some(caps) = seed.rvs_lookup(callee.rvs_as_str())
+                && let Some(caps) = seed.rvs_lookup_def_path(callee)
             {
                 inferred.insert(callee.clone(), caps.clone());
             } else if !inferred.contains_key(callee)
@@ -451,7 +458,7 @@ pub(crate) fn rvs_infer_caps_with_index(
     loop {
         let mut changed = false;
         for (func, behavior) in graph.rvs_iter() {
-            if seed.rvs_lookup(func.rvs_as_str()).is_some() {
+            if seed.rvs_lookup_def_path(func).is_some() {
                 continue;
             }
             if behavior.facts.is_port_method {
@@ -488,7 +495,7 @@ pub(crate) fn rvs_infer_caps_with_index(
         .map(|(path, _)| path.clone())
         .collect();
     for func in bodyless_paths {
-        if seed.rvs_lookup(func.rvs_as_str()).is_some() {
+        if seed.rvs_lookup_def_path(&func).is_some() {
             continue;
         }
         if let Some(caps) = CalleeCapsResolver::rvs_new(graph, seed, &inferred, impl_index)
@@ -509,7 +516,7 @@ pub(crate) fn rvs_initial_caps(
         .map(|(func, behavior)| {
             let caps = if behavior.facts.is_port_method {
                 CapabilityPolicy::rvs_port_method_caps()
-            } else if let Some(caps) = seed.rvs_lookup(func.rvs_as_str()) {
+            } else if let Some(caps) = seed.rvs_lookup_def_path(func) {
                 caps.clone()
             } else {
                 rvs_infer_signature_caps(behavior)
@@ -737,6 +744,20 @@ where
     lines.join("\n") + "\n"
 }
 
+pub(crate) fn rvs_format_def_path_capsmap(caps: &BTreeMap<DefPath, CapabilitySet>) -> String {
+    let mut normalized: BTreeMap<CapsMapKey, CapabilitySet> = BTreeMap::new();
+    for (path, path_caps) in caps {
+        let user_path = path.rvs_user_path();
+        let combined = normalized
+            .entry(CapsMapKey::rvs_new(user_path.into_owned()))
+            .or_insert_with(CapabilitySet::rvs_new);
+        for capability in path_caps.rvs_iter() {
+            combined.rvs_insert_M(capability);
+        }
+    }
+    rvs_format_capsmap(&normalized)
+}
+
 pub(crate) fn rvs_collect_direct_external_deps(
     graph: &FnGraph,
     local_crate_names: &BTreeSet<CrateName>,
@@ -759,7 +780,7 @@ pub(crate) fn rvs_collect_direct_external_deps(
             if local_scope.rvs_contains(callee) {
                 continue;
             }
-            if seed.rvs_lookup(callee.rvs_as_str()).is_some() {
+            if seed.rvs_lookup_def_path(callee).is_some() {
                 continue;
             }
             if let Some(caps) = resolver.rvs_for_propagation_target(callee) {
@@ -779,7 +800,6 @@ pub(crate) fn rvs_collect_direct_external_deps(
 mod tests {
     use super::*;
     use crate::capability::CapabilityFacts;
-    use crate::symbols::CapsMapKey;
     use crate::test_support::rvs_snapshot_BIS;
 
     /// Helper: build a default `FnNode` with all flags false and no calls.
@@ -2568,6 +2588,49 @@ mod tests {
         assert!(lines[0].starts_with("HashMap::new"));
         assert!(lines[1].starts_with("std::fs::read"));
         assert!(lines[2].starts_with("std::process::exit"));
+    }
+
+    #[test]
+    fn test_20260715_format_def_path_capsmap_unions_specialized_impl_caps() {
+        let map = BTreeMap::from([
+            (
+                DefPath::from("dep::Worker{impl#6465703a3a576f726b65723c75383e}::rvs_run"),
+                CapabilitySet::rvs_from_validated("B"),
+            ),
+            (
+                DefPath::from("dep::Worker{impl#6465703a3a576f726b65723c7531363e}::rvs_run"),
+                CapabilitySet::rvs_from_validated("I"),
+            ),
+        ]);
+        let output = rvs_format_def_path_capsmap(&map);
+        rvs_snapshot_BIS(
+            "test_20260715_format_def_path_capsmap_unions_specialized_impl_caps",
+            &output,
+        );
+
+        assert_eq!(output, "dep::Worker::rvs_run=BI # Blocking IO\n");
+    }
+
+    #[test]
+    fn test_20260715_format_unknown_callees_groups_specialized_impls() {
+        let unknown = BTreeMap::from([
+            (
+                DefPath::from("dep::Worker{impl#6465703a3a576f726b65723c75383e}::run"),
+                BTreeSet::from([DefPath::from("demo::rvs_call_u8")]),
+            ),
+            (
+                DefPath::from("dep::Worker{impl#6465703a3a576f726b65723c7531363e}::run"),
+                BTreeSet::from([DefPath::from("demo::rvs_call_u16")]),
+            ),
+        ]);
+        let output = rvs_format_unknown_callees(&unknown, "unknown:\n");
+        rvs_snapshot_BIS(
+            "test_20260715_format_unknown_callees_groups_specialized_impls",
+            &output,
+        );
+
+        assert_eq!(output.matches("dep::Worker::run=").count(), 1);
+        assert!(!output.contains("{impl#"));
     }
 
     // ─── rvs_collect_direct_external_deps ────────────────────────────────

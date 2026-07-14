@@ -483,11 +483,10 @@ fn rvs_collect_call_diagnostics_M(
             continue;
         }
         let callee_caps = resolver.rvs_for_contract_check(callee);
-        let Some(mismatch) = rvs_collect_call_contract_mismatch(
-            callee.rvs_as_str(),
-            caller_caps,
-            callee_caps.as_ref(),
-        ) else {
+        let callee_display = callee.to_string();
+        let Some(mismatch) =
+            rvs_collect_call_contract_mismatch(&callee_display, caller_caps, callee_caps.as_ref())
+        else {
             continue;
         };
         match mismatch.kind {
@@ -645,6 +644,25 @@ mod tests {
         assert!(output.contains("cargo rivus infer-std -o caps/std"));
         assert!(output.contains("add its exact def_path to caps/seed"));
         assert!(output.contains("use caps/ext only for a project-local check override"));
+    }
+
+    #[test]
+    fn test_20260715_offline_unknown_callee_hides_impl_marker() {
+        let mut graph = FnGraph::rvs_new();
+        graph.rvs_insert_M(
+            DefPath::from("demo::rvs_handle"),
+            rvs_node(&["dep::Worker{impl#6465703a3a576f726b65723c75383e}::run"]),
+        );
+        let local = BTreeSet::from([CrateName::from("demo")]);
+
+        let output = rvs_check_offline_caps(&graph, &CapsMap::rvs_new(), &local).to_string();
+        rvs_snapshot_BIS(
+            "test_20260715_offline_unknown_callee_hides_impl_marker",
+            &output,
+        );
+
+        assert!(output.contains("callee 'dep::Worker::run'"));
+        assert!(!output.contains("{impl#"));
     }
 
     #[test]

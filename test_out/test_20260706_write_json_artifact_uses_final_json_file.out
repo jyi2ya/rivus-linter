@@ -1,3 +1,3 @@
 file=demo-$PID.json
-content={"schema_version":3,"nodes":{"demo::rvs_run":{"calls":[],"has_async":false,"is_unsafe_fn":false,"has_mut_param":false,"has_static_ref":false,"has_static_mut_ref":false,"has_thread_local_ref":false,"is_port_method":false,"has_body":true,"is_trait_impl":false,"is_test":false,"sources":[]}}}
+content={"schema_version":4,"nodes":{"demo::rvs_run":{"calls":[],"has_async":false,"is_unsafe_fn":false,"has_mut_param":false,"has_static_ref":false,"has_static_mut_ref":false,"has_thread_local_ref":false,"is_port_method":false,"has_body":true,"is_trait_impl":false,"is_test":false,"sources":[]}}}
 tmp_exists=false

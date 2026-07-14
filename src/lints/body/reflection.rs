@@ -11,7 +11,7 @@ pub(crate) fn rvs_check_fn_S<'tcx>(cx: &LateContext<'tcx>, facts: &BodyFacts) {
         let Some(path) = rvs_path_lint_callable(&observation.target) else {
             continue;
         };
-        if rvs_is_reflection_S(path) {
+        if rvs_is_reflection_S(path.as_ref()) {
             cx.tcx.emit_node_span_lint(
                 RVS_REFLECTION_USAGE,
                 observation.hir_id,
