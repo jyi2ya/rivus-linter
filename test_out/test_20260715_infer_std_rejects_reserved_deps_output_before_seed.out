@@ -1,0 +1,3 @@
+result=Err("infer-std output cannot replace reserved caps layer 'deps'; expected 'std'")
+callgraph_exists=false
+deps_preserved=true

@@ -115,7 +115,7 @@ cargo rivus infer-capsmap -o caps/deps       # 从项目 caps/ 推断，并把 d
 选项：
 - `-o, --output <PATH>` — **必填**。direct external deps capsmap 输出路径；相对路径按目标项目目录解析。通常写到 `caps/deps`。命令只写这个显式输出，不再写入 `target/rivus-inferred-capsmap.txt` 或 `target/rivus-deps-capsmap.txt`。
 
-注意：种子始终从项目 `caps/` 加载（排除 `deps` 层，避免旧 deps 干扰重新推断）。如果 `-o` 指向 `caps/` 下的其他自定义层，该输出文件也会从本次种子中排除，避免旧输出影响重新生成。首次运行时允许 `caps/` 不存在，按空种子推断并创建 `-o` 指定输出的父目录。
+注意：种子始终从项目 `caps/` 加载（排除 `deps` 层，避免旧 deps 干扰重新推断）。如果 `-o` 指向 `caps/` 下的其他自定义层，该输出文件也会从本次种子中排除，避免旧输出影响重新生成。命令不会允许输出覆盖 `std`、`seed`、`suppress` 或 `ext` 等其他保留层。首次运行时允许 `caps/` 不存在，按空种子推断并创建 `-o` 指定输出的父目录。
 
 
 ---
@@ -124,7 +124,7 @@ cargo rivus infer-capsmap -o caps/deps       # 从项目 caps/ 推断，并把 d
 
 通过 `-Zbuild-std` 编译 std/core/alloc，推断标准库函数的能力标注。需要 nightly Rust；命令实际会设置 `RUSTUP_TOOLCHAIN=nightly` 并运行 `cargo check -Zbuild-std=std,core,alloc`，如果本机没有可用的 nightly toolchain 会直接失败。`PATH` 必须是一个有效的本地 crate 项目；仅含 `[workspace]` 的虚拟根目录不受支持。
 
-注意：该命令只会从 `PATH/caps` 加载 `seed` 和 `suppress` 文件（不加载 `std`/`deps`/`ext`，因为那些是上一次生成的结果，会干扰重新生成），并在其基础上推断标准库条目。
+注意：该命令只会从 `PATH/caps` 加载 `seed` 和 `suppress` 文件（不加载 `std`/`deps`/`ext`，因为那些是上一次生成的结果，会干扰重新生成），并在其基础上推断标准库条目。命令不会允许输出覆盖 `deps`、`seed`、`suppress` 或 `ext` 等其他保留层；如果没有完整收集到非本地 `std`、`core`、`alloc` 三个 crate，也会报错并保留原输出。
 
 ```bash
 cargo rivus infer-std -o caps/std        # 将 std caps 写到指定文件（通常 caps/std）

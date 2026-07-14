@@ -27,6 +27,7 @@ rustc_hir::lang_items::LanguageItems::sized_trait=
 rustc_hir_analysis::lower_ty=
 rustc_lint::context::LateContext::qpath_res=
 rustc_lint::context::LateContext::typing_env=
+same_file::is_same_file=BI
 rustc_lint::context::LateContext::type_is_copy_modulo_regions=
 rustc_lint::context::LintContext::emit_span_lint=S
 rustc_lint::context::LintStore::register_late_pass=M

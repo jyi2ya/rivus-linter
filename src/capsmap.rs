@@ -56,6 +56,14 @@ pub enum CapsMapError {
 /// 这是整个系统中唯一的层级定义——所有调用者都引用这一个常量。
 const LAYER_ORDER: &[&str] = &["std", "deps", "seed", "suppress", "ext"];
 
+pub(crate) fn rvs_reserved_layer_name(name: &OsStr) -> Option<&'static str> {
+    let name = name.to_str()?;
+    LAYER_ORDER
+        .iter()
+        .copied()
+        .find(|reserved| name.eq_ignore_ascii_case(reserved))
+}
+
 #[derive(Debug, Clone, Copy)]
 enum CapsDirSelection<'a> {
     All,

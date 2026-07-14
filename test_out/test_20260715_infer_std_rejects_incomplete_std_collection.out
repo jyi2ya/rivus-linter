@@ -1,0 +1,4 @@
+empty=Err("infer-std collection missing non-local crate graphs: std, core, alloc; refusing to replace std capsmap")
+compiler_and_local_only=Err("infer-std collection missing non-local crate graphs: std, core, alloc; refusing to replace std capsmap")
+core_only=Err("infer-std collection missing non-local crate graphs: std, alloc; refusing to replace std capsmap")
+complete=Ok(())

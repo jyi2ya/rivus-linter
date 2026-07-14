@@ -1,0 +1,3 @@
+result=Err("infer-capsmap output cannot replace reserved caps layer 'seed'; expected 'deps'")
+callgraph_exists=false
+seed_preserved=true

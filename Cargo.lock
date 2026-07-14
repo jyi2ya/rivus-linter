@@ -1806,6 +1806,7 @@ dependencies = [
  "ra_ap_paths",
  "ra_ap_project_model",
  "ra_ap_vfs",
+ "same-file",
  "serde",
  "serde_json",
  "snafu",
