@@ -1,0 +1,5 @@
+distinct=true
+artifact_dirs_are_absolute=true
+target_dirs_are_distinct=true
+first_removed=true
+sibling_preserved=true

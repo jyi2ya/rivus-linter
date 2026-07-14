@@ -7,7 +7,8 @@ use std::process::Command;
 
 use crate::artifacts::FnGraph;
 use crate::callgraph_cache::{
-    rvs_is_std_like_def_path, rvs_merge_callgraph_dir_BIS, rvs_merge_std_like_callgraph_M,
+    rvs_is_std_like_def_path, rvs_load_published_std_callgraph_cache_BIS,
+    rvs_merge_callgraph_dir_BIS, rvs_merge_std_like_callgraph_M,
     rvs_merge_std_like_callgraph_with_local_prefixes_M,
 };
 use crate::capsmap::{self, CapsMap};
@@ -89,6 +90,27 @@ pub(crate) enum CargoCheckError {
 enum CallgraphCollectionError {
     Cargo(CargoCheckError),
     Artifact(String),
+}
+
+#[derive(Debug)]
+struct RivusRunGeneration {
+    root: PathBuf,
+    artifact_dir: PathBuf,
+    target_subdir: String,
+}
+
+impl RivusRunGeneration {
+    fn rvs_root(&self) -> &Path {
+        &self.root
+    }
+
+    fn rvs_artifact_dir(&self) -> &Path {
+        &self.artifact_dir
+    }
+
+    fn rvs_target_subdir(&self) -> &str {
+        &self.target_subdir
+    }
 }
 
 impl CargoCheckError {
@@ -327,25 +349,12 @@ pub(crate) fn rvs_run_cargo_check_BIMS(extra_args: &[String]) -> Result<(), i32>
     };
     let uncovered =
         crate::offline_caps::rvs_uncovered_test_functions(&callgraph, &local_crate_names);
-    let selection_path = match rvs_write_untested_selection_BIS(project_path, &uncovered) {
-        Ok(path) => path,
-        Err(error) => {
-            eprintln!("cannot prepare merged test coverage: {error}");
-            return Err(1);
-        }
-    };
     let lint_result = rvs_run_project_lints_BIMS(
         project_path,
         target_scope,
         &extra_args_ref,
-        Some(&selection_path),
+        Some(&uncovered),
     );
-    if let Err(error) = std::fs::remove_file(&selection_path) {
-        eprintln!(
-            "warning: cannot remove merged test coverage selection {}: {error}",
-            selection_path.display()
-        );
-    }
     if let Err(error) = lint_result {
         eprintln!("{error}");
         return Err(error.rvs_exit_code());
@@ -366,44 +375,47 @@ fn rvs_run_project_lints_BIMS(
     project_path: &Path,
     target_scope: CargoTargetScope,
     extra_args: &[&str],
-    untested_selection: Option<&Path>,
+    uncovered: Option<&BTreeSet<crate::artifacts::FunctionIdentity>>,
 ) -> Result<(), CargoCheckError> {
-    rvs_clean_dir_BIS(&project_path.join("target/rivus-lint")).map_err(CargoCheckError::Message)?;
-    let mut extra_env = vec![("RIVUS_OFFLINE_CAPS", OsString::from("1"))];
-    if let Some(path) = untested_selection {
-        extra_env.push(("RIVUS_UNTESTED_PATHS", path.as_os_str().to_os_string()));
+    let generation =
+        rvs_reserve_run_generation_BIS(project_path, "lint").map_err(CargoCheckError::Message)?;
+    let lint_result = (|| {
+        let mut extra_env = vec![("RIVUS_OFFLINE_CAPS", OsString::from("1"))];
+        if let Some(functions) = uncovered {
+            let path = rvs_write_untested_selection_BIS(generation.rvs_root(), functions)
+                .map_err(CargoCheckError::Message)?;
+            extra_env.push(("RIVUS_UNTESTED_PATHS", path.as_os_str().to_os_string()));
+        }
+        rvs_run_cargo_check_impl_BIMS(&CargoCheckConfig {
+            project_path,
+            wrap_all_crates: false,
+            target_scope,
+            build_std: false,
+            extra_env,
+            extra_args: extra_args.to_vec(),
+            target_subdir: Some(generation.rvs_target_subdir()),
+        })
+    })();
+    let cleanup_result = rvs_cleanup_run_generation_BIS(&generation);
+    match (lint_result, cleanup_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(()), Err(cleanup)) => Err(CargoCheckError::Message(cleanup)),
+        (Err(error), Err(cleanup)) => {
+            eprintln!("warning: additionally failed to clean lint generation: {cleanup}");
+            Err(error)
+        }
     }
-    rvs_run_cargo_check_impl_BIMS(&CargoCheckConfig {
-        project_path,
-        wrap_all_crates: false,
-        target_scope,
-        build_std: false,
-        extra_env,
-        extra_args: extra_args.to_vec(),
-        target_subdir: Some("rivus-lint"),
-    })
 }
 
 fn rvs_write_untested_selection_BIS(
-    project_path: &Path,
+    generation_root: &Path,
     functions: &BTreeSet<crate::artifacts::FunctionIdentity>,
 ) -> Result<PathBuf, String> {
-    let project_path = rvs_absolute_path_BIS(project_path)?;
-    let target_dir = project_path.join("target");
-    std::fs::create_dir_all(&target_dir)
-        .map_err(|error| format!("cannot create {}: {error}", target_dir.display()))?;
-    let path = target_dir.join(format!(
-        "rivus-untested-functions-{}.json",
-        std::process::id()
-    ));
+    let path = generation_root.join("untested-functions.json");
     let json = crate::artifacts::rvs_serialize_function_identities_json_S(functions)?;
-    let temp_path_for_attempt = |attempt| {
-        target_dir.join(format!(
-            ".rivus-untested-functions-{}.{}.tmp",
-            std::process::id(),
-            attempt
-        ))
-    };
+    let temp_path_for_attempt =
+        |attempt| generation_root.join(format!(".untested-functions.{attempt}.tmp"));
     crate::fs_guard::rvs_write_atomic_BIS(&path, json.as_bytes(), &temp_path_for_attempt).map_err(
         |failure| rvs_render_atomic_write_failure(failure, &path, "temp coverage selection", false),
     )?;
@@ -554,9 +566,8 @@ fn rvs_collect_config_key_paths_M(prefix: &str, item: &toml_edit::Item, out: &mu
 
 /// Unified callgraph collector.
 ///
-/// Cleans the callgraph output directory and build directory, runs
-/// `cargo check` with the callgraph collection environment, and returns
-/// the merged callgraph.
+/// Reserves private artifact and Cargo target directories, runs `cargo check`
+/// with the callgraph collection environment, and returns the merged graph.
 ///
 /// Dependency and std inference wrap every crate. Project analysis uses the
 /// workspace-only collector below so third-party warnings stay capped.
@@ -632,34 +643,109 @@ fn rvs_collect_callgraph_with_args_detailed_BIMS(
     extra_args: Vec<&str>,
     local_crate_names: &BTreeSet<CrateName>,
 ) -> Result<FnGraph, CallgraphCollectionError> {
-    let suffix = if build_std { "-std" } else { "" };
-    let cg_subdir = format!("rivus-callgraph{suffix}");
-    let build_subdir = format!("rivus-build{suffix}");
-
-    let cg_dir = path.join("target").join(&cg_subdir);
-    let abs_cg_dir = std::env::current_dir()
-        .map_err(|e| CallgraphCollectionError::Artifact(format!("current dir invalid: {e}")))?
-        .join(&cg_dir);
-
-    rvs_clean_dir_BIS(&cg_dir).map_err(CallgraphCollectionError::Artifact)?;
-    rvs_clean_dir_BIS(&path.join("target").join(&build_subdir))
+    let purpose = if build_std {
+        "callgraph-std"
+    } else {
+        "callgraph"
+    };
+    let generation = rvs_reserve_run_generation_BIS(path, purpose)
         .map_err(CallgraphCollectionError::Artifact)?;
+    let env_vars = rvs_callgraph_collection_env(
+        extra_env,
+        generation.rvs_artifact_dir().as_os_str().to_os_string(),
+    );
 
-    let env_vars = rvs_callgraph_collection_env(extra_env, abs_cg_dir.into_os_string());
-
-    rvs_run_cargo_check_impl_BIMS(&CargoCheckConfig {
+    let collection_result = rvs_run_cargo_check_impl_BIMS(&CargoCheckConfig {
         project_path: path,
         wrap_all_crates,
         target_scope,
         build_std,
         extra_env: env_vars,
         extra_args,
-        target_subdir: Some(&build_subdir),
+        target_subdir: Some(generation.rvs_target_subdir()),
     })
-    .map_err(CallgraphCollectionError::Cargo)?;
+    .map_err(CallgraphCollectionError::Cargo)
+    .and_then(|()| {
+        rvs_merge_callgraph_dir_BIS(generation.rvs_artifact_dir(), local_crate_names)
+            .map_err(CallgraphCollectionError::Artifact)
+    });
+    let cleanup_result = rvs_cleanup_run_generation_BIS(&generation);
+    match (collection_result, cleanup_result) {
+        (Ok(callgraph), Ok(())) => Ok(callgraph),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(_), Err(cleanup)) => Err(CallgraphCollectionError::Artifact(cleanup)),
+        (Err(error), Err(cleanup)) => {
+            eprintln!("warning: additionally failed to clean callgraph generation: {cleanup}");
+            Err(error)
+        }
+    }
+}
 
-    rvs_merge_callgraph_dir_BIS(&cg_dir, local_crate_names)
-        .map_err(CallgraphCollectionError::Artifact)
+fn rvs_reserve_run_generation_BIS(
+    project_path: &Path,
+    purpose: &str,
+) -> Result<RivusRunGeneration, String> {
+    debug_assert!(
+        !purpose.is_empty(),
+        "run generation purpose must not be empty"
+    );
+    debug_assert!(
+        purpose
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-'),
+        "run generation purpose must be path-safe ASCII"
+    );
+    let project_path = rvs_absolute_path_BIS(project_path)?;
+    let runs_dir = project_path.join("target/.rivus-runs");
+    std::fs::create_dir_all(&runs_dir)
+        .map_err(|error| format!("cannot create {}: {error}", runs_dir.display()))?;
+    for attempt in 0..100usize {
+        debug_assert!(attempt < 100, "run generation retry bound");
+        let name = format!("{purpose}-{}-{attempt}", std::process::id());
+        let root = runs_dir.join(&name);
+        match std::fs::create_dir(&root) {
+            Ok(()) => {
+                let artifact_dir = root.join("artifacts");
+                if let Err(error) = std::fs::create_dir(&artifact_dir) {
+                    let cleanup = std::fs::remove_dir_all(&root).err();
+                    let cleanup = cleanup
+                        .map(|cleanup| {
+                            format!("; additionally cannot remove generation: {cleanup}")
+                        })
+                        .unwrap_or_default();
+                    return Err(format!(
+                        "cannot create {}: {error}{cleanup}",
+                        artifact_dir.display()
+                    ));
+                }
+                let target_subdir = Path::new(".rivus-runs")
+                    .join(&name)
+                    .join("cargo-target")
+                    .to_string_lossy()
+                    .into_owned();
+                return Ok(RivusRunGeneration {
+                    root,
+                    artifact_dir,
+                    target_subdir,
+                });
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(format!(
+                    "cannot reserve run generation {}: {error}",
+                    root.display()
+                ));
+            }
+        }
+    }
+    Err(format!(
+        "cannot reserve run generation in {}: too many collisions",
+        runs_dir.display()
+    ))
+}
+
+fn rvs_cleanup_run_generation_BIS(generation: &RivusRunGeneration) -> Result<(), String> {
+    rvs_clean_dir_BIS(generation.rvs_root())
 }
 
 fn rvs_callgraph_failure_exit_code(error: &CallgraphCollectionError) -> Option<i32> {
@@ -680,6 +766,21 @@ fn rvs_callgraph_collection_env(
 }
 
 fn rvs_load_required_std_callgraph_cache_BIS(path: &Path) -> Result<FnGraph, String> {
+    match rvs_load_published_std_callgraph_cache_BIS(path) {
+        Ok(Some(cg)) => {
+            let mut std_only = FnGraph::rvs_new();
+            rvs_merge_std_like_callgraph_M(&mut std_only, cg);
+            if std_only.rvs_is_empty() {
+                return Err(
+                    "published std callgraph cache contains no std-like functions; run cargo rivus infer-std first"
+                        .into(),
+                );
+            }
+            return Ok(std_only);
+        }
+        Ok(None) => {}
+        Err(error) => return Err(format!("{error}; run cargo rivus infer-std first")),
+    }
     let cg_std_dir = path.join("target").join("rivus-callgraph-std");
     if crate::fs_guard::rvs_validate_optional_dir_BIS(&cg_std_dir, "std callgraph cache")? {
         let cg = rvs_merge_callgraph_dir_BIS(&cg_std_dir, &BTreeSet::new())
@@ -749,6 +850,21 @@ fn rvs_collect_project_callgraph_with_optional_std_cache_BIMS(
 ) -> Result<FnGraph, String> {
     let mut callgraph =
         rvs_collect_workspace_callgraph_BIMS(path, target_scope, vec![], local_crate_names)?;
+    match rvs_load_published_std_callgraph_cache_BIS(path) {
+        Ok(Some(std_graph)) => {
+            rvs_merge_std_like_callgraph_with_local_prefixes_M(
+                &mut callgraph,
+                std_graph,
+                local_crate_names,
+            );
+            return Ok(callgraph);
+        }
+        Ok(None) => {}
+        Err(error) => {
+            eprintln!("warning: ignoring stale published std callgraph cache: {error}");
+            return Ok(callgraph);
+        }
+    }
     let cg_std_dir = path.join("target").join("rivus-callgraph-std");
     if rvs_warn_optional_dir_BIS(&cg_std_dir, "std callgraph cache") {
         match rvs_merge_callgraph_dir_BIS(&cg_std_dir, &BTreeSet::new()) {
@@ -925,7 +1041,9 @@ pub(crate) fn rvs_ensure_cargo_project_BIS(path: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{rvs_make_temp_dir_BIS, rvs_snapshot_BIS};
+    use crate::test_support::{
+        rvs_make_cargo_project_BIS, rvs_make_temp_dir_BIS, rvs_snapshot_BIS,
+    };
 
     fn rvs_make_workspace_temp_dir_BIS(tag: &str) -> PathBuf {
         rvs_make_temp_dir_BIS(&format!("workspace-{tag}"))
@@ -2996,6 +3114,232 @@ name = "throughput-bench"
         assert!(capsmap.ends_with("caps"));
 
         std::fs::remove_dir_all(absolute_project).unwrap();
+    }
+
+    #[test]
+    fn test_20260715_callgraph_generations_are_sibling_safe() {
+        let dir = rvs_make_workspace_temp_dir_BIS("callgraph-generation-isolation");
+        let (first, second) = std::thread::scope(|scope| {
+            let first = scope.spawn(|| rvs_reserve_run_generation_BIS(&dir, "callgraph").unwrap());
+            let second = scope.spawn(|| rvs_reserve_run_generation_BIS(&dir, "callgraph").unwrap());
+            (first.join().unwrap(), second.join().unwrap())
+        });
+        std::fs::write(second.rvs_root().join("sentinel"), "active\n").unwrap();
+
+        let distinct = first.rvs_root() != second.rvs_root();
+        let artifact_dirs_are_absolute =
+            first.rvs_artifact_dir().is_absolute() && second.rvs_artifact_dir().is_absolute();
+        let target_dirs_are_distinct = first.rvs_target_subdir() != second.rvs_target_subdir();
+        rvs_cleanup_run_generation_BIS(&first).unwrap();
+        let sibling_preserved = second.rvs_root().join("sentinel").is_file();
+        let first_removed = !first.rvs_root().exists();
+        rvs_cleanup_run_generation_BIS(&second).unwrap();
+        let output = format!(
+            "distinct={distinct}\nartifact_dirs_are_absolute={artifact_dirs_are_absolute}\ntarget_dirs_are_distinct={target_dirs_are_distinct}\nfirst_removed={first_removed}\nsibling_preserved={sibling_preserved}\n"
+        );
+        rvs_snapshot_BIS(
+            "test_20260715_callgraph_generations_are_sibling_safe",
+            &output,
+        );
+
+        assert!(distinct);
+        assert!(artifact_dirs_are_absolute);
+        assert!(target_dirs_are_distinct);
+        assert!(first_removed);
+        assert!(sibling_preserved);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260715_concurrent_callgraph_collections_do_not_mix_generations() {
+        let dir = rvs_make_cargo_project_BIS(
+            "concurrent-callgraph-generations",
+            "concurrent-callgraph-generations",
+            &[(
+                "src/lib.rs",
+                "#![allow(non_snake_case)]\n\npub fn rvs_common() {}\n\n#[cfg(feature = \"first\")]\npub fn rvs_first() {}\n\n#[cfg(feature = \"second\")]\npub fn rvs_second() {}\n",
+            )],
+        );
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"concurrent-callgraph-generations\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\nfirst = []\nsecond = []\n",
+        )
+        .unwrap();
+        let local_crate_names =
+            BTreeSet::from([CrateName::from("concurrent_callgraph_generations")]);
+        let (first, second) = std::thread::scope(|scope| {
+            let first = scope.spawn(|| {
+                rvs_collect_callgraph_with_args_BIMS(
+                    &dir,
+                    false,
+                    false,
+                    CargoTargetScope::Production,
+                    vec![],
+                    vec!["--features", "first"],
+                    &local_crate_names,
+                )
+            });
+            let second = scope.spawn(|| {
+                rvs_collect_callgraph_with_args_BIMS(
+                    &dir,
+                    false,
+                    false,
+                    CargoTargetScope::Production,
+                    vec![],
+                    vec!["--features", "second"],
+                    &local_crate_names,
+                )
+            });
+            (
+                first.join().unwrap().unwrap(),
+                second.join().unwrap().unwrap(),
+            )
+        });
+        let first_isolated = first
+            .rvs_get("concurrent_callgraph_generations::rvs_first")
+            .is_some()
+            && first
+                .rvs_get("concurrent_callgraph_generations::rvs_second")
+                .is_none();
+        let second_isolated = second
+            .rvs_get("concurrent_callgraph_generations::rvs_second")
+            .is_some()
+            && second
+                .rvs_get("concurrent_callgraph_generations::rvs_first")
+                .is_none();
+        let generations_remaining = std::fs::read_dir(dir.join("target/.rivus-runs"))
+            .unwrap()
+            .count();
+        let output = format!(
+            "first_isolated={first_isolated}\nsecond_isolated={second_isolated}\ngenerations_remaining={generations_remaining}\n"
+        );
+        rvs_snapshot_BIS(
+            "test_20260715_concurrent_callgraph_collections_do_not_mix_generations",
+            &output,
+        );
+
+        assert!(first_isolated);
+        assert!(second_isolated);
+        assert_eq!(generations_remaining, 0);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260715_published_std_callgraph_precedes_legacy_directory() {
+        let dir = rvs_make_workspace_temp_dir_BIS("published-std-callgraph-precedence");
+        let legacy_dir = dir.join("target/rivus-callgraph-std");
+        std::fs::create_dir_all(&legacy_dir).unwrap();
+        let mut legacy = FnGraph::rvs_new();
+        legacy.rvs_insert_M(
+            crate::symbols::DefPath::from("std::rvs_legacy"),
+            crate::artifacts::FnNode::default(),
+        );
+        std::fs::write(
+            legacy_dir.join("legacy.json"),
+            crate::artifacts::rvs_serialize_callgraph_json_S(&legacy).unwrap(),
+        )
+        .unwrap();
+        let mut published = FnGraph::rvs_new();
+        published.rvs_insert_M(
+            crate::symbols::DefPath::from("std::rvs_published"),
+            crate::artifacts::FnNode::default(),
+        );
+        crate::callgraph_cache::rvs_publish_std_callgraph_cache_BIS(&dir, &published).unwrap();
+
+        let loaded = rvs_load_required_std_callgraph_cache_BIS(&dir).unwrap();
+        let published_present = loaded.rvs_get("std::rvs_published").is_some();
+        let legacy_present = loaded.rvs_get("std::rvs_legacy").is_some();
+        let cache_is_file = dir.join("target/rivus-callgraph-std.json").is_file();
+        let output = format!(
+            "published_present={published_present}\nlegacy_present={legacy_present}\ncache_is_file={cache_is_file}\n"
+        );
+        rvs_snapshot_BIS(
+            "test_20260715_published_std_callgraph_precedes_legacy_directory",
+            &output,
+        );
+
+        assert!(published_present);
+        assert!(!legacy_present);
+        assert!(cache_is_file);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260715_failed_std_callgraph_publish_preserves_previous_cache() {
+        let dir = rvs_make_workspace_temp_dir_BIS("failed-std-callgraph-publish");
+        let mut previous = FnGraph::rvs_new();
+        previous.rvs_insert_M(
+            crate::symbols::DefPath::from("std::rvs_previous"),
+            crate::artifacts::FnNode::default(),
+        );
+        crate::callgraph_cache::rvs_publish_std_callgraph_cache_BIS(&dir, &previous).unwrap();
+        let target_dir = dir.join("target");
+        for attempt in 0..100usize {
+            std::fs::write(
+                target_dir.join(format!(
+                    ".rivus-callgraph-std.json.{}.{attempt}.tmp",
+                    std::process::id()
+                )),
+                "collision\n",
+            )
+            .unwrap();
+        }
+        let mut replacement = FnGraph::rvs_new();
+        replacement.rvs_insert_M(
+            crate::symbols::DefPath::from("std::rvs_replacement"),
+            crate::artifacts::FnNode::default(),
+        );
+
+        let result =
+            crate::callgraph_cache::rvs_publish_std_callgraph_cache_BIS(&dir, &replacement);
+        let loaded = rvs_load_required_std_callgraph_cache_BIS(&dir).unwrap();
+        let previous_present = loaded.rvs_get("std::rvs_previous").is_some();
+        let replacement_present = loaded.rvs_get("std::rvs_replacement").is_some();
+        let output = format!(
+            "result_is_err={}\nprevious_present={previous_present}\nreplacement_present={replacement_present}\n",
+            result.is_err()
+        );
+        rvs_snapshot_BIS(
+            "test_20260715_failed_std_callgraph_publish_preserves_previous_cache",
+            &output,
+        );
+
+        assert!(result.is_err());
+        assert!(previous_present);
+        assert!(!replacement_present);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260715_std_callgraph_publish_replaces_previous_cache() {
+        let dir = rvs_make_workspace_temp_dir_BIS("replace-std-callgraph-cache");
+        let mut previous = FnGraph::rvs_new();
+        previous.rvs_insert_M(
+            crate::symbols::DefPath::from("std::rvs_previous"),
+            crate::artifacts::FnNode::default(),
+        );
+        crate::callgraph_cache::rvs_publish_std_callgraph_cache_BIS(&dir, &previous).unwrap();
+        let mut replacement = FnGraph::rvs_new();
+        replacement.rvs_insert_M(
+            crate::symbols::DefPath::from("std::rvs_replacement"),
+            crate::artifacts::FnNode::default(),
+        );
+
+        crate::callgraph_cache::rvs_publish_std_callgraph_cache_BIS(&dir, &replacement).unwrap();
+        let loaded = rvs_load_required_std_callgraph_cache_BIS(&dir).unwrap();
+        let previous_present = loaded.rvs_get("std::rvs_previous").is_some();
+        let replacement_present = loaded.rvs_get("std::rvs_replacement").is_some();
+        let output = format!(
+            "previous_present={previous_present}\nreplacement_present={replacement_present}\n"
+        );
+        rvs_snapshot_BIS(
+            "test_20260715_std_callgraph_publish_replaces_previous_cache",
+            &output,
+        );
+
+        assert!(!previous_present);
+        assert!(replacement_present);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

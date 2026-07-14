@@ -51,7 +51,7 @@ cargo rivus check                    # 使用项目 caps/（若存在）
 cargo rivus check -- --features foo  # 传递额外 cargo check 参数
 ```
 
-`check` 必须从待分析 package 的目录运行，不接受 `--workspace`、`--all`、`--package`/`-p` 或 `--exclude` 等 workspace package 选择参数；否则本地 crate 分类会与 Cargo 实际选择范围不一致。`--target-dir` 也不能透传，因为 `check` 必须使用自己的隔离 target 目录。其他不会覆盖 driver 环境或项目路径的 Cargo 参数可继续透传。
+`check` 必须从待分析 package 的目录运行，不接受 `--workspace`、`--all`、`--package`/`-p` 或 `--exclude` 等 workspace package 选择参数；否则本地 crate 分类会与 Cargo 实际选择范围不一致。`--target-dir` 也不能透传，因为每次命令都会在项目 `target/.rivus-runs/` 下预留自己的隔离 target 和 artifact generation，并发命令不会清理或读取彼此的中间文件。其他不会覆盖 driver 环境或项目路径的 Cargo 参数可继续透传。
 
 注意：capsmap 只从项目 `caps/` 目录加载。CLI 不再支持 `-m/--capsmap`，也不再读取或生成 `target/rivus-std-capsmap.txt`、`target/rivus-inferred-capsmap.txt`、`target/rivus-deps-capsmap.txt`、`target/rivus-effective-capsmap/`。目录不存在时统一能力引擎使用空 capsmap。caps 目录使用统一的层级加载器（`CapsMap::rvs_load_dir_BIS`），按 `std → deps → seed → suppress → ext → 其余字母序` 的固定顺序合并；原子写入遗留的 `.层名.PID.序号.tmp` 临时文件会被忽略。
 
@@ -124,7 +124,7 @@ cargo rivus infer-capsmap -o caps/deps       # 从项目 caps/ 推断，并把 d
 
 通过 `-Zbuild-std` 编译 std/core/alloc，推断标准库函数的能力标注。需要 nightly Rust；命令实际会设置 `RUSTUP_TOOLCHAIN=nightly` 并运行 `cargo check -Zbuild-std=std,core,alloc`，如果本机没有可用的 nightly toolchain 会直接失败。`PATH` 必须是一个有效的本地 crate 项目；仅含 `[workspace]` 的虚拟根目录不受支持。
 
-注意：该命令只会从 `PATH/caps` 加载 `seed` 和 `suppress` 文件（不加载 `std`/`deps`/`ext`，因为那些是上一次生成的结果，会干扰重新生成），并在其基础上推断标准库条目。命令不会允许输出覆盖 `deps`、`seed`、`suppress` 或 `ext` 等其他保留层；如果没有完整收集到非本地 `std`、`core`、`alloc` 三个 crate，也会报错并保留原输出。
+注意：该命令只会从 `PATH/caps` 加载 `seed` 和 `suppress` 文件（不加载 `std`/`deps`/`ext`，因为那些是上一次生成的结果，会干扰重新生成），并在其基础上推断标准库条目。命令不会允许输出覆盖 `deps`、`seed`、`suppress` 或 `ext` 等其他保留层；如果没有完整收集到非本地 `std`、`core`、`alloc` 三个 crate，也会报错并保留原输出。成功写出 caps 后，命令会把本次完整合并的 versioned 函数图原子发布到 `target/rivus-callgraph-std.json`，供后续 std `why` 使用；任一前置步骤失败都保留上一个缓存。旧版 `target/rivus-callgraph-std/` 目录仍可只读加载。
 
 ```bash
 cargo rivus infer-std -o caps/std        # 将 std caps 写到指定文件（通常 caps/std）
@@ -196,7 +196,7 @@ cargo rivus annotate /path/to  # 指定目录
 - rustc 选中的可执行入口、测试函数、trait impl 方法、synthetic 节点、宏展开或其他没有真实源码位置的函数不会作为直接 annotate 候选；库 crate 中普通的根级 `main` 仍按一般函数处理，trait impl 方法可能会随 trait 声明或调用点的语义重命名被间接更新
 - 本地非 Port trait 方法的能力由各 impl 按 at-least-half vote（`ceil(n/2)`）聚合；声明后缀只在没有 impl 可聚合时作为回退。Port 方法固定为 `P`
 - annotate 后 `#[serde(default = "...")]` 等字符串字面量中的函数引用不会自动更新，需要手动修复
-- annotate 会删除 `target/rivus-callgraph` 和 `target/rivus-callgraph-std` 缓存（函数名已变，旧缓存失效）
+- annotate 会删除 `target/rivus-callgraph-std.json` 及旧版 `target/rivus-callgraph`、`target/rivus-callgraph-std` 缓存（函数名已变，旧缓存失效），不会删除其他正在运行命令的 `target/.rivus-runs/` generation
 
 ---
 

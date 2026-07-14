@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
-use crate::callgraph_cache::rvs_is_std_like_def_path;
+use crate::callgraph_cache::{rvs_is_std_like_def_path, rvs_publish_std_callgraph_cache_BIS};
 use crate::capsmap::{CapsMap, rvs_reserved_layer_name};
 use crate::cargo_targets::{CargoTargetScope, rvs_detect_local_crate_prefixes_BIS};
 use crate::function_classification::LocalScope;
@@ -143,7 +143,8 @@ pub(crate) fn rvs_run_infer_std_BIMPS(path: &Path, output: &Path) -> Result<(), 
     }
 
     let result = rvs_format_capsmap(&std_only);
-    rvs_write_capsmap_result_BIS(&result, &resolved_output, "std capsmap")
+    rvs_write_capsmap_result_BIS(&result, &resolved_output, "std capsmap")?;
+    rvs_publish_std_callgraph_cache_BIS(&project_path, &callgraph)
 }
 
 fn rvs_require_inference_output_layer(

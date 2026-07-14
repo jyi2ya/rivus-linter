@@ -37,6 +37,8 @@
 - lint pass 负责从 HIR 收集节点和边
 - callgraph artifact 负责把这些节点持久化；artifact 使用显式 schema version，当前读取器兼容 version 2、当前版本以及没有 envelope 的旧图
 - 每个参与收集的 crate 都必须成功写出自己的 artifact；没有函数的 crate 仍写出合法的空图，只有完全没有 artifact 才表示 wrapper 未执行。任一写入失败都使本次收集失败，不能用其他 crate 的部分图继续分析。项目检查、报告和重命名只收集工作区 crate，第三方依赖通过调用边和 capsmap 表达；只有依赖能力推断与标准库推断才收集依赖 crate。artifact 收集阶段只保留编译错误并静默普通 warning，避免依赖推断泄漏第三方诊断
+- 每次命令必须在项目 `target/` 下原子预留自己的 generation。原始 artifact、Cargo target 和测试覆盖选择文件只属于该 generation；并发命令不能清理、读取或复用彼此的 generation。命令只在 Cargo 成功后合并自己的完整 artifact 集，正常结束时只清理自己的 generation，遗留 generation 不属于任何缓存且所有读取器必须忽略
+- 标准库函数图缓存是成功 generation 合并后的单个 versioned artifact。`infer-std` 只有在完整收集 `std`、`core`、`alloc`、完成推断并成功写出 caps 后才原子发布该缓存；收集、推断或输出失败必须保留上一个完整缓存。读取器优先读取该合并缓存，并只为已有用户保留旧目录格式的只读兼容
 - 源码写回只使用 artifact 记录的路径基准；旧 artifact 没有基准时允许兼容解析，但多个候选都存在则拒绝猜测
 - 源码写回的 eligibility 只由 rustc 函数图生成的精确 source plan 决定；rust-analyzer 只把计划中的文件和字节范围解析为语义 rename position，不能按目录或语法标签再次筛选候选
 - 同一命令已经确定本地 crate 边界后，callgraph 收集、std cache 选择、报告和缓存过滤都必须接收并复用这一份边界快照，并通过同一个 `LocalScope` 执行 typed path 和字符串 path 的归属判定，不允许各阶段重新构造 prefix 规则或用可选参数在执行中途重新探测项目范围

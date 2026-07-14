@@ -661,15 +661,31 @@ fn rvs_canonical_local_file_BIS(
     Some(real_file)
 }
 
-/// Removes cached callgraph directories after a rename operation.
+/// Removes published and legacy callgraph caches after a rename operation.
 /// Function names in the source have changed, so the old callgraph
 /// (keyed by function def_path) is stale and must not be reused.
 fn rvs_invalidate_callgraph_cache_BIS(project_path: &Path) -> Result<(), String> {
-    for dir_name in &["rivus-callgraph", "rivus-callgraph-std"] {
-        let dir = project_path.join("target").join(dir_name);
-        crate::workspace::rvs_clean_dir_BIS(&dir)?;
+    let target = project_path.join("target");
+    let caches = [
+        target.join("rivus-callgraph"),
+        target.join("rivus-callgraph-std"),
+        target.join("rivus-callgraph-std.json"),
+    ];
+    rvs_invalidate_callgraph_cache_paths_BIS(&caches)
+}
+
+fn rvs_invalidate_callgraph_cache_paths_BIS(caches: &[PathBuf]) -> Result<(), String> {
+    let mut errors = Vec::new();
+    for cache in caches {
+        if let Err(error) = crate::workspace::rvs_clean_dir_BIS(cache) {
+            errors.push(error);
+        }
     }
-    Ok(())
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
 }
 
 fn rvs_require_directory_BIS(path: &Path) -> Result<(), String> {
@@ -1037,6 +1053,56 @@ mod tests {
 
         assert!(result.is_ok());
         assert!(!exists);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260715_invalidate_callgraph_cache_preserves_active_generation() {
+        let dir = rvs_make_temp_dir_BIS("invalidate-published-cache");
+        let active_generation = dir.join("target/.rivus-runs/callgraph-active");
+        std::fs::create_dir_all(&active_generation).unwrap();
+        std::fs::write(active_generation.join("sentinel"), "active\n").unwrap();
+        let published_cache = dir.join("target/rivus-callgraph-std.json");
+        std::fs::write(&published_cache, "stale\n").unwrap();
+
+        let result = rvs_invalidate_callgraph_cache_BIS(&dir);
+        let published_removed = !published_cache.exists();
+        let active_preserved = active_generation.join("sentinel").is_file();
+        rvs_snapshot_BIS(
+            "test_20260715_invalidate_callgraph_cache_preserves_active_generation",
+            &format!(
+                "result={result:?}\npublished_removed={published_removed}\nactive_preserved={active_preserved}\n"
+            ),
+        );
+
+        assert!(result.is_ok());
+        assert!(published_removed);
+        assert!(active_preserved);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_20260715_cache_invalidation_continues_after_error() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let dir = rvs_make_temp_dir_BIS("invalidate-cache-continues");
+        let invalid = PathBuf::from(std::ffi::OsString::from_vec(b"invalid\0path".to_vec()));
+        let removable = dir.join("removable-cache");
+        std::fs::write(&removable, "stale\n").unwrap();
+
+        let result = rvs_invalidate_callgraph_cache_paths_BIS(&[invalid, removable.clone()]);
+        let later_removed = !removable.exists();
+        rvs_snapshot_BIS(
+            "test_20260715_cache_invalidation_continues_after_error",
+            &format!(
+                "result_is_err={}\nlater_removed={later_removed}\n",
+                result.is_err()
+            ),
+        );
+
+        assert!(result.is_err());
+        assert!(later_removed);
         std::fs::remove_dir_all(dir).unwrap();
     }
 
