@@ -51,6 +51,8 @@ cargo rivus check                    # 使用项目 caps/（若存在）
 cargo rivus check -- --features foo  # 传递额外 cargo check 参数
 ```
 
+`check` 必须从待分析 package 的目录运行，不接受 `--workspace`、`--all`、`--package`/`-p` 或 `--exclude` 等 workspace package 选择参数；否则本地 crate 分类会与 Cargo 实际选择范围不一致。`--target-dir` 也不能透传，因为 `check` 必须使用自己的隔离 target 目录。其他不会覆盖 driver 环境或项目路径的 Cargo 参数可继续透传。
+
 注意：capsmap 只从项目 `caps/` 目录加载。CLI 不再支持 `-m/--capsmap`，也不再读取或生成 `target/rivus-std-capsmap.txt`、`target/rivus-inferred-capsmap.txt`、`target/rivus-deps-capsmap.txt`、`target/rivus-effective-capsmap/`。目录不存在时统一能力引擎使用空 capsmap。caps 目录使用统一的层级加载器（`CapsMap::rvs_load_dir_BIS`），按 `std → deps → seed → suppress → ext → 其余字母序` 的固定顺序合并；原子写入遗留的 `.层名.PID.序号.tmp` 临时文件会被忽略。
 
 
@@ -208,7 +210,7 @@ caps/
 ├── std       # std/core/alloc 的全量条目（`cargo rivus infer-std -o caps/std`）
 ├── deps      # 第三方依赖条目（`cargo rivus infer-capsmap -o caps/deps`）
 ├── suppress  # 修正条目（覆盖 std/deps 中过宽的能力标记）
-└── ext       # 项目特定条目（标准层中最高优先级）
+└── ext       # 手工修正或无法自动推导的精确条目（标准层中最高优先级）
 ```
 
 目录内的文件按固定层级顺序加载（后加载的覆盖先加载的）：
@@ -285,7 +287,7 @@ std::process::exit=S           # 副作用：终止进程
 | `TodoCommentWarning` | 代码中包含 `// TODO` 或 `// FIXME` 注释（含 `/* */` 块注释，仅检测以 `//` 或 `/*` 开头的行） |
 | `UntestedGoodFnWarning` | good 函数（能力 ≤ ABM）未被任何测试调用 |
 | `UntestedOkFnWarning` | ok 函数（能力 ≤ ABMP）未被任何测试调用 |
-| `ErrorSwallowWarning` | 对标准库 `Result` 调用 `.ok()` 或 `.unwrap_or_default()` 静默吞掉错误；`Option::unwrap_or_default()` 和同名自定义方法不适用 |
+| `ErrorSwallowWarning` | 对标准库 `Result` 调用 `.ok()`、`.unwrap_or_default()` 或 `drop(Result)`，在未处理错误信息的情况下丢弃结果；`Option::unwrap_or_default()` 和同名自定义方法不适用 |
 | `CatchUnwindWarning` | 使用 `catch_unwind`——应修 panic 源头而非捕获 |
 | `CatchAllErrorVariantWarning` | 错误枚举含 `Unknown`/`Other`/`UnknownError`/`OtherError` 兜底变体 |
 | `MissingTestOutputWarning` | `#[test]` 函数缺少对应的 `test_out/{name}.out` 快照文件（仅当 `test_out/` 目录存在时检查） |
@@ -321,7 +323,7 @@ std::process::exit=S           # 副作用：终止进程
    cargo test           # 测试通过
    cargo rivus check    # 能力合规检查无违规
    ```
-3. **遇到 unknown callee warning 时**：linter 输出的 `Warning` 表示某个函数调用既非 `rvs_` 前缀也不在 capsmap 中。补全 capsmap 即可消除
+3. **遇到 unknown callee warning 时**：linter 输出的 `Warning` 表示某个函数调用既非 `rvs_` 前缀也不在 capsmap 中。标准库路径运行 `cargo rivus infer-std -o caps/std`；若该推断命令自身报告未知前置函数，将精确 `def_path` 写入 `caps/seed`，因为 `infer-std` 只读取 `seed` 和 `suppress`。第三方依赖运行 `cargo rivus infer-capsmap -o caps/deps`。仅需修正当前项目普通检查结果时，将精确 `def_path` 写入 `caps/ext`
 4. **遇到其他 warning 时**：根据警告类型分别处理——缺少断言就加 `debug_assert!`，缺少文档就补 `///`，等等
 5. **遇到 violation 时**：调用链能力冲突。要么修改调用方的标记（可能级联影响），要么重构代码避免不合规的调用
 6. **遇到推断提示时**：推断性提示——函数的实际行为暗示应有某能力但名字里没写。审查后决定：补上能力标记（注意级联影响），或确认是误判则忽略

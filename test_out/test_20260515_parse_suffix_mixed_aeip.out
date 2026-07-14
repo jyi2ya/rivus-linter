@@ -1,3 +1,0 @@
-input: rvs_render_msg_AEIP
-base: render_msg
-caps: A,I,P (E ignored as unknown)

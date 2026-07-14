@@ -263,7 +263,7 @@ caps/
 ├── std       # std/core/alloc 的全量条目（通过 `cargo rivus infer-std -o caps/std` 生成）
 ├── deps      # 第三方依赖条目（通过 `cargo rivus infer-capsmap -o caps/deps` 生成）
 ├── suppress  # 修正条目（覆盖 std/deps 中过宽的能力标记）
-└── ext       # 项目特定条目（最高优先级）
+└── ext       # 手工修正或无法自动推导的精确条目（最高优先级）
 ```
 
 目录内的文件按固定层级顺序加载（后加载的覆盖先加载的）：
@@ -307,7 +307,7 @@ std::process::exit=S           # 副作用：终止进程
    cargo test           # 测试通过
    cargo rivus check    # 能力合规检查无违规
    ```
-3. **遇到 unknown callee warning 时**：linter 输出的 `Warning` 表示某个函数调用既非 `rvs_` 前缀也不在 capsmap 中。补全 capsmap 即可消除
+3. **遇到 unknown callee warning 时**：linter 输出的 `Warning` 表示某个函数调用既非 `rvs_` 前缀也不在 capsmap 中。标准库路径运行 `cargo rivus infer-std -o caps/std`；若该推断命令自身报告未知前置函数，将精确 `def_path` 写入 `caps/seed`，因为 `infer-std` 只读取 `seed` 和 `suppress`。第三方依赖运行 `cargo rivus infer-capsmap -o caps/deps`。仅需修正当前项目普通检查结果时，将精确 `def_path` 写入 `caps/ext`
 4. **遇到其他 warning 时**：根据警告类型分别处理——缺少断言就加 `debug_assert!`，缺少文档就补 `///`，等等
 5. **遇到 violation 时**：调用链能力冲突。要么修改调用方的标记（可能级联影响），要么重构代码避免不合规的调用
 6. **遇到推断提示时**：推断性提示——函数的实际行为暗示应有某能力但名字里没写。审查后决定：补上能力标记（注意级联影响），或确认是误判则忽略

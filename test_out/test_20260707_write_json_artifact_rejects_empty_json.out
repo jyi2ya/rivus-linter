@@ -1,2 +1,0 @@
-result=Err("callgraph artifact must contain at least one node")
-dir_exists=false
