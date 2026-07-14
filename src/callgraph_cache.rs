@@ -62,11 +62,5 @@ pub(crate) fn rvs_merge_callgraph_dir_BIS(
         ));
     }
     let merged = FnGraph::rvs_merge_artifacts(artifacts, local_crate_names)?;
-    if merged.rvs_is_empty() {
-        return Err(format!(
-            "callgraph JSON artifacts in {} contained no nodes",
-            cg_dir.display()
-        ));
-    }
     Ok(merged)
 }

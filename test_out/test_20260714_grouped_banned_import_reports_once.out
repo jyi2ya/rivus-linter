@@ -1,0 +1,5 @@
+success=true
+warning_count=4
+grouped_span_covers_statement=true
+allowed_macro_reported=false
+denied_macro_reported=true

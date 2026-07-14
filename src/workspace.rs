@@ -85,6 +85,12 @@ pub(crate) enum CargoCheckError {
     ExitCode(i32),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CallgraphCollectionError {
+    Cargo(CargoCheckError),
+    Artifact(String),
+}
+
 impl CargoCheckError {
     pub(crate) fn rvs_exit_code(&self) -> i32 {
         match self {
@@ -99,6 +105,15 @@ impl fmt::Display for CargoCheckError {
         match self {
             Self::Message(message) => f.write_str(message),
             Self::ExitCode(code) => write!(f, "cargo check failed (exit code {code})"),
+        }
+    }
+}
+
+impl fmt::Display for CallgraphCollectionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Cargo(error) => error.fmt(f),
+            Self::Artifact(message) => f.write_str(message),
         }
     }
 }
@@ -279,7 +294,7 @@ pub(crate) fn rvs_run_cargo_check_BIMS(extra_args: &[String]) -> Result<(), i32>
             return Err(1);
         }
     };
-    let callgraph_result = rvs_collect_callgraph_with_args_BIMS(
+    let callgraph_result = rvs_collect_callgraph_with_args_detailed_BIMS(
         project_path,
         false,
         false,
@@ -290,6 +305,11 @@ pub(crate) fn rvs_run_cargo_check_BIMS(extra_args: &[String]) -> Result<(), i32>
     );
     let mut callgraph = match callgraph_result {
         Ok(callgraph) => callgraph,
+        Err(error) if rvs_callgraph_failure_exit_code(&error).is_some() => {
+            eprintln!("offline caps check unavailable: {error}");
+            return Err(rvs_callgraph_failure_exit_code(&error)
+                .expect("never: guarded callgraph cargo failure has an exit code"));
+        }
         Err(e) => {
             eprintln!("offline caps check unavailable: {e}");
             if let Err(lint_error) =
@@ -396,6 +416,64 @@ fn rvs_reject_forwarded_check_args(extra_args: &[String]) -> Result<(), String> 
         if arg == "--manifest-path" || arg.starts_with("--manifest-path=") {
             return Err("cargo rivus check does not support forwarded --manifest-path; run from the target project directory or use commands with an explicit path".into());
         }
+        if arg == "--target-dir" || arg.starts_with("--target-dir=") {
+            return Err("cargo rivus check does not support forwarded --target-dir because check uses an isolated target directory".into());
+        }
+        if matches!(
+            arg.as_str(),
+            "--lib"
+                | "--bins"
+                | "--bin"
+                | "--examples"
+                | "--example"
+                | "--tests"
+                | "--test"
+                | "--benches"
+                | "--bench"
+                | "--all-targets"
+        ) || arg.starts_with("--bin=")
+            || arg.starts_with("--example=")
+            || arg.starts_with("--test=")
+            || arg.starts_with("--bench=")
+        {
+            return Err(format!(
+                "cargo rivus check does not support forwarded target selector '{arg}'; check analyzes its fixed all-targets universe"
+            ));
+        }
+        if matches!(
+            arg.as_str(),
+            "--help" | "-h" | "--version" | "-V" | "--unit-graph" | "--build-plan"
+        ) || arg == "--print"
+            || arg.starts_with("--print=")
+        {
+            return Err(format!(
+                "cargo rivus check does not support forwarded non-building mode '{arg}'"
+            ));
+        }
+        if arg == "--message-format" {
+            let Some(value) = extra_args.get(index + 1) else {
+                return Err(
+                    "cargo rivus check does not support empty forwarded --message-format".into(),
+                );
+            };
+            rvs_reject_json_message_format(value)?;
+            index += 2;
+            continue;
+        }
+        if let Some(value) = arg.strip_prefix("--message-format=") {
+            rvs_reject_json_message_format(value)?;
+        }
+        if matches!(arg.as_str(), "--workspace" | "--all" | "--exclude")
+            || arg.starts_with("--exclude=")
+            || arg == "--package"
+            || arg.starts_with("--package=")
+            || arg == "-p"
+            || (arg.starts_with("-p") && arg.len() > 2)
+        {
+            return Err(format!(
+                "cargo rivus check does not support forwarded workspace package selector '{arg}'; run from the package directory"
+            ));
+        }
         if arg == "--config" {
             let Some(value) = extra_args.get(index + 1) else {
                 return Err("cargo rivus check does not support empty forwarded --config".into());
@@ -408,6 +486,15 @@ fn rvs_reject_forwarded_check_args(extra_args: &[String]) -> Result<(), String> 
             rvs_reject_dangerous_forwarded_config(value)?;
         }
         index += 1;
+    }
+    Ok(())
+}
+
+fn rvs_reject_json_message_format(value: &str) -> Result<(), String> {
+    if value.split(',').any(|format| format.starts_with("json")) {
+        return Err(format!(
+            "cargo rivus check does not support forwarded JSON message format '{value}'"
+        ));
     }
     Ok(())
 }
@@ -520,17 +607,39 @@ pub(crate) fn rvs_collect_callgraph_with_args_BIMS(
     extra_args: Vec<&str>,
     local_crate_names: &BTreeSet<CrateName>,
 ) -> Result<FnGraph, String> {
+    rvs_collect_callgraph_with_args_detailed_BIMS(
+        path,
+        build_std,
+        wrap_all_crates,
+        target_scope,
+        extra_env,
+        extra_args,
+        local_crate_names,
+    )
+    .map_err(|error| error.to_string())
+}
+
+fn rvs_collect_callgraph_with_args_detailed_BIMS(
+    path: &Path,
+    build_std: bool,
+    wrap_all_crates: bool,
+    target_scope: CargoTargetScope,
+    extra_env: Vec<(&str, OsString)>,
+    extra_args: Vec<&str>,
+    local_crate_names: &BTreeSet<CrateName>,
+) -> Result<FnGraph, CallgraphCollectionError> {
     let suffix = if build_std { "-std" } else { "" };
     let cg_subdir = format!("rivus-callgraph{suffix}");
     let build_subdir = format!("rivus-build{suffix}");
 
     let cg_dir = path.join("target").join(&cg_subdir);
     let abs_cg_dir = std::env::current_dir()
-        .map_err(|e| format!("current dir invalid: {e}"))?
+        .map_err(|e| CallgraphCollectionError::Artifact(format!("current dir invalid: {e}")))?
         .join(&cg_dir);
 
-    rvs_clean_dir_BIS(&cg_dir)?;
-    rvs_clean_dir_BIS(&path.join("target").join(&build_subdir))?;
+    rvs_clean_dir_BIS(&cg_dir).map_err(CallgraphCollectionError::Artifact)?;
+    rvs_clean_dir_BIS(&path.join("target").join(&build_subdir))
+        .map_err(CallgraphCollectionError::Artifact)?;
 
     let env_vars = rvs_callgraph_collection_env(extra_env, abs_cg_dir.into_os_string());
 
@@ -543,9 +652,17 @@ pub(crate) fn rvs_collect_callgraph_with_args_BIMS(
         extra_args,
         target_subdir: Some(&build_subdir),
     })
-    .map_err(|e| e.to_string())?;
+    .map_err(CallgraphCollectionError::Cargo)?;
 
     rvs_merge_callgraph_dir_BIS(&cg_dir, local_crate_names)
+        .map_err(CallgraphCollectionError::Artifact)
+}
+
+fn rvs_callgraph_failure_exit_code(error: &CallgraphCollectionError) -> Option<i32> {
+    match error {
+        CallgraphCollectionError::Cargo(error) => Some(error.rvs_exit_code()),
+        CallgraphCollectionError::Artifact(_) => None,
+    }
 }
 
 fn rvs_callgraph_collection_env(
@@ -917,6 +1034,35 @@ mod tests {
     }
 
     #[test]
+    fn test_20260714_check_accepts_const_only_crate() {
+        let dir = rvs_make_workspace_temp_dir_BIS("const-only-check");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"const-only\"\nversion = \"0.1.0\"\nedition = \"2024\"\nautobins = false\nautotests = false\nautoexamples = false\nautobenches = false\n\n[lib]\ntest = false\nbench = false\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("src/lib.rs"), "pub const ANSWER: u8 = 42;\n").unwrap();
+
+        let output = Command::new(rvs_current_wrapper_exe_BIS().unwrap())
+            .arg("check")
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let summary = format!(
+            "success={}\nmissing_artifact={}\n",
+            output.status.success(),
+            stderr.contains("no callgraph JSON artifacts") || stderr.contains("contained no nodes")
+        );
+        rvs_snapshot_BIS("test_20260714_check_accepts_const_only_crate", &summary);
+
+        assert!(output.status.success(), "{stderr}");
+        assert!(!summary.contains("missing_artifact=true"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn test_20260714_project_callgraph_excludes_path_dependency_nodes() {
         let dir = rvs_make_workspace_temp_dir_BIS("project-callgraph-local-only");
         std::fs::create_dir_all(dir.join("src")).unwrap();
@@ -1039,6 +1185,47 @@ mod tests {
         );
         rvs_snapshot_BIS(
             "test_20260714_callgraph_collection_fulfills_statement_expectations",
+            &output,
+        );
+
+        assert!(result.is_ok(), "{result:?}");
+        assert!(graph_has_function);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260714_callgraph_collection_caps_source_deny_warnings() {
+        let dir = rvs_make_workspace_temp_dir_BIS("collection-deny-warnings");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"collection-deny-warnings\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("src/lib.rs"),
+            "#![deny(warnings)]\n#![allow(non_snake_case)]\n\npub fn rvs_value() -> i32 {\n    let unused = 1;\n    42\n}\n",
+        )
+        .unwrap();
+        let local = BTreeSet::from([CrateName::from("collection-deny-warnings")]);
+
+        let result = rvs_collect_workspace_callgraph_BIMS(
+            &dir,
+            CargoTargetScope::Production,
+            vec![],
+            &local,
+        );
+        let graph_has_function = result.as_ref().is_ok_and(|graph| {
+            graph
+                .rvs_get("collection_deny_warnings::rvs_value")
+                .is_some()
+        });
+        let output = format!(
+            "result_ok={}\ngraph_has_function={graph_has_function}\n",
+            result.is_ok(),
+        );
+        rvs_snapshot_BIS(
+            "test_20260714_callgraph_collection_caps_source_deny_warnings",
             &output,
         );
 
@@ -1566,6 +1753,36 @@ name = "throughput-bench"
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn test_20260714_collect_auto_target_prefixes_reports_first_sorted_error() {
+        use std::os::unix::ffi::OsStringExt as _;
+
+        let dir = rvs_make_workspace_temp_dir_BIS("auto-target-sorted-error");
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"sorted-error-demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.join("tests")).unwrap();
+        std::fs::write(dir.join("tests/z bad.rs"), "fn main() {}\n").unwrap();
+        let non_utf8_name = std::ffi::OsString::from_vec(vec![b'a', 0xff, b'.', b'r', b's']);
+        std::fs::write(dir.join("tests").join(non_utf8_name), "fn main() {}\n").unwrap();
+
+        let mut prefixes = BTreeSet::new();
+        let result = rvs_collect_auto_target_prefixes_BIMS(&dir, &mut prefixes);
+        let output = format!("{result:?}\nlen={}\n", prefixes.len())
+            .replace(&dir.to_string_lossy().into_owned(), "$TMP");
+        rvs_snapshot_BIS(
+            "test_20260714_collect_auto_target_prefixes_reports_first_sorted_error",
+            &output,
+        );
+
+        assert!(output.contains("not UTF-8"), "{output}");
+        assert!(prefixes.is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn test_20260706_detect_local_crate_prefixes_for_cargo_check_excludes_unchecked_targets() {
         let dir = rvs_make_workspace_temp_dir_BIS("production-target-prefixes");
@@ -2075,7 +2292,7 @@ name = "throughput-bench"
             "--manifest-path".to_string(),
             "other/Cargo.toml".to_string(),
         ];
-        let normal_args = vec!["--all-targets".to_string()];
+        let normal_args = vec!["--release".to_string()];
 
         let equals = rvs_reject_forwarded_check_args(&equals_args);
         let split = rvs_reject_forwarded_check_args(&split_args);
@@ -2089,6 +2306,223 @@ name = "throughput-bench"
         assert!(equals.is_err());
         assert!(split.is_err());
         assert!(normal.is_ok());
+    }
+
+    #[test]
+    fn test_20260714_check_rejects_forwarded_target_dir() {
+        let split_args = vec!["--target-dir".to_string(), "custom-target".to_string()];
+        let equals_args = vec!["--target-dir=custom-target".to_string()];
+        let normal_args = vec!["--release".to_string()];
+        let output = format!(
+            "split={}\nequals={}\nnormal={}\n",
+            rvs_reject_forwarded_check_args(&split_args).is_err(),
+            rvs_reject_forwarded_check_args(&equals_args).is_err(),
+            rvs_reject_forwarded_check_args(&normal_args).is_ok(),
+        );
+        rvs_snapshot_BIS("test_20260714_check_rejects_forwarded_target_dir", &output);
+
+        assert!(rvs_reject_forwarded_check_args(&split_args).is_err());
+        assert!(rvs_reject_forwarded_check_args(&equals_args).is_err());
+        assert!(rvs_reject_forwarded_check_args(&normal_args).is_ok());
+    }
+
+    #[test]
+    fn test_20260714_check_rejects_workspace_package_selectors() {
+        let cases = [
+            vec!["--workspace".to_string()],
+            vec!["--all".to_string()],
+            vec!["--package".to_string(), "member".to_string()],
+            vec!["--package=member".to_string()],
+            vec!["-p".to_string(), "member".to_string()],
+            vec!["-pmember".to_string()],
+            vec!["--exclude".to_string(), "member".to_string()],
+            vec!["--exclude=member".to_string()],
+        ];
+        let output = cases
+            .iter()
+            .map(|args| {
+                format!(
+                    "{}={:?}",
+                    args.join(" "),
+                    rvs_reject_forwarded_check_args(args)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        rvs_snapshot_BIS(
+            "test_20260714_check_rejects_workspace_package_selectors",
+            &(output + "\n"),
+        );
+
+        assert!(
+            cases
+                .iter()
+                .all(|args| rvs_reject_forwarded_check_args(args).is_err())
+        );
+    }
+
+    #[test]
+    fn test_20260714_check_rejects_forwarded_target_selectors() {
+        let cases = [
+            vec!["--lib".to_string()],
+            vec!["--bins".to_string()],
+            vec!["--bin".to_string(), "tool".to_string()],
+            vec!["--bin=tool".to_string()],
+            vec!["--examples".to_string()],
+            vec!["--example".to_string(), "demo".to_string()],
+            vec!["--example=demo".to_string()],
+            vec!["--tests".to_string()],
+            vec!["--test".to_string(), "ui".to_string()],
+            vec!["--test=ui".to_string()],
+            vec!["--benches".to_string()],
+            vec!["--bench".to_string(), "perf".to_string()],
+            vec!["--bench=perf".to_string()],
+            vec!["--all-targets".to_string()],
+        ];
+        let output = cases
+            .iter()
+            .map(|args| {
+                format!(
+                    "{}={}",
+                    args.join(" "),
+                    rvs_reject_forwarded_check_args(args).is_err()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        rvs_snapshot_BIS(
+            "test_20260714_check_rejects_forwarded_target_selectors",
+            &(output + "\n"),
+        );
+
+        assert!(
+            cases
+                .iter()
+                .all(|args| rvs_reject_forwarded_check_args(args).is_err())
+        );
+    }
+
+    #[test]
+    fn test_20260714_check_rejects_non_building_and_json_modes() {
+        let rejected = [
+            vec!["--help".to_string()],
+            vec!["-h".to_string()],
+            vec!["--version".to_string()],
+            vec!["-V".to_string()],
+            vec!["--unit-graph".to_string()],
+            vec!["--build-plan".to_string()],
+            vec!["--print".to_string(), "cfg".to_string()],
+            vec!["--print=cfg".to_string()],
+            vec!["--message-format".to_string(), "json".to_string()],
+            vec!["--message-format=json-diagnostic-short".to_string()],
+            vec!["--message-format=short,json".to_string()],
+        ];
+        let accepted = [
+            vec!["--message-format".to_string(), "short".to_string()],
+            vec!["--message-format=human".to_string()],
+            vec!["--release".to_string()],
+        ];
+        let output = format!(
+            "rejected={}\naccepted={}\n",
+            rejected
+                .iter()
+                .all(|args| rvs_reject_forwarded_check_args(args).is_err()),
+            accepted
+                .iter()
+                .all(|args| rvs_reject_forwarded_check_args(args).is_ok()),
+        );
+        rvs_snapshot_BIS(
+            "test_20260714_check_rejects_non_building_and_json_modes",
+            &output,
+        );
+
+        assert!(
+            rejected
+                .iter()
+                .all(|args| rvs_reject_forwarded_check_args(args).is_err())
+        );
+        assert!(
+            accepted
+                .iter()
+                .all(|args| rvs_reject_forwarded_check_args(args).is_ok())
+        );
+    }
+
+    #[test]
+    fn test_20260714_callgraph_compile_failure_skips_lint_fallback() {
+        let compile_failure = CallgraphCollectionError::Cargo(CargoCheckError::ExitCode(101));
+        let artifact_failure = CallgraphCollectionError::Artifact("missing artifact".to_string());
+        let output = format!(
+            "compile={:?}\nartifact={:?}\n",
+            rvs_callgraph_failure_exit_code(&compile_failure),
+            rvs_callgraph_failure_exit_code(&artifact_failure),
+        );
+        rvs_snapshot_BIS(
+            "test_20260714_callgraph_compile_failure_skips_lint_fallback",
+            &output,
+        );
+
+        assert_eq!(rvs_callgraph_failure_exit_code(&compile_failure), Some(101));
+        assert_eq!(rvs_callgraph_failure_exit_code(&artifact_failure), None);
+    }
+
+    #[test]
+    fn test_20260714_grouped_banned_import_reports_once() {
+        let dir = rvs_make_workspace_temp_dir_BIS("grouped-banned-import");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::create_dir_all(dir.join("anyhow/src")).unwrap();
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"banned-import-group\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nanyhow = { path = \"anyhow\" }\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("src/lib.rs"),
+            "#![feature(register_tool)]\n#![register_tool(rivus)]\n\nextern crate anyhow as anyhow_alias;\nuse anyhow::{Context, Error, Result};\n#[allow(rivus::rvs_banned_import)] use anyhow::Context as AllowedContext; use anyhow::Error as DeniedError;\n\nmacro_rules! import_anyhow { ($alias:ident) => { use anyhow::Context as $alias; } }\n#[allow(rivus::rvs_banned_import)]\nmod allowed_macro {\n    import_anyhow!(AllowedMacroContext);\n    const _: usize = core::mem::size_of::<AllowedMacroContext>();\n}\n\nimport_anyhow!(DeniedMacroContext);\n\nconst _: usize = core::mem::size_of::<(anyhow_alias::Error, Context, Error, Result, AllowedContext, DeniedError, DeniedMacroContext)>();\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("anyhow/Cargo.toml"),
+            "[package]\nname = \"anyhow\"\nversion = \"1.0.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("anyhow/src/lib.rs"),
+            "pub struct Context;\npub struct Error;\npub struct Result;\n",
+        )
+        .unwrap();
+
+        let output = Command::new(rvs_current_wrapper_exe_BIS().unwrap())
+            .arg("check")
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let warning_count = stderr
+            .lines()
+            .filter(|line| line.contains("warning: banned import: anyhow"))
+            .count();
+        let grouped_caret_width = stderr
+            .lines()
+            .skip_while(|line| !line.contains("use anyhow::{Context, Error, Result};"))
+            .find(|line| line.contains('^'))
+            .map(|line| line.chars().filter(|character| *character == '^').count())
+            .unwrap_or(0);
+        let allowed_macro_reported = stderr.contains("import_anyhow!(AllowedMacroContext)");
+        let denied_macro_reported = stderr.contains("import_anyhow!(DeniedMacroContext)");
+        let summary = format!(
+            "success={}\nwarning_count={warning_count}\ngrouped_span_covers_statement={}\nallowed_macro_reported={allowed_macro_reported}\ndenied_macro_reported={denied_macro_reported}\n",
+            output.status.success(),
+            grouped_caret_width > "Context".len(),
+        );
+        rvs_snapshot_BIS("test_20260714_grouped_banned_import_reports_once", &summary);
+
+        assert!(output.status.success(), "{stderr}");
+        assert_eq!(warning_count, 4, "{stderr}");
+        assert!(grouped_caret_width > "Context".len(), "{stderr}");
+        assert!(!allowed_macro_reported, "{stderr}");
+        assert!(denied_macro_reported, "{stderr}");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -2887,20 +3321,26 @@ name = "throughput-bench"
     }
 
     #[test]
-    fn test_20260706_merge_callgraph_dir_rejects_empty_graph_json() {
+    fn test_20260714_merge_callgraph_dir_accepts_empty_graph_json() {
         let dir = rvs_make_workspace_temp_dir_BIS("empty-callgraph-json");
         let cg_dir = dir.join("target/rivus-callgraph");
         std::fs::create_dir_all(&cg_dir).unwrap();
-        std::fs::write(cg_dir.join("demo-1.json"), "{}\n").unwrap();
+        let json = crate::artifacts::rvs_serialize_callgraph_json_S(&FnGraph::rvs_new()).unwrap();
+        std::fs::write(cg_dir.join("demo-1.json"), json).unwrap();
 
         let result = rvs_merge_callgraph_dir_BIS(&cg_dir, &BTreeSet::new());
-        let output = format!("{result:?}\n").replace(&dir.to_string_lossy().into_owned(), "$TMP");
+        let output = format!(
+            "is_ok={}\nis_empty={}\n",
+            result.is_ok(),
+            result.as_ref().is_ok_and(FnGraph::rvs_is_empty)
+        );
         rvs_snapshot_BIS(
-            "test_20260706_merge_callgraph_dir_rejects_empty_graph_json",
+            "test_20260714_merge_callgraph_dir_accepts_empty_graph_json",
             &output,
         );
 
-        assert!(result.is_err());
+        assert!(result.is_ok());
+        assert!(result.as_ref().is_ok_and(FnGraph::rvs_is_empty));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

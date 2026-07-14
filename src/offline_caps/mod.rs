@@ -2,6 +2,7 @@ use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::fmt;
 
 use crate::artifacts::{FnGraph, FnNode, FunctionIdentity};
+use crate::callgraph_cache::rvs_is_std_like_def_path;
 use crate::capability::{Capability, CapabilityPolicy, CapabilitySet, ParsedFunctionName};
 use crate::capsmap::CapsMap;
 use crate::function_classification::{FunctionClassification, LocalScope};
@@ -189,7 +190,10 @@ fn rvs_collect_contract_diagnostics_M(
             .collect()
     };
     for kind in selected {
-        let mut details = vec![format!("expected name: {}", diff.expected_name)];
+        let mut details = Vec::new();
+        if kind != FnContractMismatchKind::NameMismatch {
+            details.push(format!("expected name: {}", diff.expected_name));
+        }
         details.push(format!(
             "declared caps: {}",
             rvs_format_optional_caps(diff.declared_public_caps.as_ref())
@@ -495,10 +499,7 @@ fn rvs_collect_call_diagnostics_M(
                         "callee '{}' has no rvs_ suffix and no caps/ entry",
                         mismatch.callee_display
                     ),
-                    details: vec![
-                        format!("callee: {callee}"),
-                        "add an exact def_path entry to caps/seed or caps/ext".to_string(),
-                    ],
+                    details: vec![rvs_unknown_callee_repair(callee)],
                 });
             }
             CallContractMismatchKind::MissingCapabilities => {
@@ -521,6 +522,14 @@ fn rvs_collect_call_diagnostics_M(
                 });
             }
         }
+    }
+}
+
+fn rvs_unknown_callee_repair(callee: &DefPath) -> String {
+    if rvs_is_std_like_def_path(callee.rvs_as_str()) {
+        "run `cargo rivus infer-std -o caps/std` to refresh standard-library capabilities; if that command reports an unknown prerequisite, add its exact def_path to caps/seed; use caps/ext only for a project-local check override".to_string()
+    } else {
+        "run `cargo rivus infer-capsmap -o caps/deps` to refresh dependency capabilities; if inference still reports this path, add its exact def_path to caps/ext".to_string()
     }
 }
 
@@ -612,6 +621,29 @@ mod tests {
         assert_eq!(OfflineCapsSeverity::Warning.rvs_as_str(), "warning");
         assert!(output.contains("error[call_violation]"));
         assert!(output.contains("warning[unknown_callee]"));
+        assert!(output.contains("cargo rivus infer-capsmap -o caps/deps"));
+    }
+
+    #[test]
+    fn test_20260714_offline_caps_unknown_std_callee_suggests_std_caps() {
+        let mut graph = FnGraph::rvs_new();
+        graph.rvs_insert_M(
+            DefPath::from("demo::rvs_handle"),
+            rvs_node(&["core::slice::iter"]),
+        );
+        let caps = CapsMap::rvs_new();
+        let local = BTreeSet::from([CrateName::from("demo")]);
+
+        let report = rvs_check_offline_caps_M(&mut graph, &caps, &local);
+        let output = report.to_string();
+        rvs_snapshot_BIS(
+            "test_20260714_offline_caps_unknown_std_callee_suggests_std_caps",
+            &output,
+        );
+
+        assert!(output.contains("cargo rivus infer-std -o caps/std"));
+        assert!(output.contains("add its exact def_path to caps/seed"));
+        assert!(output.contains("use caps/ext only for a project-local check override"));
     }
 
     #[test]

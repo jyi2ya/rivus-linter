@@ -316,7 +316,9 @@ fn rvs_apply_source_renames_BIS(
         show_conflicts: false,
     };
 
-    for (source, new_name) in rename_map {
+    let mut ordered_renames = rename_map.iter().collect::<Vec<_>>();
+    ordered_renames.sort_by_key(|(source, _)| *source);
+    for (source, new_name) in ordered_renames {
         let func = functions
             .iter()
             .find(|func| &func.source == source)
@@ -354,8 +356,10 @@ fn rvs_write_collected_edits_BIS(
     file_edits: HashMap<PathBuf, Vec<Indel>>,
     canonical_path: &Path,
 ) -> Result<usize, String> {
+    let mut ordered_file_edits = file_edits.into_iter().collect::<Vec<_>>();
+    ordered_file_edits.sort_by(|(left, _), (right, _)| left.cmp(right));
     let mut prepared_files: Vec<(PathBuf, String)> = Vec::new();
-    for (file_path, edits) in file_edits {
+    for (file_path, edits) in ordered_file_edits {
         rvs_require_local_real_file_BIS(&file_path, canonical_path)?;
         let mut text = std::fs::read_to_string(&file_path)
             .map_err(|e| format!("cannot read {}: {e}", file_path.display()))?;
@@ -411,7 +415,9 @@ fn rvs_preflight_source_rename_matches(
     rename_map: &HashMap<FnSource, FnName>,
     functions: &[FunctionNode],
 ) -> Result<(), String> {
-    for key in rename_map.keys() {
+    let mut keys = rename_map.keys().collect::<Vec<_>>();
+    keys.sort();
+    for key in keys {
         let matches = functions.iter().filter(|func| &func.source == key).count();
         match matches {
             1 => {}
@@ -1032,6 +1038,28 @@ mod tests {
         assert!(result.is_ok());
         assert!(!exists);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260714_source_rename_preflight_reports_first_sorted_candidate() {
+        let earlier = FnSource::rvs_new(PathBuf::from("a.rs"), 10, 20);
+        let later = FnSource::rvs_new(PathBuf::from("z.rs"), 30, 40);
+        let rename_map = HashMap::from([
+            (later, FnName::from("rvs_later")),
+            (earlier, FnName::from("rvs_earlier")),
+        ]);
+
+        let result = rvs_preflight_source_rename_matches(&rename_map, &[]);
+        rvs_snapshot_BIS(
+            "test_20260714_source_rename_preflight_reports_first_sorted_candidate",
+            &format!("{result:?}\n"),
+        );
+
+        assert!(
+            result
+                .as_ref()
+                .is_err_and(|message| message.contains("a.rs:10..20"))
+        );
     }
 
     #[test]

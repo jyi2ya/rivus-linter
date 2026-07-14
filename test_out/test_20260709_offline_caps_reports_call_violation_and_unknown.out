@@ -18,5 +18,4 @@ warning[missing_io]: demo::rvs_handle
   inferred caps: BI
 warning[unknown_callee]: demo::rvs_handle
   callee 'dep::plain' has no rvs_ suffix and no caps/ entry
-  callee: dep::plain
-  add an exact def_path entry to caps/seed or caps/ext
+  run `cargo rivus infer-capsmap -o caps/deps` to refresh dependency capabilities; if inference still reports this path, add its exact def_path to caps/ext

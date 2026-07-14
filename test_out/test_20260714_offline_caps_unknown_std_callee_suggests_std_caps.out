@@ -1,0 +1,5 @@
+Offline Caps Check: 0 error(s), 1 warning(s)
+------------------------------------------------------------
+warning[unknown_callee]: demo::rvs_handle
+  callee 'core::slice::iter' has no rvs_ suffix and no caps/ entry
+  run `cargo rivus infer-std -o caps/std` to refresh standard-library capabilities; if that command reports an unknown prerequisite, add its exact def_path to caps/seed; use caps/ext only for a project-local check override

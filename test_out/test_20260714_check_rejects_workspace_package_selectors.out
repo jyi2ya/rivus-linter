@@ -1,0 +1,8 @@
+--workspace=Err("cargo rivus check does not support forwarded workspace package selector '--workspace'; run from the package directory")
+--all=Err("cargo rivus check does not support forwarded workspace package selector '--all'; run from the package directory")
+--package member=Err("cargo rivus check does not support forwarded workspace package selector '--package'; run from the package directory")
+--package=member=Err("cargo rivus check does not support forwarded workspace package selector '--package=member'; run from the package directory")
+-p member=Err("cargo rivus check does not support forwarded workspace package selector '-p'; run from the package directory")
+-pmember=Err("cargo rivus check does not support forwarded workspace package selector '-pmember'; run from the package directory")
+--exclude member=Err("cargo rivus check does not support forwarded workspace package selector '--exclude'; run from the package directory")
+--exclude=member=Err("cargo rivus check does not support forwarded workspace package selector '--exclude=member'; run from the package directory")

@@ -1,0 +1,14 @@
+--lib=true
+--bins=true
+--bin tool=true
+--bin=tool=true
+--examples=true
+--example demo=true
+--example=demo=true
+--tests=true
+--test ui=true
+--test=ui=true
+--benches=true
+--bench perf=true
+--bench=perf=true
+--all-targets=true

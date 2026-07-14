@@ -240,18 +240,16 @@ fn rvs_write_callgraph_BIS<'tcx>(
     collect_callgraph: bool,
 ) {
     if collect_callgraph {
-        if !callgraph.rvs_is_empty() {
-            let cg_dir = std::env::var_os("RIVUS_CALLGRAPH_DIR")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("target/rivus-callgraph"));
-            let crate_name = CrateName::rvs_from_manifest_name(
-                cx.tcx.crate_name(rustc_span::def_id::LOCAL_CRATE).as_str(),
-            );
-            if let Err(e) = rvs_write_callgraph_artifact_BIS(&cg_dir, &crate_name, callgraph) {
-                cx.tcx
-                    .dcx()
-                    .err(format!("cannot write rivus callgraph artifact: {e}"));
-            }
+        let cg_dir = std::env::var_os("RIVUS_CALLGRAPH_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("target/rivus-callgraph"));
+        let crate_name = CrateName::rvs_from_manifest_name(
+            cx.tcx.crate_name(rustc_span::def_id::LOCAL_CRATE).as_str(),
+        );
+        if let Err(e) = rvs_write_callgraph_artifact_BIS(&cg_dir, &crate_name, callgraph) {
+            cx.tcx
+                .dcx()
+                .err(format!("cannot write rivus callgraph artifact: {e}"));
         }
     }
 }
@@ -261,9 +259,6 @@ fn rvs_write_callgraph_artifact_BIS(
     crate_name: &CrateName,
     callgraph: &FnGraph,
 ) -> Result<PathBuf, String> {
-    if callgraph.rvs_is_empty() {
-        return Err("callgraph artifact must contain at least one node".into());
-    }
     let crate_name_str = crate_name.rvs_as_str();
     if crate_name_str.is_empty()
         || crate_name_str.contains('/')
@@ -544,7 +539,7 @@ mod tests {
     }
 
     #[test]
-    fn test_20260707_write_json_artifact_rejects_empty_json() {
+    fn test_20260714_write_empty_callgraph_artifact() {
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("never: system clock should be after unix epoch for test temp dir")
@@ -557,14 +552,21 @@ mod tests {
         let graph = FnGraph::rvs_new();
         let result = rvs_write_callgraph_artifact_BIS(&dir, &CrateName::from("demo"), &graph);
         let dir_exists = dir.exists();
-        let output = format!("result={result:?}\ndir_exists={dir_exists}\n");
-        rvs_snapshot_BIS(
-            "test_20260707_write_json_artifact_rejects_empty_json",
-            &output,
+        let content = result
+            .as_ref()
+            .ok()
+            .and_then(|path| std::fs::read_to_string(path).ok())
+            .unwrap_or_default();
+        let output = format!(
+            "is_ok={}\ndir_exists={dir_exists}\ncontent={content}\n",
+            result.is_ok()
         );
+        rvs_snapshot_BIS("test_20260714_write_empty_callgraph_artifact", &output);
 
-        assert!(result.is_err());
-        assert!(!dir_exists);
+        assert!(result.is_ok());
+        assert!(dir_exists);
+        assert!(content.contains(r#""nodes":{}"#));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

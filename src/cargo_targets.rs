@@ -268,8 +268,11 @@ fn rvs_collect_auto_target_names_BIMS(
             ));
         }
     };
+    let mut entries = entries
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("readdir error in {}: {e}", dir.display()))?;
+    entries.sort_by_key(std::fs::DirEntry::file_name);
     for entry in entries {
-        let entry = entry.map_err(|e| format!("readdir error in {}: {e}", dir.display()))?;
         let file_type = entry
             .file_type()
             .map_err(|e| format!("cannot inspect {}: {e}", entry.path().display()))?;

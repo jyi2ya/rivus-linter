@@ -26,6 +26,14 @@ pub enum CapsMapError {
     MissingSeparator { line: usize },
     #[snafu(display("line {line}: empty capsmap key"))]
     EmptyKey { line: usize },
+    #[snafu(display(
+        "line {line}: duplicate capsmap key '{key}' (first defined on line {first_line})"
+    ))]
+    DuplicateKey {
+        key: CapsMapKey,
+        first_line: usize,
+        line: usize,
+    },
     #[snafu(display("cannot read caps directory: {message}"))]
     DirRead { message: String },
     #[snafu(display("cannot read {path}: {error}"))]
@@ -67,6 +75,7 @@ impl CapsMap {
     /// 键中可含 `#`（如 `closure#0`），因此不从键中剥离注释。
     pub fn rvs_parse(content: &str) -> Result<Self, CapsMapError> {
         let mut entries = BTreeMap::new();
+        let mut first_lines = BTreeMap::new();
         for (i, raw_line) in content.lines().enumerate() {
             let line_num = i + 1;
             let trimmed = raw_line.trim();
@@ -80,6 +89,13 @@ impl CapsMap {
                 return Err(CapsMapError::EmptyKey { line: line_num });
             }
             let key = CapsMapKey::rvs_new(key.trim().to_string());
+            if let Some(first_line) = first_lines.get(&key) {
+                return Err(CapsMapError::DuplicateKey {
+                    key,
+                    first_line: *first_line,
+                    line: line_num,
+                });
+            }
             let value = value.split('#').next().unwrap_or("").trim();
             let caps =
                 CapabilitySet::rvs_from_str(value).map_err(|e| CapsMapError::InvalidCaps {
@@ -88,6 +104,7 @@ impl CapsMap {
                     line: line_num,
                     source: e,
                 })?;
+            first_lines.insert(key.clone(), line_num);
             entries.insert(key, caps);
         }
         Ok(Self { entries })
@@ -424,6 +441,7 @@ mod tests {
             ("empty_key", "=BI"),
             ("invalid_caps", "func=XYZ"),
             ("duplicate_caps", "func=BB"),
+            ("duplicate_key", "func=B\nother=\nfunc=I"),
         ];
         let mut output = String::new();
         for (name, input) in cases {
