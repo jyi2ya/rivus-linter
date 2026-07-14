@@ -8,7 +8,7 @@ LL | |     }
    |
    = note: `#[deny(rivus::rvs_call_violation)]` on by default
 
-error: 'rvs_load' should be named 'rvs_load_P'; expected name: rvs_load_P; declared caps: pure; inferred caps: P
+error: 'rvs_load' should be named 'rvs_load_P'; declared caps: pure; inferred caps: P
   --> $DIR/tests/ui/159_port_method_call_requires_p.rs:26:5
    |
 LL | /     fn rvs_load(&self) {

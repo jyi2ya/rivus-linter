@@ -1,11 +1,8 @@
 error: param 'x' missing debug_assert!
-  --> $DIR/tests/ui/47_infer_assert.rs:3:28
+  --> $DIR/tests/ui/47_infer_assert.rs:3:20
    |
-LL |   fn rvs_check_valid(x: i32) {
-   |  ____________________________^
-LL | |     assert!(x > 0);
-LL | | }
-   | |_^
+LL | fn rvs_check_valid(x: i32) {
+   |                    ^
    |
    = note: `-D rivus::rvs-missing-debug-assert` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_debug_assert)]`

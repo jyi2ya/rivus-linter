@@ -1,0 +1,3 @@
+"Performs work.\n\n# Safety\n\nCaller contract.": actual=true, expected=true
+"# SafetyDance\n\nNot a safety section.": actual=false, expected=false
+"Safety\n\nPlain prose.": actual=false, expected=false

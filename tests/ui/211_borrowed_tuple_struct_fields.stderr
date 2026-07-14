@@ -1,0 +1,22 @@
+error: &String field — use &str instead
+  --> $DIR/tests/ui/211_borrowed_tuple_struct_fields.rs:5:5
+   |
+LL |     &'a String,
+   |     ^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-borrowed-param` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_borrowed_param)]`
+
+error: &Vec field — use &[T] instead
+  --> $DIR/tests/ui/211_borrowed_tuple_struct_fields.rs:6:5
+   |
+LL |     &'a Vec<u8>,
+   |     ^^^^^^^^^^^
+
+error: &Box field — use &T instead
+  --> $DIR/tests/ui/211_borrowed_tuple_struct_fields.rs:7:5
+   |
+LL |     &'a Box<u8>,
+   |     ^^^^^^^^^^^
+
+error: aborting due to 3 previous errors

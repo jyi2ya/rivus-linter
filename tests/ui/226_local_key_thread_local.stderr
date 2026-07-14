@@ -1,0 +1,22 @@
+error: caller lacks propagated capabilities required by callee; callee: std::thread::local::LocalKey::get; caller declared caps: S; callee caps: ST; missing propagated caps: T
+  --> $DIR/tests/ui/226_local_key_thread_local.rs:9:1
+   |
+LL | / fn rvs_read_local_key_S() -> u32 {
+LL | |     TLS_KEY.get()
+LL | | }
+   | |_^
+   |
+   = note: `#[deny(rivus::rvs_call_violation)]` on by default
+
+error: 'rvs_read_local_key_S' is missing capability marker missing_thread_local; expected name: rvs_read_local_key_ST; declared caps: S; inferred caps: ST
+  --> $DIR/tests/ui/226_local_key_thread_local.rs:9:1
+   |
+LL | / fn rvs_read_local_key_S() -> u32 {
+LL | |     TLS_KEY.get()
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-missing-thread-local` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_thread_local)]`
+
+error: aborting due to 2 previous errors

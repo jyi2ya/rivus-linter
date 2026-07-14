@@ -47,3 +47,14 @@ core::unicode::unicode_data::n::lookup=
 core::unicode::unicode_data::n::lookup_slow=
 core::unicode::unicode_data::uppercase::lookup=
 core::unicode::unicode_data::white_space::lookup=
+
+# ─── Thread-local accessors ──────────────────────────────────────
+# LocalKey methods access per-thread global state and therefore require S+T.
+std::thread::local::LocalKey::get=ST
+std::thread::local::LocalKey::replace=ST
+std::thread::local::LocalKey::set=ST
+std::thread::local::LocalKey::take=ST
+std::thread::local::LocalKey::try_with=ST
+std::thread::local::LocalKey::with=ST
+std::thread::local::LocalKey::with_borrow=ST
+std::thread::local::LocalKey::with_borrow_mut=ST

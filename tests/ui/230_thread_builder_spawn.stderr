@@ -1,0 +1,10 @@
+error: spawn: std::thread::builder::Builder::spawn
+  --> $DIR/tests/ui/230_thread_builder_spawn.rs:4:18
+   |
+LL |     let handle = std::thread::Builder::new().spawn(|| {}).unwrap();
+   |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-spawn-warning` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_spawn_warning)]`
+
+error: aborting due to 1 previous error

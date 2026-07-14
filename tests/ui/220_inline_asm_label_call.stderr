@@ -1,0 +1,14 @@
+error: caller lacks propagated capabilities required by callee; callee: 220_inline_asm_label_call::rvs_read_BI; caller declared caps: pure; callee caps: BI; missing propagated caps: B, I
+  --> $DIR/tests/ui/220_inline_asm_label_call.rs:8:1
+   |
+LL | / fn rvs_inline_asm_label() {
+LL | |     unsafe {
+LL | |         core::arch::asm!("jmp {}", label {
+LL | |             rvs_read_BI();
+...  |
+LL | | }
+   | |_^
+   |
+   = note: `#[deny(rivus::rvs_call_violation)]` on by default
+
+error: aborting due to 1 previous error

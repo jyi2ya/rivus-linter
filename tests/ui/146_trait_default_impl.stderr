@@ -1,11 +1,8 @@
 error: param 'x' missing debug_assert!
-  --> $DIR/tests/ui/146_trait_default_impl.rs:5:34
+  --> $DIR/tests/ui/146_trait_default_impl.rs:5:26
    |
-LL |       fn rvs_handle(&self, x: i32) {
-   |  __________________________________^
-LL | |         let _ = x + 1;
-LL | |     }
-   | |_____^
+LL |     fn rvs_handle(&self, x: i32) {
+   |                          ^
    |
    = note: `-D rivus::rvs-missing-debug-assert` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_debug_assert)]`

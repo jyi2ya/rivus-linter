@@ -1,0 +1,10 @@
+error: drop(Result) discards a Result without handling it
+  --> $DIR/tests/ui/212_drop_result_swallow.rs:8:5
+   |
+LL |     drop(result);
+   |     ^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-error-swallow` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_error_swallow)]`
+
+error: aborting due to 1 previous error

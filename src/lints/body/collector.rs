@@ -1,12 +1,13 @@
 use std::collections::{BTreeSet, HashSet};
 
-use rustc_hir::{Body, ExprKind, Mutability, def::DefKind};
+use rustc_hir::{Body, ExprKind, HirId, Mutability, def::DefKind};
 use rustc_lint::LateContext;
-use rustc_span::Symbol;
+use rustc_middle::ty::TyKind;
+use rustc_span::{Span, Symbol, sym};
 
 use super::super::utils::{
-    CallObservation, CallTarget, rvs_collect_all_idents_M, rvs_qp, rvs_resolve_call,
-    rvs_root_body_expr, rvs_static_is_thread_local, rvs_visit_body_exprs_M,
+    CallObservation, CallTarget, rvs_collect_all_idents_M, rvs_resolve_call, rvs_root_body_expr,
+    rvs_static_is_thread_local, rvs_visit_body_exprs_M,
 };
 use super::macro_expansion::rvs_span_has_bang_macro;
 use crate::lints::ctx::TestCallTarget;
@@ -19,6 +20,8 @@ pub(crate) struct BodyFacts {
     pub(crate) has_thread_local_ref: bool,
     pub(crate) has_stub: bool,
     pub(crate) debug_assert_identifiers: BTreeSet<String>,
+    pub(crate) result_swallow_calls: Vec<(HirId, Span, super::super::utils::CallSyntax, String)>,
+    pub(crate) result_drop_calls: Vec<(HirId, Span)>,
 }
 
 pub(crate) fn rvs_collect_body_facts_M<'tcx>(
@@ -32,7 +35,7 @@ pub(crate) fn rvs_collect_body_facts_M<'tcx>(
         Symbol::intern("debug_assert_ne"),
     ];
     let root_expr = rvs_root_body_expr(cx.tcx, body);
-    rvs_visit_body_exprs_M(cx.tcx, root_expr, |expr, nested_body_depth| {
+    rvs_visit_body_exprs_M(cx.tcx, root_expr, |expr, nested_body| {
         match &expr.kind {
             ExprKind::Path(qpath) => {
                 if let rustc_hir::def::Res::Def(DefKind::Static { mutability, .. }, def_id) =
@@ -47,18 +50,45 @@ pub(crate) fn rvs_collect_body_facts_M<'tcx>(
                     }
                 }
             }
+            ExprKind::InlineAsm(asm) => {
+                for (operand, _) in asm.operands {
+                    let rustc_hir::InlineAsmOperand::SymStatic { def_id, .. } = operand else {
+                        continue;
+                    };
+                    if rvs_static_is_thread_local(cx, *def_id) {
+                        facts.has_thread_local_ref = true;
+                    }
+                    if let DefKind::Static { mutability, .. } = cx.tcx.def_kind(*def_id) {
+                        match mutability {
+                            Mutability::Mut => facts.has_static_mut_ref = true,
+                            Mutability::Not => facts.has_static_ref = true,
+                        }
+                    }
+                }
+            }
             _ => {}
         }
 
         if matches!(expr.kind, ExprKind::Call(..) | ExprKind::MethodCall(..))
             && let Some(observation) = rvs_resolve_call(cx, expr)
         {
+            if let Some(name) = rvs_result_swallow_name(cx, &observation.target) {
+                facts.result_swallow_calls.push((
+                    expr.hir_id,
+                    expr.span,
+                    observation.syntax,
+                    name.to_string(),
+                ));
+            }
+            if rvs_is_result_drop(cx, expr, &observation.target) {
+                facts.result_drop_calls.push((expr.hir_id, expr.span));
+            }
             facts.calls.push(observation);
         }
         if !facts.has_stub && rvs_expr_is_stub(expr) {
             facts.has_stub = true;
         }
-        if nested_body_depth == 0
+        if !nested_body
             && expr.span.from_expansion()
             && rvs_span_has_bang_macro(expr.span, &debug_assert_macros)
         {
@@ -66,6 +96,66 @@ pub(crate) fn rvs_collect_body_facts_M<'tcx>(
         }
     });
     facts
+}
+
+fn rvs_result_swallow_name(cx: &LateContext<'_>, target: &CallTarget) -> Option<&'static str> {
+    let CallTarget::Resolved {
+        def_path, crate_id, ..
+    } = target
+    else {
+        return None;
+    };
+    let name = match def_path.rvs_as_str() {
+        "core::result::Result::ok" => "ok",
+        "core::result::Result::unwrap_or_default" => "unwrap_or_default",
+        _ => return None,
+    };
+    let result_def_id = cx.tcx.get_diagnostic_item(sym::Result)?;
+    (*crate_id == cx.tcx.stable_crate_id(result_def_id.krate).as_u64()).then_some(name)
+}
+
+fn rvs_is_result_drop<'tcx>(
+    cx: &LateContext<'tcx>,
+    expr: &'tcx rustc_hir::Expr<'tcx>,
+    target: &CallTarget,
+) -> bool {
+    let ExprKind::Call(_, arguments) = &expr.kind else {
+        return false;
+    };
+    let CallTarget::Resolved {
+        def_path, crate_id, ..
+    } = target
+    else {
+        return false;
+    };
+    let Some(drop_def_id) = cx.tcx.get_diagnostic_item(sym::mem_drop) else {
+        return false;
+    };
+    if def_path.rvs_as_str() != "core::mem::drop"
+        || *crate_id != cx.tcx.stable_crate_id(drop_def_id.krate).as_u64()
+    {
+        return false;
+    }
+    let [argument] = *arguments else {
+        return false;
+    };
+    rvs_is_std_result_expr(cx, expr.hir_id.owner.def_id, argument)
+}
+
+fn rvs_is_std_result_expr<'tcx>(
+    cx: &LateContext<'tcx>,
+    owner: rustc_hir::def_id::LocalDefId,
+    expr: &'tcx rustc_hir::Expr<'tcx>,
+) -> bool {
+    let expr_type = cx.tcx.typeck(owner).expr_ty(expr);
+    let expr_type = cx
+        .tcx
+        .try_normalize_erasing_regions(cx.typing_env(), expr_type)
+        .unwrap_or(expr_type);
+    matches!(
+        expr_type.kind(),
+        TyKind::Adt(adt, _) if cx.tcx.is_diagnostic_item(sym::Result, adt.did())
+    )
 }
 
 pub(crate) fn rvs_collect_test_calls_M(facts: &BodyFacts, out: &mut HashSet<TestCallTarget>) {
@@ -95,16 +185,6 @@ pub(crate) fn rvs_collect_test_calls_M(facts: &BodyFacts, out: &mut HashSet<Test
 }
 
 fn rvs_expr_is_stub(expr: &rustc_hir::Expr<'_>) -> bool {
-    if let ExprKind::Call(function, _) = &expr.kind
-        && let ExprKind::Path(qpath) = &function.kind
-    {
-        let path = rvs_qp(qpath);
-        let name = path.rsplit("::").next().unwrap_or(&path);
-        if name == "todo" || name == "unimplemented" {
-            return true;
-        }
-    }
-
     let names = [Symbol::intern("todo"), Symbol::intern("unimplemented")];
     rvs_span_has_bang_macro(expr.span, &names)
 }

@@ -13,6 +13,7 @@ extern crate rustc_hir;
 extern crate rustc_hir_analysis;
 extern crate rustc_hir_id;
 extern crate rustc_interface;
+extern crate rustc_lexer;
 extern crate rustc_lint;
 extern crate rustc_middle;
 extern crate rustc_session;
@@ -152,7 +153,36 @@ fn rvs_callgraph_lint_mode(
 
 fn rvs_add_callgraph_lint_args_M(args: &mut Vec<String>, mode: CallgraphLintMode) {
     if mode == CallgraphLintMode::Collect {
+        rvs_force_cap_lints_warn_M(args);
+        args.push("-Awarnings".to_string());
         args.push("-Aunfulfilled_lint_expectations".to_string());
+    }
+}
+
+fn rvs_force_cap_lints_warn_M(args: &mut Vec<String>) {
+    let mut found = false;
+    let mut index = 0usize;
+    while index < args.len() {
+        if args.get(index).is_some_and(|arg| arg == "--cap-lints") {
+            if let Some(value) = args.get_mut(index + 1) {
+                *value = "warn".to_string();
+                found = true;
+            }
+            index += 2;
+            continue;
+        }
+        if args
+            .get(index)
+            .is_some_and(|arg| arg.starts_with("--cap-lints="))
+            && let Some(arg) = args.get_mut(index)
+        {
+            *arg = "--cap-lints=warn".to_string();
+            found = true;
+        }
+        index += 1;
+    }
+    if !found {
+        args.push("--cap-lints=warn".to_string());
     }
 }
 
@@ -288,12 +318,19 @@ mod tests {
     #[test]
     fn test_20260714_callgraph_suppresses_intermediate_expectations() {
         let mut enabled = vec!["rustc".to_string()];
+        let mut existing_cap = vec![
+            "rustc".to_string(),
+            "--cap-lints".to_string(),
+            "allow".to_string(),
+        ];
         let mut disabled = enabled.clone();
         rvs_add_callgraph_lint_args_M(&mut enabled, CallgraphLintMode::Collect);
+        rvs_add_callgraph_lint_args_M(&mut existing_cap, CallgraphLintMode::Collect);
         rvs_add_callgraph_lint_args_M(&mut disabled, CallgraphLintMode::Normal);
         let output = format!(
-            "enabled={}\ndisabled={}\n",
+            "enabled={}\nexisting_cap={}\ndisabled={}\n",
             enabled.join(" "),
+            existing_cap.join(" "),
             disabled.join(" ")
         );
         rvs_snapshot_BIS(
@@ -302,10 +339,18 @@ mod tests {
         );
 
         assert_eq!(
+            enabled
+                .get(enabled.len().saturating_sub(2))
+                .map(String::as_str),
+            Some("-Awarnings")
+        );
+        assert_eq!(
             enabled.last().map(String::as_str),
             Some("-Aunfulfilled_lint_expectations")
         );
         assert_eq!(disabled, ["rustc"]);
+        assert!(enabled.iter().any(|arg| arg == "--cap-lints=warn"));
+        assert_eq!(existing_cap.get(2).map(String::as_str), Some("warn"));
         assert_eq!(
             rvs_callgraph_lint_mode(true, false, true),
             CallgraphLintMode::Normal

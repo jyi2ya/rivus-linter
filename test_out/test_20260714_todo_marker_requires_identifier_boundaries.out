@@ -1,0 +1,5 @@
+// TODO: repair: actual=true, expected=true
+/* fixme later */: actual=true, expected=true
+// autodoc output: actual=false, expected=false
+/* prefixfixme text */: actual=false, expected=false
+// TODO_item: actual=false, expected=false

@@ -1,0 +1,35 @@
+error: pub fn 'rvs_required_U' missing /// doc comment
+  --> $DIR/tests/ui/219_trait_method_docs.rs:4:5
+   |
+LL |     unsafe fn rvs_required_U();
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-missing-doc` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_doc)]`
+
+error: unsafe fn missing /// # Safety
+  --> $DIR/tests/ui/219_trait_method_docs.rs:4:5
+   |
+LL |     unsafe fn rvs_required_U();
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-missing-safety-doc` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_safety_doc)]`
+
+error: pub fn 'rvs_provided_U' missing /// doc comment
+  --> $DIR/tests/ui/219_trait_method_docs.rs:6:5
+   |
+LL | /     unsafe fn rvs_provided_U() {
+LL | |         let _ = 42;
+LL | |     }
+   | |_____^
+
+error: unsafe fn missing /// # Safety
+  --> $DIR/tests/ui/219_trait_method_docs.rs:6:5
+   |
+LL | /     unsafe fn rvs_provided_U() {
+LL | |         let _ = 42;
+LL | |     }
+   | |_____^
+
+error: aborting due to 4 previous errors

@@ -31,22 +31,19 @@ pub(crate) fn rvs_check_fn_MS<'tcx>(cx: &LateContext<'tcx>, body: &Body<'tcx>, f
                 | "f64"
         ) {
             if let PatKind::Binding(_, _, id, _) = p.pat.kind {
-                prims.push(id.name.to_string());
+                prims.push((id.name.to_string(), p.pat.span));
             }
         }
     }
     if prims.is_empty() {
         return;
     }
-    for p in &prims {
-        if !facts.debug_assert_identifiers.contains(p) {
+    for (name, span) in &prims {
+        if !facts.debug_assert_identifiers.contains(name) {
             cx.emit_span_lint(
                 RVS_MISSING_DEBUG_ASSERT,
-                body.value.span,
-                Msg::rvs_new(
-                    body.value.span,
-                    format!("param '{p}' missing debug_assert!"),
-                ),
+                *span,
+                Msg::rvs_new(*span, format!("param '{name}' missing debug_assert!")),
             );
         }
     }

@@ -1,11 +1,8 @@
 error: param 'n' missing debug_assert!
-  --> $DIR/tests/ui/05_missing_assert.rs:3:35
+  --> $DIR/tests/ui/05_missing_assert.rs:3:27
    |
-LL |   fn rvs_add_M(x: &mut i32, n: i32) {
-   |  ___________________________________^
-LL | |     *x += n;
-LL | | }
-   | |_^
+LL | fn rvs_add_M(x: &mut i32, n: i32) {
+   |                           ^
    |
    = note: `-D rivus::rvs-missing-debug-assert` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_debug_assert)]`

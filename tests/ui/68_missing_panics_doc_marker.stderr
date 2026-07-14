@@ -1,23 +1,17 @@
 error: param 'a' missing debug_assert!
-  --> $DIR/tests/ui/68_missing_panics_doc_marker.rs:4:42
+  --> $DIR/tests/ui/68_missing_panics_doc_marker.rs:4:19
    |
-LL |   pub fn rvs_divide(a: i32, b: i32) -> i32 {
-   |  __________________________________________^
-LL | |     a / b
-LL | | }
-   | |_^
+LL | pub fn rvs_divide(a: i32, b: i32) -> i32 {
+   |                   ^
    |
    = note: `-D rivus::rvs-missing-debug-assert` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_debug_assert)]`
 
 error: param 'b' missing debug_assert!
-  --> $DIR/tests/ui/68_missing_panics_doc_marker.rs:4:42
+  --> $DIR/tests/ui/68_missing_panics_doc_marker.rs:4:27
    |
-LL |   pub fn rvs_divide(a: i32, b: i32) -> i32 {
-   |  __________________________________________^
-LL | |     a / b
-LL | | }
-   | |_^
+LL | pub fn rvs_divide(a: i32, b: i32) -> i32 {
+   |                           ^
 
 error: good fn 'rvs_divide' not called by any test
   --> $DIR/tests/ui/68_missing_panics_doc_marker.rs:4:1

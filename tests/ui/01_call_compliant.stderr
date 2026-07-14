@@ -1,23 +1,17 @@
 error: param 'a' missing debug_assert!
-  --> $DIR/tests/ui/01_call_compliant.rs:3:35
+  --> $DIR/tests/ui/01_call_compliant.rs:3:12
    |
-LL |   fn rvs_add(a: i32, b: i32) -> i32 {
-   |  ___________________________________^
-LL | |     a + b
-LL | | }
-   | |_^
+LL | fn rvs_add(a: i32, b: i32) -> i32 {
+   |            ^
    |
    = note: `-D rivus::rvs-missing-debug-assert` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_debug_assert)]`
 
 error: param 'b' missing debug_assert!
-  --> $DIR/tests/ui/01_call_compliant.rs:3:35
+  --> $DIR/tests/ui/01_call_compliant.rs:3:20
    |
-LL |   fn rvs_add(a: i32, b: i32) -> i32 {
-   |  ___________________________________^
-LL | |     a + b
-LL | | }
-   | |_^
+LL | fn rvs_add(a: i32, b: i32) -> i32 {
+   |                    ^
 
 error: good fn 'rvs_add' not called by any test
   --> $DIR/tests/ui/01_call_compliant.rs:3:1

@@ -15,7 +15,7 @@ pub(crate) fn rvs_check_fn_MS<'tcx>(
     is_stub: bool,
 ) {
     if has_body && !is_stub {
-        let (is_empty, only_debug_asserts) = rvs_is_empty_body(body);
+        let (is_empty, only_debug_asserts) = rvs_is_empty_body(cx.tcx, body);
         if is_empty {
             let msg = if only_debug_asserts {
                 "function body contains only debug_assert!"

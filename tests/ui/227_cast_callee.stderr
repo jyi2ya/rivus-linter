@@ -1,0 +1,31 @@
+error: drop(Result) discards a Result without handling it
+  --> $DIR/tests/ui/227_cast_callee.rs:13:5
+   |
+LL |     (drop::<Result<(), String>> as fn(Result<(), String>))(result);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-error-swallow` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_error_swallow)]`
+
+error: caller lacks propagated capabilities required by callee; callee: 227_cast_callee::rvs_blocking_BI; caller declared caps: pure; callee caps: BI; missing propagated caps: B, I
+  --> $DIR/tests/ui/227_cast_callee.rs:7:1
+   |
+LL | / fn rvs_cast_call() {
+LL | |     (rvs_blocking_BI as fn())();
+LL | | }
+   | |_^
+   |
+   = note: `#[deny(rivus::rvs_call_violation)]` on by default
+
+error: good fn 'rvs_cast_call' not called by any test
+  --> $DIR/tests/ui/227_cast_callee.rs:7:1
+   |
+LL | / fn rvs_cast_call() {
+LL | |     (rvs_blocking_BI as fn())();
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
+
+error: aborting due to 3 previous errors

@@ -1,0 +1,22 @@
+error: function touches static/thread-local state without declaring required caps; declared caps: S; required caps from body facts: ST; missing: T
+  --> $DIR/tests/ui/225_thread_local_static.rs:7:1
+   |
+LL | / fn rvs_read_tls_S() -> i32 {
+LL | |     TLS_VALUE
+LL | | }
+   | |_^
+   |
+   = note: `#[deny(rivus::rvs_static_ref)]` on by default
+
+error: 'rvs_read_tls_S' is missing capability marker missing_thread_local; expected name: rvs_read_tls_ST; declared caps: S; inferred caps: ST
+  --> $DIR/tests/ui/225_thread_local_static.rs:7:1
+   |
+LL | / fn rvs_read_tls_S() -> i32 {
+LL | |     TLS_VALUE
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-missing-thread-local` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_thread_local)]`
+
+error: aborting due to 2 previous errors

@@ -1,0 +1,10 @@
+error: spawn: std::thread::functions::spawn — use structured concurrency
+  --> $DIR/tests/ui/210_deep_closure_spawn.rs:21:73
+   |
+LL | ...                   std::thread::spawn(|| {});
+   |                       ^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-spawn-warning` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_spawn_warning)]`
+
+error: aborting due to 1 previous error

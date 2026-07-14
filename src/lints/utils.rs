@@ -14,12 +14,13 @@ use crate::symbols::DefPath;
 
 pub(crate) const SPAWN_FUNCTIONS: &[&str] = &[
     "tokio::runtime::spawn",
+    "tokio::task::blocking::spawn_blocking",
     "tokio::task::spawn",
     "tokio::task::spawn_blocking",
     "tokio::task::spawn_local",
     "std::thread::functions::spawn",
-    "std::thread::builder::spawn",
-    "std::thread::builder::spawn_unchecked",
+    "std::thread::builder::Builder::spawn",
+    "std::thread::builder::Builder::spawn_unchecked",
     "std::thread::lifecycle::spawn_unchecked",
     "async_std::task::spawn",
     "async_std::task::spawn_blocking",
@@ -104,12 +105,21 @@ pub(crate) fn rvs_allows_non_snake_case(cx: &LateContext<'_>, hir_id: HirId) -> 
 pub(crate) fn rvs_has_doc_section(cx: &LateContext<'_>, hir_id: HirId, section: &str) -> bool {
     for a in cx.tcx.hir_attrs(hir_id) {
         if let Some(d) = a.doc_str() {
-            if d.as_str().trim().starts_with(&format!("# {section}")) {
+            if rvs_doc_has_section(d.as_str(), section) {
                 return true;
             }
         }
     }
     false
+}
+
+fn rvs_doc_has_section(doc: &str, section: &str) -> bool {
+    doc.lines().any(|line| {
+        let Some(rest) = line.trim().strip_prefix('#') else {
+            return false;
+        };
+        rest.chars().next().is_some_and(char::is_whitespace) && rest.trim() == section
+    })
 }
 
 pub(crate) fn rvs_has_any_doc(attrs: &[rustc_hir::Attribute]) -> bool {
@@ -155,8 +165,12 @@ pub(crate) fn rvs_has_mutable_params(sig: &rustc_hir::FnSig<'_>) -> bool {
 
 // ─── Body scanners ───────────────────────────────────────────────────────
 
-pub(crate) fn rvs_is_empty_body(body: &Body<'_>) -> (bool, bool) {
-    let block = match &body.value.kind {
+pub(crate) fn rvs_is_empty_body<'tcx>(
+    tcx: rustc_middle::ty::TyCtxt<'tcx>,
+    body: &Body<'tcx>,
+) -> (bool, bool) {
+    let body_expr = rvs_root_body_expr(tcx, body);
+    let block = match &body_expr.kind {
         ExprKind::Block(b, _) => b,
         _ => return (false, false),
     };
@@ -207,15 +221,6 @@ fn rvs_is_only_debug_asserts(e: &Expr<'_>) -> bool {
             }
             true
         }
-        ExprKind::Call(func, _) => {
-            if let ExprKind::Path(ref q) = func.kind {
-                let s = rvs_qp(q);
-                let last = s.rsplit("::").next().unwrap_or(&s);
-                last == "debug_assert" || last == "debug_assert_eq" || last == "debug_assert_ne"
-            } else {
-                false
-            }
-        }
         _ => false,
     }
 }
@@ -257,7 +262,8 @@ fn rvs_for_each_expr_child_M<'tcx>(e: &'tcx Expr<'tcx>, f: &mut impl FnMut(&'tcx
         | ExprKind::Yield(x, _)
         | ExprKind::DropTemps(x)
         | ExprKind::Become(x)
-        | ExprKind::Use(x, _) => f(x),
+        | ExprKind::Use(x, _)
+        | ExprKind::UnsafeBinderCast(_, x, _) => f(x),
         ExprKind::Let(l) => f(&l.init),
         ExprKind::If(c, t, el) => {
             f(c);
@@ -286,9 +292,19 @@ fn rvs_for_each_expr_child_M<'tcx>(e: &'tcx Expr<'tcx>, f: &mut impl FnMut(&'tcx
         }
         ExprKind::InlineAsm(asm) => asm.operands.iter().for_each(|(op, _)| match op {
             rustc_hir::InlineAsmOperand::In { expr, .. }
+            | rustc_hir::InlineAsmOperand::InOut { expr, .. }
             | rustc_hir::InlineAsmOperand::Out {
                 expr: Some(expr), ..
-            } => f(expr),
+            }
+            | rustc_hir::InlineAsmOperand::SymFn { expr } => f(expr),
+            rustc_hir::InlineAsmOperand::SplitInOut {
+                in_expr, out_expr, ..
+            } => {
+                f(in_expr);
+                if let Some(expr) = out_expr {
+                    f(expr);
+                }
+            }
             _ => {}
         }),
         _ => {}
@@ -335,12 +351,7 @@ fn rvs_collect_block_idents_M(block: &Block<'_>, out: &mut BTreeSet<String>) {
 }
 
 pub(crate) fn rvs_static_is_thread_local(cx: &LateContext<'_>, did: DefId) -> bool {
-    if let Some(local_did) = did.as_local() {
-        let owner_id = rustc_hir::OwnerId { def_id: local_did };
-        let attrs = cx.tcx.hir_attrs(rustc_hir::HirId::from(owner_id));
-        return rvs_has_attr(attrs, "thread_local");
-    }
-    false
+    cx.tcx.is_thread_local_static(did)
 }
 
 pub(crate) fn rvs_count_effective_lines_M<'tcx>(
@@ -376,9 +387,33 @@ pub(crate) fn rvs_root_body_expr<'tcx>(
     body: &Body<'tcx>,
 ) -> &'tcx Expr<'tcx> {
     let mut expr = body.value;
+    let mut unwrap_coroutine_shell = false;
     loop {
+        if unwrap_coroutine_shell {
+            match &expr.kind {
+                ExprKind::Block(block, _) if block.stmts.is_empty() && block.expr.is_some() => {
+                    expr = block
+                        .expr
+                        .expect("never: guarded coroutine shell tail exists");
+                    continue;
+                }
+                ExprKind::DropTemps(inner) => {
+                    expr = inner;
+                    unwrap_coroutine_shell = false;
+                    continue;
+                }
+                _ => unwrap_coroutine_shell = false,
+            }
+        }
         match &expr.kind {
             ExprKind::Closure(closure) => {
+                unwrap_coroutine_shell = matches!(
+                    closure.kind,
+                    rustc_hir::ClosureKind::Coroutine(rustc_hir::CoroutineKind::Desugared(
+                        rustc_hir::CoroutineDesugaring::Async,
+                        rustc_hir::CoroutineSource::Fn,
+                    ))
+                );
                 expr = tcx.hir_body(closure.body).value;
             }
             ExprKind::DropTemps(inner) | ExprKind::Become(inner) | ExprKind::Use(inner, _) => {
@@ -437,73 +472,124 @@ fn rvs_line_has_effective_code_M(line: &str, in_comment: &mut bool) -> bool {
 
 // ─── Walker ──────────────────────────────────────────────────────────────
 
-fn rvs_walk_expr_M<'tcx, F: FnMut(&'tcx Expr<'tcx>, u32)>(
+fn rvs_walk_expr_M<'tcx, F: FnMut(&'tcx Expr<'tcx>, bool)>(
     e: &'tcx Expr<'tcx>,
     f: &mut F,
     resolve_body: &dyn Fn(rustc_hir::BodyId) -> Option<&'tcx Body<'tcx>>,
-    depth: u32,
+    nested_body: bool,
 ) {
-    debug_assert!(
-        depth <= 17,
-        "closure walk depth is capped before recursion continues"
-    );
-    if depth > 16 {
-        return;
-    }
-    f(e, depth);
+    f(e, nested_body);
     match &e.kind {
+        ExprKind::ConstBlock(const_block) => {
+            if let Some(body) = resolve_body(const_block.body) {
+                rvs_walk_expr_M(body.value, f, resolve_body, true);
+            }
+        }
+        ExprKind::Repeat(element, count) => {
+            rvs_walk_expr_M(element, f, resolve_body, nested_body);
+            rvs_walk_const_arg_M(count, f, resolve_body);
+        }
         ExprKind::Loop(b, ..) | ExprKind::Block(b, _) => {
-            rvs_walk_block_M(b, f, resolve_body, depth)
+            rvs_walk_block_M(b, f, resolve_body, nested_body)
         }
         ExprKind::Closure(closure) => {
             if let Some(body) = resolve_body(closure.body) {
-                rvs_walk_expr_M(body.value, f, resolve_body, depth + 1);
+                rvs_walk_expr_M(body.value, f, resolve_body, true);
+            }
+        }
+        ExprKind::InlineAsm(asm) => {
+            rvs_for_each_expr_child_M(e, &mut |child| {
+                rvs_walk_expr_M(child, f, resolve_body, nested_body);
+            });
+            for (operand, _) in asm.operands {
+                match operand {
+                    rustc_hir::InlineAsmOperand::Const { anon_const } => {
+                        if let Some(body) = resolve_body(anon_const.body) {
+                            rvs_walk_expr_M(body.value, f, resolve_body, true);
+                        }
+                    }
+                    rustc_hir::InlineAsmOperand::Label { block } => {
+                        rvs_walk_block_M(block, f, resolve_body, nested_body);
+                    }
+                    _ => {}
+                }
             }
         }
         _ => rvs_for_each_expr_child_M(e, &mut |child| {
-            rvs_walk_expr_M(child, f, resolve_body, depth);
+            rvs_walk_expr_M(child, f, resolve_body, nested_body);
         }),
     }
 }
 
-fn rvs_walk_block_M<'tcx, F: FnMut(&'tcx Expr<'tcx>, u32)>(
+fn rvs_walk_const_arg_M<'tcx, F: FnMut(&'tcx Expr<'tcx>, bool)>(
+    arg: &'tcx rustc_hir::ConstArg<'tcx>,
+    f: &mut F,
+    resolve_body: &dyn Fn(rustc_hir::BodyId) -> Option<&'tcx Body<'tcx>>,
+) {
+    use rustc_hir::ConstArgKind;
+
+    match arg.kind {
+        ConstArgKind::Tup(args) | ConstArgKind::TupleCall(_, args) => {
+            for arg in args {
+                rvs_walk_const_arg_M(arg, f, resolve_body);
+            }
+        }
+        ConstArgKind::Anon(anon_const) => {
+            if let Some(body) = resolve_body(anon_const.body) {
+                rvs_walk_expr_M(body.value, f, resolve_body, true);
+            }
+        }
+        ConstArgKind::Struct(_, fields) => {
+            for field in fields {
+                rvs_walk_const_arg_M(field.expr, f, resolve_body);
+            }
+        }
+        ConstArgKind::Array(array) => {
+            for element in array.elems {
+                rvs_walk_const_arg_M(element, f, resolve_body);
+            }
+        }
+        ConstArgKind::Path(_)
+        | ConstArgKind::Error(_)
+        | ConstArgKind::Infer(_)
+        | ConstArgKind::Literal { .. } => {}
+    }
+}
+
+fn rvs_walk_block_M<'tcx, F: FnMut(&'tcx Expr<'tcx>, bool)>(
     b: &'tcx Block<'tcx>,
     f: &mut F,
     resolve_body: &dyn Fn(rustc_hir::BodyId) -> Option<&'tcx Body<'tcx>>,
-    depth: u32,
+    nested_body: bool,
 ) {
-    debug_assert!(
-        depth <= 17,
-        "closure walk depth is capped before recursion continues"
-    );
     for s in b.stmts {
         match &s.kind {
             rustc_hir::StmtKind::Expr(e) | rustc_hir::StmtKind::Semi(e) => {
-                rvs_walk_expr_M(e, f, resolve_body, depth)
+                rvs_walk_expr_M(e, f, resolve_body, nested_body)
             }
             rustc_hir::StmtKind::Let(l) => {
                 if let Some(i) = l.init {
-                    rvs_walk_expr_M(i, f, resolve_body, depth);
+                    rvs_walk_expr_M(i, f, resolve_body, nested_body);
                 }
                 if let Some(els) = l.els {
-                    rvs_walk_block_M(els, f, resolve_body, depth);
+                    rvs_walk_block_M(els, f, resolve_body, nested_body);
                 }
             }
             _ => {}
         }
     }
     if let Some(e) = b.expr {
-        rvs_walk_expr_M(e, f, resolve_body, depth);
+        rvs_walk_expr_M(e, f, resolve_body, nested_body);
     }
 }
 
-pub(crate) fn rvs_visit_body_exprs_M<'tcx, F: FnMut(&'tcx Expr<'tcx>, u32)>(
+pub(crate) fn rvs_visit_body_exprs_M<'tcx, F: FnMut(&'tcx Expr<'tcx>, bool)>(
     tcx: rustc_middle::ty::TyCtxt<'tcx>,
     e: &'tcx Expr<'tcx>,
     mut f: F,
 ) {
     let resolver = |bid: rustc_hir::BodyId| -> Option<&'tcx Body<'tcx>> { Some(tcx.hir_body(bid)) };
-    rvs_walk_expr_M(e, &mut f, &resolver, 0);
+    rvs_walk_expr_M(e, &mut f, &resolver, false);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -538,10 +624,19 @@ pub(crate) struct CallObservation {
 pub(crate) fn rvs_resolve_call(cx: &LateContext<'_>, expr: &Expr<'_>) -> Option<CallObservation> {
     match &expr.kind {
         ExprKind::Call(func, _) => {
-            let ExprKind::Path(qpath) = &func.kind else {
+            let mut callee = *func;
+            while let ExprKind::Cast(inner, _)
+            | ExprKind::Type(inner, _)
+            | ExprKind::DropTemps(inner)
+            | ExprKind::Use(inner, _)
+            | ExprKind::UnsafeBinderCast(_, inner, _) = callee.kind
+            {
+                callee = inner;
+            }
+            let ExprKind::Path(qpath) = &callee.kind else {
                 return None;
             };
-            let target = match cx.qpath_res(qpath, func.hir_id) {
+            let target = match cx.qpath_res(qpath, callee.hir_id) {
                 rustc_hir::def::Res::Def(def_kind, def_id) => CallTarget::Resolved {
                     def_path: DefPath::rvs_new(rvs_def_path(cx, def_id)),
                     def_kind,
@@ -765,7 +860,9 @@ mod tests {
     fn test_20260714_spawn_paths_include_kovi_wrapper() {
         let cases = [
             ("tokio::task::spawn", true),
+            ("tokio::task::blocking::spawn_blocking", true),
             ("kovi::task::spawn", true),
+            ("std::thread::builder::Builder::spawn", true),
             ("demo::task::spawn", false),
         ];
         let output = cases
@@ -778,6 +875,34 @@ mod tests {
 
         for (path, expected) in cases {
             assert_eq!(rvs_is_spawn_S(path), expected, "{path}");
+        }
+    }
+
+    #[test]
+    fn test_20260714_doc_section_requires_heading_boundary() {
+        let cases = [
+            ("Performs work.\n\n# Safety\n\nCaller contract.", true),
+            ("# SafetyDance\n\nNot a safety section.", false),
+            ("Safety\n\nPlain prose.", false),
+        ];
+        let output = cases
+            .iter()
+            .map(|(doc, expected)| {
+                format!(
+                    "{doc:?}: actual={}, expected={expected}",
+                    rvs_doc_has_section(doc, "Safety")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        rvs_snapshot_BIS(
+            "test_20260714_doc_section_requires_heading_boundary",
+            &output,
+        );
+
+        for (doc, expected) in cases {
+            assert_eq!(rvs_doc_has_section(doc, "Safety"), expected, "{doc}");
         }
     }
 
@@ -811,7 +936,7 @@ mod tests {
             rvs_has_any_doc(_attrs);
             rvs_has_debug_derive(_cx, _def_id);
             rvs_has_mutable_params(_sig);
-            rvs_is_empty_body(_body);
+            rvs_is_empty_body(_tcx, _body);
             rvs_is_only_debug_asserts(_expr);
             rvs_expr_from_debug_assert_macro(_expr);
             rvs_collect_all_idents_M(_expr, &mut set);
@@ -820,8 +945,10 @@ mod tests {
             rvs_root_body_expr(_tcx, _body);
             rvs_line_has_effective_code_M("let x = 1;", &mut in_comment);
             let resolver = |_bid: rustc_hir::BodyId| -> Option<&Body<'_>> { None };
-            rvs_walk_expr_M(_expr, &mut |_, _| {}, &resolver, 0);
-            rvs_walk_block_M(_block, &mut |_, _| {}, &resolver, 0);
+            rvs_walk_expr_M(_expr, &mut |_, _| {}, &resolver, false);
+            rvs_walk_block_M(_block, &mut |_, _| {}, &resolver, false);
+            let _const_arg: &rustc_hir::ConstArg<'_> = unreachable!();
+            rvs_walk_const_arg_M(_const_arg, &mut |_, _| {}, &resolver);
             rvs_visit_body_exprs_M(_tcx, _expr, |_, _| {});
             rvs_qp(_qpath);
             rvs_tys(_ty);

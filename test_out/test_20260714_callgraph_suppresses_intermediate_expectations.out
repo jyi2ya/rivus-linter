@@ -1,2 +1,3 @@
-enabled=rustc -Aunfulfilled_lint_expectations
+enabled=rustc --cap-lints=warn -Awarnings -Aunfulfilled_lint_expectations
+existing_cap=rustc --cap-lints warn -Awarnings -Aunfulfilled_lint_expectations
 disabled=rustc

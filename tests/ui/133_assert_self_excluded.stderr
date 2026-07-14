@@ -1,11 +1,8 @@
 error: param 'x' missing debug_assert!
-  --> $DIR/tests/ui/133_assert_self_excluded.rs:8:42
+  --> $DIR/tests/ui/133_assert_self_excluded.rs:8:27
    |
-LL |       fn rvs_compute(&self, x: i32) -> i32 {
-   |  __________________________________________^
-LL | |         x * 2
-LL | |     }
-   | |_____^
+LL |     fn rvs_compute(&self, x: i32) -> i32 {
+   |                           ^
    |
    = note: `-D rivus::rvs-missing-debug-assert` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_debug_assert)]`

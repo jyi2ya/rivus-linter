@@ -128,7 +128,7 @@ rvs_declare_lints!(
     (
         RVS_ERROR_SWALLOW,
         Warn,
-        ".ok() or .unwrap_or_default() swallows errors"
+        ".ok(), .unwrap_or_default(), or drop(Result) discards error information"
     ),
     (
         RVS_CATCH_UNWIND,
@@ -218,6 +218,7 @@ pub struct RivusLintPass {
     should_emit_lints: bool,
     should_emit_caps_report: bool,
     test_fn_names: HashSet<String>,
+    banned_import_statements: HashSet<(rustc_span::StableSourceFileId, u32, String)>,
     untested_functions: Option<BTreeSet<crate::artifacts::FunctionIdentity>>,
     untested_functions_error: Option<String>,
 }
@@ -247,6 +248,7 @@ impl RivusLintPass {
             should_emit_lints: !collect_callgraph,
             should_emit_caps_report,
             test_fn_names: HashSet::new(),
+            banned_import_statements: HashSet::new(),
             untested_functions,
             untested_functions_error,
         }
@@ -426,6 +428,7 @@ impl<'tcx> LateLintPass<'tcx> for RivusLintPass {
             &self.test_fn_names,
             &mut self.test_names,
             &mut self.test_calls,
+            &mut self.banned_import_statements,
             &mut data,
         );
     }
@@ -657,6 +660,7 @@ fn rvs_run_body_fn_pipeline_MS<'tcx, F>(
 {
     if should_check_fn {
         rvs_run_fn_checks_MS(cx, subject, data);
+        todo_comment::rvs_check_fn_S(cx, subject.span);
         after_checks();
     }
     if data.collect_caps_facts {
@@ -673,6 +677,7 @@ fn rvs_check_item_MS<'tcx>(
     test_fn_names: &HashSet<String>,
     test_names: &mut BTreeMap<String, Vec<Span>>,
     test_calls: &mut HashSet<ctx::TestCallTarget>,
+    banned_import_statements: &mut HashSet<(rustc_span::StableSourceFileId, u32, String)>,
     data: &mut FnCheckData<'_>,
 ) {
     use rustc_hir::{ItemKind, VariantData};
@@ -719,12 +724,22 @@ fn rvs_check_item_MS<'tcx>(
                     item.span,
                     &sig.header.safety,
                 );
-                todo_comment::rvs_check_fn_S(cx, item.span);
             });
         }
         ItemKind::Use(path, use_kind) => {
             if data.should_emit_lints {
-                banned_import::rvs_check_item_S(cx, item, path, *use_kind);
+                banned_import::rvs_check_item_MS(
+                    cx,
+                    item,
+                    path,
+                    *use_kind,
+                    banned_import_statements,
+                );
+            }
+        }
+        ItemKind::ExternCrate(..) => {
+            if data.should_emit_lints {
+                banned_import::rvs_check_extern_crate_S(cx, item);
             }
         }
         ItemKind::Enum(_, _, enum_def) => {
@@ -736,8 +751,11 @@ fn rvs_check_item_MS<'tcx>(
         ItemKind::Struct(_, _, data_fields) => {
             if data.should_emit_lints {
                 missing_debug_derive::rvs_check_struct_or_enum_S(cx, item);
-                if let VariantData::Struct { fields, .. } = data_fields {
-                    borrowed_param::rvs_check_borrowed_fields_S(cx, fields);
+                match data_fields {
+                    VariantData::Struct { fields, .. } | VariantData::Tuple(fields, ..) => {
+                        borrowed_param::rvs_check_borrowed_fields_S(cx, fields);
+                    }
+                    VariantData::Unit(..) => {}
                 }
             }
         }
@@ -811,15 +829,16 @@ fn rvs_check_impl_item_MS<'tcx>(
             if !is_test && is_pub {
                 missing_doc::rvs_check_fn_S(cx, name, impl_item.span, attrs, true);
             }
-            if is_pub {
-                missing_safety_doc::rvs_check_fn_S(
-                    cx,
-                    impl_item.hir_id(),
-                    impl_item.span,
-                    &sig.header.safety,
-                );
-            }
+            missing_safety_doc::rvs_check_fn_S(
+                cx,
+                impl_item.hir_id(),
+                impl_item.span,
+                &sig.header.safety,
+            );
         });
+        if data.should_emit_lints && !should_check_fn {
+            todo_comment::rvs_check_fn_S(cx, impl_item.span);
+        }
     }
 }
 
@@ -835,6 +854,8 @@ fn rvs_check_trait_item_MS<'tcx>(
     let parent = cx.tcx.hir_get_parent_item(trait_item.hir_id());
     let parent_def_id = parent.def_id.to_def_id();
     let is_port_trait = port_traits::rvs_is_local_port_trait_S(cx, parent_def_id);
+    let is_pub = cx.tcx.visibility(parent_def_id).is_public();
+    let attrs = cx.tcx.hir_attrs(trait_item.hir_id());
 
     match &trait_item.kind {
         TraitItemKind::Fn(sig, TraitFn::Provided(body_id)) => {
@@ -852,7 +873,21 @@ fn rvs_check_trait_item_MS<'tcx>(
                 false,
                 is_port_trait,
             );
-            rvs_run_body_fn_pipeline_MS(cx, &subject, data, data.should_emit_lints, || {});
+            rvs_run_body_fn_pipeline_MS(cx, &subject, data, data.should_emit_lints, || {
+                missing_doc::rvs_check_fn_S(
+                    cx,
+                    trait_item.ident.name.as_str(),
+                    trait_item.span,
+                    attrs,
+                    is_pub,
+                );
+                missing_safety_doc::rvs_check_fn_S(
+                    cx,
+                    trait_item.hir_id(),
+                    trait_item.span,
+                    &sig.header.safety,
+                );
+            });
         }
         TraitItemKind::Fn(sig, TraitFn::Required(_)) => {
             if data.should_emit_lints {
@@ -866,6 +901,13 @@ fn rvs_check_trait_item_MS<'tcx>(
                         parsed_name.rvs_raw_suffix().unwrap_or(""),
                     );
                 }
+                missing_doc::rvs_check_fn_S(cx, name, trait_item.span, attrs, is_pub);
+                missing_safety_doc::rvs_check_fn_S(
+                    cx,
+                    trait_item.hir_id(),
+                    trait_item.span,
+                    &sig.header.safety,
+                );
             }
             // Required methods (no body) — collect signature info for callgraph.
             if data.collect_caps_facts {

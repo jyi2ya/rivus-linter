@@ -1,3 +1,5 @@
 tokio::task::spawn=true
+tokio::task::blocking::spawn_blocking=true
 kovi::task::spawn=true
+std::thread::builder::Builder::spawn=true
 demo::task::spawn=false

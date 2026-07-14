@@ -1,0 +1,12 @@
+error: unsafe fn missing /// # Safety
+  --> $DIR/tests/ui/233_safety_heading_boundary.rs:6:1
+   |
+LL | / unsafe fn rvs_bad_heading_U() {
+LL | |     let _ = 1;
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-missing-safety-doc` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_safety_doc)]`
+
+error: aborting due to 1 previous error
