@@ -2,7 +2,7 @@ use std::path::Path;
 
 use toml_edit::{DocumentMut, Item, Table};
 
-use crate::fs_guard::rvs_render_atomic_write_failure;
+use crate::fs_guard::{rvs_atomic_sibling_temp_path_S, rvs_render_atomic_write_failure};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SetupFileRequirement {
@@ -10,48 +10,28 @@ enum SetupFileRequirement {
     Optional,
 }
 
-pub const CLIPPY_LINTS: &[(&str, &str)] = &[
-    ("string_slice", "warn"),
-    ("indexing_slicing", "warn"),
-    ("unwrap_used", "warn"),
-    ("panic", "warn"),
-    ("todo", "warn"),
-    ("unimplemented", "warn"),
-    ("unreachable", "warn"),
-    ("get_unwrap", "warn"),
-    ("unwrap_in_result", "warn"),
-    ("unchecked_time_subtraction", "warn"),
-    ("panic_in_result_fn", "warn"),
-    ("let_underscore_future", "warn"),
-    ("let_underscore_must_use", "warn"),
-    ("unused_result_ok", "warn"),
-    ("map_err_ignore", "warn"),
-    ("assertions_on_result_states", "warn"),
-    ("await_holding_lock", "warn"),
-    ("await_holding_refcell_ref", "warn"),
-    ("large_futures", "warn"),
-    ("mem_forget", "warn"),
-    ("undocumented_unsafe_blocks", "warn"),
-    ("multiple_unsafe_ops_per_block", "warn"),
-    ("unnecessary_safety_doc", "warn"),
-    ("unnecessary_safety_comment", "warn"),
-    ("float_cmp", "warn"),
-    ("float_cmp_const", "warn"),
-    ("lossy_float_literal", "warn"),
-    ("cast_sign_loss", "warn"),
-    ("invalid_upcast_comparisons", "warn"),
-    ("rc_mutex", "warn"),
-    ("debug_assert_with_mut_call", "warn"),
-    ("iter_not_returning_iterator", "warn"),
-    ("expl_impl_clone_on_copy", "warn"),
-    ("infallible_try_from", "warn"),
-    ("use_debug", "warn"),
-    ("dbg_macro", "warn"),
-    ("allow_attributes", "warn"),
-    ("allow_attributes_without_reason", "warn"),
-    ("manual_ok_err", "allow"),
-    ("manual_unwrap_or_default", "allow"),
-];
+fn rvs_clippy_lints() -> Vec<(String, String)> {
+    let document: DocumentMut = include_str!("../Cargo.toml")
+        .parse()
+        .expect("never: rivus-linter Cargo.toml must be valid TOML");
+    document
+        .get("lints")
+        .and_then(Item::as_table)
+        .and_then(|lints| lints.get("clippy"))
+        .and_then(Item::as_table)
+        .expect("never: rivus-linter Cargo.toml defines [lints.clippy]")
+        .iter()
+        .map(|(name, level)| {
+            (
+                name.to_string(),
+                level
+                    .as_str()
+                    .expect("never: clippy lint levels are strings")
+                    .to_string(),
+            )
+        })
+        .collect()
+}
 
 /// Inject clippy lint rules into a Cargo.toml string.
 /// Returns the new Cargo.toml string and the count of injected lints.
@@ -83,9 +63,9 @@ fn rvs_inject_clippy_lints_into_document_M(doc: &mut DocumentMut) -> Result<usiz
     };
 
     let mut count = 0;
-    for (name, level) in CLIPPY_LINTS {
-        if !clippy_table.contains_key(name) {
-            clippy_table.insert(name, toml_edit::value(*level));
+    for (name, level) in rvs_clippy_lints() {
+        if !clippy_table.contains_key(&name) {
+            clippy_table.insert(&name, toml_edit::value(level));
             count += 1;
         }
     }
@@ -180,20 +160,11 @@ fn rvs_preflight_setup_file_BIS(
 }
 
 fn rvs_write_file_atomic_BIS(path: &Path, content: &str) -> Result<(), String> {
-    let parent = path
-        .parent()
+    path.parent()
         .ok_or_else(|| format!("cannot determine parent for '{}'", path.display()))?;
-    let file_name = path
-        .file_name()
-        .ok_or_else(|| format!("cannot determine file name for '{}'", path.display()))?
-        .to_string_lossy();
-    let temp_path_for_attempt = |attempt| {
-        parent.join(format!(
-            ".{file_name}.{}.{}.tmp",
-            std::process::id(),
-            attempt
-        ))
-    };
+    path.file_name()
+        .ok_or_else(|| format!("cannot determine file name for '{}'", path.display()))?;
+    let temp_path_for_attempt = |attempt| rvs_atomic_sibling_temp_path_S(path, attempt);
     crate::fs_guard::rvs_write_atomic_BIS(path, content.as_bytes(), &temp_path_for_attempt)
         .map_err(|failure| rvs_render_atomic_write_failure(failure, path, "temp file", true))
 }
@@ -207,7 +178,7 @@ mod tests {
     fn test_20260501_inject_into_empty_cargo_toml() {
         let input = "[package]\nname = \"test\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\n";
         let (result, count) = rvs_inject_clippy_lints_M(input).unwrap();
-        debug_assert_eq!(count, CLIPPY_LINTS.len());
+        debug_assert_eq!(count, rvs_clippy_lints().len());
         debug_assert!(result.contains("[lints.clippy]"));
         debug_assert!(result.contains("string_slice = \"warn\""));
         debug_assert!(result.contains("allow_attributes_without_reason = \"warn\""));
@@ -229,7 +200,7 @@ mod tests {
         let (result, count) = rvs_inject_clippy_lints_M(input).unwrap();
         debug_assert!(result.contains("string_slice = \"deny\""));
         debug_assert!(result.contains("unwrap_used = \"warn\""));
-        debug_assert_eq!(count, CLIPPY_LINTS.len() - 2);
+        debug_assert_eq!(count, rvs_clippy_lints().len() - 2);
     }
 
     #[test]
@@ -240,7 +211,7 @@ mod tests {
             "test_20260607_setup_inject_clippy_empty",
             &format!("count: {count}\n{result}"),
         );
-        assert_eq!(count, CLIPPY_LINTS.len());
+        assert_eq!(count, rvs_clippy_lints().len());
         assert!(result.contains("[lints.clippy]"));
     }
 
@@ -259,7 +230,7 @@ mod tests {
         let input = "[package]\nname = \"test\"\n\n[lints.clippy]\nstring_slice = \"deny\"\n\n[dependencies]\n";
         let (result, count) = rvs_inject_clippy_lints_M(input).unwrap();
         assert!(result.contains("string_slice = \"deny\""));
-        assert_eq!(count, CLIPPY_LINTS.len() - 1);
+        assert_eq!(count, rvs_clippy_lints().len() - 1);
     }
 
     #[test]

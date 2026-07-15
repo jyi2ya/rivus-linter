@@ -143,7 +143,7 @@ pub(crate) fn rvs_build_source_rename_plan_BIS(
             )?;
             eprintln!(
                 "warning: skipping {label} candidate '{}' because callgraph metadata is missing",
-                candidate.def_path.rvs_as_str()
+                candidate.def_path
             );
             continue;
         };
@@ -156,7 +156,7 @@ pub(crate) fn rvs_build_source_rename_plan_BIS(
             )?;
             eprintln!(
                 "warning: skipping {label} candidate '{}' because it has no real source location metadata",
-                candidate.def_path.rvs_as_str()
+                candidate.def_path
             );
             continue;
         }
@@ -180,6 +180,32 @@ pub(crate) fn rvs_build_source_rename_plan_BIS(
         }
     }
     Ok(plan)
+}
+
+pub(crate) fn rvs_execute_source_rename_plan_BIS(
+    path: &Path,
+    plan: &SourceRenamePlan,
+    action: &str,
+    title: &str,
+) -> Result<(), String> {
+    if plan.rename_map.is_empty() {
+        if plan.skipped_without_source > 0 {
+            println!(
+                "No functions to {action} (skipped {} candidate(s) without source metadata).",
+                plan.skipped_without_source
+            );
+        } else {
+            println!("No functions to {action}.");
+        }
+        return Ok(());
+    }
+
+    let renamed_functions = plan.rename_map.len();
+    let files_changed = rvs_apply_ra_source_renames_BIS(path, &plan.rename_map)?;
+    println!(
+        "{title} complete: renamed {renamed_functions} function(s) in {files_changed} file(s)."
+    );
+    Ok(())
 }
 
 /// Loads the rust-analyzer workspace at `canonical_path` and returns the
@@ -482,28 +508,7 @@ pub fn rvs_strip_BIS(path: &Path) -> Result<(), String> {
     }
 
     let plan = rvs_build_source_rename_plan_BIS(&callgraph, path, candidates, "strip")?;
-    let rename_map = plan.rename_map;
-
-    if rename_map.is_empty() {
-        if plan.skipped_without_source > 0 {
-            println!(
-                "No functions to strip (skipped {} candidate(s) without source metadata).",
-                plan.skipped_without_source
-            );
-            return Ok(());
-        }
-        println!("No functions to strip.");
-        return Ok(());
-    }
-
-    let renamed_functions = rename_map.len();
-    let files_changed = rvs_apply_ra_source_renames_BIS(path, &rename_map)?;
-
-    println!(
-        "Strip complete: renamed {} function(s) in {} file(s).",
-        renamed_functions, files_changed
-    );
-    Ok(())
+    rvs_execute_source_rename_plan_BIS(path, &plan, "strip", "Strip")
 }
 
 /// Applies rust-analyzer semantic renames for annotate candidates keyed by exact source location.

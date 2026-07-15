@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 
 use crate::artifacts::{FnGraph, FnNode, FunctionIdentity};
@@ -57,6 +57,7 @@ pub(crate) struct OfflineCapsDiagnostic {
     pub(crate) severity: OfflineCapsSeverity,
     pub(crate) kind: OfflineCapsKind,
     pub(crate) function: DefPath,
+    pub(crate) span_anchors: BTreeSet<DefPath>,
     pub(crate) message: String,
     pub(crate) details: Vec<String>,
 }
@@ -73,6 +74,7 @@ impl OfflineCapsReport {
             .any(|diagnostic| diagnostic.severity == OfflineCapsSeverity::Error)
     }
 
+    #[cfg(test)]
     pub(crate) fn rvs_is_empty(&self) -> bool {
         self.diagnostics.is_empty()
     }
@@ -122,6 +124,7 @@ impl fmt::Display for OfflineCapsReport {
     }
 }
 
+#[derive(Debug)]
 struct OfflineFnContext<'a> {
     def_path: &'a DefPath,
     node: &'a FnNode,
@@ -129,6 +132,25 @@ struct OfflineFnContext<'a> {
     declared_caps: Option<CapabilitySet>,
     inferred_caps: Option<&'a CapabilitySet>,
     contract_diff: Option<&'a FnContractDiff>,
+}
+
+impl OfflineFnContext<'_> {
+    fn rvs_diagnostic(
+        &self,
+        severity: OfflineCapsSeverity,
+        kind: OfflineCapsKind,
+        message: String,
+        details: Vec<String>,
+    ) -> OfflineCapsDiagnostic {
+        OfflineCapsDiagnostic {
+            severity,
+            kind,
+            function: self.def_path.clone(),
+            span_anchors: BTreeSet::from([self.def_path.clone()]),
+            message,
+            details,
+        }
+    }
 }
 
 pub(crate) fn rvs_check_offline_caps(
@@ -146,6 +168,7 @@ pub(crate) fn rvs_check_offline_caps(
         .map(|diff| (diff.def_path.rvs_as_str(), diff))
         .collect();
     let resolver = analysis.rvs_resolver(&scoped_graph, caps);
+    let mut unknown_callees: BTreeMap<String, BTreeSet<DefPath>> = BTreeMap::new();
     for (def_path, node) in scoped_graph.rvs_iter() {
         let classification = FunctionClassification::rvs_new(&local_scope, def_path, node);
         if !classification.rvs_is_offline_checked() {
@@ -164,8 +187,9 @@ pub(crate) fn rvs_check_offline_caps(
         rvs_collect_contract_diagnostics_M(&mut report, &context);
         rvs_collect_suffix_diagnostics_M(&mut report, &context);
         rvs_collect_static_ref_diagnostics_M(&mut report, &context);
-        rvs_collect_call_diagnostics_M(&mut report, &context, &resolver);
+        rvs_collect_call_diagnostics_M(&mut report, &context, &resolver, &mut unknown_callees);
     }
+    rvs_append_unknown_callee_diagnostics_M(&mut report, &unknown_callees);
     report.diagnostics.sort();
     report
 }
@@ -217,13 +241,12 @@ fn rvs_collect_contract_diagnostics_M(
                 kind.rvs_as_str()
             ),
         };
-        report.diagnostics.push(OfflineCapsDiagnostic {
-            severity: OfflineCapsSeverity::Warning,
-            kind: OfflineCapsKind::Contract(kind),
-            function: diff.def_path.clone(),
+        report.diagnostics.push(context.rvs_diagnostic(
+            OfflineCapsSeverity::Warning,
+            OfflineCapsKind::Contract(kind),
             message,
             details,
-        });
+        ));
     }
 }
 
@@ -237,29 +260,11 @@ pub(crate) fn rvs_uncovered_test_functions(
         .filter(|(_, node)| !node.test_crate_ids.is_empty())
         .flat_map(|(_, node)| node.unresolved_test_calls.iter().map(String::as_str))
         .collect();
-    let mut covered = BTreeSet::new();
-    let mut visited = BTreeSet::new();
-    let mut pending = VecDeque::new();
-    for (_, node) in graph.rvs_iter() {
-        for crate_id in &node.test_crate_ids {
-            if let Some(calls) = node.coverage_calls.get(crate_id) {
-                pending.extend(calls.iter().cloned());
-            }
-        }
-    }
-    while let Some(identity) = pending.pop_front() {
-        if !visited.insert(identity.clone()) {
-            continue;
-        }
-        covered.insert(rvs_normalize_coverage_identity(graph, &identity));
-        let Some(node) = graph.rvs_get(identity.def_path.rvs_as_str()) else {
-            continue;
-        };
-        let Some(calls) = node.coverage_calls.get(&identity.crate_id) else {
-            continue;
-        };
-        pending.extend(calls.iter().cloned());
-    }
+    let covered: BTreeSet<FunctionIdentity> = graph
+        .rvs_test_reachable_identities()
+        .into_iter()
+        .map(|identity| rvs_normalize_coverage_identity(graph, &identity))
+        .collect();
 
     let mut candidates = Vec::new();
     for (def_path, node) in graph.rvs_iter() {
@@ -390,30 +395,27 @@ fn rvs_collect_suffix_diagnostics_M(
             .parsed_name
             .rvs_canonical_suffix()
             .expect("never: raw suffix has a canonical form");
-        report.diagnostics.push(OfflineCapsDiagnostic {
-            severity: OfflineCapsSeverity::Warning,
-            kind: OfflineCapsKind::NonAlphabeticalSuffix,
-            function: context.def_path.clone(),
-            message: format!("suffix '{raw_suffix}' should be alphabetically ordered"),
-            details: vec![format!("suggested suffix order: {sorted}")],
-        });
+        report.diagnostics.push(context.rvs_diagnostic(
+            OfflineCapsSeverity::Warning,
+            OfflineCapsKind::NonAlphabeticalSuffix,
+            format!("suffix '{raw_suffix}' should be alphabetically ordered"),
+            vec![format!("suggested suffix order: {sorted}")],
+        ));
     }
     if let Some(letter) = context.parsed_name.rvs_duplicate_suffix_letters().first() {
-        report.diagnostics.push(OfflineCapsDiagnostic {
-            severity: OfflineCapsSeverity::Warning,
-            kind: OfflineCapsKind::DuplicateSuffix,
-            function: context.def_path.clone(),
-            message: format!("suffix '{raw_suffix}' repeats '{letter}'"),
-            details: vec!["remove duplicate capability letters".to_string()],
-        });
+        report.diagnostics.push(context.rvs_diagnostic(
+            OfflineCapsSeverity::Warning,
+            OfflineCapsKind::DuplicateSuffix,
+            format!("suffix '{raw_suffix}' repeats '{letter}'"),
+            vec!["remove duplicate capability letters".to_string()],
+        ));
     }
     let unknown = context.parsed_name.rvs_unknown_suffix_letters();
     if !unknown.is_empty() {
-        report.diagnostics.push(OfflineCapsDiagnostic {
-            severity: OfflineCapsSeverity::Warning,
-            kind: OfflineCapsKind::UnknownSuffixLetter,
-            function: context.def_path.clone(),
-            message: format!(
+        report.diagnostics.push(context.rvs_diagnostic(
+            OfflineCapsSeverity::Warning,
+            OfflineCapsKind::UnknownSuffixLetter,
+            format!(
                 "suffix '{raw_suffix}' contains unknown letters: {}",
                 unknown
                     .iter()
@@ -421,8 +423,8 @@ fn rvs_collect_suffix_diagnostics_M(
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
-            details: vec!["known letters are A, B, I, M, P, S, T, U".to_string()],
-        });
+            vec!["known letters are A, B, I, M, P, S, T, U".to_string()],
+        ));
     }
 }
 
@@ -450,13 +452,11 @@ fn rvs_collect_static_ref_diagnostics_M(
     if missing.is_empty() {
         return;
     }
-    report.diagnostics.push(OfflineCapsDiagnostic {
-        severity: OfflineCapsSeverity::Error,
-        kind: OfflineCapsKind::StaticRefRequiresCaps,
-        function: context.def_path.clone(),
-        message: "function touches static/thread-local state without declaring required caps"
-            .to_string(),
-        details: vec![
+    report.diagnostics.push(context.rvs_diagnostic(
+        OfflineCapsSeverity::Error,
+        OfflineCapsKind::StaticRefRequiresCaps,
+        "function touches static/thread-local state without declaring required caps".to_string(),
+        vec![
             format!("declared caps: {}", rvs_format_caps(declared)),
             format!(
                 "required caps from body facts: {}",
@@ -464,13 +464,14 @@ fn rvs_collect_static_ref_diagnostics_M(
             ),
             format!("missing: {}", rvs_format_cap_list(&missing)),
         ],
-    });
+    ));
 }
 
 fn rvs_collect_call_diagnostics_M(
     report: &mut OfflineCapsReport,
     context: &OfflineFnContext<'_>,
     resolver: &CalleeCapsResolver<'_>,
+    unknown_callees: &mut BTreeMap<String, BTreeSet<DefPath>>,
 ) {
     if !context.node.has_body {
         return;
@@ -491,16 +492,10 @@ fn rvs_collect_call_diagnostics_M(
         };
         match mismatch.kind {
             CallContractMismatchKind::UnknownCallee => {
-                report.diagnostics.push(OfflineCapsDiagnostic {
-                    severity: OfflineCapsSeverity::Warning,
-                    kind: OfflineCapsKind::UnknownCallee,
-                    function: context.def_path.clone(),
-                    message: format!(
-                        "callee '{}' has no rvs_ suffix and no caps/ entry",
-                        mismatch.callee_display
-                    ),
-                    details: vec![rvs_unknown_callee_repair(callee)],
-                });
+                unknown_callees
+                    .entry(mismatch.callee_display)
+                    .or_default()
+                    .insert(context.def_path.clone());
             }
             CallContractMismatchKind::MissingCapabilities => {
                 let callee_caps = mismatch
@@ -508,20 +503,49 @@ fn rvs_collect_call_diagnostics_M(
                     .as_ref()
                     .expect("never: missing-capability mismatch carries callee caps");
                 let missing: Vec<_> = mismatch.missing_caps.iter().copied().collect();
-                report.diagnostics.push(OfflineCapsDiagnostic {
-                    severity: OfflineCapsSeverity::Error,
-                    kind: OfflineCapsKind::CallViolation,
-                    function: context.def_path.clone(),
-                    message: "caller lacks propagated capabilities required by callee".to_string(),
-                    details: vec![
+                report.diagnostics.push(context.rvs_diagnostic(
+                    OfflineCapsSeverity::Error,
+                    OfflineCapsKind::CallViolation,
+                    "caller lacks propagated capabilities required by callee".to_string(),
+                    vec![
                         format!("callee: {callee}"),
                         format!("caller declared caps: {}", rvs_format_caps(caller_caps)),
                         format!("callee caps: {}", rvs_format_caps(callee_caps)),
                         format!("missing propagated caps: {}", rvs_format_cap_list(&missing)),
                     ],
-                });
+                ));
             }
         }
+    }
+}
+
+fn rvs_append_unknown_callee_diagnostics_M(
+    report: &mut OfflineCapsReport,
+    unknown_callees: &BTreeMap<String, BTreeSet<DefPath>>,
+) {
+    for (callee, callers) in unknown_callees {
+        let readable_callers: BTreeSet<String> = callers.iter().map(ToString::to_string).collect();
+        let mut details: Vec<String> = readable_callers
+            .iter()
+            .take(5)
+            .map(|caller| format!("called by: {caller}"))
+            .collect();
+        if readable_callers.len() > 5 {
+            details.push(format!(
+                "... and {} more callers",
+                readable_callers.len() - 5
+            ));
+        }
+        let callee_path = DefPath::from(callee.as_str());
+        details.push(rvs_unknown_callee_repair(&callee_path));
+        report.diagnostics.push(OfflineCapsDiagnostic {
+            severity: OfflineCapsSeverity::Warning,
+            kind: OfflineCapsKind::UnknownCallee,
+            function: callee_path,
+            span_anchors: callers.clone(),
+            message: format!("callee '{callee}' has no rvs_ suffix and no caps/ entry"),
+            details,
+        });
     }
 }
 
@@ -543,7 +567,7 @@ fn rvs_format_optional_caps(caps: Option<&CapabilitySet>) -> String {
 }
 
 fn rvs_format_caps(caps: &CapabilitySet) -> String {
-    let caps_str = crate::inference::rvs_caps_to_string(caps);
+    let caps_str = caps.rvs_letters();
     if caps_str.is_empty() {
         "pure".to_string()
     } else {
@@ -625,6 +649,17 @@ mod tests {
     }
 
     #[test]
+    fn test_20260715_empty_offline_caps_report_renders_stage_success() {
+        let output = OfflineCapsReport::default().to_string();
+        rvs_snapshot_BIS(
+            "test_20260715_empty_offline_caps_report_renders_stage_success",
+            &output,
+        );
+
+        assert_eq!(output, "Offline Caps Check: ok\n");
+    }
+
+    #[test]
     fn test_20260714_offline_caps_unknown_std_callee_suggests_std_caps() {
         let mut graph = FnGraph::rvs_new();
         graph.rvs_insert_M(
@@ -663,6 +698,68 @@ mod tests {
 
         assert!(output.contains("callee 'dep::Worker::run'"));
         assert!(!output.contains("{impl#"));
+    }
+
+    #[test]
+    fn test_20260715_offline_unknown_callees_group_callers_by_callee() {
+        let mut graph = FnGraph::rvs_new();
+        graph.rvs_insert_M(DefPath::from("demo::rvs_first"), rvs_node(&["dep::plain"]));
+        graph.rvs_insert_M(DefPath::from("demo::rvs_second"), rvs_node(&["dep::plain"]));
+        let local = BTreeSet::from([CrateName::from("demo")]);
+
+        let report = rvs_check_offline_caps(&graph, &CapsMap::rvs_new(), &local);
+        let output = report.to_string();
+        rvs_snapshot_BIS(
+            "test_20260715_offline_unknown_callees_group_callers_by_callee",
+            &output,
+        );
+
+        assert_eq!(
+            report
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.kind == OfflineCapsKind::UnknownCallee)
+                .count(),
+            1
+        );
+        let diagnostic = report
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.kind == OfflineCapsKind::UnknownCallee)
+            .expect("never: grouped report contains the unknown-callee diagnostic");
+        assert_eq!(diagnostic.span_anchors.len(), 2);
+    }
+
+    #[test]
+    fn test_20260715_offline_unknown_callee_deduplicates_readable_callers() {
+        let mut graph = FnGraph::rvs_new();
+        graph.rvs_insert_M(
+            DefPath::from("demo::Worker{impl#7538}::rvs_call"),
+            rvs_node(&["dep::plain"]),
+        );
+        graph.rvs_insert_M(
+            DefPath::from("demo::Worker{impl#753136}::rvs_call"),
+            rvs_node(&["dep::plain"]),
+        );
+        let local = BTreeSet::from([CrateName::from("demo")]);
+
+        let report = rvs_check_offline_caps(&graph, &CapsMap::rvs_new(), &local);
+        let output = report.to_string();
+        rvs_snapshot_BIS(
+            "test_20260715_offline_unknown_callee_deduplicates_readable_callers",
+            &output,
+        );
+
+        assert_eq!(
+            output.matches("called by: demo::Worker::rvs_call").count(),
+            1
+        );
+        let diagnostic = report
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.kind == OfflineCapsKind::UnknownCallee)
+            .expect("never: grouped report contains the unknown-callee diagnostic");
+        assert_eq!(diagnostic.span_anchors.len(), 2);
     }
 
     #[test]

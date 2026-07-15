@@ -106,7 +106,7 @@ fn rvs_run_driver_BIMPS() -> ExitCode {
         // failures from std's #[deny(...)] attributes.
         let rivus_enabled = wrapper_mode && rvs_rivus_enabled_BS();
         if rivus_enabled {
-            rvs_rewrite_cap_lints_allow_M(&mut args);
+            rvs_rewrite_cap_lints_M(&mut args, CapLintsRewrite::AllowToWarn);
         }
         let callgraph_lint_mode = rvs_callgraph_lint_mode(
             wrapper_mode,
@@ -124,10 +124,7 @@ fn rvs_run_driver_BIMPS() -> ExitCode {
 }
 
 fn rvs_rivus_enabled_BS() -> bool {
-    match env::var("RIVUS_ENABLED") {
-        Ok(value) => rvs_rivus_enabled_value(&value),
-        Err(env::VarError::NotPresent) | Err(env::VarError::NotUnicode(_)) => false,
-    }
+    rvs_env_flag_is_one_BS("RIVUS_ENABLED")
 }
 
 fn rvs_env_flag_is_one_BS(name: &str) -> bool {
@@ -138,6 +135,12 @@ fn rvs_env_flag_is_one_BS(name: &str) -> bool {
 enum CallgraphLintMode {
     Normal,
     Collect,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CapLintsRewrite {
+    AllowToWarn,
+    ForceWarn,
 }
 
 fn rvs_callgraph_lint_mode(
@@ -154,39 +157,42 @@ fn rvs_callgraph_lint_mode(
 
 fn rvs_add_callgraph_lint_args_M(args: &mut Vec<String>, mode: CallgraphLintMode) {
     if mode == CallgraphLintMode::Collect {
-        rvs_force_cap_lints_warn_M(args);
+        rvs_rewrite_cap_lints_M(args, CapLintsRewrite::ForceWarn);
         args.push("-Awarnings".to_string());
         args.push("-Aunfulfilled_lint_expectations".to_string());
     }
 }
 
-fn rvs_force_cap_lints_warn_M(args: &mut Vec<String>) {
+fn rvs_rewrite_cap_lints_M(args: &mut Vec<String>, rewrite: CapLintsRewrite) {
     let mut found = false;
     let mut index = 0usize;
     while index < args.len() {
         if args.get(index).is_some_and(|arg| arg == "--cap-lints") {
             if let Some(value) = args.get_mut(index + 1) {
-                *value = "warn".to_string();
+                if rewrite == CapLintsRewrite::ForceWarn || value == "allow" {
+                    *value = "warn".to_string();
+                }
                 found = true;
             }
             index += 2;
             continue;
         }
-        if args
-            .get(index)
-            .is_some_and(|arg| arg.starts_with("--cap-lints="))
-            && let Some(arg) = args.get_mut(index)
+        if let Some(arg) = args.get_mut(index)
+            && let Some(value) = arg.strip_prefix("--cap-lints=")
         {
-            *arg = "--cap-lints=warn".to_string();
+            if rewrite == CapLintsRewrite::ForceWarn || value == "allow" {
+                *arg = "--cap-lints=warn".to_string();
+            }
             found = true;
         }
         index += 1;
     }
-    if !found {
+    if rewrite == CapLintsRewrite::ForceWarn && !found {
         args.push("--cap-lints=warn".to_string());
     }
 }
 
+#[cfg(test)]
 fn rvs_rivus_enabled_value(value: &str) -> bool {
     value == "1"
 }
@@ -239,22 +245,6 @@ fn rvs_is_cargo_rustc_leading_arg(arg: &str) -> bool {
     ) || arg.starts_with("--print=")
 }
 
-fn rvs_rewrite_cap_lints_allow_M(args: &mut [String]) {
-    for arg in args.iter_mut() {
-        if arg == "--cap-lints=allow" {
-            *arg = "--cap-lints=warn".to_string();
-        }
-    }
-    for index in 0..args.len().saturating_sub(1) {
-        let is_cap_lints_allow = args.get(index..index + 2).is_some_and(
-            |pair| matches!(pair, [flag, value] if flag == "--cap-lints" && value == "allow"),
-        );
-        if is_cap_lints_allow && let Some(value) = args.get_mut(index + 1) {
-            *value = "warn".to_string();
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -270,7 +260,7 @@ mod tests {
             "allow".to_string(),
         ];
 
-        rvs_rewrite_cap_lints_allow_M(&mut args);
+        rvs_rewrite_cap_lints_M(&mut args, CapLintsRewrite::AllowToWarn);
         let output = format!("{}\n", args.join("\n"));
         rvs_snapshot_BIS(
             "test_20260706_rewrite_cap_lints_preserves_allow_crate_name",
@@ -285,7 +275,7 @@ mod tests {
     fn test_20260706_rewrite_cap_lints_equals_allow() {
         let mut args = vec!["rustc".to_string(), "--cap-lints=allow".to_string()];
 
-        rvs_rewrite_cap_lints_allow_M(&mut args);
+        rvs_rewrite_cap_lints_M(&mut args, CapLintsRewrite::AllowToWarn);
         let output = format!("{}\n", args.join("\n"));
         rvs_snapshot_BIS("test_20260706_rewrite_cap_lints_equals_allow", &output);
 
@@ -392,7 +382,7 @@ mod tests {
         let mut args = vec!["rustc".to_string(), "--cap-lints=allow".to_string()];
         let enabled = false;
         if enabled {
-            rvs_rewrite_cap_lints_allow_M(&mut args);
+            rvs_rewrite_cap_lints_M(&mut args, CapLintsRewrite::AllowToWarn);
         }
         let output = args.join("\n") + "\n";
         rvs_snapshot_BIS(
@@ -448,6 +438,15 @@ mod tests {
             CallgraphLintMode::Collect
         );
     }
+
+    #[test]
+    fn test_20260715_cli_version_is_available() {
+        let error = Cli::try_parse_from(["cargo-rivus", "--version"]).unwrap_err();
+        let output = format!("kind={:?}\n{error}", error.kind());
+        rvs_snapshot_BIS("test_20260715_cli_version_is_available", &output);
+
+        assert_eq!(error.kind(), clap::error::ErrorKind::DisplayVersion);
+    }
 }
 
 // ─── CLI mode ────────────────────────────────────────────────────────────
@@ -455,6 +454,7 @@ mod tests {
 #[derive(Debug, Parser)]
 #[command(name = "rivus-linter")]
 #[command(about = "Check function capability compliance in Rust source code")]
+#[command(version)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -542,63 +542,41 @@ fn main() -> ExitCode {
     };
     let cli = Cli::parse_from(filtered_args);
 
-    match cli.command {
+    let result: Result<(), String> = match cli.command {
         None => {
             let empty_args: Vec<String> = Vec::new();
             if let Err(code) = workspace::rvs_run_cargo_check_BIMS(&empty_args) {
                 process::exit(code);
             }
+            Ok(())
         }
         Some(Commands::Check { args }) => {
             if let Err(code) = workspace::rvs_run_cargo_check_BIMS(&args) {
                 process::exit(code);
             }
+            Ok(())
         }
-        Some(Commands::Report { path }) => {
-            if let Err(e) = report_commands::rvs_run_report_BIMPS(&path) {
-                eprintln!("Error: {e}");
-                return ExitCode::from(2u8);
-            }
-        }
-        Some(Commands::Setup { path }) => {
-            if let Err(e) = setup::rvs_run_setup_BIMS(&path) {
-                eprintln!("Error: {e}");
-                return ExitCode::from(2u8);
-            }
-        }
+        Some(Commands::Report { path }) => report_commands::rvs_run_report_BIMPS(&path),
+        Some(Commands::Setup { path }) => setup::rvs_run_setup_BIMS(&path),
         Some(Commands::InferCapsmap { path, output }) => {
-            if let Err(e) = infer_commands::rvs_run_infer_capsmap_BIMPS(&path, &output) {
-                eprintln!("Error: {e}");
-                return ExitCode::from(2u8);
-            }
+            infer_commands::rvs_run_infer_capsmap_BIMPS(&path, &output)
         }
         Some(Commands::InferStd { path, output }) => {
-            if let Err(e) = infer_commands::rvs_run_infer_std_BIMPS(&path, &output) {
-                eprintln!("Error: {e}");
-                return ExitCode::from(2u8);
-            }
+            infer_commands::rvs_run_infer_std_BIMPS(&path, &output)
         }
-        Some(Commands::Strip { path }) => {
-            if let Err(e) = rename::rvs_strip_BIS(&path) {
-                eprintln!("Error: {e}");
-                return ExitCode::from(2u8);
-            }
-        }
-        Some(Commands::Annotate { path }) => {
-            if let Err(e) = analysis_commands::rvs_run_annotate_BIMPS(&path) {
-                eprintln!("Error: {e}");
-                return ExitCode::from(2u8);
-            }
-        }
+        Some(Commands::Strip { path }) => rename::rvs_strip_BIS(&path),
+        Some(Commands::Annotate { path }) => analysis_commands::rvs_run_annotate_BIMPS(&path),
         Some(Commands::Why { function, path }) => {
-            if let Err(e) = analysis_commands::rvs_run_why_BIMPS(&function, &path) {
-                eprintln!("Error: {e}");
-                return ExitCode::from(2u8);
-            }
+            analysis_commands::rvs_run_why_BIMPS(&function, &path)
         }
         Some(Commands::Usage) => {
             print!("{RIVUS_MANUAL}");
+            Ok(())
         }
+    };
+    if let Err(error) = result {
+        eprintln!("Error: {error}");
+        return ExitCode::from(2u8);
     }
     ExitCode::SUCCESS
 }

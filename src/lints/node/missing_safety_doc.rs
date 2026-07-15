@@ -1,9 +1,9 @@
 use rustc_hir::{self, HeaderSafety, HirId, Safety};
-use rustc_lint::{LateContext, LintContext};
+use rustc_lint::LateContext;
 use rustc_span::Span;
 
 use super::super::RVS_MISSING_SAFETY_DOC;
-use super::super::msg::Msg;
+use super::super::msg::rvs_emit_span_lint_S;
 use super::super::utils::rvs_has_doc_section;
 
 /// Check that unsafe functions have `/// # Safety` doc section.
@@ -17,10 +17,11 @@ pub(crate) fn rvs_check_fn_S(
         return;
     }
     if !rvs_has_doc_section(cx, hir_id, "Safety") {
-        cx.emit_span_lint(
+        rvs_emit_span_lint_S(
+            cx,
             RVS_MISSING_SAFETY_DOC,
             span,
-            Msg::rvs_new(span, "unsafe fn missing /// # Safety"),
+            "unsafe fn missing /// # Safety",
         );
     }
 }

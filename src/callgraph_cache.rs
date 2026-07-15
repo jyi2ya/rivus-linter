@@ -2,11 +2,33 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use crate::artifacts::{self, FnGraph};
-use crate::fs_guard::rvs_render_atomic_write_failure;
+use crate::fs_guard::{rvs_atomic_sibling_temp_path_S, rvs_render_atomic_write_failure};
 use crate::function_classification::LocalScope;
 use crate::symbols::CrateName;
 
 const STD_CALLGRAPH_CACHE_FILE: &str = "rivus-callgraph-std.json";
+
+fn rvs_validate_optional_cache_file_BIS(path: &Path) -> Result<bool, String> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_file() => Ok(true),
+        Ok(_) => Err(format!(
+            "published std callgraph cache must be a regular file: {}",
+            path.display()
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(format!(
+            "cannot inspect published std callgraph cache {}: {error}",
+            path.display()
+        )),
+    }
+}
+
+fn rvs_load_callgraph_file_BIS(path: &Path) -> Result<FnGraph, String> {
+    let json = std::fs::read_to_string(path)
+        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    artifacts::rvs_parse_callgraph_json_S(&json)
+        .map_err(|error| format!("{}: {error}", path.display()))
+}
 
 pub(crate) fn rvs_merge_std_like_callgraph_M(target: &mut FnGraph, source: FnGraph) {
     rvs_merge_std_like_callgraph_with_local_prefixes_M(target, source, &BTreeSet::new());
@@ -40,27 +62,10 @@ pub(crate) fn rvs_load_published_std_callgraph_cache_BIS(
     project_path: &Path,
 ) -> Result<Option<FnGraph>, String> {
     let path = rvs_std_callgraph_cache_path(project_path);
-    match std::fs::symlink_metadata(&path) {
-        Ok(metadata) if metadata.is_file() => {}
-        Ok(_) => {
-            return Err(format!(
-                "published std callgraph cache must be a regular file: {}",
-                path.display()
-            ));
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => {
-            return Err(format!(
-                "cannot inspect published std callgraph cache {}: {error}",
-                path.display()
-            ));
-        }
+    if !rvs_validate_optional_cache_file_BIS(&path)? {
+        return Ok(None);
     }
-    let json = std::fs::read_to_string(&path)
-        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
-    artifacts::rvs_parse_callgraph_json_S(&json)
-        .map(Some)
-        .map_err(|error| format!("{}: {error}", path.display()))
+    rvs_load_callgraph_file_BIS(&path).map(Some)
 }
 
 pub(crate) fn rvs_publish_std_callgraph_cache_BIS(
@@ -72,30 +77,9 @@ pub(crate) fn rvs_publish_std_callgraph_cache_BIS(
         std::fs::create_dir_all(parent)
             .map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
     }
-    match std::fs::symlink_metadata(&path) {
-        Ok(metadata) if metadata.is_file() => {}
-        Ok(_) => {
-            return Err(format!(
-                "published std callgraph cache must be a regular file: {}",
-                path.display()
-            ));
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => {
-            return Err(format!(
-                "cannot inspect published std callgraph cache {}: {error}",
-                path.display()
-            ));
-        }
-    }
+    let _ = rvs_validate_optional_cache_file_BIS(&path)?;
     let json = artifacts::rvs_serialize_callgraph_json_S(callgraph)?;
-    let temp_path_for_attempt = |attempt| {
-        path.with_file_name(format!(
-            ".{STD_CALLGRAPH_CACHE_FILE}.{}.{}.tmp",
-            std::process::id(),
-            attempt
-        ))
-    };
+    let temp_path_for_attempt = |attempt| rvs_atomic_sibling_temp_path_S(&path, attempt);
     crate::fs_guard::rvs_write_atomic_BIS(&path, json.as_bytes(), &temp_path_for_attempt).map_err(
         |failure| {
             rvs_render_atomic_write_failure(failure, &path, "temp std callgraph cache", false)
@@ -123,11 +107,7 @@ pub(crate) fn rvs_merge_callgraph_dir_BIS(
     }
     json_paths.sort();
     for path in &json_paths {
-        let json_str = std::fs::read_to_string(path)
-            .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-        let partial = artifacts::rvs_parse_callgraph_json_S(&json_str)
-            .map_err(|e| format!("{}: {e}", path.display()))?;
-        artifacts.push(partial);
+        artifacts.push(rvs_load_callgraph_file_BIS(path)?);
     }
     if json_paths.is_empty() {
         return Err(format!(

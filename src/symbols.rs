@@ -3,6 +3,56 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+macro_rules! rvs_string_symbol {
+    ($name:ident, $new_doc:literal, $as_str_doc:literal) => {
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+        #[serde(transparent)]
+        pub struct $name(String);
+
+        impl $name {
+            #[doc = $new_doc]
+            pub fn rvs_new(value: impl Into<String>) -> Self {
+                Self(value.into())
+            }
+
+            #[doc = $as_str_doc]
+            pub fn rvs_as_str(&self) -> &str {
+                &self.0
+            }
+        }
+
+        impl fmt::Display for $name {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str(self.rvs_as_str())
+            }
+        }
+
+        impl AsRef<str> for $name {
+            fn as_ref(&self) -> &str {
+                self.rvs_as_str()
+            }
+        }
+
+        impl Borrow<str> for $name {
+            fn borrow(&self) -> &str {
+                self.rvs_as_str()
+            }
+        }
+
+        impl From<&str> for $name {
+            fn from(value: &str) -> Self {
+                Self::rvs_new(value)
+            }
+        }
+
+        impl From<String> for $name {
+            fn from(value: String) -> Self {
+                Self::rvs_new(value)
+            }
+        }
+    };
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct CrateName(String);
@@ -70,51 +120,11 @@ impl Borrow<str> for DefPathPrefix {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct FnName(String);
-
-impl FnName {
-    /// Wrap a bare function name.
-    pub fn rvs_new(name: impl Into<String>) -> Self {
-        Self(name.into())
-    }
-
-    /// Borrow the function name as `&str`.
-    pub fn rvs_as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl fmt::Display for FnName {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.rvs_as_str())
-    }
-}
-
-impl AsRef<str> for FnName {
-    fn as_ref(&self) -> &str {
-        self.rvs_as_str()
-    }
-}
-
-impl Borrow<str> for FnName {
-    fn borrow(&self) -> &str {
-        self.rvs_as_str()
-    }
-}
-
-impl From<&str> for FnName {
-    fn from(value: &str) -> Self {
-        Self::rvs_new(value)
-    }
-}
-
-impl From<String> for FnName {
-    fn from(value: String) -> Self {
-        Self::rvs_new(value)
-    }
-}
+rvs_string_symbol!(
+    FnName,
+    "Wrap a bare function name.",
+    "Borrow the function name as `&str`."
+);
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -303,51 +313,11 @@ impl From<String> for DefPath {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct CapsMapKey(String);
-
-impl CapsMapKey {
-    /// Wrap a capsmap key string.
-    pub fn rvs_new(key: impl Into<String>) -> Self {
-        Self(key.into())
-    }
-
-    /// Borrow the capsmap key as `&str`.
-    pub fn rvs_as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl fmt::Display for CapsMapKey {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.rvs_as_str())
-    }
-}
-
-impl AsRef<str> for CapsMapKey {
-    fn as_ref(&self) -> &str {
-        self.rvs_as_str()
-    }
-}
-
-impl Borrow<str> for CapsMapKey {
-    fn borrow(&self) -> &str {
-        self.rvs_as_str()
-    }
-}
-
-impl From<&str> for CapsMapKey {
-    fn from(value: &str) -> Self {
-        Self::rvs_new(value)
-    }
-}
-
-impl From<String> for CapsMapKey {
-    fn from(value: String) -> Self {
-        Self::rvs_new(value)
-    }
-}
+rvs_string_symbol!(
+    CapsMapKey,
+    "Wrap a capsmap key string.",
+    "Borrow the capsmap key as `&str`."
+);
 
 impl From<DefPath> for CapsMapKey {
     fn from(value: DefPath) -> Self {

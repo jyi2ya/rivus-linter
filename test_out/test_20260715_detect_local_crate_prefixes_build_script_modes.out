@@ -1,0 +1,4 @@
+default=build_script_build,default_build
+absent=absent_build
+explicit=build_script_build,explicit_build
+disabled=disabled_build

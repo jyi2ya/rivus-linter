@@ -1,17 +1,18 @@
 use std::collections::HashSet;
 
 use rustc_hir::{Item, UseKind, UsePath, def::Res};
-use rustc_lint::{LateContext, LintContext};
+use rustc_lint::LateContext;
 use rustc_span::Span;
 
-use super::super::msg::Msg;
+use super::super::msg::rvs_emit_span_lint_S;
 use super::super::{RVS_BANNED_IMPORT, RVS_WILDCARD_IMPORT};
 
 fn rvs_emit_banned_crate_S(cx: &LateContext<'_>, span: Span, crate_name: &str) {
-    cx.emit_span_lint(
+    rvs_emit_span_lint_S(
+        cx,
         RVS_BANNED_IMPORT,
         span,
-        Msg::rvs_new(span, format!("banned import: {crate_name}")),
+        format!("banned import: {crate_name}"),
     );
 }
 
@@ -91,10 +92,11 @@ pub(crate) fn rvs_check_item_MS<'tcx>(
             // super ok
         } else {
             let full = format!("{}::*", ps.join("::"));
-            cx.emit_span_lint(
+            rvs_emit_span_lint_S(
+                cx,
                 RVS_WILDCARD_IMPORT,
                 item.span,
-                Msg::rvs_new(item.span, format!("wildcard import: {full}")),
+                format!("wildcard import: {full}"),
             );
         }
     }

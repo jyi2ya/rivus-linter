@@ -1,0 +1,4 @@
+trait_incomplete=true
+implementation_incomplete=true
+expected=rvs_fetch_BIS
+name_mismatch=false

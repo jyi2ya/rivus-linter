@@ -1,9 +1,9 @@
 use rustc_lexer::{FrontmatterAllowed, TokenKind};
-use rustc_lint::{LateContext, LintContext};
+use rustc_lint::LateContext;
 use rustc_span::Span;
 
 use super::super::RVS_TODO_COMMENT;
-use super::super::msg::Msg;
+use super::super::msg::rvs_emit_span_lint_S;
 
 /// Check source span for `// TODO` or `// FIXME` comments.
 pub(crate) fn rvs_check_fn_S(cx: &LateContext<'_>, span: Span) {
@@ -11,11 +11,7 @@ pub(crate) fn rvs_check_fn_S(cx: &LateContext<'_>, span: Span) {
     if let Ok(src) = source_map.span_to_snippet(span)
         && rvs_source_has_marker_comment(&src)
     {
-        cx.emit_span_lint(
-            RVS_TODO_COMMENT,
-            span,
-            Msg::rvs_new(span, "TODO/FIXME comment found"),
-        );
+        rvs_emit_span_lint_S(cx, RVS_TODO_COMMENT, span, "TODO/FIXME comment found");
     }
 }
 

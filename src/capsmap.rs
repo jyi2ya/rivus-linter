@@ -285,7 +285,7 @@ fn rvs_collect_caps_dir_files_BIS(
             continue;
         }
         let name = raw_name.to_string_lossy().into_owned();
-        if rvs_is_atomic_caps_temp_file(&name) {
+        if crate::fs_guard::rvs_is_atomic_sibling_temp_name(&name) {
             continue;
         }
         if path.is_file() {
@@ -297,24 +297,6 @@ fn rvs_collect_caps_dir_files_BIS(
         }
     }
     Ok(files)
-}
-
-fn rvs_is_atomic_caps_temp_file(name: &str) -> bool {
-    let Some(without_tmp) = name.strip_suffix(".tmp") else {
-        return false;
-    };
-    let Some((without_attempt, attempt)) = without_tmp.rsplit_once('.') else {
-        return false;
-    };
-    let Some((layer, pid)) = without_attempt.rsplit_once('.') else {
-        return false;
-    };
-    layer.starts_with('.')
-        && layer.len() > 1
-        && !pid.is_empty()
-        && pid.bytes().all(|byte| byte.is_ascii_digit())
-        && !attempt.is_empty()
-        && attempt.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 fn rvs_require_caps_dir_BIS(dir: &Path) -> Result<(), CapsMapError> {

@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::path::Path;
 
-use crate::artifacts::FnGraph;
+use crate::artifacts::{FnGraph, FnNode};
 use crate::capability::{Capability, CapabilityPolicy, CapabilitySet, ParsedFunctionName};
 use crate::cargo_targets::CargoTargetScope;
 use crate::function_classification::{FunctionClassification, LocalScope};
@@ -11,7 +11,7 @@ use crate::inference::{
     FnContractMismatch, FnContractMismatchKind, PreparedLocalAnalysis,
     rvs_collect_contract_mismatch_items, rvs_summarize_contract_mismatch_items,
 };
-use crate::symbols::CrateName;
+use crate::symbols::{CrateName, DefPath};
 use crate::workspace::{rvs_collect_callgraph_and_caps_BIMS, rvs_load_local_crate_prefixes_BIS};
 
 #[derive(Debug, Clone, Default)]
@@ -20,17 +20,29 @@ struct CapStats {
     line_count: usize,
 }
 
-#[derive(Debug, Clone)]
+impl CapStats {
+    fn rvs_add_M(&mut self, entry: &FnEntry, label: &str) -> Result<(), String> {
+        self.fn_count = rvs_checked_report_sum(
+            self.fn_count,
+            entry.function_count,
+            &format!("{label} function count"),
+        )?;
+        self.line_count = rvs_checked_report_sum(
+            self.line_count,
+            entry.line_count,
+            &format!("{label} report line count"),
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Default)]
 struct Report {
     by_capability: BTreeMap<Capability, CapStats>,
-    pure_fn_count: usize,
-    pure_line_count: usize,
-    good_fn_count: usize,
-    good_line_count: usize,
-    ok_fn_count: usize,
-    ok_line_count: usize,
-    total_fn_count: usize,
-    total_line_count: usize,
+    pure: CapStats,
+    good: CapStats,
+    ok: CapStats,
+    total: CapStats,
 }
 
 impl fmt::Display for Report {
@@ -40,27 +52,27 @@ impl fmt::Display for Report {
         writeln!(
             f,
             "Total: {} functions, {} lines",
-            self.total_fn_count, self.total_line_count
+            self.total.fn_count, self.total.line_count
         )?;
         writeln!(f, "{:-<60}", "")?;
 
-        if self.total_fn_count == 0 {
+        if self.total.fn_count == 0 {
             writeln!(f, "(no rvs_ functions found)")?;
             return Ok(());
         }
 
         let bar_width = 30;
         let mut rows: Vec<(String, usize, usize)> = Vec::new();
-        rows.push(("(ok)".to_string(), self.ok_fn_count, self.ok_line_count));
+        rows.push(("(ok)".to_string(), self.ok.fn_count, self.ok.line_count));
         rows.push((
             "(good)".to_string(),
-            self.good_fn_count,
-            self.good_line_count,
+            self.good.fn_count,
+            self.good.line_count,
         ));
         rows.push((
             "(pure)".to_string(),
-            self.pure_fn_count,
-            self.pure_line_count,
+            self.pure.fn_count,
+            self.pure.line_count,
         ));
 
         for cap in [
@@ -80,10 +92,10 @@ impl fmt::Display for Report {
         rows.sort_by_key(|b| std::cmp::Reverse(b.2));
 
         for (label, fn_count, line_count) in &rows {
-            let pct = if self.total_line_count == 0 {
+            let pct = if self.total.line_count == 0 {
                 0.0
             } else {
-                *line_count as f64 / self.total_line_count as f64 * 100.0
+                *line_count as f64 / self.total.line_count as f64 * 100.0
             };
             #[expect(clippy::cast_sign_loss, reason = "pct is 0..=100")]
             let bar_len = (pct / 100.0 * bar_width as f64)
@@ -109,80 +121,39 @@ struct FnEntry {
     capabilities: CapabilitySet,
     function_count: usize,
     line_count: usize,
-    is_test: bool,
-    allows_dead_code: bool,
 }
 
 fn rvs_build_report(entries: &[FnEntry]) -> Result<Report, String> {
-    let mut by_capability: BTreeMap<Capability, CapStats> = BTreeMap::new();
-    let mut pure_fn_count = 0usize;
-    let mut pure_line_count = 0usize;
-    let mut good_fn_count = 0usize;
-    let mut good_line_count = 0usize;
-    let mut ok_fn_count = 0usize;
-    let mut ok_line_count = 0usize;
-    let mut total_fn_count = 0usize;
-    let mut total_line_count = 0usize;
-    for func in entries {
-        if func.is_test || func.allows_dead_code {
-            continue;
-        }
-        if func.line_count == 0 {
+    let mut report = Report::default();
+    for entry in entries {
+        if entry.line_count == 0 {
             return Err("report entry line count must be positive".into());
         }
-        debug_assert!(func.function_count > 0, "report functions are non-empty");
-        total_fn_count =
-            rvs_checked_report_sum(total_fn_count, func.function_count, "total function count")?;
-        total_line_count =
-            rvs_checked_report_sum(total_line_count, func.line_count, "total report line count")?;
+        debug_assert!(entry.function_count > 0, "report functions are non-empty");
+        report.total.rvs_add_M(entry, "total")?;
 
-        if func.capabilities.rvs_is_empty() {
-            pure_fn_count =
-                rvs_checked_report_sum(pure_fn_count, func.function_count, "pure function count")?;
-            pure_line_count =
-                rvs_checked_report_sum(pure_line_count, func.line_count, "pure report line count")?;
+        if entry.capabilities.rvs_is_empty() {
+            report.pure.rvs_add_M(entry, "pure")?;
         } else {
-            for cap in func.capabilities.rvs_iter() {
-                let stats = by_capability.entry(cap).or_default();
-                stats.fn_count = rvs_checked_report_sum(
-                    stats.fn_count,
-                    func.function_count,
-                    "capability function count",
-                )?;
-                stats.line_count = rvs_checked_report_sum(
-                    stats.line_count,
-                    func.line_count,
-                    "capability report line count",
-                )?;
+            for cap in entry.capabilities.rvs_iter() {
+                report
+                    .by_capability
+                    .entry(cap)
+                    .or_default()
+                    .rvs_add_M(entry, "capability")?;
             }
         }
 
-        if CapabilityPolicy::rvs_is_good(&func.capabilities) {
-            good_fn_count =
-                rvs_checked_report_sum(good_fn_count, func.function_count, "good function count")?;
-            good_line_count =
-                rvs_checked_report_sum(good_line_count, func.line_count, "good report line count")?;
+        if CapabilityPolicy::rvs_is_good(&entry.capabilities) {
+            report.good.rvs_add_M(entry, "good")?;
         }
 
-        if CapabilityPolicy::rvs_is_ok(&func.capabilities) {
-            ok_fn_count =
-                rvs_checked_report_sum(ok_fn_count, func.function_count, "ok function count")?;
-            ok_line_count =
-                rvs_checked_report_sum(ok_line_count, func.line_count, "ok report line count")?;
+        if CapabilityPolicy::rvs_is_ok(&entry.capabilities) {
+            report.ok.rvs_add_M(entry, "ok")?;
         }
     }
 
-    Ok(Report {
-        by_capability,
-        pure_fn_count,
-        pure_line_count,
-        good_fn_count,
-        good_line_count,
-        ok_fn_count,
-        ok_line_count,
-        total_fn_count,
-        total_line_count,
-    })
+    Ok(report)
 }
 
 fn rvs_checked_report_sum(current: usize, delta: usize, label: &str) -> Result<usize, String> {
@@ -193,6 +164,44 @@ fn rvs_checked_report_sum(current: usize, delta: usize, label: &str) -> Result<u
         .ok_or_else(|| format!("{label} overflow while building capability report"))
 }
 
+fn rvs_report_entry(
+    scope: &LocalScope,
+    def_path: &DefPath,
+    node: &FnNode,
+) -> Result<Option<FnEntry>, String> {
+    if !FunctionClassification::rvs_new(scope, def_path, node).rvs_is_report_candidate() {
+        return Ok(None);
+    }
+    let has_per_definition_metadata = node.report_function_count > 0;
+    if node.is_test || node.is_test_compilation {
+        return Ok(None);
+    }
+    if !has_per_definition_metadata && node.allows_dead_code {
+        return Ok(None);
+    }
+    let parsed = ParsedFunctionName::rvs_parse(def_path.rvs_as_str());
+    let capabilities = if node.facts.is_port_method {
+        CapabilityPolicy::rvs_port_method_caps()
+    } else if parsed.rvs_has_rvs_prefix() {
+        parsed.rvs_known_caps().clone()
+    } else {
+        return Ok(None);
+    };
+    let Some(line_count) = node.report_line_count else {
+        return Ok(None);
+    };
+    if line_count == 0 {
+        return Err(format!(
+            "callgraph report line count for {def_path} must be positive"
+        ));
+    }
+    Ok(Some(FnEntry {
+        capabilities,
+        function_count: node.report_function_count.max(1),
+        line_count,
+    }))
+}
+
 fn rvs_report_entries_from_callgraph(
     graph: &FnGraph,
     local_crate_names: &BTreeSet<CrateName>,
@@ -200,41 +209,34 @@ fn rvs_report_entries_from_callgraph(
     let mut entries = Vec::new();
     let scope = LocalScope::rvs_new(local_crate_names);
     for (def_path, node) in graph.rvs_iter() {
-        if !FunctionClassification::rvs_new(&scope, def_path, node).rvs_is_report_candidate() {
-            continue;
+        if let Some(entry) = rvs_report_entry(&scope, def_path, node)? {
+            entries.push(entry);
         }
-        let has_per_definition_metadata = node.report_function_count > 0;
-        if node.is_test || node.is_test_compilation {
-            continue;
-        }
-        if !has_per_definition_metadata && node.allows_dead_code {
-            continue;
-        }
-        let parsed = ParsedFunctionName::rvs_parse(def_path.rvs_as_str());
-        let capabilities = if node.facts.is_port_method {
-            CapabilityPolicy::rvs_port_method_caps()
-        } else if parsed.rvs_has_rvs_prefix() {
-            parsed.rvs_known_caps().clone()
-        } else {
-            continue;
-        };
-        let Some(line_count) = node.report_line_count else {
-            continue;
-        };
-        if line_count == 0 {
-            return Err(format!(
-                "callgraph report line count for {def_path} must be positive"
-            ));
-        }
-        entries.push(FnEntry {
-            capabilities,
-            function_count: node.report_function_count.max(1),
-            line_count,
-            is_test: false,
-            allows_dead_code: false,
-        });
     }
     Ok(entries)
+}
+
+fn rvs_incomplete_report_function_count(
+    graph: &FnGraph,
+    local_crate_names: &BTreeSet<CrateName>,
+    incomplete_paths: &BTreeSet<DefPath>,
+) -> Result<usize, String> {
+    let scope = LocalScope::rvs_new(local_crate_names);
+    let mut count = 0usize;
+    for path in incomplete_paths {
+        let Some(node) = graph.rvs_get(path.rvs_as_str()) else {
+            continue;
+        };
+        let Some(entry) = rvs_report_entry(&scope, path, node)? else {
+            continue;
+        };
+        count = rvs_checked_report_sum(
+            count,
+            entry.function_count,
+            "incomplete report function count",
+        )?;
+    }
+    Ok(count)
 }
 
 fn rvs_format_contract_mismatch_summary(
@@ -255,6 +257,17 @@ fn rvs_format_contract_mismatch_summary(
     out
 }
 
+fn rvs_format_incomplete_inference_summary(count: usize) -> String {
+    if count == 0 {
+        debug_assert_eq!(count, 0);
+        return String::new();
+    }
+    debug_assert!(count > 0);
+    format!(
+        "\nInference Status\n------------------------------\n{count} local function(s) depend on unknown callee capability data. Capability totals and rename suggestions are conservative lower bounds.\n"
+    )
+}
+
 /// # Panics
 ///
 /// Panics if the current executable path, current directory, or cargo cannot be resolved.
@@ -266,10 +279,19 @@ pub(crate) fn rvs_run_report_BIMPS(path: &Path) -> Result<(), String> {
     let analysis = PreparedLocalAnalysis::rvs_prepare_M(&mut callgraph, &caps, &local_crate_names);
     let report_entries = rvs_report_entries_from_callgraph(&callgraph, &local_crate_names)?;
     let report = rvs_build_report(&report_entries)?;
+    let incomplete_count = rvs_incomplete_report_function_count(
+        &callgraph,
+        &local_crate_names,
+        analysis.rvs_incomplete_paths(),
+    )?;
+    let incomplete_output = rvs_format_incomplete_inference_summary(incomplete_count);
     let mismatch_items = rvs_collect_contract_mismatch_items(&analysis.diffs);
     let mismatch_summary = rvs_summarize_contract_mismatch_items(&mismatch_items);
     let mismatch_output = rvs_format_contract_mismatch_summary(&mismatch_summary, &mismatch_items);
     print!("{report}");
+    if !incomplete_output.is_empty() {
+        print!("{incomplete_output}");
+    }
     if !mismatch_output.is_empty() {
         print!("{mismatch_output}");
     }
@@ -286,6 +308,102 @@ mod tests {
     };
 
     #[test]
+    fn test_20260715_report_marks_incomplete_inference_as_lower_bound() {
+        let output = format!(
+            "zero={:?}\nnonzero={}",
+            rvs_format_incomplete_inference_summary(0),
+            rvs_format_incomplete_inference_summary(3)
+        );
+        rvs_snapshot_BIS(
+            "test_20260715_report_marks_incomplete_inference_as_lower_bound",
+            &output,
+        );
+
+        assert!(output.contains("3 local function(s)"));
+        assert!(output.contains("conservative lower bounds"));
+    }
+
+    #[test]
+    fn test_20260715_report_incomplete_count_matches_entry_eligibility_and_multiplicity() {
+        let mut graph = FnGraph::rvs_new();
+        let rvs_incomplete_node = |line_count, function_count| {
+            let mut node = FnNode {
+                report_line_count: line_count,
+                report_function_count: function_count,
+                ..FnNode::default()
+            };
+            node.calls.insert(DefPath::from("dep::unknown"));
+            node
+        };
+
+        graph.rvs_insert_M(
+            DefPath::from("demo::rvs_included"),
+            rvs_incomplete_node(Some(5), 3),
+        );
+
+        let mut test = rvs_incomplete_node(Some(2), 1);
+        test.is_test = true;
+        graph.rvs_insert_M(DefPath::from("demo::rvs_test"), test);
+
+        let mut test_compilation = rvs_incomplete_node(Some(2), 1);
+        test_compilation.is_test_compilation = true;
+        graph.rvs_insert_M(
+            DefPath::from("demo::rvs_test_compilation"),
+            test_compilation,
+        );
+
+        let mut skipped_dead_code = rvs_incomplete_node(Some(2), 0);
+        skipped_dead_code.allows_dead_code = true;
+        graph.rvs_insert_M(
+            DefPath::from("demo::rvs_skipped_dead_code"),
+            skipped_dead_code,
+        );
+
+        graph.rvs_insert_M(
+            DefPath::from("demo::plain"),
+            rvs_incomplete_node(Some(2), 1),
+        );
+        graph.rvs_insert_M(
+            DefPath::from("demo::rvs_missing_line_count"),
+            rvs_incomplete_node(None, 1),
+        );
+
+        let mut trait_impl = rvs_incomplete_node(Some(2), 1);
+        trait_impl.is_trait_impl = true;
+        graph.rvs_insert_M(
+            DefPath::from("demo::Worker::rvs_run@demo::Runnable"),
+            trait_impl,
+        );
+
+        let local = BTreeSet::from([CrateName::from("demo")]);
+        let analysis = PreparedLocalAnalysis::rvs_prepare_M(
+            &mut graph,
+            &crate::capsmap::CapsMap::rvs_new(),
+            &local,
+        );
+        let entries = rvs_report_entries_from_callgraph(&graph, &local).unwrap();
+        let report = rvs_build_report(&entries).unwrap();
+        let incomplete_count =
+            rvs_incomplete_report_function_count(&graph, &local, analysis.rvs_incomplete_paths())
+                .unwrap();
+        let output = format!(
+            "all_incomplete_paths={}\nentries={}\nreported_functions={}\nincomplete_report_functions={}\n",
+            analysis.rvs_incomplete_paths().len(),
+            entries.len(),
+            report.total.fn_count,
+            incomplete_count,
+        );
+        rvs_snapshot_BIS(
+            "test_20260715_report_incomplete_count_matches_entry_eligibility_and_multiplicity",
+            &output,
+        );
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(report.total.fn_count, 3);
+        assert_eq!(incomplete_count, 3);
+    }
+
+    #[test]
     fn test_20260709_build_report_table() {
         let cases = [
             ("empty", vec![], (0usize, 0usize, 0usize, 0usize, 0usize)),
@@ -295,8 +413,6 @@ mod tests {
                     capabilities: CapabilitySet::rvs_new(),
                     function_count: 1,
                     line_count: 10,
-                    is_test: false,
-                    allows_dead_code: false,
                 }],
                 (1, 1, 1, 1, 10),
             ),
@@ -307,22 +423,16 @@ mod tests {
                         capabilities: CapabilitySet::rvs_new(),
                         function_count: 1,
                         line_count: 100,
-                        is_test: false,
-                        allows_dead_code: false,
                     },
                     FnEntry {
                         capabilities: CapabilitySet::rvs_from_validated("BI"),
                         function_count: 1,
                         line_count: 50,
-                        is_test: false,
-                        allows_dead_code: false,
                     },
                     FnEntry {
                         capabilities: CapabilitySet::rvs_from_validated("M"),
                         function_count: 1,
                         line_count: 30,
-                        is_test: false,
-                        allows_dead_code: false,
                     },
                 ],
                 (3, 1, 2, 2, 180),
@@ -333,37 +443,8 @@ mod tests {
                     capabilities: CapabilitySet::rvs_new(),
                     function_count: 2,
                     line_count: 25,
-                    is_test: false,
-                    allows_dead_code: false,
                 }],
                 (2, 2, 2, 2, 25),
-            ),
-            (
-                "skips_test_and_dead_code",
-                vec![
-                    FnEntry {
-                        capabilities: CapabilitySet::rvs_new(),
-                        function_count: 1,
-                        line_count: 10,
-                        is_test: false,
-                        allows_dead_code: false,
-                    },
-                    FnEntry {
-                        capabilities: CapabilitySet::rvs_new(),
-                        function_count: 1,
-                        line_count: 20,
-                        is_test: true,
-                        allows_dead_code: false,
-                    },
-                    FnEntry {
-                        capabilities: CapabilitySet::rvs_new(),
-                        function_count: 1,
-                        line_count: 30,
-                        is_test: false,
-                        allows_dead_code: true,
-                    },
-                ],
-                (1, 1, 1, 1, 10),
             ),
         ];
         let mut output = String::new();
@@ -372,11 +453,11 @@ mod tests {
             output.push_str(&format!("{name}: {}\n", report.to_string().trim_end()));
             assert_eq!(
                 (
-                    report.total_fn_count,
-                    report.pure_fn_count,
-                    report.good_fn_count,
-                    report.ok_fn_count,
-                    report.total_line_count,
+                    report.total.fn_count,
+                    report.pure.fn_count,
+                    report.good.fn_count,
+                    report.ok.fn_count,
+                    report.total.line_count,
                 ),
                 expected,
                 "{name}"
@@ -432,8 +513,8 @@ mod tests {
             &output,
         );
 
-        assert_eq!(report.total_fn_count, 2);
-        assert_eq!(report.total_line_count, 5);
+        assert_eq!(report.total.fn_count, 2);
+        assert_eq!(report.total.line_count, 5);
     }
 
     #[test]
@@ -960,23 +1041,17 @@ mod tests {
             capabilities: CapabilitySet::rvs_new(),
             function_count: 1,
             line_count: 0,
-            is_test: false,
-            allows_dead_code: false,
         }]);
         let build_overflow = rvs_build_report(&[
             FnEntry {
                 capabilities: CapabilitySet::rvs_new(),
                 function_count: 1,
                 line_count: usize::MAX,
-                is_test: false,
-                allows_dead_code: false,
             },
             FnEntry {
                 capabilities: CapabilitySet::rvs_new(),
                 function_count: 1,
                 line_count: 1,
-                is_test: false,
-                allows_dead_code: false,
             },
         ]);
         let sum_ok = rvs_checked_report_sum(2, 3, "demo");

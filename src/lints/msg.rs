@@ -1,4 +1,5 @@
 use rustc_errors::{Diag, DiagCtxtHandle, Diagnostic, Level};
+use rustc_lint::LintContext;
 use rustc_span::Span;
 
 #[derive(Debug)]
@@ -14,6 +15,26 @@ impl Msg {
             text: text.into(),
         }
     }
+}
+
+pub(crate) fn rvs_emit_span_lint_S(
+    cx: &rustc_lint::LateContext<'_>,
+    lint: &'static rustc_lint::Lint,
+    span: rustc_span::Span,
+    text: impl Into<String>,
+) {
+    cx.emit_span_lint(lint, span, Msg::rvs_new(span, text));
+}
+
+pub(crate) fn rvs_emit_node_span_lint_S(
+    cx: &rustc_lint::LateContext<'_>,
+    lint: &'static rustc_lint::Lint,
+    hir_id: rustc_hir::HirId,
+    span: rustc_span::Span,
+    text: impl Into<String>,
+) {
+    cx.tcx
+        .emit_node_span_lint(lint, hir_id, span, Msg::rvs_new(span, text));
 }
 
 impl<'a> Diagnostic<'a, ()> for Msg {

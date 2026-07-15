@@ -1,7 +1,7 @@
 use rustc_lint::LateContext;
 
 use super::super::RVS_REFLECTION_USAGE;
-use super::super::msg::Msg;
+use super::super::msg::rvs_emit_node_span_lint_S;
 use super::super::utils::rvs_is_reflection_S;
 use super::{BodyFacts, rvs_path_lint_callable};
 
@@ -12,11 +12,12 @@ pub(crate) fn rvs_check_fn_S<'tcx>(cx: &LateContext<'tcx>, facts: &BodyFacts) {
             continue;
         };
         if rvs_is_reflection_S(path.as_ref()) {
-            cx.tcx.emit_node_span_lint(
+            rvs_emit_node_span_lint_S(
+                cx,
                 RVS_REFLECTION_USAGE,
                 observation.hir_id,
                 observation.span,
-                Msg::rvs_new(observation.span, "reflection — use trait dispatch instead"),
+                "reflection — use trait dispatch instead",
             );
         }
     }

@@ -1,0 +1,4 @@
+readable=std::fs::File::rvs_touch_P@local_trait_external_type::FileClient
+port=true
+offline=true
+report=true

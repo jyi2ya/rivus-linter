@@ -37,6 +37,37 @@ fn rvs_format_atomic_write_path(path: &Path, quote_paths: bool) -> String {
     }
 }
 
+pub(crate) fn rvs_atomic_sibling_temp_path_S(final_path: &Path, attempt: usize) -> PathBuf {
+    debug_assert!(attempt < 100, "atomic temp filename retry bound");
+    let file_name = final_path
+        .file_name()
+        .expect("never: atomic final path has a file name")
+        .to_string_lossy();
+    final_path.with_file_name(format!(
+        ".{file_name}.{}.{}.tmp",
+        std::process::id(),
+        attempt
+    ))
+}
+
+pub(crate) fn rvs_is_atomic_sibling_temp_name(name: &str) -> bool {
+    let Some(without_tmp) = name.strip_suffix(".tmp") else {
+        return false;
+    };
+    let Some((without_attempt, attempt)) = without_tmp.rsplit_once('.') else {
+        return false;
+    };
+    let Some((file_name, pid)) = without_attempt.rsplit_once('.') else {
+        return false;
+    };
+    file_name.starts_with('.')
+        && file_name.len() > 1
+        && !pid.is_empty()
+        && pid.bytes().all(|byte| byte.is_ascii_digit())
+        && !attempt.is_empty()
+        && attempt.bytes().all(|byte| byte.is_ascii_digit())
+}
+
 pub(crate) fn rvs_render_atomic_write_failure(
     failure: AtomicWriteFailure,
     final_path: &Path,

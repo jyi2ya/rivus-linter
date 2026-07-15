@@ -18,7 +18,7 @@ use crate::cargo_targets::{
     rvs_collect_auto_target_prefixes_BIMS, rvs_collect_local_crate_prefixes,
     rvs_collect_local_crate_prefixes_for_targets, rvs_insert_manifest_crate_name_M,
 };
-use crate::fs_guard::rvs_render_atomic_write_failure;
+use crate::fs_guard::{rvs_atomic_sibling_temp_path_S, rvs_render_atomic_write_failure};
 use crate::function_classification::LocalScope;
 use crate::symbols::CrateName;
 
@@ -263,8 +263,7 @@ fn rvs_prepare_cargo_check_command_BIMS(
     }
     if config.build_std {
         cmd.arg("-Zbuild-std=std,core,alloc");
-        cmd.arg("--target")
-            .arg(rvs_host_triple_BIMS().map_err(CargoCheckError::Message)?);
+        cmd.arg("--target").arg(rustc_session::config::host_tuple());
     }
     if let Some(subdir) = config.target_subdir {
         let target_dir = project_path.join("target").join(subdir);
@@ -339,7 +338,7 @@ pub(crate) fn rvs_run_cargo_check_BIMS(extra_args: &[String]) -> Result<(), i32>
         Err(e) => {
             eprintln!("offline caps check unavailable: {e}");
             if let Err(lint_error) =
-                rvs_run_project_lints_BIMS(project_path, target_scope, &extra_args_ref, None)
+                rvs_run_project_lints_BIMS(project_path, &target_scope, &extra_args_ref, &None)
             {
                 eprintln!("{lint_error}");
                 return Err(lint_error.rvs_exit_code());
@@ -351,9 +350,9 @@ pub(crate) fn rvs_run_cargo_check_BIMS(extra_args: &[String]) -> Result<(), i32>
         crate::offline_caps::rvs_uncovered_test_functions(&callgraph, &local_crate_names);
     let lint_result = rvs_run_project_lints_BIMS(
         project_path,
-        target_scope,
+        &target_scope,
         &extra_args_ref,
-        Some(&uncovered),
+        &Some(&uncovered),
     );
     if let Err(error) = lint_result {
         eprintln!("{error}");
@@ -361,9 +360,7 @@ pub(crate) fn rvs_run_cargo_check_BIMS(extra_args: &[String]) -> Result<(), i32>
     }
 
     let report = crate::offline_caps::rvs_check_offline_caps(&callgraph, &caps, &local_crate_names);
-    if !report.rvs_is_empty() {
-        print!("{report}");
-    }
+    print!("{report}");
     if report.rvs_has_errors() {
         Err(1)
     } else {
@@ -373,9 +370,9 @@ pub(crate) fn rvs_run_cargo_check_BIMS(extra_args: &[String]) -> Result<(), i32>
 
 fn rvs_run_project_lints_BIMS(
     project_path: &Path,
-    target_scope: CargoTargetScope,
+    target_scope: &CargoTargetScope,
     extra_args: &[&str],
-    uncovered: Option<&BTreeSet<crate::artifacts::FunctionIdentity>>,
+    uncovered: &Option<&BTreeSet<crate::artifacts::FunctionIdentity>>,
 ) -> Result<(), CargoCheckError> {
     let generation =
         rvs_reserve_run_generation_BIS(project_path, "lint").map_err(CargoCheckError::Message)?;
@@ -389,7 +386,7 @@ fn rvs_run_project_lints_BIMS(
         rvs_run_cargo_check_impl_BIMS(&CargoCheckConfig {
             project_path,
             wrap_all_crates: false,
-            target_scope,
+            target_scope: *target_scope,
             build_std: false,
             extra_env,
             extra_args: extra_args.to_vec(),
@@ -685,6 +682,17 @@ fn rvs_reserve_run_generation_BIS(
     project_path: &Path,
     purpose: &str,
 ) -> Result<RivusRunGeneration, String> {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|error| format!("system clock is before unix epoch: {error}"))?;
+    rvs_reserve_run_generation_at_BIS(project_path, purpose, nonce)
+}
+
+fn rvs_reserve_run_generation_at_BIS(
+    project_path: &Path,
+    purpose: &str,
+    nonce: std::time::Duration,
+) -> Result<RivusRunGeneration, String> {
     debug_assert!(
         !purpose.is_empty(),
         "run generation purpose must not be empty"
@@ -699,20 +707,24 @@ fn rvs_reserve_run_generation_BIS(
     let runs_dir = project_path.join("target/.rivus-runs");
     std::fs::create_dir_all(&runs_dir)
         .map_err(|error| format!("cannot create {}: {error}", runs_dir.display()))?;
-    for attempt in 0..100usize {
-        debug_assert!(attempt < 100, "run generation retry bound");
-        let name = format!("{purpose}-{}-{attempt}", std::process::id());
+    for attempt in 0..=100usize {
+        let name = format!(
+            "{purpose}-{}-{}-{attempt}",
+            std::process::id(),
+            nonce.as_nanos()
+        );
         let root = runs_dir.join(&name);
         match std::fs::create_dir(&root) {
             Ok(()) => {
                 let artifact_dir = root.join("artifacts");
                 if let Err(error) = std::fs::create_dir(&artifact_dir) {
                     let cleanup = std::fs::remove_dir_all(&root).err();
-                    let cleanup = cleanup
-                        .map(|cleanup| {
+                    let cleanup = match cleanup {
+                        Some(cleanup) => {
                             format!("; additionally cannot remove generation: {cleanup}")
-                        })
-                        .unwrap_or_default();
+                        }
+                        None => String::new(),
+                    };
                     return Err(format!(
                         "cannot create {}: {error}{cleanup}",
                         artifact_dir.display()
@@ -965,17 +977,7 @@ fn rvs_write_capsmap_file_BIS(path: &Path, result: &str, label: &str) -> Result<
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("cannot create parent for {}: {e}", path.display()))?;
     }
-    let file_name = path
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "capsmap".into());
-    let temp_path_for_attempt = |attempt| {
-        path.with_file_name(format!(
-            ".{file_name}.{}.{}.tmp",
-            std::process::id(),
-            attempt
-        ))
-    };
+    let temp_path_for_attempt = |attempt| rvs_atomic_sibling_temp_path_S(path, attempt);
     crate::fs_guard::rvs_write_atomic_BIS(path, result.as_bytes(), &temp_path_for_attempt).map_err(
         |failure| rvs_render_atomic_write_failure(failure, path, "temp capsmap file", false),
     )
@@ -999,26 +1001,6 @@ pub(crate) fn rvs_clean_dir_BIS(path: &Path) -> Result<(), String> {
         Err(e) => return Err(format!("cannot inspect {}: {e}", path.display())),
     }
     Ok(())
-}
-
-fn rvs_host_triple_BIMS() -> Result<String, String> {
-    let output = Command::new("rustc")
-        .arg("-vV")
-        .output()
-        .map_err(|e| format!("cannot run rustc -vV to determine host target: {e}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "rustc -vV failed while determining host target: {}",
-            output.status
-        ));
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    for line in stdout.lines() {
-        if let Some(host) = line.strip_prefix("host: ") {
-            return Ok(host.trim().to_string());
-        }
-    }
-    Err("rustc -vV output did not contain a host target".into())
 }
 
 /// Validate that `path` is a directory, returning an error message if not.
@@ -1742,6 +1724,123 @@ name = "throughput-bench"
         assert!(!prefixes.contains(&CrateName::from("demo")));
         assert!(!prefixes.contains(&CrateName::from("bench")));
         assert!(!prefixes.contains(&CrateName::from("tool")));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260715_detect_local_crate_prefixes_build_script_modes() {
+        let root = rvs_make_workspace_temp_dir_BIS("build-script-prefix-modes");
+        let cases = [
+            (
+                "default",
+                "[package]\nname = \"default-build\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+                Some("build.rs"),
+                true,
+            ),
+            (
+                "absent",
+                "[package]\nname = \"absent-build\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+                None,
+                false,
+            ),
+            (
+                "explicit",
+                "[package]\nname = \"explicit-build\"\nversion = \"0.1.0\"\nedition = \"2024\"\nbuild = \"build/custom.rs\"\n",
+                Some("build/custom.rs"),
+                true,
+            ),
+            (
+                "disabled",
+                "[package]\nname = \"disabled-build\"\nversion = \"0.1.0\"\nedition = \"2024\"\nbuild = false\n",
+                Some("build.rs"),
+                false,
+            ),
+        ];
+        let mut output = String::new();
+        for (label, manifest, build_path, expected_build_script) in cases {
+            let dir = root.join(label);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("Cargo.toml"), manifest).unwrap();
+            if let Some(build_path) = build_path {
+                let build_path = dir.join(build_path);
+                std::fs::create_dir_all(
+                    build_path
+                        .parent()
+                        .expect("never: build script path has a parent"),
+                )
+                .unwrap();
+                std::fs::write(build_path, "fn main() {}\n").unwrap();
+            }
+
+            let prefixes =
+                rvs_detect_local_crate_prefixes_BIS(&dir, CargoTargetScope::Production).unwrap();
+            let rendered = prefixes
+                .iter()
+                .map(CrateName::rvs_as_str)
+                .collect::<Vec<_>>()
+                .join(",");
+            output.push_str(&format!("{label}={rendered}\n"));
+            assert_eq!(
+                prefixes.contains(&CrateName::from("build_script_build")),
+                expected_build_script,
+                "{label}"
+            );
+        }
+        rvs_snapshot_BIS(
+            "test_20260715_detect_local_crate_prefixes_build_script_modes",
+            &output,
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn test_20260715_build_script_artifact_uses_shared_local_scope() {
+        let dir = rvs_make_cargo_project_BIS(
+            "build-script-shared-scope",
+            "build-script-shared-scope",
+            &[
+                ("src/lib.rs", "pub fn rvs_library() {}\n"),
+                (
+                    "build.rs",
+                    "#![allow(non_snake_case)]\nfn rvs_build_helper() {}\nfn main() { rvs_build_helper(); }\n",
+                ),
+            ],
+        );
+        let local_crate_names =
+            rvs_load_local_crate_prefixes_BIS(&dir, CargoTargetScope::Production).unwrap();
+        let callgraph = rvs_collect_workspace_callgraph_BIMS(
+            &dir,
+            CargoTargetScope::Production,
+            vec![],
+            &local_crate_names,
+        )
+        .unwrap();
+        let path = crate::symbols::DefPath::from("build_script_build::rvs_build_helper");
+        let node = callgraph
+            .rvs_get(path.rvs_as_str())
+            .expect("never: build script helper should be collected");
+        let classification = crate::function_classification::FunctionClassification::rvs_new(
+            &LocalScope::rvs_new(&local_crate_names),
+            &path,
+            node,
+        );
+        let output = format!(
+            "prefix={}\nartifact={}\noffline={}\nreport={}\nstrip={}\n",
+            local_crate_names.contains(&CrateName::from("build_script_build")),
+            callgraph.rvs_get(path.rvs_as_str()).is_some(),
+            classification.rvs_is_offline_checked(),
+            classification.rvs_is_report_candidate(),
+            classification.rvs_is_strip_candidate(),
+        );
+        rvs_snapshot_BIS(
+            "test_20260715_build_script_artifact_uses_shared_local_scope",
+            &output,
+        );
+
+        assert!(classification.rvs_is_offline_checked());
+        assert!(classification.rvs_is_report_candidate());
+        assert!(classification.rvs_is_strip_candidate());
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -3151,6 +3250,38 @@ name = "throughput-bench"
     }
 
     #[test]
+    fn test_20260715_generation_reservation_retries_after_one_hundred_real_collisions() {
+        let dir = rvs_make_workspace_temp_dir_BIS("generation-many-collisions");
+        let runs_dir = dir.join("target/.rivus-runs");
+        std::fs::create_dir_all(&runs_dir).unwrap();
+        let nonce = std::time::Duration::new(123, 456);
+        for attempt in 0..100usize {
+            let name = format!(
+                "callgraph-{}-{}-{attempt}",
+                std::process::id(),
+                nonce.as_nanos()
+            );
+            std::fs::create_dir(runs_dir.join(name)).unwrap();
+        }
+
+        let generation = rvs_reserve_run_generation_at_BIS(&dir, "callgraph", nonce).unwrap();
+        let reserved_attempt = generation
+            .rvs_root()
+            .file_name()
+            .and_then(|name| name.to_str())
+            .and_then(|name| name.rsplit('-').next())
+            .unwrap();
+        let output = format!("reserved_attempt={reserved_attempt}\n");
+        rvs_snapshot_BIS(
+            "test_20260715_generation_reservation_retries_after_one_hundred_real_collisions",
+            &output,
+        );
+
+        assert_eq!(reserved_attempt, "100");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn test_20260715_concurrent_callgraph_collections_do_not_mix_generations() {
         let dir = rvs_make_cargo_project_BIS(
             "concurrent-callgraph-generations",
@@ -3450,6 +3581,55 @@ name = "throughput-bench"
         assert_eq!(generic_methods.len(), 2);
         assert!(generic_methods.windows(2).all(|pair| pair[0] != pair[1]));
         assert_eq!(generic_nested_paths.len(), 2);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260715_local_trait_impl_for_external_type_remains_in_scope() {
+        let dir = rvs_make_cargo_project_BIS(
+            "local-trait-external-type",
+            "local-trait-external-type",
+            &[(
+                "src/lib.rs",
+                "#![allow(non_snake_case)]\n\npub trait FileClient {\n    fn rvs_touch_P(&self);\n}\n\nimpl FileClient for std::fs::File {\n    fn rvs_touch_P(&self) {}\n}\n",
+            )],
+        );
+        let local_crate_names = BTreeSet::from([CrateName::from("local_trait_external_type")]);
+        let mut callgraph = rvs_collect_workspace_callgraph_BIMS(
+            &dir,
+            CargoTargetScope::Production,
+            vec![],
+            &local_crate_names,
+        )
+        .unwrap();
+        let _analysis = crate::inference::PreparedLocalAnalysis::rvs_prepare_M(
+            &mut callgraph,
+            &CapsMap::rvs_new(),
+            &local_crate_names,
+        );
+        let (method_path, method_node) = callgraph
+            .rvs_iter()
+            .find(|(path, node)| path.rvs_fn_name_str() == "rvs_touch_P" && node.is_trait_impl)
+            .expect("never: local trait implementation method was collected");
+        let classification = crate::function_classification::FunctionClassification::rvs_new(
+            &LocalScope::rvs_new(&local_crate_names),
+            method_path,
+            method_node,
+        );
+        let output = format!(
+            "readable={method_path}\nport={}\noffline={}\nreport={}\n",
+            method_node.facts.is_port_method,
+            classification.rvs_is_offline_checked(),
+            classification.rvs_is_report_candidate(),
+        );
+        rvs_snapshot_BIS(
+            "test_20260715_local_trait_impl_for_external_type_remains_in_scope",
+            &output,
+        );
+
+        assert!(method_node.facts.is_port_method);
+        assert!(classification.rvs_is_offline_checked());
+        assert!(classification.rvs_is_report_candidate());
         std::fs::remove_dir_all(dir).unwrap();
     }
 

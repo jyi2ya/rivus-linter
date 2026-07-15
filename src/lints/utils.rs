@@ -1,10 +1,16 @@
 use std::collections::HashSet;
 
 use rustc_hir::{
-    self, Block, Body, Expr, ExprKind, HirId, Mutability, QPath, TyKind, attrs::AttributeKind,
-    def::DefKind, def_id::DefId,
+    self, AmbigArg, Body, BodyId, Expr, ExprKind, HirId, InlineAsm, InlineAsmOperand, Mutability,
+    Pat, PathSegment, QPath, Ty, TyKind,
+    attrs::AttributeKind,
+    def::DefKind,
+    def_id::DefId,
+    intravisit::{self, Visitor},
 };
+use rustc_lexer::{FrontmatterAllowed, TokenKind};
 use rustc_lint::LateContext;
+use rustc_middle::{hir::nested_filter, ty::TyCtxt};
 use rustc_span::{Span, Symbol};
 
 use super::body::macro_expansion::rvs_span_has_bang_macro;
@@ -249,124 +255,76 @@ fn rvs_expr_from_debug_assert_macro(tcx: rustc_middle::ty::TyCtxt<'_>, e: &Expr<
     rvs_span_has_bang_macro(tcx, e.span, &names)
 }
 
-fn rvs_for_each_expr_child_M<'tcx>(e: &'tcx Expr<'tcx>, f: &mut impl FnMut(&'tcx Expr<'tcx>)) {
-    match &e.kind {
-        ExprKind::Array(a) | ExprKind::Tup(a) => a.iter().for_each(&mut *f),
-        ExprKind::Call(fn_, a) => {
-            f(fn_);
-            a.iter().for_each(&mut *f);
+#[allow(
+    clippy::allow_attributes,
+    rivus::rvs_missing_debug_derive,
+    reason = "rustc LateContext does not implement Debug"
+)]
+struct LocalBindingVisitor<'a, 'tcx> {
+    cx: &'a LateContext<'tcx>,
+    out: &'a mut HashSet<HirId>,
+}
+
+impl<'hir, 'tcx> Visitor<'hir> for LocalBindingVisitor<'_, 'tcx> {
+    fn visit_expr(&mut self, expr: &'hir Expr<'hir>) {
+        if let ExprKind::Path(qpath) = &expr.kind
+            && let rustc_hir::def::Res::Local(binding_hir_id) =
+                self.cx.qpath_res(qpath, expr.hir_id)
+        {
+            self.out.insert(binding_hir_id);
         }
-        ExprKind::MethodCall(_, r, a, _) => {
-            f(r);
-            a.iter().for_each(&mut *f);
-        }
-        ExprKind::Binary(_, l, r) | ExprKind::AssignOp(_, l, r) | ExprKind::Assign(l, r, _) => {
-            f(l);
-            f(r);
-        }
-        ExprKind::Index(value, index, _) => {
-            f(value);
-            f(index);
-        }
-        ExprKind::Unary(_, x)
-        | ExprKind::Cast(x, _)
-        | ExprKind::Type(x, _)
-        | ExprKind::Field(x, _)
-        | ExprKind::AddrOf(_, _, x)
-        | ExprKind::Repeat(x, _)
-        | ExprKind::Yield(x, _)
-        | ExprKind::DropTemps(x)
-        | ExprKind::Become(x)
-        | ExprKind::Use(x, _)
-        | ExprKind::UnsafeBinderCast(_, x, _) => f(x),
-        ExprKind::Let(l) => f(&l.init),
-        ExprKind::If(c, t, el) => {
-            f(c);
-            f(t);
-            if let Some(e) = el {
-                f(e);
+        match expr.kind {
+            ExprKind::Closure(_) => {}
+            ExprKind::Assign(lhs, rhs, _) | ExprKind::AssignOp(_, lhs, rhs) => {
+                self.visit_expr(lhs);
+                self.visit_expr(rhs);
             }
+            _ => intravisit::walk_expr(self, expr),
         }
-        ExprKind::Match(s, arms, _) => {
-            f(s);
-            for arm in *arms {
-                if let Some(guard) = arm.guard {
-                    f(guard);
+    }
+
+    fn visit_nested_body(&mut self, _body_id: BodyId) {}
+
+    fn visit_pat(&mut self, _pat: &'hir Pat<'hir>) {}
+
+    fn visit_ty(&mut self, _ty: &'hir Ty<'hir, AmbigArg>) {}
+
+    fn visit_qpath(&mut self, _qpath: &'hir QPath<'hir>, _id: HirId, _span: Span) {}
+
+    fn visit_path_segment(&mut self, _segment: &'hir PathSegment<'hir>) {}
+
+    fn visit_inline_asm(&mut self, asm: &'hir InlineAsm<'hir>, _id: HirId) {
+        for (operand, _) in asm.operands {
+            match operand {
+                InlineAsmOperand::In { expr, .. }
+                | InlineAsmOperand::InOut { expr, .. }
+                | InlineAsmOperand::Out {
+                    expr: Some(expr), ..
                 }
-                f(&arm.body);
-            }
-        }
-        ExprKind::Break(_, Some(x)) | ExprKind::Ret(Some(x)) => f(x),
-        ExprKind::Struct(_, fld, rest) => {
-            for fl in *fld {
-                f(&fl.expr);
-            }
-            if let rustc_hir::StructTailExpr::Base(r) = rest {
-                f(r);
-            }
-        }
-        ExprKind::InlineAsm(asm) => asm.operands.iter().for_each(|(op, _)| match op {
-            rustc_hir::InlineAsmOperand::In { expr, .. }
-            | rustc_hir::InlineAsmOperand::InOut { expr, .. }
-            | rustc_hir::InlineAsmOperand::Out {
-                expr: Some(expr), ..
-            }
-            | rustc_hir::InlineAsmOperand::SymFn { expr } => f(expr),
-            rustc_hir::InlineAsmOperand::SplitInOut {
-                in_expr, out_expr, ..
-            } => {
-                f(in_expr);
-                if let Some(expr) = out_expr {
-                    f(expr);
+                | InlineAsmOperand::SymFn { expr } => self.visit_expr(expr),
+                InlineAsmOperand::SplitInOut {
+                    in_expr, out_expr, ..
+                } => {
+                    self.visit_expr(in_expr);
+                    if let Some(expr) = out_expr {
+                        self.visit_expr(expr);
+                    }
                 }
+                InlineAsmOperand::Out { expr: None, .. }
+                | InlineAsmOperand::Const { .. }
+                | InlineAsmOperand::SymStatic { .. }
+                | InlineAsmOperand::Label { .. } => {}
             }
-            _ => {}
-        }),
-        _ => {}
+        }
     }
 }
 
 pub(crate) fn rvs_collect_local_bindings_M(
     cx: &LateContext<'_>,
-    e: &Expr<'_>,
+    expr: &Expr<'_>,
     out: &mut HashSet<HirId>,
 ) {
-    if let ExprKind::Path(q) = &e.kind
-        && let rustc_hir::def::Res::Local(binding_hir_id) = cx.qpath_res(q, e.hir_id)
-    {
-        out.insert(binding_hir_id);
-    }
-    match &e.kind {
-        ExprKind::Block(block, _) | ExprKind::Loop(block, ..) => {
-            rvs_collect_block_bindings_M(cx, block, out);
-        }
-        ExprKind::Closure(_) => {}
-        _ => rvs_for_each_expr_child_M(e, &mut |child| {
-            rvs_collect_local_bindings_M(cx, child, out);
-        }),
-    }
-}
-
-fn rvs_collect_block_bindings_M(cx: &LateContext<'_>, block: &Block<'_>, out: &mut HashSet<HirId>) {
-    for statement in block.stmts {
-        match &statement.kind {
-            rustc_hir::StmtKind::Expr(expr) | rustc_hir::StmtKind::Semi(expr) => {
-                rvs_collect_local_bindings_M(cx, expr, out);
-            }
-            rustc_hir::StmtKind::Let(local) => {
-                if let Some(initializer) = local.init {
-                    rvs_collect_local_bindings_M(cx, initializer, out);
-                }
-                if let Some(else_block) = local.els {
-                    rvs_collect_block_bindings_M(cx, else_block, out);
-                }
-            }
-            _ => {}
-        }
-    }
-    if let Some(expr) = block.expr {
-        rvs_collect_local_bindings_M(cx, expr, out);
-    }
+    LocalBindingVisitor { cx, out }.visit_expr(expr);
 }
 
 pub(crate) fn rvs_static_is_thread_local(cx: &LateContext<'_>, did: DefId) -> bool {
@@ -387,18 +345,51 @@ pub(crate) fn rvs_count_effective_lines_M<'tcx>(
         Ok(s) => s,
         Err(_) => return 0,
     };
-    let mut in_block_comment = false;
-    let mut count = 0;
-    for raw_line in snippet.lines() {
-        let trimmed = raw_line.trim();
-        if trimmed.is_empty() || trimmed == "{" || trimmed == "}" {
-            continue;
+    rvs_count_effective_lines(&snippet)
+}
+
+fn rvs_count_effective_lines(snippet: &str) -> usize {
+    let mut uncommented = snippet.as_bytes().to_vec();
+    let mut offset = 0usize;
+    for token in rustc_lexer::tokenize(snippet, FrontmatterAllowed::No) {
+        let Ok(token_len) = usize::try_from(token.len) else {
+            return 0;
+        };
+        let Some(end) = offset.checked_add(token_len) else {
+            return 0;
+        };
+        if matches!(
+            token.kind,
+            TokenKind::LineComment { .. } | TokenKind::BlockComment { .. }
+        ) {
+            let Some(comment) = uncommented.get_mut(offset..end) else {
+                return 0;
+            };
+            for byte in comment {
+                if *byte != b'\n' {
+                    *byte = b' ';
+                }
+            }
         }
-        if rvs_line_has_effective_code_M(trimmed, &mut in_block_comment) {
-            count += 1;
-        }
+        offset = end;
     }
-    count
+    debug_assert_eq!(offset, uncommented.len(), "lexer covers the full snippet");
+    uncommented
+        .split(|byte| *byte == b'\n')
+        .filter(|line| {
+            let Some(start) = line.iter().position(|byte| !byte.is_ascii_whitespace()) else {
+                return false;
+            };
+            let end = line
+                .iter()
+                .rposition(|byte| !byte.is_ascii_whitespace())
+                .expect("never: non-whitespace line has an end");
+            let trimmed = line
+                .get(start..=end)
+                .expect("never: detected line bounds are valid");
+            trimmed != b"{" && trimmed != b"}"
+        })
+        .count()
 }
 
 pub(crate) fn rvs_root_body_expr<'tcx>(
@@ -443,172 +434,113 @@ pub(crate) fn rvs_root_body_expr<'tcx>(
     }
 }
 
-fn rvs_line_has_effective_code_M(line: &str, in_comment: &mut bool) -> bool {
-    let bytes = line.as_bytes();
-    let mut i = 0;
-    let mut has_code = false;
-    while let Some(&byte) = bytes.get(i) {
-        if *in_comment {
-            if matches!((bytes.get(i), bytes.get(i + 1)), (Some(b'*'), Some(b'/'))) {
-                *in_comment = false;
-                i += 2;
-                continue;
-            }
-            i += 1;
-            continue;
-        }
-        if matches!((bytes.get(i), bytes.get(i + 1)), (Some(b'/'), Some(b'*'))) {
-            *in_comment = true;
-            i += 2;
-            continue;
-        }
-        if byte == b'"' {
-            has_code = true;
-            i += 1;
-            while let Some(&quoted) = bytes.get(i) {
-                if quoted == b'\\' {
-                    i += 2;
-                    continue;
-                }
-                if quoted == b'"' {
-                    i += 1;
-                    break;
-                }
-                i += 1;
-            }
-            continue;
-        }
-        if matches!((bytes.get(i), bytes.get(i + 1)), (Some(b'/'), Some(b'/'))) {
-            break;
-        }
-        if !matches!(byte, b' ' | b'\t' | b'\r' | b'\n') {
-            has_code = true;
-        }
-        i += 1;
-    }
-    has_code
-}
-
-// ─── Walker ──────────────────────────────────────────────────────────────
-
-fn rvs_walk_expr_M<'tcx, F: FnMut(&'tcx Expr<'tcx>, bool)>(
-    e: &'tcx Expr<'tcx>,
-    f: &mut F,
-    resolve_body: &dyn Fn(rustc_hir::BodyId) -> Option<&'tcx Body<'tcx>>,
+#[allow(
+    clippy::allow_attributes,
+    rivus::rvs_missing_debug_derive,
+    reason = "rustc TyCtxt does not implement Debug"
+)]
+struct BodyExprVisitor<'a, 'tcx, F> {
+    tcx: TyCtxt<'tcx>,
+    callback: &'a mut F,
     nested_body: bool,
-) {
-    f(e, nested_body);
-    match &e.kind {
-        ExprKind::ConstBlock(const_block) => {
-            if let Some(body) = resolve_body(const_block.body) {
-                rvs_walk_expr_M(body.value, f, resolve_body, true);
+}
+
+impl<'tcx, F> BodyExprVisitor<'_, 'tcx, F>
+where
+    F: FnMut(&'tcx Expr<'tcx>, bool),
+{
+    fn rvs_visit_nested_body_M(&mut self, body_id: BodyId) {
+        let previous = std::mem::replace(&mut self.nested_body, true);
+        self.visit_expr(self.tcx.hir_body(body_id).value);
+        self.nested_body = previous;
+    }
+}
+
+impl<'tcx, F> Visitor<'tcx> for BodyExprVisitor<'_, 'tcx, F>
+where
+    F: FnMut(&'tcx Expr<'tcx>, bool),
+{
+    type NestedFilter = nested_filter::OnlyBodies;
+
+    fn maybe_tcx(&mut self) -> Self::MaybeTyCtxt {
+        self.tcx
+    }
+
+    fn visit_nested_body(&mut self, body_id: BodyId) {
+        self.rvs_visit_nested_body_M(body_id);
+    }
+
+    fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
+        (self.callback)(expr, self.nested_body);
+        match expr.kind {
+            ExprKind::Closure(closure) => self.visit_nested_body(closure.body),
+            ExprKind::Assign(lhs, rhs, _) | ExprKind::AssignOp(_, lhs, rhs) => {
+                self.visit_expr(lhs);
+                self.visit_expr(rhs);
             }
+            _ => intravisit::walk_expr(self, expr),
         }
-        ExprKind::Repeat(element, count) => {
-            rvs_walk_expr_M(element, f, resolve_body, nested_body);
-            rvs_walk_const_arg_M(count, f, resolve_body);
-        }
-        ExprKind::Loop(b, ..) | ExprKind::Block(b, _) => {
-            rvs_walk_block_M(b, f, resolve_body, nested_body)
-        }
-        ExprKind::Closure(closure) => {
-            if let Some(body) = resolve_body(closure.body) {
-                rvs_walk_expr_M(body.value, f, resolve_body, true);
-            }
-        }
-        ExprKind::InlineAsm(asm) => {
-            rvs_for_each_expr_child_M(e, &mut |child| {
-                rvs_walk_expr_M(child, f, resolve_body, nested_body);
-            });
-            for (operand, _) in asm.operands {
-                match operand {
-                    rustc_hir::InlineAsmOperand::Const { anon_const } => {
-                        if let Some(body) = resolve_body(anon_const.body) {
-                            rvs_walk_expr_M(body.value, f, resolve_body, true);
-                        }
+    }
+
+    fn visit_pat(&mut self, _pat: &'tcx Pat<'tcx>) {}
+
+    fn visit_ty(&mut self, _ty: &'tcx Ty<'tcx, AmbigArg>) {}
+
+    fn visit_qpath(&mut self, _qpath: &'tcx QPath<'tcx>, _id: HirId, _span: Span) {}
+
+    fn visit_path_segment(&mut self, _segment: &'tcx PathSegment<'tcx>) {}
+
+    fn visit_inline_asm(&mut self, asm: &'tcx InlineAsm<'tcx>, _id: HirId) {
+        for (operand, _) in asm.operands {
+            match operand {
+                InlineAsmOperand::In { expr, .. }
+                | InlineAsmOperand::InOut { expr, .. }
+                | InlineAsmOperand::Out {
+                    expr: Some(expr), ..
+                }
+                | InlineAsmOperand::SymFn { expr } => self.visit_expr(expr),
+                InlineAsmOperand::SplitInOut {
+                    in_expr, out_expr, ..
+                } => {
+                    self.visit_expr(in_expr);
+                    if let Some(expr) = out_expr {
+                        self.visit_expr(expr);
                     }
-                    rustc_hir::InlineAsmOperand::Label { block } => {
-                        rvs_walk_block_M(block, f, resolve_body, nested_body);
-                    }
-                    _ => {}
                 }
+                InlineAsmOperand::Out { expr: None, .. }
+                | InlineAsmOperand::Const { .. }
+                | InlineAsmOperand::SymStatic { .. }
+                | InlineAsmOperand::Label { .. } => {}
             }
         }
-        _ => rvs_for_each_expr_child_M(e, &mut |child| {
-            rvs_walk_expr_M(child, f, resolve_body, nested_body);
-        }),
+        for (operand, _) in asm.operands {
+            match operand {
+                InlineAsmOperand::Const { anon_const } => self.visit_inline_const(anon_const),
+                InlineAsmOperand::Label { block } => self.visit_block(block),
+                InlineAsmOperand::In { .. }
+                | InlineAsmOperand::Out { .. }
+                | InlineAsmOperand::InOut { .. }
+                | InlineAsmOperand::SplitInOut { .. }
+                | InlineAsmOperand::SymFn { .. }
+                | InlineAsmOperand::SymStatic { .. } => {}
+            }
+        }
     }
 }
 
-fn rvs_walk_const_arg_M<'tcx, F: FnMut(&'tcx Expr<'tcx>, bool)>(
-    arg: &'tcx rustc_hir::ConstArg<'tcx>,
-    f: &mut F,
-    resolve_body: &dyn Fn(rustc_hir::BodyId) -> Option<&'tcx Body<'tcx>>,
-) {
-    use rustc_hir::ConstArgKind;
-
-    match arg.kind {
-        ConstArgKind::Tup(args) | ConstArgKind::TupleCall(_, args) => {
-            for arg in args {
-                rvs_walk_const_arg_M(arg, f, resolve_body);
-            }
-        }
-        ConstArgKind::Anon(anon_const) => {
-            if let Some(body) = resolve_body(anon_const.body) {
-                rvs_walk_expr_M(body.value, f, resolve_body, true);
-            }
-        }
-        ConstArgKind::Struct(_, fields) => {
-            for field in fields {
-                rvs_walk_const_arg_M(field.expr, f, resolve_body);
-            }
-        }
-        ConstArgKind::Array(array) => {
-            for element in array.elems {
-                rvs_walk_const_arg_M(element, f, resolve_body);
-            }
-        }
-        ConstArgKind::Path(_)
-        | ConstArgKind::Error(_)
-        | ConstArgKind::Infer(_)
-        | ConstArgKind::Literal { .. } => {}
+pub(crate) fn rvs_visit_body_exprs_M<'tcx, F>(
+    tcx: TyCtxt<'tcx>,
+    expr: &'tcx Expr<'tcx>,
+    mut callback: F,
+) where
+    F: FnMut(&'tcx Expr<'tcx>, bool),
+{
+    BodyExprVisitor {
+        tcx,
+        callback: &mut callback,
+        nested_body: false,
     }
-}
-
-fn rvs_walk_block_M<'tcx, F: FnMut(&'tcx Expr<'tcx>, bool)>(
-    b: &'tcx Block<'tcx>,
-    f: &mut F,
-    resolve_body: &dyn Fn(rustc_hir::BodyId) -> Option<&'tcx Body<'tcx>>,
-    nested_body: bool,
-) {
-    for s in b.stmts {
-        match &s.kind {
-            rustc_hir::StmtKind::Expr(e) | rustc_hir::StmtKind::Semi(e) => {
-                rvs_walk_expr_M(e, f, resolve_body, nested_body)
-            }
-            rustc_hir::StmtKind::Let(l) => {
-                if let Some(i) = l.init {
-                    rvs_walk_expr_M(i, f, resolve_body, nested_body);
-                }
-                if let Some(els) = l.els {
-                    rvs_walk_block_M(els, f, resolve_body, nested_body);
-                }
-            }
-            _ => {}
-        }
-    }
-    if let Some(e) = b.expr {
-        rvs_walk_expr_M(e, f, resolve_body, nested_body);
-    }
-}
-
-pub(crate) fn rvs_visit_body_exprs_M<'tcx, F: FnMut(&'tcx Expr<'tcx>, bool)>(
-    tcx: rustc_middle::ty::TyCtxt<'tcx>,
-    e: &'tcx Expr<'tcx>,
-    mut f: F,
-) {
-    let resolver = |bid: rustc_hir::BodyId| -> Option<&'tcx Body<'tcx>> { Some(tcx.hir_body(bid)) };
-    rvs_walk_expr_M(e, &mut f, &resolver, false);
+    .visit_expr(expr);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -882,6 +814,41 @@ mod tests {
     use crate::test_support::rvs_snapshot_BIS;
 
     #[test]
+    fn test_20260715_effective_line_count_uses_rust_lexer() {
+        let cases = [
+            (
+                "nested_comments",
+                "{\n    let value = 1;\n    /* outer\n       /* nested */\n       still comment\n    */\n    value\n}\n",
+                2,
+            ),
+            (
+                "raw_string",
+                "{\n    let raw = r#\"\n// string data\n/* string data */\n\"#;\n    raw\n}\n",
+                5,
+            ),
+            (
+                "trailing_comment",
+                "{\n    let value = 1; // explanation\n}\n",
+                1,
+            ),
+        ];
+        let output = cases
+            .iter()
+            .map(|(name, snippet, _)| format!("{name}={}", rvs_count_effective_lines(snippet)))
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        rvs_snapshot_BIS(
+            "test_20260715_effective_line_count_uses_rust_lexer",
+            &output,
+        );
+
+        for (name, snippet, expected) in cases {
+            assert_eq!(rvs_count_effective_lines(snippet), expected, "{name}");
+        }
+    }
+
+    #[test]
     fn test_20260711_unresolved_method_call_keeps_source_name() {
         let target = rvs_method_call_target(None, "rvs_example");
         rvs_snapshot_BIS(
@@ -985,13 +952,11 @@ mod tests {
             let _def_id: DefId = unreachable!();
             let _sig: &rustc_hir::FnSig<'_> = unreachable!();
             let _body: &Body<'_> = unreachable!();
-            let _block: &Block<'_> = unreachable!();
             let _expr: &Expr<'_> = unreachable!();
             let _qpath: &QPath<'_> = unreachable!();
             let _ty: &rustc_hir::Ty<'_> = unreachable!();
             let _tcx: rustc_middle::ty::TyCtxt<'_> = unreachable!();
             let mut set = HashSet::new();
-            let mut in_comment = false;
 
             rvs_has_attr(_attrs, "test");
             rvs_has_allow(_attrs, "dead_code");
@@ -1007,12 +972,6 @@ mod tests {
             rvs_static_is_thread_local(_cx, _def_id);
             rvs_count_effective_lines_M(_cx, _body);
             rvs_root_body_expr(_tcx, _body);
-            rvs_line_has_effective_code_M("let x = 1;", &mut in_comment);
-            let resolver = |_bid: rustc_hir::BodyId| -> Option<&Body<'_>> { None };
-            rvs_walk_expr_M(_expr, &mut |_, _| {}, &resolver, false);
-            rvs_walk_block_M(_block, &mut |_, _| {}, &resolver, false);
-            let _const_arg: &rustc_hir::ConstArg<'_> = unreachable!();
-            rvs_walk_const_arg_M(_const_arg, &mut |_, _| {}, &resolver);
             rvs_visit_body_exprs_M(_tcx, _expr, |_, _| {});
             rvs_qp(_qpath);
             rvs_tys(_ty);

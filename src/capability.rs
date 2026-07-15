@@ -430,6 +430,30 @@ impl CapabilitySet {
         self.0.iter().copied()
     }
 
+    /// Render capabilities as their canonical ordered suffix letters.
+    pub fn rvs_letters(&self) -> String {
+        self.rvs_iter().map(Capability::rvs_as_char).collect()
+    }
+
+    /// Render the canonical descriptions used in capsmap comments.
+    pub fn rvs_descriptions(&self) -> String {
+        self.rvs_iter()
+            .map(Capability::rvs_description)
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// Extend this set with selected capabilities, returning whether it changed.
+    pub fn rvs_extend_filtered_M(
+        &mut self,
+        other: &Self,
+        include: impl Fn(Capability) -> bool,
+    ) -> bool {
+        let old_len = self.0.len();
+        self.0.extend(other.rvs_iter().filter(|cap| include(*cap)));
+        self.0.len() != old_len
+    }
+
     /// 返回能力集中能力的个数。
     #[cfg(test)]
     pub fn rvs_len(&self) -> usize {

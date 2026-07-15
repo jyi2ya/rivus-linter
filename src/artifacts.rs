@@ -1,10 +1,10 @@
-use std::collections::BTreeMap;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
 use crate::capability::CapabilityFacts;
+use crate::function_classification::LocalScope;
 use crate::symbols::{CrateName, DefPath};
 
 pub(crate) const CALLGRAPH_SCHEMA_VERSION: u32 = 4;
@@ -226,6 +226,31 @@ impl FnGraph {
         self.nodes.keys()
     }
 
+    pub(crate) fn rvs_test_reachable_identities(&self) -> BTreeSet<FunctionIdentity> {
+        let mut covered = BTreeSet::new();
+        let mut pending = VecDeque::new();
+        for node in self.nodes.values() {
+            for crate_id in &node.test_crate_ids {
+                if let Some(calls) = node.coverage_calls.get(crate_id) {
+                    pending.extend(calls.iter().cloned());
+                }
+            }
+        }
+        while let Some(identity) = pending.pop_front() {
+            if !covered.insert(identity.clone()) {
+                continue;
+            }
+            if let Some(calls) = self
+                .nodes
+                .get(&identity.def_path)
+                .and_then(|node| node.coverage_calls.get(&identity.crate_id))
+            {
+                pending.extend(calls.iter().cloned());
+            }
+        }
+        covered
+    }
+
     #[cfg(test)]
     pub(crate) fn rvs_insert_M(&mut self, path: DefPath, node: FnNode) {
         self.nodes.insert(path, node);
@@ -258,15 +283,13 @@ impl FnGraph {
         }
 
         let mut merged = Self::rvs_new();
+        let local_scope = LocalScope::rvs_new(local_crate_names);
         for (path, nodes) in variants {
             let mut coverage = FnNode::default();
             for node in &nodes {
                 coverage.rvs_merge_coverage_M(node);
             }
-            let is_local = local_crate_names.iter().any(|crate_name| {
-                path.rvs_as_str()
-                    .starts_with(crate_name.rvs_prefix().rvs_as_str())
-            });
+            let is_local = local_scope.rvs_contains(&path);
             let has_production_variant = nodes.iter().any(|node| !node.is_test_compilation);
             let non_test_sources: BTreeSet<FnSource> = nodes
                 .iter()
@@ -815,6 +838,53 @@ mod tests {
         assert_eq!(ordinary_merged.report_line_count, Some(5));
         assert!(mixed_role.is_err());
         assert!(source_less_mixed_role.is_err());
+    }
+
+    #[test]
+    fn test_20260715_artifact_merge_treats_local_trait_external_type_impl_as_local() {
+        let path = DefPath::from(
+            "std::fs::File{impl#7374643a3a66733a3a46696c654064656d6f3a3a46696c65436c69656e74}::rvs_touch_P@demo::FileClient",
+        );
+        let mut first = FnGraph::rvs_new();
+        first.rvs_insert_M(
+            path.clone(),
+            FnNode {
+                is_trait_impl: true,
+                sources: BTreeSet::from([FnSource::rvs_new("src/lib.rs".into(), 1, 2)]),
+                report_line_count: Some(2),
+                report_function_count: 1,
+                ..FnNode::default()
+            },
+        );
+        let mut second = FnGraph::rvs_new();
+        second.rvs_insert_M(
+            path.clone(),
+            FnNode {
+                is_trait_impl: true,
+                sources: BTreeSet::from([FnSource::rvs_new("src/other.rs".into(), 1, 2)]),
+                report_line_count: Some(3),
+                report_function_count: 1,
+                ..FnNode::default()
+            },
+        );
+
+        let merged = FnGraph::rvs_merge_artifacts(
+            vec![first, second],
+            &BTreeSet::from([CrateName::from("demo")]),
+        )
+        .unwrap();
+        let node = merged.rvs_get(path.rvs_as_str()).unwrap();
+        let output = format!(
+            "function_count={}\nline_count={:?}\n",
+            node.report_function_count, node.report_line_count
+        );
+        rvs_snapshot_BIS(
+            "test_20260715_artifact_merge_treats_local_trait_external_type_impl_as_local",
+            &output,
+        );
+
+        assert_eq!(node.report_function_count, 2);
+        assert_eq!(node.report_line_count, Some(5));
     }
 
     #[test]

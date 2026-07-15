@@ -201,6 +201,19 @@ rvs_declare_lints!(
     ),
 );
 
+macro_rules! rvs_fn_check_data {
+    ($pass:expr) => {
+        FnCheckData {
+            good_fns: &mut $pass.good_fns,
+            ok_fns: &mut $pass.ok_fns,
+            callgraph: &mut $pass.callgraph,
+            diagnostic_spans: &mut $pass.diagnostic_spans,
+            collect_caps_facts: $pass.collect_caps_facts,
+            should_emit_lints: $pass.should_emit_lints,
+        }
+    };
+}
+
 // ─── Lint pass ───────────────────────────────────────────────────────────
 
 #[derive(Debug)]
@@ -226,8 +239,8 @@ pub struct RivusLintPass {
 impl RivusLintPass {
     /// Create a lint pass configured from the current process environment.
     pub fn rvs_new_BIS() -> Self {
-        let collect_callgraph = rvs_env_flag_enabled_BS("RIVUS_CALLGRAPH");
-        let offline_caps_check = rvs_env_flag_enabled_BS("RIVUS_OFFLINE_CAPS");
+        let collect_callgraph = crate::rvs_env_flag_is_one_BS("RIVUS_CALLGRAPH");
+        let offline_caps_check = crate::rvs_env_flag_is_one_BS("RIVUS_OFFLINE_CAPS");
         let should_emit_caps_report = !collect_callgraph && !offline_caps_check;
         let (untested_functions, untested_functions_error) = match rvs_load_untested_functions_BIS()
         {
@@ -278,11 +291,12 @@ fn rvs_fulfill_collection_expectations_S(
 ) {
     for lint in RIVUS_LINTS {
         if cx.tcx.lint_level_at_node(lint, hir_id).level.as_str() == "expect" {
-            cx.tcx.emit_node_span_lint(
+            msg::rvs_emit_node_span_lint_S(
+                cx,
                 lint,
                 hir_id,
                 span,
-                msg::Msg::rvs_new(span, "collection-only expectation marker"),
+                "collection-only expectation marker",
             );
         }
     }
@@ -305,15 +319,7 @@ fn rvs_load_untested_functions_BIS()
         .map_err(|error| format!("{}: {error}", path.display()))
 }
 
-fn rvs_env_flag_enabled_BS(name: &str) -> bool {
-    match std::env::var(name) {
-        Ok(value) => rvs_env_flag_value_enabled(Some(value.as_str())),
-        Err(std::env::VarError::NotPresent | std::env::VarError::NotUnicode(_)) => {
-            rvs_env_flag_value_enabled(None)
-        }
-    }
-}
-
+#[cfg(test)]
 fn rvs_env_flag_value_enabled(value: Option<&str>) -> bool {
     matches!(value, Some("1"))
 }
@@ -415,14 +421,7 @@ impl<'tcx> LateLintPass<'tcx> for RivusLintPass {
         if self.collect_callgraph {
             rvs_fulfill_collection_expectations_S(cx, item.hir_id(), item.span);
         }
-        let mut data = FnCheckData {
-            good_fns: &mut self.good_fns,
-            ok_fns: &mut self.ok_fns,
-            callgraph: &mut self.callgraph,
-            diagnostic_spans: &mut self.diagnostic_spans,
-            collect_caps_facts: self.collect_caps_facts,
-            should_emit_lints: self.should_emit_lints,
-        };
+        let mut data = rvs_fn_check_data!(self);
         rvs_check_item_MS(
             cx,
             item,
@@ -442,14 +441,7 @@ impl<'tcx> LateLintPass<'tcx> for RivusLintPass {
         if self.collect_callgraph {
             rvs_fulfill_collection_expectations_S(cx, impl_item.hir_id(), impl_item.span);
         }
-        let mut data = FnCheckData {
-            good_fns: &mut self.good_fns,
-            ok_fns: &mut self.ok_fns,
-            callgraph: &mut self.callgraph,
-            diagnostic_spans: &mut self.diagnostic_spans,
-            collect_caps_facts: self.collect_caps_facts,
-            should_emit_lints: self.should_emit_lints,
-        };
+        let mut data = rvs_fn_check_data!(self);
         rvs_check_impl_item_MS(
             cx,
             impl_item,
@@ -468,14 +460,7 @@ impl<'tcx> LateLintPass<'tcx> for RivusLintPass {
         if self.collect_callgraph {
             rvs_fulfill_collection_expectations_S(cx, trait_item.hir_id(), trait_item.span);
         }
-        let mut data = FnCheckData {
-            good_fns: &mut self.good_fns,
-            ok_fns: &mut self.ok_fns,
-            callgraph: &mut self.callgraph,
-            diagnostic_spans: &mut self.diagnostic_spans,
-            collect_caps_facts: self.collect_caps_facts,
-            should_emit_lints: self.should_emit_lints,
-        };
+        let mut data = rvs_fn_check_data!(self);
         rvs_check_trait_item_MS(cx, trait_item, &mut data);
     }
 
@@ -517,9 +502,6 @@ fn rvs_emit_offline_caps_diagnostics_S(
     use crate::offline_caps::OfflineCapsKind;
 
     for diagnostic in &report.diagnostics {
-        let Some((hir_id, span)) = spans.get(&diagnostic.function).copied() else {
-            continue;
-        };
         let lint = match diagnostic.kind {
             OfflineCapsKind::CallViolation => RVS_CALL_VIOLATION,
             OfflineCapsKind::Contract(kind) => match kind {
@@ -545,8 +527,12 @@ fn rvs_emit_offline_caps_diagnostics_S(
         } else {
             format!("{}; {}", diagnostic.message, diagnostic.details.join("; "))
         };
-        cx.tcx
-            .emit_node_span_lint(lint, hir_id, span, msg::Msg::rvs_new(span, message));
+        for anchor in &diagnostic.span_anchors {
+            let Some((hir_id, span)) = spans.get(anchor).copied() else {
+                continue;
+            };
+            msg::rvs_emit_node_span_lint_S(cx, lint, hir_id, span, message.clone());
+        }
     }
 }
 
@@ -594,43 +580,21 @@ fn rvs_run_fn_checks_MS<'tcx>(
         }
 
         let is_good = CapabilityPolicy::rvs_is_good(&effective_caps);
-
-        // Collect good fns for later untested-good-fn check
+        let coverage_fns = if is_good {
+            Some(&mut *data.good_fns)
+        } else if CapabilityPolicy::rvs_is_ok(&effective_caps) && !subject.is_trait_impl {
+            Some(&mut *data.ok_fns)
+        } else {
+            None
+        };
         if has_rvs_prefix
-            && is_good
             && data.should_emit_lints
             && !subject.is_test
             && !utils::rvs_has_allow(attrs, "dead_code")
             && !utils::rvs_has_allow(attrs, "unused")
+            && let Some(coverage_fns) = coverage_fns
         {
-            data.good_fns.push(ctx::CoverageFn {
-                identity: crate::artifacts::FunctionIdentity {
-                    crate_id: cx
-                        .tcx
-                        .stable_crate_id(subject.hir_id.owner.def_id.to_def_id().krate)
-                        .as_u64(),
-                    def_path: DefPath::rvs_new(utils::rvs_def_path(
-                        cx,
-                        subject.hir_id.owner.def_id.to_def_id(),
-                    )),
-                },
-                name: name.to_string(),
-                hir_id: subject.hir_id,
-                span: subject.span,
-            });
-        }
-
-        // Collect ok fns (ABMP subset, mock-testable) for untested-ok-fn check.
-        if CapabilityPolicy::rvs_is_ok(&effective_caps)
-            && !is_good
-            && data.should_emit_lints
-            && !subject.is_test
-            && !subject.is_trait_impl
-            && has_rvs_prefix
-            && !utils::rvs_has_allow(attrs, "dead_code")
-            && !utils::rvs_has_allow(attrs, "unused")
-        {
-            data.ok_fns.push(ctx::CoverageFn {
+            coverage_fns.push(ctx::CoverageFn {
                 identity: crate::artifacts::FunctionIdentity {
                     crate_id: cx
                         .tcx

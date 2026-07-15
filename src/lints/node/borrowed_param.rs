@@ -4,7 +4,7 @@ use rustc_middle::ty::TyKind;
 use rustc_span::sym;
 
 use super::super::RVS_BORROWED_PARAM;
-use super::super::msg::Msg;
+use super::super::msg::rvs_emit_node_span_lint_S;
 
 fn rvs_borrowed_type<'tcx>(
     cx: &LateContext<'tcx>,
@@ -47,11 +47,12 @@ pub(crate) fn rvs_check_fn_params_S<'tcx>(
     debug_assert_eq!(sig.decl.inputs.len(), params.len());
     for (input, param) in sig.decl.inputs.iter().zip(params) {
         if let Some((name, better)) = rvs_borrowed_type(cx, input) {
-            cx.tcx.emit_node_span_lint(
+            rvs_emit_node_span_lint_S(
+                cx,
                 RVS_BORROWED_PARAM,
                 param.hir_id,
                 input.span,
-                Msg::rvs_new(input.span, format!("&{name} — use {better} instead")),
+                format!("&{name} — use {better} instead"),
             );
         }
     }
@@ -61,11 +62,12 @@ pub(crate) fn rvs_check_fn_params_S<'tcx>(
 pub(crate) fn rvs_check_borrowed_fields_S<'tcx>(cx: &LateContext<'tcx>, fields: &[FieldDef<'tcx>]) {
     for f in fields {
         if let Some((name, better)) = rvs_borrowed_type(cx, f.ty) {
-            cx.tcx.emit_node_span_lint(
+            rvs_emit_node_span_lint_S(
+                cx,
                 RVS_BORROWED_PARAM,
                 f.hir_id,
                 f.ty.span,
-                Msg::rvs_new(f.ty.span, format!("&{name} field — use {better} instead")),
+                format!("&{name} field — use {better} instead"),
             );
         }
     }

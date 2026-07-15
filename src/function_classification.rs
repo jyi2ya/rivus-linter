@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use crate::artifacts::FnNode;
-use crate::symbols::{CrateName, DefPath, DefPathPrefix};
+use crate::symbols::{CrateName, DefPath, DefPathPrefix, TraitMethodIdentity};
 
 #[derive(Debug)]
 pub(crate) struct LocalScope {
@@ -25,6 +25,8 @@ impl LocalScope {
         self.prefixes
             .iter()
             .any(|prefix| def_path.starts_with(prefix.rvs_as_str()))
+            || TraitMethodIdentity::rvs_parse(def_path)
+                .is_some_and(|identity| self.rvs_contains(&identity.rvs_trait_method_path()))
     }
 }
 
@@ -204,5 +206,36 @@ mod tests {
             "test_20260712_local_scope_matches_typed_and_borrowed_paths",
             &output,
         );
+    }
+
+    #[test]
+    fn test_20260715_local_trait_impl_for_external_type_stays_local() {
+        let scope = LocalScope::rvs_new(&BTreeSet::from([CrateName::from("demo")]));
+        let path = DefPath::from(
+            "std::fs::File{impl#7374643a3a66733a3a46696c654064656d6f3a3a46696c65436c69656e74}::rvs_touch_P@demo::FileClient",
+        );
+        let mut node = FnNode {
+            is_trait_impl: true,
+            ..FnNode::default()
+        };
+        node.facts.is_port_method = true;
+        node.sources
+            .insert(FnSource::rvs_new("/workspace/src/lib.rs".into(), 1, 2));
+
+        let classification = FunctionClassification::rvs_new(&scope, &path, &node);
+        let output = format!(
+            "scope_contains={}\noffline={}\nreport={}\n",
+            scope.rvs_contains(&path),
+            classification.rvs_is_offline_checked(),
+            classification.rvs_is_report_candidate(),
+        );
+        rvs_snapshot_BIS(
+            "test_20260715_local_trait_impl_for_external_type_stays_local",
+            &output,
+        );
+
+        assert!(scope.rvs_contains(&path));
+        assert!(classification.rvs_is_offline_checked());
+        assert!(classification.rvs_is_report_candidate());
     }
 }

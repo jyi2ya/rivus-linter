@@ -7,9 +7,9 @@ use crate::capsmap::{CapsMap, rvs_reserved_layer_name};
 use crate::cargo_targets::{CargoTargetScope, rvs_detect_local_crate_prefixes_BIS};
 use crate::function_classification::LocalScope;
 use crate::inference::{
-    PreparedInference, rvs_build_impl_index, rvs_collect_direct_external_deps,
-    rvs_format_def_path_capsmap, rvs_format_unknown_callees, rvs_generate_trait_aliases,
-    rvs_infer_caps_with_index, rvs_initial_caps, rvs_scope_port_methods_M,
+    PreparedInference, rvs_build_impl_index, rvs_format_def_path_capsmap,
+    rvs_format_unknown_callees, rvs_generate_trait_aliases, rvs_infer_caps_with_index,
+    rvs_initial_caps, rvs_scope_port_methods_M,
 };
 use crate::symbols::{CapsMapKey, DefPath};
 use crate::workspace::{
@@ -32,7 +32,7 @@ pub(crate) fn rvs_run_infer_capsmap_BIMPS(path: &Path, output: &Path) -> Result<
     let resolved_output = rvs_prepare_output_path_BIS(&project_path, output, "deps capsmap")?;
     let caps_dir_exists = rvs_validate_optional_capsmap_dir_BIS(&abs_seed)?;
     let output_layer = rvs_caps_output_layer_BIS(&abs_seed, &resolved_output, caps_dir_exists)?;
-    rvs_require_inference_output_layer(output_layer.as_deref(), "deps", "infer-capsmap")?;
+    rvs_require_inference_output_layer(&output_layer.as_deref(), "deps", "infer-capsmap")?;
     let mut excluded_layers = vec![OsStr::new("deps")];
     if let Some(layer) = output_layer.as_deref()
         && layer != OsStr::new("deps")
@@ -54,13 +54,8 @@ pub(crate) fn rvs_run_infer_capsmap_BIMPS(path: &Path, output: &Path) -> Result<
         &local_crate_names,
     )?;
     let inference = PreparedInference::rvs_prepare_M(&mut callgraph, &seed, &local_crate_names);
-    let (direct_external_calls, unknown_callees) = rvs_collect_direct_external_deps(
-        &callgraph,
-        &local_crate_names,
-        &seed,
-        inference.rvs_inferred(),
-        inference.rvs_impl_index(),
-    );
+    let (direct_external_calls, unknown_callees) =
+        inference.rvs_collect_direct_external_deps(&callgraph, &local_crate_names, &seed);
 
     if !unknown_callees.is_empty() {
         return Err(rvs_format_unknown_callees(
@@ -87,7 +82,7 @@ pub(crate) fn rvs_run_infer_std_BIMPS(path: &Path, output: &Path) -> Result<(), 
     let caps_dir_exists = rvs_validate_optional_capsmap_dir_BIS(&caps_dir)?;
     let resolved_output = rvs_prepare_output_path_BIS(&project_path, output, "std capsmap")?;
     let output_layer = rvs_caps_output_layer_BIS(&caps_dir, &resolved_output, caps_dir_exists)?;
-    rvs_require_inference_output_layer(output_layer.as_deref(), "std", "infer-std")?;
+    rvs_require_inference_output_layer(&output_layer.as_deref(), "std", "infer-std")?;
     let seed = CapsMap::rvs_load_dir_layers_BIS(&caps_dir, &["seed", "suppress"])
         .map_err(|e| format!("caps: {e}"))?;
     let mut callgraph = rvs_collect_callgraph_BIMS(
@@ -148,7 +143,7 @@ pub(crate) fn rvs_run_infer_std_BIMPS(path: &Path, output: &Path) -> Result<(), 
 }
 
 fn rvs_require_inference_output_layer(
-    output_layer: Option<&OsStr>,
+    output_layer: &Option<&OsStr>,
     expected_layer: &str,
     command: &str,
 ) -> Result<(), String> {
@@ -710,7 +705,7 @@ mod tests {
         let mut output = String::new();
         for (command, expected, layer, should_error) in cases {
             let result =
-                rvs_require_inference_output_layer(layer.map(OsStr::new), expected, command);
+                rvs_require_inference_output_layer(&layer.map(OsStr::new), expected, command);
             output.push_str(&format!(
                 "{command}:{}={}\n",
                 layer.unwrap_or("outside"),

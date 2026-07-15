@@ -1,8 +1,8 @@
 use rustc_hir::{self, Body, PatKind};
-use rustc_lint::{LateContext, LintContext};
+use rustc_lint::LateContext;
 
 use super::super::RVS_MISSING_DEBUG_ASSERT;
-use super::super::msg::Msg;
+use super::super::msg::rvs_emit_span_lint_S;
 use super::BodyFacts;
 
 /// Check that primitive numeric parameters have corresponding `debug_assert!`
@@ -40,10 +40,11 @@ pub(crate) fn rvs_check_fn_MS<'tcx>(cx: &LateContext<'tcx>, body: &Body<'tcx>, f
     }
     for (binding_hir_id, name, span) in &prims {
         if !facts.debug_assert_bindings.contains(binding_hir_id) {
-            cx.emit_span_lint(
+            rvs_emit_span_lint_S(
+                cx,
                 RVS_MISSING_DEBUG_ASSERT,
                 *span,
-                Msg::rvs_new(*span, format!("param '{name}' missing debug_assert!")),
+                format!("param '{name}' missing debug_assert!"),
             );
         }
     }

@@ -16,6 +16,7 @@ warning[missing_io]: demo::rvs_handle
   expected name: rvs_handle_BI
   declared caps: pure
   inferred caps: BI
-warning[unknown_callee]: demo::rvs_handle
+warning[unknown_callee]: dep::plain
   callee 'dep::plain' has no rvs_ suffix and no caps/ entry
+  called by: demo::rvs_handle
   run `cargo rivus infer-capsmap -o caps/deps` to refresh dependency capabilities; if inference still reports this path, add its exact def_path to caps/ext

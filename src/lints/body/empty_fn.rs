@@ -1,9 +1,9 @@
 use rustc_hir::Body;
-use rustc_lint::{LateContext, LintContext};
+use rustc_lint::LateContext;
 use rustc_span::Span;
 
 use super::super::RVS_EMPTY_FN;
-use super::super::msg::Msg;
+use super::super::msg::rvs_emit_span_lint_S;
 use super::super::utils::rvs_is_empty_body;
 
 /// Check for empty function bodies (optionally containing only debug_assert!).
@@ -22,7 +22,7 @@ pub(crate) fn rvs_check_fn_MS<'tcx>(
             } else {
                 "empty function body"
             };
-            cx.emit_span_lint(RVS_EMPTY_FN, span, Msg::rvs_new(span, msg));
+            rvs_emit_span_lint_S(cx, RVS_EMPTY_FN, span, msg);
         }
     }
 }

@@ -1,9 +1,8 @@
 use rustc_hir::{self};
-use rustc_lint::LintContext;
 use rustc_span::Symbol;
 
 use super::super::RVS_DENY_WARNINGS;
-use super::super::msg::Msg;
+use super::super::msg::rvs_emit_span_lint_S;
 
 /// `check_crate` — detect `#![deny(warnings)]` at crate level.
 pub(crate) fn rvs_check_crate_S(cx: &rustc_lint::LateContext<'_>) {
@@ -16,13 +15,11 @@ pub(crate) fn rvs_check_crate_S(cx: &rustc_lint::LateContext<'_>) {
                 for m in &items {
                     if let Some(p) = m.ident() {
                         if p.name == warnings_sym {
-                            cx.emit_span_lint(
+                            rvs_emit_span_lint_S(
+                                cx,
                                 RVS_DENY_WARNINGS,
                                 a.span(),
-                                Msg::rvs_new(
-                                    a.span(),
-                                    "#![deny(warnings)] — use named lints instead",
-                                ),
+                                "#![deny(warnings)] — use named lints instead",
                             );
                         }
                     }

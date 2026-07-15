@@ -1,0 +1,6 @@
+Offline Caps Check: 0 error(s), 1 warning(s)
+------------------------------------------------------------
+warning[unknown_callee]: dep::plain
+  callee 'dep::plain' has no rvs_ suffix and no caps/ entry
+  called by: demo::Worker::rvs_call
+  run `cargo rivus infer-capsmap -o caps/deps` to refresh dependency capabilities; if inference still reports this path, add its exact def_path to caps/ext

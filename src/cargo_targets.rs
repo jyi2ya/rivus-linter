@@ -3,6 +3,8 @@ use std::path::Path;
 
 use crate::symbols::CrateName;
 
+const BUILD_SCRIPT_CRATE_NAME: &str = "build_script_build";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CargoTargetScope {
     Production,
@@ -61,44 +63,31 @@ fn rvs_collect_manifest_crate_prefixes(
     scope: CargoTargetScope,
 ) -> Result<BTreeSet<CrateName>, String> {
     let mut prefixes = BTreeSet::new();
-    if let Some(package_name) = document
-        .get("package")
-        .and_then(|package| package.get("name"))
-        .and_then(toml_edit::Item::as_str)
-    {
-        rvs_insert_manifest_crate_name_M(&mut prefixes, "[package].name", package_name)?;
-    }
-    if let Some(lib_name) = document
-        .get("lib")
-        .and_then(|lib| lib.get("name"))
-        .and_then(toml_edit::Item::as_str)
-    {
-        rvs_insert_manifest_crate_name_M(&mut prefixes, "[lib].name", lib_name)?;
-    }
-    if let Some(bins) = document
-        .get("bin")
-        .and_then(toml_edit::Item::as_array_of_tables)
-    {
-        for bin in bins {
-            if let Some(name) = bin.get("name").and_then(toml_edit::Item::as_str) {
-                rvs_insert_manifest_crate_name_M(&mut prefixes, "[[bin]].name", name)?;
-            }
+    for (table_name, label) in [("package", "[package].name"), ("lib", "[lib].name")] {
+        if let Some(name) = document
+            .get(table_name)
+            .and_then(|table| table.get("name"))
+            .and_then(toml_edit::Item::as_str)
+        {
+            rvs_insert_manifest_crate_name_M(&mut prefixes, label, name)?;
         }
     }
-    if scope.rvs_includes_test_example_bench() {
-        for table_name in ["test", "example", "bench"] {
-            if let Some(targets) = document
-                .get(table_name)
-                .and_then(toml_edit::Item::as_array_of_tables)
-            {
-                for target in targets {
-                    if let Some(name) = target.get("name").and_then(toml_edit::Item::as_str) {
-                        rvs_insert_manifest_crate_name_M(
-                            &mut prefixes,
-                            &format!("[[{table_name}]].name"),
-                            name,
-                        )?;
-                    }
+
+    for table_name in ["bin", "test", "example", "bench"] {
+        if table_name != "bin" && !scope.rvs_includes_test_example_bench() {
+            continue;
+        }
+        if let Some(targets) = document
+            .get(table_name)
+            .and_then(toml_edit::Item::as_array_of_tables)
+        {
+            for target in targets {
+                if let Some(name) = target.get("name").and_then(toml_edit::Item::as_str) {
+                    rvs_insert_manifest_crate_name_M(
+                        &mut prefixes,
+                        &format!("[[{table_name}]].name"),
+                        name,
+                    )?;
                 }
             }
         }
@@ -154,14 +143,45 @@ pub(crate) fn rvs_collect_local_crate_prefixes_from_model_BIS(
     let cargo_toml = path.join("Cargo.toml");
     let mut prefixes = rvs_collect_manifest_crate_prefixes(&model.document, scope)
         .map_err(|e| format!("{}: {e}", cargo_toml.display()))?;
+    if rvs_has_build_script_BIS(path, &model.document)? {
+        prefixes.insert(CrateName::from(BUILD_SCRIPT_CRATE_NAME));
+    }
     let auto_target_flags = rvs_parse_auto_target_flags(&model.document);
     rvs_collect_auto_target_prefixes_for_targets_BIMS(
         path,
         &mut prefixes,
-        scope,
+        &scope,
         &auto_target_flags,
     )?;
     Ok(prefixes)
+}
+
+fn rvs_has_build_script_BIS(
+    path: &Path,
+    document: &toml_edit::DocumentMut,
+) -> Result<bool, String> {
+    let Some(package) = document.get("package") else {
+        return Ok(false);
+    };
+    let Some(build) = package.get("build") else {
+        return Ok(path.join("build.rs").is_file());
+    };
+    if let Some(enabled) = build.as_bool() {
+        if enabled {
+            return Err(format!(
+                "{}: [package].build must be a path string or false",
+                path.join("Cargo.toml").display()
+            ));
+        }
+        return Ok(false);
+    }
+    if build.as_str().is_some() {
+        return Ok(true);
+    }
+    Err(format!(
+        "{}: [package].build must be a path string or false",
+        path.join("Cargo.toml").display()
+    ))
 }
 
 pub(crate) fn rvs_detect_local_crate_prefixes_for_function_query_BIS(
@@ -193,7 +213,7 @@ pub(crate) fn rvs_collect_auto_target_prefixes_BIMS(
     rvs_collect_auto_target_prefixes_for_targets_BIMS(
         path,
         prefixes,
-        CargoTargetScope::WithTestExampleBench,
+        &CargoTargetScope::WithTestExampleBench,
         &auto_target_flags,
     )
 }
@@ -201,26 +221,20 @@ pub(crate) fn rvs_collect_auto_target_prefixes_BIMS(
 fn rvs_collect_auto_target_prefixes_for_targets_BIMS(
     path: &Path,
     prefixes: &mut BTreeSet<CrateName>,
-    scope: CargoTargetScope,
+    scope: &CargoTargetScope,
     flags: &AutoTargetFlags,
 ) -> Result<(), String> {
-    if scope.rvs_includes_test_example_bench() && flags.autotests {
-        let tests_dir = path.join("tests");
-        rvs_collect_auto_target_names_BIMS(&tests_dir, prefixes)?;
+    let include_optional = scope.rvs_includes_test_example_bench();
+    for (enabled, relative_dir) in [
+        (include_optional && flags.autotests, "tests"),
+        (include_optional && flags.autoexamples, "examples"),
+        (include_optional && flags.autobenches, "benches"),
+        (flags.autobins, "src/bin"),
+    ] {
+        if enabled {
+            rvs_collect_auto_target_names_BIMS(&path.join(relative_dir), prefixes)?;
+        }
     }
-    if scope.rvs_includes_test_example_bench() && flags.autoexamples {
-        let examples_dir = path.join("examples");
-        rvs_collect_auto_target_names_BIMS(&examples_dir, prefixes)?;
-    }
-    if scope.rvs_includes_test_example_bench() && flags.autobenches {
-        let benches_dir = path.join("benches");
-        rvs_collect_auto_target_names_BIMS(&benches_dir, prefixes)?;
-    }
-    if !flags.autobins {
-        return Ok(());
-    }
-    let bin_dir = path.join("src/bin");
-    rvs_collect_auto_target_names_BIMS(&bin_dir, prefixes)?;
     Ok(())
 }
 
@@ -234,23 +248,17 @@ fn rvs_parse_cargo_project_model(source: &str) -> Result<CargoProjectModel, toml
 
 fn rvs_parse_auto_target_flags(document: &toml_edit::DocumentMut) -> AutoTargetFlags {
     let package = document.get("package");
+    let rvs_flag = |name| {
+        package
+            .and_then(|item| item.get(name))
+            .and_then(toml_edit::Item::as_bool)
+            .unwrap_or(true)
+    };
     AutoTargetFlags {
-        autobins: package
-            .and_then(|item| item.get("autobins"))
-            .and_then(toml_edit::Item::as_bool)
-            .unwrap_or(true),
-        autotests: package
-            .and_then(|item| item.get("autotests"))
-            .and_then(toml_edit::Item::as_bool)
-            .unwrap_or(true),
-        autoexamples: package
-            .and_then(|item| item.get("autoexamples"))
-            .and_then(toml_edit::Item::as_bool)
-            .unwrap_or(true),
-        autobenches: package
-            .and_then(|item| item.get("autobenches"))
-            .and_then(toml_edit::Item::as_bool)
-            .unwrap_or(true),
+        autobins: rvs_flag("autobins"),
+        autotests: rvs_flag("autotests"),
+        autoexamples: rvs_flag("autoexamples"),
+        autobenches: rvs_flag("autobenches"),
     }
 }
 

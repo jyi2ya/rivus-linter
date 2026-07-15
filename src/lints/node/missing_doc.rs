@@ -1,9 +1,9 @@
 use rustc_hir;
-use rustc_lint::{LateContext, LintContext};
+use rustc_lint::LateContext;
 use rustc_span::Span;
 
 use super::super::RVS_MISSING_DOC;
-use super::super::msg::Msg;
+use super::super::msg::rvs_emit_span_lint_S;
 use super::super::utils::{rvs_has_any_doc, rvs_has_attr};
 
 /// Check that pub rvs_ functions have `///` doc comments.
@@ -24,10 +24,11 @@ pub(crate) fn rvs_check_fn_S(
         return;
     }
     if !rvs_has_any_doc(attrs) {
-        cx.emit_span_lint(
+        rvs_emit_span_lint_S(
+            cx,
             RVS_MISSING_DOC,
             span,
-            Msg::rvs_new(span, format!("pub fn '{name}' missing /// doc comment")),
+            format!("pub fn '{name}' missing /// doc comment"),
         );
     }
 }

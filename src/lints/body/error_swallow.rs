@@ -1,7 +1,7 @@
 use rustc_lint::LateContext;
 
 use super::super::RVS_ERROR_SWALLOW;
-use super::super::msg::Msg;
+use super::super::msg::rvs_emit_node_span_lint_S;
 use super::super::utils::CallSyntax;
 use super::BodyFacts;
 
@@ -12,22 +12,21 @@ pub(crate) fn rvs_check_fn_S<'tcx>(cx: &LateContext<'tcx>, facts: &BodyFacts) {
             CallSyntax::Method => format!(".{name}()"),
             CallSyntax::Function => format!("{name}(...)"),
         };
-        cx.tcx.emit_node_span_lint(
+        rvs_emit_node_span_lint_S(
+            cx,
             RVS_ERROR_SWALLOW,
             *hir_id,
             *span,
-            Msg::rvs_new(*span, format!("{call} swallows errors")),
+            format!("{call} swallows errors"),
         );
     }
     for (hir_id, span) in &facts.result_drop_calls {
-        cx.tcx.emit_node_span_lint(
+        rvs_emit_node_span_lint_S(
+            cx,
             RVS_ERROR_SWALLOW,
             *hir_id,
             *span,
-            Msg::rvs_new(
-                *span,
-                "drop(Result) discards a Result without handling it".to_string(),
-            ),
+            "drop(Result) discards a Result without handling it".to_string(),
         );
     }
 }

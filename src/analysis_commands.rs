@@ -1,9 +1,8 @@
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use crate::callgraph_cache::rvs_is_std_like_def_path;
-use crate::inference::{
-    FnContractDiff, PreparedLocalAnalysis, rvs_caps_to_string, rvs_collect_local_contract_diffs_M,
-};
+use crate::inference::{FnContractDiff, PreparedLocalAnalysis};
 use crate::rename;
 use crate::symbols::DefPath;
 
@@ -25,7 +24,8 @@ pub(crate) fn rvs_run_annotate_BIMPS(path: &Path) -> Result<(), String> {
     let local_crate_names = rvs_detect_local_crate_prefixes_BIS(path, target_scope)?;
     let (mut callgraph, seed) =
         rvs_collect_callgraph_and_caps_BIMS(path, target_scope, &local_crate_names)?;
-    let diffs = rvs_collect_local_contract_diffs_M(&mut callgraph, &seed, &local_crate_names);
+    let diffs =
+        PreparedLocalAnalysis::rvs_prepare_M(&mut callgraph, &seed, &local_crate_names).diffs;
     let mut candidates = Vec::new();
     for diff in diffs {
         if !diff.rvs_has_name_mismatch() {
@@ -37,28 +37,7 @@ pub(crate) fn rvs_run_annotate_BIMPS(path: &Path) -> Result<(), String> {
         ));
     }
     let plan = rename::rvs_build_source_rename_plan_BIS(&callgraph, path, candidates, "annotate")?;
-    let rename_map = plan.rename_map;
-
-    if rename_map.is_empty() {
-        if plan.skipped_without_source > 0 {
-            println!(
-                "No functions to annotate (skipped {} candidate(s) without source metadata).",
-                plan.skipped_without_source
-            );
-            return Ok(());
-        }
-        println!("No functions to annotate.");
-        return Ok(());
-    }
-
-    let renamed_functions = rename_map.len();
-    let files_changed = rename::rvs_apply_ra_source_renames_BIS(path, &rename_map)?;
-
-    println!(
-        "Annotate complete: renamed {} function(s) in {} file(s).",
-        renamed_functions, files_changed
-    );
-    Ok(())
+    rename::rvs_execute_source_rename_plan_BIS(path, &plan, "annotate", "Annotate")
 }
 
 /// # Panics
@@ -85,61 +64,59 @@ pub(crate) fn rvs_run_why_BIMPS(function: &str, path: &Path) -> Result<(), Strin
     let analysis = PreparedLocalAnalysis::rvs_prepare_M(&mut callgraph, &seed, &local_crate_names);
     let resolver = analysis.rvs_resolver(&callgraph, &seed);
 
-    let behavior = callgraph.rvs_get(function);
-    let is_synthetic = analysis
-        .rvs_synthetic_paths()
-        .contains(&DefPath::from(function));
-    if behavior.is_none() && !is_synthetic {
-        let candidates: Vec<DefPath> = callgraph
-            .rvs_keys()
-            .chain(analysis.rvs_synthetic_paths().iter())
-            .filter(|k| k.rvs_contains(function))
-            .take(10)
-            .cloned()
-            .collect();
-        if candidates.is_empty() {
-            return Err(format!("function '{function}' not found in callgraph"));
-        }
-        eprintln!("Exact match not found. Did you mean:");
-        for c in &candidates {
-            let caps_str = analysis
-                .rvs_inferred()
-                .get(c)
-                .map(|cs| {
-                    let s = rvs_caps_to_string(cs);
-                    if s.is_empty() {
-                        " (pure)".to_string()
-                    } else {
-                        format!(" = {s}")
-                    }
-                })
-                .unwrap_or_else(|| " (unknown)".to_string());
-            eprintln!("  {c}{caps_str}");
-        }
-        return Err(format!(
-            "function '{function}' not found; see suggestions above"
-        ));
-    }
-
-    let own_caps = analysis.rvs_inferred().get(function);
-    let caps_str = match own_caps {
-        Some(cs) => {
-            let s = rvs_caps_to_string(cs);
-            if s.is_empty() {
-                " (pure)".to_string()
-            } else {
-                let desc: String = cs
-                    .rvs_iter()
-                    .map(|c| c.rvs_description())
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                format!(" = {s} ({desc})")
+    let exact_or_readable_matches =
+        rvs_why_function_matches(&callgraph, analysis.rvs_synthetic_paths(), function);
+    let function_path = match exact_or_readable_matches.as_slice() {
+        [function_path] => function_path.clone(),
+        [] => {
+            let candidates: Vec<DefPath> = callgraph
+                .rvs_keys()
+                .chain(analysis.rvs_synthetic_paths().iter())
+                .filter(|k| k.rvs_contains(function))
+                .take(10)
+                .cloned()
+                .collect();
+            if candidates.is_empty() {
+                return Err(format!("function '{function}' not found in callgraph"));
             }
+            eprintln!("Exact match not found. Did you mean:");
+            for c in &candidates {
+                let caps_str = analysis
+                    .rvs_inferred()
+                    .get(c)
+                    .map(|cs| {
+                        let s = cs.rvs_letters();
+                        if s.is_empty() {
+                            " (pure)".to_string()
+                        } else {
+                            format!(" = {s}")
+                        }
+                    })
+                    .unwrap_or_else(|| " (unknown)".to_string());
+                eprintln!("  {c}{caps_str}");
+            }
+            return Err(format!(
+                "function '{function}' not found; see suggestions above"
+            ));
         }
-        None => " (not in inferred)".to_string(),
+        matches => {
+            return Err(format!(
+                "function '{function}' is ambiguous: {} specialized implementations share this readable path",
+                matches.len()
+            ));
+        }
     };
-    println!("{function}{caps_str}");
-    for line in rvs_format_enforced_contract_diff_summary(&analysis.diffs, function) {
+    let function_key = function_path.rvs_as_str();
+    let behavior = callgraph.rvs_get(function_key);
+    let is_synthetic = analysis.rvs_synthetic_paths().contains(&function_path);
+
+    let own_caps = resolver.rvs_for_explanation_view(&function_path);
+    let caps_str = rvs_format_why_caps(
+        own_caps.as_ref(),
+        analysis.rvs_incomplete_paths().contains(&function_path),
+    );
+    println!("{function_path}{caps_str}");
+    for line in rvs_format_enforced_contract_diff_summary(&analysis.diffs, function_key) {
         println!("  {line}");
     }
     println!();
@@ -175,12 +152,8 @@ pub(crate) fn rvs_run_why_BIMPS(function: &str, path: &Path) -> Result<(), Strin
     for (callee, caps) in &callees {
         let s = match caps {
             Some(cs) if !cs.rvs_is_empty() => {
-                let chars = rvs_caps_to_string(cs);
-                let desc: String = cs
-                    .rvs_iter()
-                    .map(|c| c.rvs_description())
-                    .collect::<Vec<_>>()
-                    .join(" ");
+                let chars = cs.rvs_letters();
+                let desc = cs.rvs_descriptions();
                 format!("{chars} ({desc})")
             }
             Some(_) => "(pure)".to_string(),
@@ -190,6 +163,50 @@ pub(crate) fn rvs_run_why_BIMPS(function: &str, path: &Path) -> Result<(), Strin
     }
 
     Ok(())
+}
+
+fn rvs_why_function_matches(
+    callgraph: &crate::artifacts::FnGraph,
+    synthetic_paths: &BTreeSet<DefPath>,
+    function: &str,
+) -> Vec<DefPath> {
+    let exact = DefPath::from(function);
+    if callgraph.rvs_get(function).is_some() || synthetic_paths.contains(&exact) {
+        return vec![exact];
+    }
+    callgraph
+        .rvs_keys()
+        .chain(synthetic_paths)
+        .filter(|path| path.rvs_user_path() == function)
+        .cloned()
+        .collect()
+}
+
+fn rvs_format_why_caps(
+    caps: Option<&crate::capability::CapabilitySet>,
+    inference_incomplete: bool,
+) -> String {
+    let Some(caps) = caps else {
+        return " (unknown)".to_string();
+    };
+    let letters = caps.rvs_letters();
+    if letters.is_empty() {
+        if inference_incomplete {
+            " (incomplete; no known caps)".to_string()
+        } else {
+            " (pure)".to_string()
+        }
+    } else {
+        let mut description = caps
+            .rvs_iter()
+            .map(|capability| capability.rvs_description())
+            .collect::<Vec<_>>()
+            .join(" ");
+        if inference_incomplete {
+            description.push_str("; inference incomplete");
+        }
+        format!(" = {letters} ({description})")
+    }
 }
 
 fn rvs_callee_absence_message(had_collected_body: bool, is_synthetic: bool) -> &'static str {
@@ -254,7 +271,7 @@ fn rvs_format_contract_diff_summary(diff: &FnContractDiff) -> Vec<String> {
 fn rvs_format_optional_caps(caps: Option<&crate::capability::CapabilitySet>) -> String {
     match caps {
         Some(caps) => {
-            let text = rvs_caps_to_string(caps);
+            let text = caps.rvs_letters();
             if text.is_empty() {
                 "(pure)".to_string()
             } else {
@@ -561,6 +578,77 @@ mod tests {
 
         assert!(result.is_err());
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260715_why_accepts_unique_readable_specialized_path() {
+        let dir = rvs_make_cargo_project_BIS(
+            "why-readable-specialized-path",
+            "why-readable-specialized",
+            &[(
+                "src/lib.rs",
+                "#![allow(non_snake_case)]\n\npub struct Worker<T>(pub T);\n\nimpl Worker<u8> {\n    pub fn rvs_run(&self) {}\n}\n",
+            )],
+        );
+
+        let result = rvs_run_why_BIMPS("why_readable_specialized::Worker::rvs_run", &dir);
+        let output = format!("{result:?}\n");
+        rvs_snapshot_BIS(
+            "test_20260715_why_accepts_unique_readable_specialized_path",
+            &output,
+        );
+
+        assert!(result.is_ok());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260715_why_readable_specialized_path_detects_ambiguity() {
+        let mut graph = FnGraph::rvs_new();
+        graph.rvs_insert_M(
+            DefPath::from("demo::Worker{impl#7538}::rvs_run"),
+            crate::artifacts::FnNode::default(),
+        );
+        graph.rvs_insert_M(
+            DefPath::from("demo::Worker{impl#753136}::rvs_run"),
+            crate::artifacts::FnNode::default(),
+        );
+
+        let matches = rvs_why_function_matches(
+            &graph,
+            &std::collections::BTreeSet::new(),
+            "demo::Worker::rvs_run",
+        );
+        let output = format!(
+            "matches={}\nreadable_equal={}\n",
+            matches.len(),
+            matches
+                .iter()
+                .all(|path| path.rvs_user_path() == "demo::Worker::rvs_run")
+        );
+        rvs_snapshot_BIS(
+            "test_20260715_why_readable_specialized_path_detects_ambiguity",
+            &output,
+        );
+
+        assert_eq!(matches.len(), 2);
+    }
+
+    #[test]
+    fn test_20260715_why_marks_incomplete_capabilities() {
+        let pure = crate::capability::CapabilitySet::rvs_new();
+        let side_effect = crate::capability::CapabilitySet::rvs_from_validated("S");
+        let output = format!(
+            "pure={}\nincomplete_pure={}\nincomplete_known={}\nunknown={}\n",
+            rvs_format_why_caps(Some(&pure), false),
+            rvs_format_why_caps(Some(&pure), true),
+            rvs_format_why_caps(Some(&side_effect), true),
+            rvs_format_why_caps(None, false),
+        );
+        rvs_snapshot_BIS("test_20260715_why_marks_incomplete_capabilities", &output);
+
+        assert!(output.contains("inference incomplete"));
+        assert!(output.contains("unknown"));
     }
 
     #[test]

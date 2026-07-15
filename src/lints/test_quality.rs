@@ -1,11 +1,12 @@
-use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
+#[cfg(test)]
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use rustc_lint::LateContext;
 
 use super::ctx::{CoverageFn, TestCallTarget, TestSite};
-use super::msg::Msg;
+use super::msg::rvs_emit_node_span_lint_S;
 use super::{
     RVS_DUPLICATE_TEST, RVS_MISSING_TEST_OUTPUT, RVS_UNTESTED_GOOD_FN, RVS_UNTESTED_OK_FN,
 };
@@ -29,7 +30,7 @@ pub(crate) fn rvs_check_crate_post_BIMS<'tcx>(
     rvs_check_missing_test_output_BIS(cx, test_names);
     if let Some(selected) = selected_untested_functions {
         rvs_check_selected_untested_fns_S(cx, good_fns, ok_fns, selected);
-    } else if check_local_coverage || rvs_env_os_flag_enabled_BS("RIVUS_UI_TESTING") {
+    } else if check_local_coverage || crate::rvs_env_flag_is_one_BS("RIVUS_UI_TESTING") {
         let covered = rvs_direct_covered_functions(callgraph);
         let mut candidate_name_counts = BTreeMap::new();
         for candidate in good_fns.iter().chain(ok_fns) {
@@ -37,8 +38,14 @@ pub(crate) fn rvs_check_crate_post_BIMS<'tcx>(
                 .entry(candidate.name.clone())
                 .or_insert(0usize) += 1;
         }
-        rvs_check_untested_good_fns_S(cx, good_fns, test_calls, &covered, &candidate_name_counts);
-        rvs_check_untested_ok_fns_S(cx, ok_fns, test_calls, &covered, &candidate_name_counts);
+        rvs_check_untested_fns_S(
+            cx,
+            good_fns,
+            ok_fns,
+            test_calls,
+            &covered,
+            &candidate_name_counts,
+        );
     }
     rvs_write_callgraph_BIS(cx, callgraph, collect_callgraph);
 }
@@ -49,30 +56,20 @@ fn rvs_check_selected_untested_fns_S<'tcx>(
     ok_fns: &[CoverageFn],
     selected: &BTreeSet<FunctionIdentity>,
 ) {
-    for candidate in good_fns {
-        if rvs_should_emit_selected(cx, candidate, selected, RVS_UNTESTED_GOOD_FN) {
-            cx.tcx.emit_node_span_lint(
-                RVS_UNTESTED_GOOD_FN,
-                candidate.hir_id,
-                candidate.span,
-                Msg::rvs_new(
+    for (candidates, lint, label) in [
+        (good_fns, RVS_UNTESTED_GOOD_FN, "good"),
+        (ok_fns, RVS_UNTESTED_OK_FN, "ok"),
+    ] {
+        for candidate in candidates {
+            if rvs_should_emit_selected(cx, candidate, selected, lint) {
+                rvs_emit_node_span_lint_S(
+                    cx,
+                    lint,
+                    candidate.hir_id,
                     candidate.span,
-                    format!("good fn '{}' not called by any test", candidate.name),
-                ),
-            );
-        }
-    }
-    for candidate in ok_fns {
-        if rvs_should_emit_selected(cx, candidate, selected, RVS_UNTESTED_OK_FN) {
-            cx.tcx.emit_node_span_lint(
-                RVS_UNTESTED_OK_FN,
-                candidate.hir_id,
-                candidate.span,
-                Msg::rvs_new(
-                    candidate.span,
-                    format!("ok fn '{}' not called by any test", candidate.name),
-                ),
-            );
+                    format!("{label} fn '{}' not called by any test", candidate.name),
+                );
+            }
         }
     }
 }
@@ -100,11 +97,12 @@ fn rvs_check_duplicate_tests_S<'tcx>(
     for (name, spans) in test_names {
         if spans.len() > 1 {
             for site in spans {
-                cx.tcx.emit_node_span_lint(
+                rvs_emit_node_span_lint_S(
+                    cx,
                     RVS_DUPLICATE_TEST,
                     site.hir_id,
                     site.span,
-                    Msg::rvs_new(site.span, format!("duplicate test '{name}'")),
+                    format!("duplicate test '{name}'"),
                 );
             }
         }
@@ -115,7 +113,7 @@ fn rvs_check_missing_test_output_BIS<'tcx>(
     cx: &LateContext<'tcx>,
     test_names: &BTreeMap<String, Vec<TestSite>>,
 ) {
-    if rvs_env_os_flag_enabled_BS("RIVUS_UI_TESTING") {
+    if crate::rvs_env_flag_is_one_BS("RIVUS_UI_TESTING") {
         return;
     }
     let out_dir = Path::new("test_out");
@@ -126,11 +124,12 @@ fn rvs_check_missing_test_output_BIS<'tcx>(
         let out_file = format!("test_out/{name}.out");
         if !rvs_has_test_output_BIS(name, out_dir) {
             if let Some(site) = spans.first() {
-                cx.tcx.emit_node_span_lint(
+                rvs_emit_node_span_lint_S(
+                    cx,
                     RVS_MISSING_TEST_OUTPUT,
                     site.hir_id,
                     site.span,
-                    Msg::rvs_new(site.span, format!("test '{name}' missing {out_file}")),
+                    format!("test '{name}' missing {out_file}"),
                 );
             }
         }
@@ -145,46 +144,28 @@ fn rvs_has_test_output_BIS(name: &str, out_dir: &Path) -> bool {
     out_dir.join(format!("{name}.out")).is_file()
 }
 
-fn rvs_check_untested_good_fns_S<'tcx>(
+fn rvs_check_untested_fns_S<'tcx>(
     cx: &LateContext<'tcx>,
     good_fns: &[CoverageFn],
-    test_calls: &HashSet<TestCallTarget>,
-    covered: &BTreeSet<FunctionIdentity>,
-    candidate_name_counts: &BTreeMap<String, usize>,
-) {
-    for candidate in good_fns {
-        if !rvs_test_calls_function(test_calls, covered, candidate_name_counts, candidate) {
-            cx.tcx.emit_node_span_lint(
-                RVS_UNTESTED_GOOD_FN,
-                candidate.hir_id,
-                candidate.span,
-                Msg::rvs_new(
-                    candidate.span,
-                    format!("good fn '{}' not called by any test", candidate.name),
-                ),
-            );
-        }
-    }
-}
-
-fn rvs_check_untested_ok_fns_S<'tcx>(
-    cx: &LateContext<'tcx>,
     ok_fns: &[CoverageFn],
     test_calls: &HashSet<TestCallTarget>,
     covered: &BTreeSet<FunctionIdentity>,
     candidate_name_counts: &BTreeMap<String, usize>,
 ) {
-    for candidate in ok_fns {
-        if !rvs_test_calls_function(test_calls, covered, candidate_name_counts, candidate) {
-            cx.tcx.emit_node_span_lint(
-                RVS_UNTESTED_OK_FN,
-                candidate.hir_id,
-                candidate.span,
-                Msg::rvs_new(
+    for (candidates, lint, label) in [
+        (good_fns, RVS_UNTESTED_GOOD_FN, "good"),
+        (ok_fns, RVS_UNTESTED_OK_FN, "ok"),
+    ] {
+        for candidate in candidates {
+            if !rvs_test_calls_function(test_calls, covered, candidate_name_counts, candidate) {
+                rvs_emit_node_span_lint_S(
+                    cx,
+                    lint,
+                    candidate.hir_id,
                     candidate.span,
-                    format!("ok fn '{}' not called by any test", candidate.name),
-                ),
-            );
+                    format!("{label} fn '{}' not called by any test", candidate.name),
+                );
+            }
         }
     }
 }
@@ -202,36 +183,10 @@ fn rvs_test_calls_function(
 }
 
 fn rvs_direct_covered_functions(graph: &FnGraph) -> BTreeSet<FunctionIdentity> {
-    let mut covered = BTreeSet::new();
-    let mut visited = BTreeSet::new();
-    let mut pending = VecDeque::new();
-    for (_, node) in graph.rvs_iter() {
-        for crate_id in &node.test_crate_ids {
-            if let Some(calls) = node.coverage_calls.get(crate_id) {
-                pending.extend(calls.iter().cloned());
-            }
-        }
-    }
-    while let Some(identity) = pending.pop_front() {
-        if !visited.insert(identity.clone()) {
-            continue;
-        }
-        covered.insert(identity.clone());
-        let Some(node) = graph.rvs_get(identity.def_path.rvs_as_str()) else {
-            continue;
-        };
-        let Some(calls) = node.coverage_calls.get(&identity.crate_id) else {
-            continue;
-        };
-        pending.extend(calls.iter().cloned());
-    }
-    covered
+    graph.rvs_test_reachable_identities()
 }
 
-fn rvs_env_os_flag_enabled_BS(name: &str) -> bool {
-    rvs_env_os_flag_value_enabled(std::env::var_os(name).as_deref())
-}
-
+#[cfg(test)]
 fn rvs_env_os_flag_value_enabled(value: Option<&OsStr>) -> bool {
     value.and_then(OsStr::to_str) == Some("1")
 }

@@ -1,7 +1,7 @@
-use rustc_lint::{LateContext, LintContext};
+use rustc_lint::LateContext;
 
 use super::super::RVS_VALIDATE_RETURNS_UNIT;
-use super::super::msg::Msg;
+use super::super::msg::rvs_emit_span_lint_S;
 use super::super::utils::VALIDATE_PREFIXES;
 use super::result_return::rvs_result_return;
 
@@ -24,15 +24,11 @@ pub(crate) fn rvs_check_fn_S<'tcx>(
     }
 
     if rvs_result_return(cx, sig).is_some_and(|result| result.rvs_ok_is_unit()) {
-        cx.emit_span_lint(
+        rvs_emit_span_lint_S(
+            cx,
             RVS_VALIDATE_RETURNS_UNIT,
             sig.span,
-            Msg::rvs_new(
-                sig.span,
-                format!(
-                    "{name}: validate returning Result<(),E> — use TryFrom returning Result<T,E>"
-                ),
-            ),
+            format!("{name}: validate returning Result<(),E> — use TryFrom returning Result<T,E>"),
         );
     }
 }

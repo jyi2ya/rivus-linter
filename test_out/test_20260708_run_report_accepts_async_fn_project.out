@@ -1,3 +1,3 @@
 result=Ok(())
-report_entries=Ok([FnEntry { capabilities: CapabilitySet({A, S}), function_count: 1, line_count: 2, is_test: false, allows_dead_code: false }])
+report_entries=Ok([FnEntry { capabilities: CapabilitySet({A, S}), function_count: 1, line_count: 2 }])
 async_lines=Some(2)

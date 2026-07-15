@@ -3,7 +3,7 @@ use rustc_lint::LateContext;
 use rustc_middle::ty::{TyKind, TypeVisitableExt};
 
 use super::super::RVS_CONSUMED_ARG_ON_ERROR;
-use super::super::msg::Msg;
+use super::super::msg::rvs_emit_node_span_lint_S;
 use super::super::utils::rvs_tys;
 use super::result_return::rvs_result_return;
 
@@ -48,15 +48,13 @@ pub(crate) fn rvs_check_fn_MS<'tcx>(
         }
         if !result.error.contains(resolved_type) {
             let param_type = rvs_tys(input);
-            cx.tcx.emit_node_span_lint(
+            rvs_emit_node_span_lint_S(
+                cx,
                 RVS_CONSUMED_ARG_ON_ERROR,
                 param.hir_id,
                 input.span,
-                Msg::rvs_new(
-                    input.span,
-                    format!(
-                        "owned param '{param_type}' consumed but not preserved in error type of {fn_name}"
-                    ),
+                format!(
+                    "owned param '{param_type}' consumed but not preserved in error type of {fn_name}"
                 ),
             );
         }
