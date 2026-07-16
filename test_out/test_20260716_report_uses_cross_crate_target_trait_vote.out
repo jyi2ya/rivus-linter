@@ -1,0 +1,5 @@
+
+Trait Vote Outliers
+------------------------------
+1 target-specific local trait implementation group(s) have propagated capabilities outside their aggregate vote. Capability totals are unchanged.
+demo::Gamma::rvs_parse@demo::Parser: S outside pure for demo::Parser::rvs_parse (threshold 2/3, targets 13)

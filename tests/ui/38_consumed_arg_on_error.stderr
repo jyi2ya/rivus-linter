@@ -11,7 +11,8 @@ error: good fn 'rvs_process' not called by any test
   --> $DIR/tests/ui/38_consumed_arg_on_error.rs:3:1
    |
 LL | / fn rvs_process(name: String) -> Result<(), std::io::Error> {
-LL | |     Ok(())
+LL | |     drop(name);
+LL | |     Err(std::io::Error::other("failed"))
 LL | | }
    | |_^
    |

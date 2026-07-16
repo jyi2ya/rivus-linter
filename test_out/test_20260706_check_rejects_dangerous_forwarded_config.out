@@ -3,6 +3,7 @@ wrapper=true
 rivus_env=true
 ui_env=true
 coverage_env=true
+emissions_env=true
 rustc_env=true
 path_config=true
 harmless=true

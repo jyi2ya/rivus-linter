@@ -1,0 +1,5 @@
+zero=""
+nonzero=
+Inference Status
+------------------------------
+3 local function(s) depend on unknown callee capability data. Capability totals reflect declared suffixes; rename suggestions may omit unknown capabilities.

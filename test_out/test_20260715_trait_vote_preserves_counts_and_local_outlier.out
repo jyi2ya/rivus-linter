@@ -1,0 +1,8 @@
+selected=
+implementations=3
+threshold=2
+S_votes=1
+complete=true
+outlier=demo::EnvValue::rvs_parse@demo::FromString
+outlier_caps=S
+info_basis=TraitVote { implementations: 3, threshold: 2, votes: {S: 1} }

@@ -1,0 +1,4 @@
+kind=true
+active=not-v2
+backup_exists=false
+staging_exists=true

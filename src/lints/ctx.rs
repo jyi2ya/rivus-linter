@@ -4,8 +4,7 @@ use rustc_hir::HirId;
 use rustc_span::{Ident, Span};
 
 use super::body::BodyFacts;
-use crate::artifacts::{FnGraph, FunctionIdentity};
-use crate::symbols::DefPath;
+use crate::artifacts::{CallSiteIdentity, FnGraph, FunctionIdentity};
 
 #[derive(Debug)]
 pub(crate) struct CoverageFn {
@@ -109,7 +108,9 @@ pub(crate) struct FnCheckData<'a> {
     pub good_fns: &'a mut Vec<CoverageFn>,
     pub ok_fns: &'a mut Vec<CoverageFn>,
     pub callgraph: &'a mut FnGraph,
-    pub diagnostic_spans: &'a mut BTreeMap<DefPath, (HirId, Span)>,
+    pub diagnostic_spans: &'a mut BTreeMap<FunctionIdentity, (HirId, Span)>,
+    pub diagnostic_call_spans:
+        &'a mut BTreeMap<(FunctionIdentity, CallSiteIdentity), (HirId, Span)>,
     pub collect_caps_facts: bool,
     pub should_emit_lints: bool,
 }

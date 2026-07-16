@@ -1,0 +1,3 @@
+.deps.123.0.tmp: Err("infer-capsmap output layer '.deps.123.0.tmp' uses a reserved temporary filename shape")
+.caps-migration.123.0.tmp: Err("infer-capsmap output layer '.caps-migration.123.0.tmp' uses a reserved temporary filename shape")
+.custom.123.0.tmp: Err("infer-capsmap output layer '.custom.123.0.tmp' uses a reserved temporary filename shape")

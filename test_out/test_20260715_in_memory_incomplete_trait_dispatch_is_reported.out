@@ -1,0 +1,11 @@
+Offline Caps Check: 0 error(s), 1 warning(s)
+------------------------------------------------------------
+warning[incomplete_caps_knowledge]: demo::rvs_use_parser
+  calls rely on incomplete caps knowledge; checks use known capability lower bounds
+  layer: <inference>
+  file: <callgraph>
+  completeness: incomplete
+  affected callees: 1
+  callee: demo::Parser::rvs_parse (known caps: pure, basis=inferred)
+  refresh generated layer '<inference>' or add reviewed corrections to caps/ext
+  affected callers: 1

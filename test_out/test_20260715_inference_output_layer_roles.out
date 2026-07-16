@@ -1,6 +1,6 @@
 infer-capsmap:outside=ok
 infer-capsmap:deps=ok
-infer-capsmap:DEPS=ok
+infer-capsmap:DEPS=error
 infer-capsmap:generated=ok
 infer-capsmap:std=error
 infer-capsmap:seed=error
@@ -9,7 +9,7 @@ infer-capsmap:suppress=error
 infer-capsmap:ext=error
 infer-std:outside=ok
 infer-std:std=ok
-infer-std:STD=ok
+infer-std:STD=error
 infer-std:generated=ok
 infer-std:deps=error
 infer-std:DEPS=error

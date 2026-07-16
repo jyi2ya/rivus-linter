@@ -5,6 +5,7 @@ pub(crate) mod empty_fn;
 pub(crate) mod error_swallow;
 pub(crate) mod macro_expansion;
 pub(crate) mod reflection;
+pub(crate) mod result_flow;
 pub(crate) mod spawn;
 pub(crate) mod stub_macro;
 

@@ -1,1 +1,2 @@
-std::fs::read=BI # Blocking IO
+# rivus-caps-v2
+{"path":"std::fs::read","caps":"BI","basis":{"kind":"inferred"},"completeness":"complete"}

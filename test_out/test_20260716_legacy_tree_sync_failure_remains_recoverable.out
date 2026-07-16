@@ -1,0 +1,12 @@
+publish_error=true
+marker_after_publish_failure=1
+staging_after_publish_failure=true
+backup_after_publish_failure=false
+recovery_error=true
+marker_after_recovery_failure=1
+staging_after_recovery_failure=true
+backup_after_recovery_failure=false
+retry_ok=true
+marker_after_retry=0
+backup_after_retry=true
+active=S

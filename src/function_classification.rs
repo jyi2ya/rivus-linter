@@ -52,6 +52,18 @@ impl FunctionClassification {
         }
     }
 
+    pub(crate) fn rvs_new_for_crate(
+        scope: &LocalScope,
+        def_path: &DefPath,
+        node: &FnNode,
+        crate_id: u64,
+    ) -> Self {
+        debug_assert!(crate_id > 0, "stable crate id is nonzero");
+        let mut classification = Self::rvs_new(scope, def_path, node);
+        classification.is_entrypoint = node.rvs_is_entrypoint_for_crate(crate_id);
+        classification
+    }
+
     pub(crate) fn rvs_is_contract_enforced(self) -> bool {
         self.is_local
             && !self.is_entrypoint
@@ -70,6 +82,10 @@ impl FunctionClassification {
 
     pub(crate) fn rvs_is_report_candidate(self) -> bool {
         self.is_local && (!self.is_trait_impl || self.is_port_method)
+    }
+
+    pub(crate) fn rvs_is_trait_vote_outlier_candidate(self) -> bool {
+        self.is_local && self.is_trait_impl && !self.is_port_method && self.has_source
     }
 
     pub(crate) fn rvs_is_strip_candidate(self) -> bool {
@@ -170,10 +186,11 @@ mod tests {
             let classification =
                 FunctionClassification::rvs_new(&scope, &DefPath::from(path), &node);
             output.push_str(&format!(
-                "{name}: contract={} offline={} report={} strip={}\n",
+                "{name}: contract={} offline={} report={} outlier={} strip={}\n",
                 classification.rvs_is_contract_enforced(),
                 classification.rvs_is_offline_checked(),
                 classification.rvs_is_report_candidate(),
+                classification.rvs_is_trait_vote_outlier_candidate(),
                 classification.rvs_is_strip_candidate(),
             ));
         }
@@ -237,5 +254,35 @@ mod tests {
         assert!(scope.rvs_contains(&path));
         assert!(classification.rvs_is_offline_checked());
         assert!(classification.rvs_is_report_candidate());
+    }
+
+    #[test]
+    fn test_20260716_function_classification_uses_target_entrypoint_identity() {
+        let scope = LocalScope::rvs_new(&BTreeSet::from([CrateName::from("demo")]));
+        let path = DefPath::from("demo::main");
+        let mut node = FnNode::default();
+        node.sources
+            .insert(FnSource::rvs_new("/workspace/src/lib.rs".into(), 1, 2));
+        node.production_crate_ids.extend([1, 2]);
+        node.entrypoint_crate_ids.insert(2);
+
+        let library = FunctionClassification::rvs_new_for_crate(&scope, &path, &node, 1);
+        let binary = FunctionClassification::rvs_new_for_crate(&scope, &path, &node, 2);
+        let output = format!(
+            "library_contract={}\nlibrary_offline={}\nbinary_contract={}\nbinary_offline={}\n",
+            library.rvs_is_contract_enforced(),
+            library.rvs_is_offline_checked(),
+            binary.rvs_is_contract_enforced(),
+            binary.rvs_is_offline_checked(),
+        );
+        rvs_snapshot_BIS(
+            "test_20260716_function_classification_uses_target_entrypoint_identity",
+            &output,
+        );
+
+        assert!(library.rvs_is_contract_enforced());
+        assert!(library.rvs_is_offline_checked());
+        assert!(!binary.rvs_is_contract_enforced());
+        assert!(!binary.rvs_is_offline_checked());
     }
 }

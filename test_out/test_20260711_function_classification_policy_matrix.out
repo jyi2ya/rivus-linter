@@ -1,9 +1,9 @@
-ordinary: contract=true offline=true report=true strip=true
-entry_main: contract=false offline=false report=true strip=true
-library_main: contract=true offline=true report=true strip=true
-external: contract=false offline=false report=false strip=false
-test: contract=false offline=false report=true strip=true
-trait_impl: contract=false offline=false report=false strip=false
-port_impl: contract=false offline=true report=true strip=false
-generated_snafu: contract=false offline=false report=true strip=true
-user_snafu: contract=true offline=true report=true strip=true
+ordinary: contract=true offline=true report=true outlier=false strip=true
+entry_main: contract=false offline=false report=true outlier=false strip=true
+library_main: contract=true offline=true report=true outlier=false strip=true
+external: contract=false offline=false report=false outlier=false strip=false
+test: contract=false offline=false report=true outlier=false strip=true
+trait_impl: contract=false offline=false report=false outlier=true strip=false
+port_impl: contract=false offline=true report=true outlier=false strip=false
+generated_snafu: contract=false offline=false report=true outlier=false strip=true
+user_snafu: contract=true offline=true report=true outlier=false strip=true

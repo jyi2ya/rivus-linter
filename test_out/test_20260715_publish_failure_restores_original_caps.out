@@ -1,0 +1,6 @@
+error=cannot preserve original caps directory $TMP/staging as backup $TMP/caps.v1-backup: backup publish failed; rollback: original caps restored
+exchange_calls=2
+rename_calls=1
+original=old
+backup_exists=false
+staging_exists=false

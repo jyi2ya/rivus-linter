@@ -116,7 +116,18 @@ pub(crate) fn rvs_run_why_BIMPS(function: &str, path: &Path) -> Result<(), Strin
         analysis.rvs_incomplete_paths().contains(&function_path),
     );
     println!("{function_path}{caps_str}");
-    for line in rvs_format_enforced_contract_diff_summary(&analysis.diffs, function_key) {
+    let inference_incomplete = analysis.rvs_incomplete_paths().contains(&function_path);
+    for line in rvs_format_enforced_contract_diff_summary(
+        &analysis.diffs,
+        function_key,
+        inference_incomplete,
+    ) {
+        println!("  {line}");
+    }
+    for line in rvs_format_capsmap_knowledge(&seed, &function_path) {
+        println!("  {line}");
+    }
+    for line in rvs_format_trait_vote_summary(&analysis, &function_path) {
         println!("  {line}");
     }
     println!();
@@ -163,6 +174,129 @@ pub(crate) fn rvs_run_why_BIMPS(function: &str, path: &Path) -> Result<(), Strin
     }
 
     Ok(())
+}
+
+fn rvs_format_capsmap_knowledge(caps: &crate::capsmap::CapsMap, function: &DefPath) -> Vec<String> {
+    let Some(info) = caps.rvs_lookup_info_def_path(function) else {
+        return Vec::new();
+    };
+    let mut lines = vec![format!(
+        "caps knowledge: basis={}, completeness={}",
+        info.rvs_basis().rvs_name(),
+        info.rvs_completeness().rvs_name()
+    )];
+    if let crate::capability::CapabilityBasis::TraitVote {
+        implementations,
+        threshold,
+        votes,
+    } = info.rvs_basis()
+    {
+        let counts = [
+            crate::capability::Capability::B,
+            crate::capability::Capability::I,
+            crate::capability::Capability::P,
+            crate::capability::Capability::S,
+            crate::capability::Capability::T,
+        ]
+        .into_iter()
+        .map(|capability| {
+            format!(
+                "{}={}/{}",
+                capability.rvs_as_char(),
+                votes.get(&capability).copied().unwrap_or(0),
+                implementations
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+        lines.push(format!(
+            "persisted trait vote: selected={}, threshold={threshold}/{implementations}, votes: {counts}",
+            rvs_format_caps_letters(info.rvs_caps())
+        ));
+    }
+    if let Some(source) = info.rvs_source() {
+        lines.push(format!(
+            "caps source: {}:{} ({})",
+            source.file.display(),
+            source.line,
+            source.layer
+        ));
+    }
+    lines
+}
+
+fn rvs_format_trait_vote_summary(
+    analysis: &PreparedLocalAnalysis,
+    function: &DefPath,
+) -> Vec<String> {
+    let trait_method = function
+        .rvs_trait_method_identity()
+        .map(|identity| identity.rvs_trait_method_path())
+        .unwrap_or_else(|| function.clone());
+    let Some(vote) = analysis.rvs_trait_votes().get(&trait_method) else {
+        return Vec::new();
+    };
+    if vote.port_short_circuit {
+        return vec!["trait vote: bypassed by fixed Port capability".to_string()];
+    }
+    let selected = rvs_format_caps_letters(&vote.selected_caps);
+    let counts = [
+        crate::capability::Capability::B,
+        crate::capability::Capability::I,
+        crate::capability::Capability::P,
+        crate::capability::Capability::S,
+        crate::capability::Capability::T,
+    ]
+    .into_iter()
+    .map(|capability| {
+        format!(
+            "{}={}/{}",
+            capability.rvs_as_char(),
+            vote.counts.get(&capability).copied().unwrap_or(0),
+            vote.implementations.len()
+        )
+    })
+    .collect::<Vec<_>>()
+    .join(", ");
+    let mut lines = vec![format!(
+        "trait vote: selected={selected}, threshold={}/{}, completeness={}",
+        vote.threshold,
+        vote.implementations.len(),
+        if vote.rvs_is_complete() {
+            "complete"
+        } else {
+            "incomplete"
+        }
+    )];
+    lines.push(format!("trait votes: {counts}"));
+    if let Some(implementation) = vote
+        .implementations
+        .iter()
+        .find(|implementation| implementation.path == *function)
+    {
+        let contribution = rvs_format_caps_letters(&implementation.propagated_caps);
+        lines.push(format!("trait impl contribution: {contribution}"));
+        if let Some(outlier) = analysis
+            .trait_impl_outliers
+            .iter()
+            .find(|outlier| outlier.implementation == *function)
+        {
+            lines.push(format!(
+                "trait impl outlier caps: {}",
+                rvs_format_caps_letters(&outlier.unexpected_caps)
+            ));
+        }
+    }
+    lines
+}
+
+fn rvs_format_caps_letters(caps: &crate::capability::CapabilitySet) -> String {
+    let letters = caps.rvs_letters();
+    if letters.is_empty() {
+        "(pure)".to_string()
+    } else {
+        letters
+    }
 }
 
 fn rvs_why_function_matches(
@@ -219,7 +353,10 @@ fn rvs_callee_absence_message(had_collected_body: bool, is_synthetic: bool) -> &
     }
 }
 
-fn rvs_format_contract_diff_summary(diff: &FnContractDiff) -> Vec<String> {
+fn rvs_format_contract_diff_summary(
+    diff: &FnContractDiff,
+    inference_incomplete: bool,
+) -> Vec<String> {
     let mut lines = Vec::new();
     if diff.expected_name != diff.actual_name {
         lines.push(format!("expected name: {}", diff.expected_name));
@@ -228,8 +365,13 @@ fn rvs_format_contract_diff_summary(diff: &FnContractDiff) -> Vec<String> {
         "declared caps: {}",
         rvs_format_optional_caps(diff.declared_public_caps.as_ref())
     ));
+    let expected_label = if inference_incomplete {
+        "known expected caps (incomplete)"
+    } else {
+        "expected caps"
+    };
     lines.push(format!(
-        "expected caps: {}",
+        "{expected_label}: {}",
         rvs_format_optional_caps(Some(&diff.expected_public_caps))
     ));
     if let Some(declared) = diff.declared_public_caps.as_ref() {
@@ -250,7 +392,7 @@ fn rvs_format_contract_diff_summary(diff: &FnContractDiff) -> Vec<String> {
                 missing.iter().copied().collect::<String>()
             ));
         }
-        if !extra.is_empty() {
+        if !inference_incomplete && !extra.is_empty() {
             lines.push(format!(
                 "extra declared caps: {}",
                 extra.iter().copied().collect::<String>()
@@ -285,6 +427,7 @@ fn rvs_format_optional_caps(caps: Option<&crate::capability::CapabilitySet>) -> 
 fn rvs_format_enforced_contract_diff_summary(
     diffs: &[FnContractDiff],
     function: &str,
+    inference_incomplete: bool,
 ) -> Vec<String> {
     let Some(diff) = diffs
         .iter()
@@ -292,7 +435,7 @@ fn rvs_format_enforced_contract_diff_summary(
     else {
         return Vec::new();
     };
-    rvs_format_contract_diff_summary(diff)
+    rvs_format_contract_diff_summary(diff, inference_incomplete)
 }
 
 #[cfg(test)]
@@ -300,10 +443,11 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
-    use crate::artifacts::{FnGraph, FnSource};
+    use crate::artifacts::{FnGraph, FnNode, FnSource};
     use crate::symbols::{CrateName, FnName};
     use crate::test_support::{
-        rvs_make_cargo_project_BIS, rvs_make_temp_dir_BIS, rvs_snapshot_BIS,
+        rvs_caps_v2, rvs_make_capsmap, rvs_make_cargo_project_BIS, rvs_make_temp_dir_BIS,
+        rvs_snapshot_BIS,
     };
 
     #[test]
@@ -315,15 +459,20 @@ mod tests {
             declared_public_caps: Some(crate::capability::CapabilitySet::rvs_from_validated("ABI")),
             expected_public_caps: crate::capability::CapabilitySet::rvs_from_validated("AP"),
         };
-        let lines = rvs_format_contract_diff_summary(&diff);
+        let complete_lines = rvs_format_contract_diff_summary(&diff, false);
+        let incomplete_lines = rvs_format_contract_diff_summary(&diff, true);
         let none_caps = rvs_format_optional_caps(None);
         rvs_snapshot_BIS(
             "test_20260703_format_contract_diff_summary",
-            &format!("{}\nnone={none_caps}\n", lines.join("\n")),
+            &format!(
+                "complete:\n{}\nincomplete:\n{}\nnone={none_caps}\n",
+                complete_lines.join("\n"),
+                incomplete_lines.join("\n")
+            ),
         );
 
         assert_eq!(
-            lines,
+            complete_lines,
             vec![
                 "expected name: rvs_fetch_P".to_string(),
                 "declared caps: ABI".to_string(),
@@ -333,6 +482,127 @@ mod tests {
                 "mismatches: name_mismatch, missing_port".to_string(),
             ]
         );
+        assert_eq!(
+            incomplete_lines,
+            vec![
+                "expected name: rvs_fetch_P".to_string(),
+                "declared caps: ABI".to_string(),
+                "known expected caps (incomplete): AP".to_string(),
+                "missing caps: P".to_string(),
+                "mismatches: name_mismatch, missing_port".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_20260715_why_formats_trait_vote_and_impl_contribution() {
+        let node = || FnNode {
+            sources: BTreeSet::from([FnSource::rvs_new("src/lib.rs".into(), 1, 2)]),
+            ..FnNode::default()
+        };
+        let mut graph = FnGraph::rvs_new();
+        let mut declaration = node();
+        declaration.has_body = false;
+        graph.rvs_insert_M(DefPath::from("demo::FromString::rvs_parse"), declaration);
+        for implementation in ["demo::Alpha", "demo::Beta"] {
+            let mut implementation_node = node();
+            implementation_node.is_trait_impl = true;
+            graph.rvs_insert_M(
+                DefPath::from(format!("{implementation}::rvs_parse@demo::FromString")),
+                implementation_node,
+            );
+        }
+        let mut outlier = node();
+        outlier.is_trait_impl = true;
+        outlier.calls.insert(DefPath::from("dep::environment"));
+        let outlier_path = DefPath::from("demo::EnvValue::rvs_parse@demo::FromString");
+        graph.rvs_insert_M(outlier_path.clone(), outlier);
+        let analysis = PreparedLocalAnalysis::rvs_prepare_M(
+            &mut graph,
+            &rvs_make_capsmap(&[("dep::environment", "S")]),
+            &BTreeSet::from([CrateName::from("demo")]),
+        );
+
+        let trait_lines =
+            rvs_format_trait_vote_summary(&analysis, &DefPath::from("demo::FromString::rvs_parse"));
+        let impl_lines = rvs_format_trait_vote_summary(&analysis, &outlier_path);
+        let output = format!(
+            "trait:\n{}\nimpl:\n{}\n",
+            trait_lines.join("\n"),
+            impl_lines.join("\n"),
+        );
+        rvs_snapshot_BIS(
+            "test_20260715_why_formats_trait_vote_and_impl_contribution",
+            &output,
+        );
+
+        assert!(output.contains("threshold=2/3"));
+        assert!(output.contains("trait impl contribution: S"));
+        assert!(output.contains("trait impl outlier caps: S"));
+    }
+
+    #[test]
+    fn test_20260715_why_uses_persisted_votes_and_outlier_eligibility() {
+        let mut caps = crate::capsmap::CapsMap::rvs_new();
+        caps.rvs_insert_info_M(
+            crate::symbols::CapsMapKey::from("demo::Parser::rvs_parse"),
+            crate::capability::CapabilityInfo::rvs_trait_vote(
+                crate::capability::CapabilitySet::rvs_from_validated("B"),
+                3,
+                2,
+                std::collections::BTreeMap::from([
+                    (crate::capability::Capability::B, 2),
+                    (crate::capability::Capability::S, 1),
+                ]),
+                crate::capability::CapabilityCompleteness::Complete,
+            ),
+        );
+        let persisted =
+            rvs_format_capsmap_knowledge(&caps, &DefPath::from("demo::Parser::rvs_parse"));
+
+        let node = || FnNode {
+            sources: BTreeSet::from([FnSource::rvs_new("src/lib.rs".into(), 1, 2)]),
+            ..FnNode::default()
+        };
+        let mut graph = FnGraph::rvs_new();
+        let mut declaration = node();
+        declaration.has_body = false;
+        graph.rvs_insert_M(DefPath::from("demo::Parser::rvs_parse"), declaration);
+        for implementation in ["demo::Alpha", "demo::Beta"] {
+            let mut implementation_node = node();
+            implementation_node.is_trait_impl = true;
+            graph.rvs_insert_M(
+                DefPath::from(format!("{implementation}::rvs_parse@demo::Parser")),
+                implementation_node,
+            );
+        }
+        let mut generated = FnNode {
+            is_trait_impl: true,
+            ..FnNode::default()
+        };
+        generated.calls.insert(DefPath::from("dep::effect"));
+        let generated_path = DefPath::from("demo::Generated::rvs_parse@demo::Parser");
+        graph.rvs_insert_M(generated_path.clone(), generated);
+        let analysis = PreparedLocalAnalysis::rvs_prepare_M(
+            &mut graph,
+            &rvs_make_capsmap(&[("dep::effect", "S")]),
+            &BTreeSet::from([CrateName::from("demo")]),
+        );
+        let generated_lines = rvs_format_trait_vote_summary(&analysis, &generated_path);
+        let output = format!(
+            "persisted:\n{}\ngenerated:\n{}\n",
+            persisted.join("\n"),
+            generated_lines.join("\n")
+        );
+        rvs_snapshot_BIS(
+            "test_20260715_why_uses_persisted_votes_and_outlier_eligibility",
+            &output,
+        );
+
+        assert!(output.contains("persisted trait vote: selected=B, threshold=2/3"));
+        assert!(output.contains("trait impl contribution: S"));
+        assert!(!output.contains("trait impl outlier caps"));
+        assert!(analysis.trait_impl_outliers.is_empty());
     }
 
     #[test]
@@ -486,7 +756,7 @@ mod tests {
             &crate::capsmap::CapsMap::rvs_new(),
             &std::collections::BTreeSet::from([CrateName::from("demo")]),
         );
-        let lines = rvs_format_enforced_contract_diff_summary(&analysis.diffs, "demo::main");
+        let lines = rvs_format_enforced_contract_diff_summary(&analysis.diffs, "demo::main", false);
         rvs_snapshot_BIS(
             "test_20260703_why_contract_summary_skips_executable_entry",
             &format!("lines={lines:?}\n"),
@@ -549,7 +819,11 @@ mod tests {
         )
         .unwrap();
         std::fs::create_dir_all(dir.join("caps")).unwrap();
-        std::fs::write(dir.join("caps/std"), "std::fs::rvs_read_BI=BI\n").unwrap();
+        std::fs::write(
+            dir.join("caps/std"),
+            rvs_caps_v2(&[("std::fs::rvs_read_BI", "BI")]),
+        )
+        .unwrap();
 
         let result = rvs_run_why_BIMPS("std::fs::rvs_read_BI", &dir);
         let output = format!("{result:?}\n");

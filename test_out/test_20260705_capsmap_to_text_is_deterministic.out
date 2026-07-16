@@ -1,2 +1,3 @@
-alpha=BI
-zeta=S
+# rivus-caps-v2
+{"path":"alpha","caps":"BI","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"zeta","caps":"S","basis":{"kind":"explicit"},"completeness":"complete"}

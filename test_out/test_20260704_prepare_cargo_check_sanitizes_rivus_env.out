@@ -1,5 +1,7 @@
 callgraph=Some(None)
 capsmap=removed
+offline_emissions=Some(None)
+offline_acks=Some(None)
 rustc=Some(None)
 rivus_enabled=Some(Some("1"))
 ui_testing=Some(None)

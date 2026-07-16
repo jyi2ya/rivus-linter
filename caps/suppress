@@ -1,60 +1,42 @@
-# suppress
-
-# ─── Allocation capacity overflow (never triggers in practice) ──
-# capacity_overflow only fires when usize arithmetic overflows during
-# Vec/String resizing — effectively impossible on 64-bit systems.
-alloc::raw_vec::capacity_overflow=
-
-# ─── char/unicode methods: S from reading immutable static tables ──
-# These functions read `static` arrays of Unicode property data (e.g.
-# SHORT_OFFSET_RUNS). The arrays are pure compile-time constant data
-# with no interior mutability — reading them is semantically pure.
-# The linter marks them S because it cannot distinguish immutable
-# data tables from mutable global state.
-
-# char methods that delegate to unicode lookup tables
-core::char::methods::char::is_alphabetic=
-core::char::methods::char::is_alphanumeric=
-core::char::methods::char::is_lowercase=
-core::char::methods::char::is_uppercase=
-core::char::methods::char::is_whitespace=
-core::char::methods::char::is_numeric=
-core::char::methods::char::is_cased=
-core::char::methods::char::is_case_ignorable=
-core::char::methods::char::is_grapheme_extended=
-core::char::methods::char::is_titlecase=
-core::char::methods::char::to_lowercase=
-core::char::methods::char::to_uppercase=
-core::char::methods::char::to_titlecase=
-core::char::methods::char::case=
-core::char::methods::char::escape_debug=
-core::char::methods::char::escape_debug_ext=
-
-# unicode_data lookup functions — read immutable static tables
-core::unicode::unicode_data::alphabetic::lookup=
-core::unicode::unicode_data::alphabetic::lookup_slow=
-core::unicode::unicode_data::case_ignorable::lookup=
-core::unicode::unicode_data::case_ignorable::lookup_slow=
-core::unicode::unicode_data::conversions::to_lower=
-core::unicode::unicode_data::conversions::to_title=
-core::unicode::unicode_data::conversions::to_upper=
-core::unicode::unicode_data::grapheme_extend::lookup=
-core::unicode::unicode_data::grapheme_extend::lookup_slow=
-core::unicode::unicode_data::lowercase::lookup=
-core::unicode::unicode_data::lt::lookup=
-core::unicode::unicode_data::lt::lookup_slow=
-core::unicode::unicode_data::n::lookup=
-core::unicode::unicode_data::n::lookup_slow=
-core::unicode::unicode_data::uppercase::lookup=
-core::unicode::unicode_data::white_space::lookup=
-
-# ─── Thread-local accessors ──────────────────────────────────────
-# LocalKey methods access per-thread global state and therefore require S+T.
-std::thread::local::LocalKey::get=ST
-std::thread::local::LocalKey::replace=ST
-std::thread::local::LocalKey::set=ST
-std::thread::local::LocalKey::take=ST
-std::thread::local::LocalKey::try_with=ST
-std::thread::local::LocalKey::with=ST
-std::thread::local::LocalKey::with_borrow=ST
-std::thread::local::LocalKey::with_borrow_mut=ST
+# rivus-caps-v2
+{"path":"alloc::raw_vec::capacity_overflow","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::char::methods::char::case","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::char::methods::char::escape_debug","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::char::methods::char::escape_debug_ext","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::char::methods::char::is_alphabetic","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::char::methods::char::is_alphanumeric","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::char::methods::char::is_case_ignorable","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::char::methods::char::is_cased","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::char::methods::char::is_grapheme_extended","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::char::methods::char::is_lowercase","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::char::methods::char::is_numeric","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::char::methods::char::is_titlecase","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::char::methods::char::is_uppercase","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::char::methods::char::is_whitespace","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::char::methods::char::to_lowercase","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::char::methods::char::to_titlecase","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::char::methods::char::to_uppercase","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::unicode::unicode_data::alphabetic::lookup","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::unicode::unicode_data::alphabetic::lookup_slow","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::unicode::unicode_data::case_ignorable::lookup","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::unicode::unicode_data::case_ignorable::lookup_slow","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::unicode::unicode_data::conversions::to_lower","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::unicode::unicode_data::conversions::to_title","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::unicode::unicode_data::conversions::to_upper","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::unicode::unicode_data::grapheme_extend::lookup","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::unicode::unicode_data::grapheme_extend::lookup_slow","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::unicode::unicode_data::lowercase::lookup","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::unicode::unicode_data::lt::lookup","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::unicode::unicode_data::lt::lookup_slow","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::unicode::unicode_data::n::lookup","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::unicode::unicode_data::n::lookup_slow","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::unicode::unicode_data::uppercase::lookup","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::unicode::unicode_data::white_space::lookup","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::thread::local::LocalKey::get","caps":"ST","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::thread::local::LocalKey::replace","caps":"ST","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::thread::local::LocalKey::set","caps":"ST","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::thread::local::LocalKey::take","caps":"ST","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::thread::local::LocalKey::try_with","caps":"ST","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::thread::local::LocalKey::with","caps":"ST","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::thread::local::LocalKey::with_borrow","caps":"ST","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::thread::local::LocalKey::with_borrow_mut","caps":"ST","basis":{"kind":"explicit"},"completeness":"complete"}

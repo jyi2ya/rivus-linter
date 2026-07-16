@@ -1,0 +1,3 @@
+missing_site=invalid callgraph artifact: coverage_call_sites for demo::rvs_run crate id 7 does not match coverage_calls
+duplicate_occurrence=invalid callgraph artifact: coverage_call_sites for demo::rvs_run crate id 7 repeats occurrence 0
+aggregate_mismatch=invalid callgraph artifact: aggregate calls for demo::rvs_run do not match coverage_calls

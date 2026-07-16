@@ -1,12 +1,8 @@
 error: caller lacks propagated capabilities required by callee; callee: 148_calls_in_async_block::rvs_inner_ABI; caller declared caps: pure; callee caps: ABI; missing propagated caps: B, I
-  --> $DIR/tests/ui/148_calls_in_async_block.rs:8:1
+  --> $DIR/tests/ui/148_calls_in_async_block.rs:10:9
    |
-LL | / fn rvs_outer() {
-LL | |     let _ = async {
-LL | |         rvs_inner_ABI();
-LL | |     };
-LL | | }
-   | |_^
+LL |         rvs_inner_ABI();
+   |         ^^^^^^^^^^^^^^^
    |
    = note: `#[deny(rivus::rvs_call_violation)]` on by default
 

@@ -20,7 +20,8 @@ error: good fn 'rvs_validate' not called by any test
   --> $DIR/tests/ui/184_qualified_result_return.rs:6:1
    |
 LL | / fn rvs_validate(payload: Payload) -> std::result::Result<(), std::io::Error> {
-LL | |     Ok(())
+LL | |     drop(payload);
+LL | |     Err(std::io::Error::other("failed"))
 LL | | }
    | |_^
    |

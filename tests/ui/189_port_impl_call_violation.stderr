@@ -1,10 +1,8 @@
 error: caller lacks propagated capabilities required by callee; callee: 189_port_impl_call_violation::rvs_effect_S; caller declared caps: P; callee caps: S; missing propagated caps: S
-  --> $DIR/tests/ui/189_port_impl_call_violation.rs:18:5
+  --> $DIR/tests/ui/189_port_impl_call_violation.rs:19:9
    |
-LL | /     fn rvs_fetch_P(&self) -> i32 {
-LL | |         rvs_effect_S()
-LL | |     }
-   | |_____^
+LL |         rvs_effect_S()
+   |         ^^^^^^^^^^^^^^
    |
    = note: `#[deny(rivus::rvs_call_violation)]` on by default
 

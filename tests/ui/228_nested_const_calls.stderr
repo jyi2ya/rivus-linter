@@ -1,30 +1,22 @@
 error: caller lacks propagated capabilities required by callee; callee: 228_nested_const_calls::rvs_count_B; caller declared caps: pure; callee caps: B; missing propagated caps: B
-  --> $DIR/tests/ui/228_nested_const_calls.rs:15:1
+  --> $DIR/tests/ui/228_nested_const_calls.rs:17:44
    |
-LL | / fn rvs_asm_const_call() {
-LL | |     unsafe {
-LL | |         core::arch::asm!("/* {} */", const rvs_count_B());
-LL | |     }
-LL | | }
-   | |_^
+LL |         core::arch::asm!("/* {} */", const rvs_count_B());
+   |                                            ^^^^^^^^^^^^^
    |
    = note: `#[deny(rivus::rvs_call_violation)]` on by default
 
 error: caller lacks propagated capabilities required by callee; callee: 228_nested_const_calls::rvs_count_B; caller declared caps: pure; callee caps: B; missing propagated caps: B
-  --> $DIR/tests/ui/228_nested_const_calls.rs:7:1
+  --> $DIR/tests/ui/228_nested_const_calls.rs:8:21
    |
-LL | / fn rvs_inline_const_call() {
-LL | |     let _ = const { rvs_count_B() };
-LL | | }
-   | |_^
+LL |     let _ = const { rvs_count_B() };
+   |                     ^^^^^^^^^^^^^
 
 error: caller lacks propagated capabilities required by callee; callee: 228_nested_const_calls::rvs_count_B; caller declared caps: pure; callee caps: B; missing propagated caps: B
-  --> $DIR/tests/ui/228_nested_const_calls.rs:11:1
+  --> $DIR/tests/ui/228_nested_const_calls.rs:12:17
    |
-LL | / fn rvs_repeat_const_call() {
-LL | |     let _ = [0; rvs_count_B()];
-LL | | }
-   | |_^
+LL |     let _ = [0; rvs_count_B()];
+   |                 ^^^^^^^^^^^^^
 
 error: good fn 'rvs_count_B' not called by any test
   --> $DIR/tests/ui/228_nested_const_calls.rs:3:1

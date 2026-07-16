@@ -7,7 +7,7 @@ use crate::capability::CapabilityFacts;
 use crate::function_classification::LocalScope;
 use crate::symbols::{CrateName, DefPath};
 
-pub(crate) const CALLGRAPH_SCHEMA_VERSION: u32 = 4;
+pub(crate) const CALLGRAPH_SCHEMA_VERSION: u32 = 9;
 
 #[derive(Debug, Serialize)]
 struct CallgraphArtifactRef<'a> {
@@ -35,6 +35,23 @@ pub struct FnSource {
 pub(crate) struct FunctionIdentity {
     pub(crate) crate_id: u64,
     pub(crate) def_path: DefPath,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct CallSiteIdentity {
+    pub(crate) callee: FunctionIdentity,
+    pub(crate) occurrence: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) source: Option<CallSiteSource>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct CallSiteSource {
+    pub(crate) file: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) base: Option<PathBuf>,
+    pub(crate) start: u32,
+    pub(crate) end: u32,
 }
 
 impl FnSource {
@@ -66,6 +83,30 @@ impl FnSource {
     }
 }
 
+impl CallSiteSource {
+    pub(crate) fn rvs_new(file: PathBuf, start: u32, end: u32) -> Self {
+        debug_assert!(start < end, "call-site source range must be non-empty");
+        Self {
+            file,
+            base: None,
+            start,
+            end,
+        }
+    }
+
+    pub(crate) fn rvs_new_relative(file: PathBuf, base: PathBuf, start: u32, end: u32) -> Self {
+        debug_assert!(file.is_relative(), "call-site source file must be relative");
+        debug_assert!(base.is_absolute(), "call-site source base must be absolute");
+        debug_assert!(start < end, "call-site source range must be non-empty");
+        Self {
+            file,
+            base: Some(base),
+            start,
+            end,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FnNode {
     pub calls: BTreeSet<DefPath>,
@@ -75,6 +116,8 @@ pub struct FnNode {
     pub unresolved_test_calls: BTreeSet<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) coverage_calls: BTreeMap<u64, BTreeSet<FunctionIdentity>>,
+    #[serde(default)]
+    pub(crate) coverage_call_sites: BTreeMap<u64, BTreeSet<CallSiteIdentity>>,
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub(crate) test_crate_ids: BTreeSet<u64>,
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
@@ -83,6 +126,12 @@ pub struct FnNode {
     pub(crate) coverage_candidate_crate_ids: BTreeSet<u64>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) sources_by_crate: BTreeMap<u64, BTreeSet<FnSource>>,
+    #[serde(default)]
+    pub(crate) facts_by_crate: BTreeMap<u64, CapabilityFacts>,
+    #[serde(default)]
+    pub(crate) has_body_by_crate: BTreeMap<u64, bool>,
+    #[serde(default)]
+    pub(crate) entrypoint_crate_ids: BTreeSet<u64>,
     #[serde(flatten)]
     pub facts: CapabilityFacts,
     pub has_body: bool,
@@ -111,10 +160,14 @@ impl Default for FnNode {
             entry_calls: BTreeSet::new(),
             unresolved_test_calls: BTreeSet::new(),
             coverage_calls: BTreeMap::new(),
+            coverage_call_sites: BTreeMap::new(),
             test_crate_ids: BTreeSet::new(),
             production_crate_ids: BTreeSet::new(),
             coverage_candidate_crate_ids: BTreeSet::new(),
             sources_by_crate: BTreeMap::new(),
+            facts_by_crate: BTreeMap::new(),
+            has_body_by_crate: BTreeMap::new(),
+            entrypoint_crate_ids: BTreeSet::new(),
             facts: CapabilityFacts::default(),
             has_body: true,
             is_trait_impl: false,
@@ -132,10 +185,18 @@ impl Default for FnNode {
 impl FnNode {
     fn rvs_merge_coverage_M(&mut self, other: &Self) {
         for (crate_id, calls) in &other.coverage_calls {
+            self.calls
+                .extend(calls.iter().map(|call| call.def_path.clone()));
             self.coverage_calls
                 .entry(*crate_id)
                 .or_default()
                 .extend(calls.iter().cloned());
+        }
+        for (crate_id, call_sites) in &other.coverage_call_sites {
+            self.coverage_call_sites
+                .entry(*crate_id)
+                .or_default()
+                .extend(call_sites.iter().cloned());
         }
         self.test_crate_ids
             .extend(other.test_crate_ids.iter().copied());
@@ -149,6 +210,28 @@ impl FnNode {
                 .or_default()
                 .extend(sources.iter().cloned());
         }
+        for (crate_id, facts) in &other.facts_by_crate {
+            self.facts_by_crate
+                .entry(*crate_id)
+                .and_modify(|existing| {
+                    existing.has_async |= facts.has_async;
+                    existing.is_unsafe_fn |= facts.is_unsafe_fn;
+                    existing.has_mut_param |= facts.has_mut_param;
+                    existing.has_static_ref |= facts.has_static_ref;
+                    existing.has_static_mut_ref |= facts.has_static_mut_ref;
+                    existing.has_thread_local_ref |= facts.has_thread_local_ref;
+                    existing.is_port_method |= facts.is_port_method;
+                })
+                .or_insert(*facts);
+        }
+        for (crate_id, has_body) in &other.has_body_by_crate {
+            self.has_body_by_crate
+                .entry(*crate_id)
+                .and_modify(|existing| *existing |= *has_body)
+                .or_insert(*has_body);
+        }
+        self.entrypoint_crate_ids
+            .extend(other.entrypoint_crate_ids.iter().copied());
     }
 
     /// Merge another callgraph entry for the same function into this one.
@@ -178,6 +261,15 @@ impl FnNode {
 
     pub(crate) fn rvs_dependency_calls(&self) -> impl Iterator<Item = &DefPath> {
         self.calls.iter().chain(&self.entry_calls)
+    }
+
+    pub(crate) fn rvs_is_entrypoint_for_crate(&self, crate_id: u64) -> bool {
+        debug_assert!(crate_id > 0, "stable crate id is nonzero");
+        if self.entrypoint_crate_ids.is_empty() {
+            self.is_entrypoint
+        } else {
+            self.entrypoint_crate_ids.contains(&crate_id)
+        }
     }
 }
 
@@ -441,7 +533,8 @@ pub fn rvs_parse_callgraph_json_S(json: &str) -> Result<FnGraph, String> {
     let object = value
         .as_object()
         .ok_or_else(|| "invalid callgraph JSON: root must be an object".to_string())?;
-    let graph = if object.contains_key("schema_version") || object.contains_key("nodes") {
+    let is_versioned = object.contains_key("schema_version") || object.contains_key("nodes");
+    let graph = if is_versioned {
         let schema_version = object
             .get("schema_version")
             .and_then(serde_json::Value::as_u64)
@@ -452,6 +545,37 @@ pub fn rvs_parse_callgraph_json_S(json: &str) -> Result<FnGraph, String> {
             return Err(format!(
                 "unsupported callgraph schema version {schema_version}; expected {CALLGRAPH_SCHEMA_VERSION}"
             ));
+        }
+        let nodes = object
+            .get("nodes")
+            .and_then(serde_json::Value::as_object)
+            .ok_or_else(|| "invalid callgraph artifact: nodes must be an object".to_string())?;
+        for (def_path, node) in nodes {
+            let Some(fields) = node.as_object() else {
+                return Err(format!(
+                    "invalid callgraph artifact: node for {def_path} must be an object"
+                ));
+            };
+            if !fields.contains_key("facts_by_crate") {
+                return Err(format!(
+                    "invalid callgraph artifact: facts_by_crate is required for {def_path} in schema version {CALLGRAPH_SCHEMA_VERSION}"
+                ));
+            }
+            if !fields.contains_key("has_body_by_crate") {
+                return Err(format!(
+                    "invalid callgraph artifact: has_body_by_crate is required for {def_path} in schema version {CALLGRAPH_SCHEMA_VERSION}"
+                ));
+            }
+            if !fields.contains_key("coverage_call_sites") {
+                return Err(format!(
+                    "invalid callgraph artifact: coverage_call_sites is required for {def_path} in schema version {CALLGRAPH_SCHEMA_VERSION}"
+                ));
+            }
+            if !fields.contains_key("entrypoint_crate_ids") {
+                return Err(format!(
+                    "invalid callgraph artifact: entrypoint_crate_ids is required for {def_path} in schema version {CALLGRAPH_SCHEMA_VERSION}"
+                ));
+            }
         }
         let artifact: CallgraphArtifact = serde_json::from_value(value)
             .map_err(|e| format!("invalid callgraph artifact: {e}"))?;
@@ -481,7 +605,79 @@ pub fn rvs_parse_callgraph_json_S(json: &str) -> Result<FnGraph, String> {
                 ));
             }
         }
-        for source in &node.sources {
+        if is_versioned {
+            let mut crate_ids = node.production_crate_ids.clone();
+            crate_ids.extend(node.test_crate_ids.iter().copied());
+            crate_ids.extend(node.coverage_candidate_crate_ids.iter().copied());
+            crate_ids.extend(node.sources_by_crate.keys().copied());
+            crate_ids.extend(node.coverage_calls.keys().copied());
+            crate_ids.extend(node.coverage_call_sites.keys().copied());
+            crate_ids.extend(node.facts_by_crate.keys().copied());
+            crate_ids.extend(node.has_body_by_crate.keys().copied());
+            crate_ids.extend(node.entrypoint_crate_ids.iter().copied());
+            if crate_ids.contains(&0) {
+                return Err(format!(
+                    "invalid callgraph artifact: target metadata for {path} contains zero crate id"
+                ));
+            }
+            if crate_ids.is_empty() {
+                return Err(format!(
+                    "invalid callgraph artifact: node for {path} has no target identity"
+                ));
+            }
+            if let Some(crate_id) = crate_ids
+                .iter()
+                .find(|crate_id| !node.sources_by_crate.contains_key(crate_id))
+            {
+                return Err(format!(
+                    "invalid callgraph artifact: sources_by_crate for {path} is missing crate id {crate_id}"
+                ));
+            }
+            if let Some(crate_id) = crate_ids
+                .iter()
+                .find(|crate_id| !node.coverage_calls.contains_key(crate_id))
+            {
+                return Err(format!(
+                    "invalid callgraph artifact: coverage_calls for {path} is missing crate id {crate_id}"
+                ));
+            }
+            if let Some(crate_id) = crate_ids
+                .iter()
+                .find(|crate_id| !node.coverage_call_sites.contains_key(crate_id))
+            {
+                return Err(format!(
+                    "invalid callgraph artifact: coverage_call_sites for {path} is missing crate id {crate_id}"
+                ));
+            }
+            if let Some(crate_id) = crate_ids
+                .iter()
+                .find(|crate_id| !node.facts_by_crate.contains_key(crate_id))
+            {
+                return Err(format!(
+                    "invalid callgraph artifact: facts_by_crate for {path} is missing crate id {crate_id}"
+                ));
+            }
+            if let Some(crate_id) = crate_ids
+                .iter()
+                .find(|crate_id| !node.has_body_by_crate.contains_key(crate_id))
+            {
+                return Err(format!(
+                    "invalid callgraph artifact: has_body_by_crate for {path} is missing crate id {crate_id}"
+                ));
+            }
+            if node.is_entrypoint && node.entrypoint_crate_ids.is_empty() {
+                return Err(format!(
+                    "invalid callgraph artifact: entrypoint node for {path} has no entrypoint crate identity"
+                ));
+            }
+        }
+        let mut all_sources = node.sources.clone();
+        all_sources.extend(
+            node.sources_by_crate
+                .values()
+                .flat_map(|sources| sources.iter().cloned()),
+        );
+        for source in &all_sources {
             if source.file.as_os_str().is_empty() {
                 return Err(format!(
                     "invalid callgraph JSON: source file for {path} is empty"
@@ -511,8 +707,99 @@ pub fn rvs_parse_callgraph_json_S(json: &str) -> Result<FnGraph, String> {
                 ));
             }
         }
+        if let Some(call) = node
+            .coverage_calls
+            .values()
+            .flatten()
+            .find(|call| call.crate_id == 0)
+        {
+            return Err(format!(
+                "invalid callgraph JSON: callee identity for {path} and {} contains zero crate id",
+                call.def_path
+            ));
+        }
+        for (crate_id, call_sites) in &node.coverage_call_sites {
+            let mut occurrences = BTreeSet::new();
+            if let Some(call_site) = call_sites.iter().find(|call_site| {
+                call_site.callee.crate_id == 0 || call_site.callee.def_path.rvs_as_str().is_empty()
+            }) {
+                return Err(format!(
+                    "invalid callgraph JSON: call-site callee identity for {path} occurrence {} is invalid",
+                    call_site.occurrence
+                ));
+            }
+            if let Some(call_site) = call_sites.iter().find(|call_site| {
+                !occurrences.insert((call_site.source.clone(), call_site.occurrence))
+            }) {
+                return Err(format!(
+                    "invalid callgraph artifact: coverage_call_sites for {path} crate id {crate_id} repeats occurrence {}",
+                    call_site.occurrence
+                ));
+            }
+            let site_callees: BTreeSet<FunctionIdentity> = call_sites
+                .iter()
+                .map(|call_site| call_site.callee.clone())
+                .collect();
+            if node.coverage_calls.get(crate_id) != Some(&site_callees) {
+                return Err(format!(
+                    "invalid callgraph artifact: coverage_call_sites for {path} crate id {crate_id} does not match coverage_calls"
+                ));
+            }
+            for call_site in call_sites {
+                if call_site.source.is_some() {
+                    rvs_validate_call_site_source(call_site, path)?;
+                }
+            }
+        }
+        if is_versioned {
+            let target_call_paths: BTreeSet<DefPath> = node
+                .coverage_calls
+                .values()
+                .flatten()
+                .map(|call| call.def_path.clone())
+                .collect();
+            if node.calls != target_call_paths {
+                return Err(format!(
+                    "invalid callgraph artifact: aggregate calls for {path} do not match coverage_calls"
+                ));
+            }
+        }
     }
     Ok(graph)
+}
+
+fn rvs_validate_call_site_source(
+    call_site: &CallSiteIdentity,
+    caller: &DefPath,
+) -> Result<(), String> {
+    let source = call_site
+        .source
+        .as_ref()
+        .expect("never: caller checks that call-site source is present");
+    let occurrence = call_site.occurrence;
+    if source.file.as_os_str().is_empty() {
+        return Err(format!(
+            "invalid callgraph JSON: call-site source file for {caller} occurrence {occurrence} is empty"
+        ));
+    }
+    if let Some(base) = &source.base {
+        if base.as_os_str().is_empty() {
+            return Err(format!(
+                "invalid callgraph JSON: call-site source base for {caller} occurrence {occurrence} is empty"
+            ));
+        }
+        if source.file.is_absolute() || !base.is_absolute() {
+            return Err(format!(
+                "invalid callgraph JSON: call-site source base for {caller} occurrence {occurrence} is inconsistent"
+            ));
+        }
+    }
+    if source.start >= source.end {
+        return Err(format!(
+            "invalid callgraph JSON: call-site source range for {caller} occurrence {occurrence} is empty or reversed"
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -548,7 +835,7 @@ mod tests {
             }
         }"#;
         let result = rvs_parse_callgraph_json_S(json).unwrap();
-        let output = format!("{result:?}");
+        let output = format!("{result:?}\n");
         rvs_snapshot_BIS("test_20260609_parse_callgraph_valid_json", &output);
         assert_eq!(result.rvs_len(), 2);
         assert!(
@@ -573,7 +860,15 @@ mod tests {
     #[test]
     fn test_20260710_callgraph_artifact_version_roundtrip() {
         let mut graph = FnGraph::rvs_new();
-        graph.rvs_insert_M(DefPath::from("demo::rvs_run"), FnNode::default());
+        let mut node = FnNode::default();
+        node.production_crate_ids.insert(7);
+        node.coverage_candidate_crate_ids.insert(7);
+        node.sources_by_crate.insert(7, BTreeSet::new());
+        node.coverage_calls.insert(7, BTreeSet::new());
+        node.coverage_call_sites.insert(7, BTreeSet::new());
+        node.facts_by_crate.insert(7, CapabilityFacts::default());
+        node.has_body_by_crate.insert(7, true);
+        graph.rvs_insert_M(DefPath::from("demo::rvs_run"), node);
 
         let json = rvs_serialize_callgraph_json_S(&graph).unwrap();
         let parsed = rvs_parse_callgraph_json_S(&json).unwrap();
@@ -583,9 +878,41 @@ mod tests {
             1,
         );
         let previous_version_error = rvs_parse_callgraph_json_S(&previous_version).unwrap_err();
+        let mut missing_facts: serde_json::Value = serde_json::from_str(&json).unwrap();
+        missing_facts["nodes"]["demo::rvs_run"]
+            .as_object_mut()
+            .expect("never: serialized node is an object")
+            .remove("facts_by_crate");
+        let missing_facts_error =
+            rvs_parse_callgraph_json_S(&serde_json::to_string(&missing_facts).unwrap())
+                .unwrap_err();
+        let mut missing_has_body: serde_json::Value = serde_json::from_str(&json).unwrap();
+        missing_has_body["nodes"]["demo::rvs_run"]
+            .as_object_mut()
+            .expect("never: serialized node is an object")
+            .remove("has_body_by_crate");
+        let missing_has_body_error =
+            rvs_parse_callgraph_json_S(&serde_json::to_string(&missing_has_body).unwrap())
+                .unwrap_err();
+        let mut missing_call_sites: serde_json::Value = serde_json::from_str(&json).unwrap();
+        missing_call_sites["nodes"]["demo::rvs_run"]
+            .as_object_mut()
+            .expect("never: serialized node is an object")
+            .remove("coverage_call_sites");
+        let missing_call_sites_error =
+            rvs_parse_callgraph_json_S(&serde_json::to_string(&missing_call_sites).unwrap())
+                .unwrap_err();
+        let mut missing_entrypoints: serde_json::Value = serde_json::from_str(&json).unwrap();
+        missing_entrypoints["nodes"]["demo::rvs_run"]
+            .as_object_mut()
+            .expect("never: serialized node is an object")
+            .remove("entrypoint_crate_ids");
+        let missing_entrypoints_error =
+            rvs_parse_callgraph_json_S(&serde_json::to_string(&missing_entrypoints).unwrap())
+                .unwrap_err();
         let version_marker = format!(r#""schema_version":{CALLGRAPH_SCHEMA_VERSION}"#);
         let output = format!(
-            "schema_version={CALLGRAPH_SCHEMA_VERSION}\ncontains_version={}\nnodes={}\nprevious_version_error={previous_version_error}\n",
+            "schema_version={CALLGRAPH_SCHEMA_VERSION}\ncontains_version={}\nnodes={}\nprevious_version_error={previous_version_error}\nmissing_facts_error={missing_facts_error}\nmissing_has_body_error={missing_has_body_error}\nmissing_call_sites_error={missing_call_sites_error}\nmissing_entrypoints_error={missing_entrypoints_error}\n",
             json.contains(&version_marker),
             parsed.rvs_len(),
         );
@@ -599,9 +926,57 @@ mod tests {
     }
 
     #[test]
+    fn test_20260716_callgraph_artifact_rejects_identityless_node() {
+        let mut graph = FnGraph::rvs_new();
+        graph.rvs_insert_M(DefPath::from("demo::rvs_run"), FnNode::default());
+
+        let json = rvs_serialize_callgraph_json_S(&graph).unwrap();
+        let error = rvs_parse_callgraph_json_S(&json).unwrap_err();
+        let output = format!("{error}\n");
+        rvs_snapshot_BIS(
+            "test_20260716_callgraph_artifact_rejects_identityless_node",
+            &output,
+        );
+
+        assert!(error.contains("target identity"));
+    }
+
+    #[test]
+    fn test_20260715_callgraph_artifact_requires_facts_for_each_crate_identity() {
+        let mut graph = FnGraph::rvs_new();
+        let mut node = FnNode::default();
+        node.production_crate_ids.insert(7);
+        node.sources_by_crate.insert(7, BTreeSet::new());
+        node.coverage_calls.insert(7, BTreeSet::new());
+        node.coverage_call_sites.insert(7, BTreeSet::new());
+        let path = DefPath::from("demo::rvs_run");
+        graph.rvs_insert_M(path.clone(), node);
+
+        let json = rvs_serialize_callgraph_json_S(&graph).unwrap();
+        let missing_facts_error = rvs_parse_callgraph_json_S(&json).unwrap_err();
+        graph
+            .rvs_get_mut_M(&path)
+            .expect("never: test graph contains the node")
+            .facts_by_crate
+            .insert(7, CapabilityFacts::default());
+        let json = rvs_serialize_callgraph_json_S(&graph).unwrap();
+        let missing_has_body_error = rvs_parse_callgraph_json_S(&json).unwrap_err();
+        let output = format!(
+            "missing_facts={missing_facts_error}\nmissing_has_body={missing_has_body_error}\n"
+        );
+        rvs_snapshot_BIS(
+            "test_20260715_callgraph_artifact_requires_facts_for_each_crate_identity",
+            &output,
+        );
+
+        assert!(missing_facts_error.contains("facts_by_crate"));
+        assert!(missing_has_body_error.contains("has_body_by_crate"));
+    }
+
+    #[test]
     fn test_20260710_callgraph_artifact_schema_validation() {
         let cases = [
-            ("unknown", r#"{"schema_version":5,"nodes":{}}"#),
+            ("unknown", r#"{"schema_version":10,"nodes":{}}"#),
             ("missing", r#"{"nodes":{}}"#),
             ("string", r#"{"schema_version":"2","nodes":{}}"#),
         ];
@@ -616,8 +991,198 @@ mod tests {
             &output,
         );
 
-        assert!(output.contains("unsupported callgraph schema version 5"));
+        assert!(output.contains("unsupported callgraph schema version 10"));
         assert!(output.contains("schema_version must be an unsigned integer"));
+    }
+
+    #[test]
+    fn test_20260716_callgraph_artifact_validates_target_entrypoints() {
+        let mut graph = FnGraph::rvs_new();
+        let mut node = FnNode {
+            is_entrypoint: true,
+            ..FnNode::default()
+        };
+        node.production_crate_ids.insert(7);
+        node.sources_by_crate.insert(7, BTreeSet::new());
+        node.coverage_calls.insert(7, BTreeSet::new());
+        node.coverage_call_sites.insert(7, BTreeSet::new());
+        node.facts_by_crate.insert(7, CapabilityFacts::default());
+        node.has_body_by_crate.insert(7, true);
+        node.entrypoint_crate_ids.insert(7);
+        graph.rvs_insert_M(DefPath::from("demo::main"), node);
+
+        let valid_json = rvs_serialize_callgraph_json_S(&graph).unwrap();
+        let valid = rvs_parse_callgraph_json_S(&valid_json);
+        let mut missing_identity: serde_json::Value = serde_json::from_str(&valid_json).unwrap();
+        missing_identity["nodes"]["demo::main"]["entrypoint_crate_ids"] =
+            serde_json::Value::Array(Vec::new());
+        let missing_identity =
+            rvs_parse_callgraph_json_S(&serde_json::to_string(&missing_identity).unwrap())
+                .unwrap_err();
+        let output = format!(
+            "valid={}\nmissing_identity={missing_identity}\n",
+            valid.is_ok(),
+        );
+        rvs_snapshot_BIS(
+            "test_20260716_callgraph_artifact_validates_target_entrypoints",
+            &output,
+        );
+
+        assert!(valid.is_ok());
+        assert!(missing_identity.contains("no entrypoint crate identity"));
+    }
+
+    #[test]
+    fn test_20260716_callgraph_artifact_rejects_asymmetric_target_metadata() {
+        let mut graph = FnGraph::rvs_new();
+        let mut node = FnNode::default();
+        node.production_crate_ids.insert(7);
+        node.sources_by_crate.insert(7, BTreeSet::new());
+        node.coverage_calls.insert(7, BTreeSet::new());
+        node.coverage_call_sites.insert(7, BTreeSet::new());
+        node.facts_by_crate.insert(7, CapabilityFacts::default());
+        node.has_body_by_crate.insert(7, true);
+        graph.rvs_insert_M(DefPath::from("demo::rvs_run"), node);
+
+        let valid_json = rvs_serialize_callgraph_json_S(&graph).unwrap();
+        let mut extra_facts: serde_json::Value = serde_json::from_str(&valid_json).unwrap();
+        extra_facts["nodes"]["demo::rvs_run"]["facts_by_crate"]["8"] =
+            serde_json::to_value(CapabilityFacts::default()).unwrap();
+        let extra_facts_error =
+            rvs_parse_callgraph_json_S(&serde_json::to_string(&extra_facts).unwrap()).unwrap_err();
+
+        let mut zero_id: serde_json::Value = serde_json::from_str(&valid_json).unwrap();
+        zero_id["nodes"]["demo::rvs_run"]["facts_by_crate"]["0"] =
+            serde_json::to_value(CapabilityFacts::default()).unwrap();
+        zero_id["nodes"]["demo::rvs_run"]["has_body_by_crate"]["0"] = true.into();
+        zero_id["nodes"]["demo::rvs_run"]["sources_by_crate"]["0"] =
+            serde_json::Value::Array(Vec::new());
+        zero_id["nodes"]["demo::rvs_run"]["coverage_calls"]["0"] =
+            serde_json::Value::Array(Vec::new());
+        zero_id["nodes"]["demo::rvs_run"]["coverage_call_sites"]["0"] =
+            serde_json::Value::Array(Vec::new());
+        let zero_id_error =
+            rvs_parse_callgraph_json_S(&serde_json::to_string(&zero_id).unwrap()).unwrap_err();
+
+        let mut invalid_source: serde_json::Value = serde_json::from_str(&valid_json).unwrap();
+        invalid_source["nodes"]["demo::rvs_run"]["sources_by_crate"]["7"] =
+            serde_json::from_str(r#"[{"file":"","name_start":1,"name_end":2}]"#).unwrap();
+        let invalid_source_error =
+            rvs_parse_callgraph_json_S(&serde_json::to_string(&invalid_source).unwrap())
+                .unwrap_err();
+
+        let output = format!(
+            "extra_facts={extra_facts_error}\nzero_id={zero_id_error}\ninvalid_source={invalid_source_error}\n"
+        );
+        rvs_snapshot_BIS(
+            "test_20260716_callgraph_artifact_rejects_asymmetric_target_metadata",
+            &output,
+        );
+
+        assert!(extra_facts_error.contains("missing crate id 8"));
+        assert!(zero_id_error.contains("zero crate id"));
+        assert!(invalid_source_error.contains("source file"));
+    }
+
+    #[test]
+    fn test_20260716_callgraph_artifact_validates_call_site_coverage_consistency() {
+        let mut graph = FnGraph::rvs_new();
+        let mut node = FnNode::default();
+        node.production_crate_ids.insert(7);
+        node.sources_by_crate.insert(7, BTreeSet::new());
+        node.coverage_calls.insert(
+            7,
+            BTreeSet::from([FunctionIdentity {
+                crate_id: 9,
+                def_path: DefPath::from("dependency::first"),
+            }]),
+        );
+        node.calls.insert(DefPath::from("dependency::first"));
+        node.coverage_call_sites.insert(7, BTreeSet::new());
+        node.facts_by_crate.insert(7, CapabilityFacts::default());
+        node.has_body_by_crate.insert(7, true);
+        graph.rvs_insert_M(DefPath::from("demo::rvs_run"), node);
+        let missing_site =
+            rvs_parse_callgraph_json_S(&rvs_serialize_callgraph_json_S(&graph).unwrap())
+                .unwrap_err();
+
+        let node = graph
+            .rvs_get_mut_M(&DefPath::from("demo::rvs_run"))
+            .expect("never: graph contains test node");
+        node.coverage_calls
+            .get_mut(&7)
+            .unwrap()
+            .insert(FunctionIdentity {
+                crate_id: 10,
+                def_path: DefPath::from("dependency::second"),
+            });
+        node.calls.insert(DefPath::from("dependency::second"));
+        node.coverage_call_sites.insert(
+            7,
+            BTreeSet::from([
+                CallSiteIdentity {
+                    callee: FunctionIdentity {
+                        crate_id: 9,
+                        def_path: DefPath::from("dependency::first"),
+                    },
+                    occurrence: 0,
+                    source: None,
+                },
+                CallSiteIdentity {
+                    callee: FunctionIdentity {
+                        crate_id: 10,
+                        def_path: DefPath::from("dependency::second"),
+                    },
+                    occurrence: 0,
+                    source: None,
+                },
+            ]),
+        );
+        let duplicate_occurrence =
+            rvs_parse_callgraph_json_S(&rvs_serialize_callgraph_json_S(&graph).unwrap())
+                .unwrap_err();
+        let node = graph
+            .rvs_get_mut_M(&DefPath::from("demo::rvs_run"))
+            .expect("never: graph contains test node");
+        node.coverage_call_sites.insert(
+            7,
+            BTreeSet::from([
+                CallSiteIdentity {
+                    callee: FunctionIdentity {
+                        crate_id: 9,
+                        def_path: DefPath::from("dependency::first"),
+                    },
+                    occurrence: 0,
+                    source: None,
+                },
+                CallSiteIdentity {
+                    callee: FunctionIdentity {
+                        crate_id: 10,
+                        def_path: DefPath::from("dependency::second"),
+                    },
+                    occurrence: 1,
+                    source: None,
+                },
+            ]),
+        );
+        let valid_json = rvs_serialize_callgraph_json_S(&graph).unwrap();
+        let mut aggregate_mismatch: serde_json::Value = serde_json::from_str(&valid_json).unwrap();
+        aggregate_mismatch["nodes"]["demo::rvs_run"]["calls"] =
+            serde_json::Value::Array(Vec::new());
+        let aggregate_mismatch =
+            rvs_parse_callgraph_json_S(&serde_json::to_string(&aggregate_mismatch).unwrap())
+                .unwrap_err();
+        let output = format!(
+            "missing_site={missing_site}\nduplicate_occurrence={duplicate_occurrence}\naggregate_mismatch={aggregate_mismatch}\n"
+        );
+        rvs_snapshot_BIS(
+            "test_20260716_callgraph_artifact_validates_call_site_coverage_consistency",
+            &output,
+        );
+
+        assert!(missing_site.contains("coverage_call_sites"));
+        assert!(duplicate_occurrence.contains("occurrence"));
+        assert!(aggregate_mismatch.contains("aggregate calls"));
     }
 
     #[test]
@@ -689,12 +1254,15 @@ mod tests {
         ordinary
             .calls
             .insert(DefPath::from("std::fs::read_to_string"));
+        ordinary.production_crate_ids.insert(1);
         let mut entry = FnNode {
             is_entrypoint: true,
             sources: BTreeSet::from([entry_source]),
             ..FnNode::default()
         };
         entry.calls.insert(DefPath::from("std::process::exit"));
+        entry.production_crate_ids.insert(2);
+        entry.entrypoint_crate_ids.insert(2);
 
         let mut ordinary_graph = FnGraph::rvs_new();
         ordinary_graph.rvs_insert_M(DefPath::from("demo::main"), ordinary.clone());
@@ -709,6 +1277,7 @@ mod tests {
         test_copy
             .calls
             .insert(DefPath::from("test::test_main_static"));
+        test_copy.test_crate_ids.insert(3);
         test_copy_graph.rvs_insert_M(DefPath::from("demo::main"), test_copy);
         let merged = FnGraph::rvs_merge_artifacts(
             vec![ordinary_graph, entry_graph.clone(), test_copy_graph.clone()],
@@ -804,15 +1373,17 @@ mod tests {
         );
 
         let output = format!(
-            "retained_entry={}\nretained_sources={:?}\nretained_calls={:?}\nentry_calls={:?}\nreverse_equal={}\nentry_conflict={conflict_result:?}\nordinary_calls={:?}\nordinary_function_count={}\nordinary_line_count={:?}\nmixed_role={mixed_role:?}\nsource_less_mixed_role={source_less_mixed_role:?}\n",
+            "retained_entry={}\nentrypoint_crate_ids={:?}\nretained_sources={:?}\nretained_calls={:?}\nentry_calls={:?}\nreverse_equal={}\nentry_conflict={conflict_result:?}\nordinary_calls={:?}\nordinary_function_count={}\nordinary_line_count={:?}\nmixed_role={mixed_role:?}\nsource_less_mixed_role={source_less_mixed_role:?}\n",
             retained.is_entrypoint,
+            retained.entrypoint_crate_ids,
             retained.sources,
             retained.calls,
             retained.entry_calls,
             retained.sources == reverse_retained.sources
                 && retained.calls == reverse_retained.calls
                 && retained.entry_calls == reverse_retained.entry_calls
-                && retained.is_entrypoint == reverse_retained.is_entrypoint,
+                && retained.is_entrypoint == reverse_retained.is_entrypoint
+                && retained.entrypoint_crate_ids == reverse_retained.entrypoint_crate_ids,
             ordinary_merged.calls,
             ordinary_merged.report_function_count,
             ordinary_merged.report_line_count,
@@ -823,6 +1394,7 @@ mod tests {
         );
 
         assert!(!retained.is_entrypoint);
+        assert_eq!(retained.entrypoint_crate_ids, BTreeSet::from([2]));
         assert_eq!(retained.sources.len(), 1);
         assert!(retained.calls.contains("std::fs::read_to_string"));
         assert!(!retained.calls.contains("std::process::exit"));

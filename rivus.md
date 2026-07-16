@@ -217,6 +217,12 @@ Port 方法的 P 不从函数后缀中解析，而是由 trait 名推断。当�
 
 推荐使用 `rvs_*_P` 命名约定显式标注 Port 方法的调用方。
 
+#### 普通 Trait 投票与非典型实现
+
+普通非 Port trait 方法对 `B/I/P/S/T` 逐项执行 at-least-half vote，阈值为 `ceil(实现数量 / 2)`。声明自身的后缀只在没有实现可聚合时回退使用。投票表示典型公开能力，不表示所有实现的最坏情况。
+
+推断会保留参与实现数、阈值和逐能力票数。一个完整、可修改的本地实现若拥有投票未选中的传播能力，会产生 `RVS_TRAIT_IMPL_OUTLIER` warning。该 warning 不改变 trait 投票结果，也不改变 pure/good/ok 统计；它用于提示某个实现可能把隐藏环境、I/O、阻塞或其他副作用放进了一个通常不具备这些行为的抽象。Port、外部实现和推断不完整的实现组不产生此 warning。
+
 ### 调用规则
 
 **唯一规则：对 `B/I/P/S/T` 五个可传播能力逐字母检查；被调用方拥有的每个这类能力，调用方都必须拥有。`A/M/U` 只从函数自身签名推断，不参与调用规则。**
@@ -255,7 +261,7 @@ rvs_parse_int      可调用  rvs_fetch_user_A      ✅ (A 为签名能力，不
 
 ### capsmap
 
-为非 `rvs_` 函数声明能力。**只支持项目根目录下的 `caps/` 目录**；不支持单文件 capsmap、不支持 `-m/--capsmap` 覆盖路径，也不再读取或生成 `target/rivus-*-capsmap*` / `target/rivus-effective-capsmap/`。
+为非 `rvs_` 函数声明能力。**只支持项目根目录下的 `caps/` 目录和 capsmap v2 JSON Lines 格式**；不支持单文件 capsmap、不支持 `-m/--capsmap` 覆盖路径，也不再读取或生成 `target/rivus-*-capsmap*` / `target/rivus-effective-capsmap/`。
 
 ```
 caps/
@@ -276,23 +282,32 @@ cargo rivus infer-std -o caps/std
 cargo rivus infer-capsmap -o caps/deps
 ```
 
-每行一个条目，格式：
+每个 layer 的第一条有效行必须是版本头，之后每行一个 JSON record：
 
-```
-完整函数路径=能力字母 # 可选注释
-```
-
-示例：
-
-```
-std::fs::read_to_string=BI     # 阻塞+I/O（失败由 Result 表达）
-std::collections::HashMap::new=  # 纯函数，无能力
-std::process::exit=S           # 副作用：终止进程
+```text
+# rivus-caps-v2
+{"path":"std::fs::read_to_string","caps":"BI","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::collections::HashMap::new","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
 ```
 
-- linter 对 capsmap 中的键做精确匹配（全限定路径完全一致）。不支持后缀匹配——caps 文件中的键必须使用 rustc 给出的 def_path
+`caps` 使用按字母序排列的 `ABIMPSTU` 字符串，空字符串表示 pure。`basis` 记录能力知识来自显式声明、推断、trait 投票、Port 或 v1 迁移；`completeness` 为 `complete`、`incomplete` 或 `unknown`。Trait vote record 还会保存实现数量、阈值和逐能力票数。
+
+旧 v1 `path=BI` 文件不能被普通命令加载，必须显式迁移：
+
+```bash
+cargo rivus migrate-caps .
+```
+
+迁移先在同级 staging 目录写出并验证全部 v2 layer，确认迁移前后的有效能力映射一致后才原子交换目录。成功后原目录保存在 `caps.v1-backup`；该备份已存在时迁移拒绝覆盖，除非 active v2 的 transaction marker 验证它正是当前中断迁移已经发布的原 v1 目录。
+不支持原子目录交换或 no-replace rename 的平台/文件系统会拒绝迁移并保留原 `caps`。
+备份发布失败时迁移会尝试原子回滚；如果回滚交换本身也失败，错误会报告仍保存原 v1 数据的 staging 路径，不能声称 `caps` 原路径已经恢复。
+同一项目的迁移与 caps 推断写入通过项目目录锁串行化；交换后中断时，后续迁移根据 active v2 中的 transaction marker 验证原 v1 staging 或已发布 backup，只有逐层语义一致时才完成恢复。
+迁移要求 `caps/` 中每个 layer 都是 regular file；symlink、子目录和其他非文件条目会被拒绝，避免静默丢失内容。
+
+- linter 对 capsmap 中的键做 def_path 精确匹配，不支持后缀匹配。specialized impl 会先匹配带内部 identity marker 的精确路径，再回退到诊断中显示的无 marker 可读 def_path；因此一个可读路径条目默认作用于该方法的所有 specialization
 - 如果 linter 报告某函数"既非 rvs_-prefixed nor in capsmap"，你需要补全 capsmap。方法优先级：检查源码 > 编写测试验证行为 > 合理猜测
-- caps 文件中的条目使用 rustc-driver 解析出的全限定路径（如 `core::result::impl::expect=`），而非源码中的短名
+- caps record 的 `path` 使用 rustc-driver 解析出的全限定路径（如 `core::result::impl::expect`），而非源码中的短名
+- 空行和版本头之后以 `#` 开头的完整注释行会被忽略；JSON record 不支持行尾注释
 - `cargo rivus check` / `report` / `annotate` / `why` 只从项目 `caps/` 加载能力数据；缺失时按空 capsmap 处理
 
 
@@ -308,9 +323,10 @@ std::process::exit=S           # 副作用：终止进程
    cargo rivus check    # 能力合规检查无违规
    ```
 3. **遇到 unknown callee warning 时**：linter 输出的 `Warning` 表示某个函数调用既非 `rvs_` 前缀也不在 capsmap 中。标准库路径运行 `cargo rivus infer-std -o caps/std`；若该推断命令自身报告未知前置函数，将精确 `def_path` 写入 `caps/seed`，因为 `infer-std` 只读取 `seed` 和 `suppress`。第三方依赖运行 `cargo rivus infer-capsmap -o caps/deps`。仅需修正当前项目普通检查结果时，将精确 `def_path` 写入 `caps/ext`
-4. **遇到其他 warning 时**：根据警告类型分别处理——缺少断言就加 `debug_assert!`，缺少文档就补 `///`，等等
-5. **遇到 violation 时**：调用链能力冲突。要么修改调用方的标记（可能级联影响），要么重构代码避免不合规的调用
-6. **遇到推断提示时**：推断性提示——函数的实际行为暗示应有某能力但名字里没写。审查后决定：补上能力标记（注意级联影响），或确认是误判则忽略
+4. **遇到 incomplete caps knowledge warning 时**：调用检查只使用已知能力下界，不能把记录当作 pure。`std` 层运行 `cargo rivus infer-std -o caps/std`，其他自动生成层重新运行对应推断命令；人工确认的修正写入 `caps/ext`
+5. **遇到其他 warning 时**：根据警告类型分别处理——缺少断言就加 `debug_assert!`，缺少文档就补 `///`，等等
+6. **遇到 violation 时**：调用链能力冲突。要么修改调用方的标记（可能级联影响），要么重构代码避免不合规的调用
+7. **遇到推断提示时**：推断性提示——函数的实际行为暗示应有某能力但名字里没写。审查后决定：补上能力标记（注意级联影响），或确认是误判则忽略
 
 ### 结构化并发
 

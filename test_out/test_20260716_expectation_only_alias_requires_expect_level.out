@@ -1,0 +1,4 @@
+deny: success=true violations=0 unfulfilled=false unmatched=false
+forbid: success=true violations=0 unfulfilled=false unmatched=false
+force_warn: success=true violations=1 unfulfilled=false unmatched=false
+expect: success=true violations=0 unfulfilled=false unmatched=false

@@ -8,7 +8,9 @@ use super::super::ctx::FnSubject;
 use super::super::utils::{
     CallTarget, rvs_count_effective_lines_M, rvs_def_path, rvs_has_allow, rvs_has_mutable_params,
 };
-use crate::artifacts::{FnGraph, FnNode, FnSource, FunctionIdentity};
+use crate::artifacts::{
+    CallSiteIdentity, CallSiteSource, FnGraph, FnNode, FnSource, FunctionIdentity,
+};
 use crate::capability::{CapabilityFacts, ParsedFunctionName};
 use crate::symbols::DefPath;
 
@@ -65,7 +67,7 @@ pub(crate) fn rvs_collect_callgraph_for_item_M<'tcx>(
         subject.span,
     );
 
-    let resolved_calls: Vec<(DefPath, FunctionIdentity)> = subject
+    let resolved_calls: Vec<(DefPath, FunctionIdentity, Option<CallSiteSource>)> = subject
         .body_facts
         .calls
         .iter()
@@ -82,6 +84,7 @@ pub(crate) fn rvs_collect_callgraph_for_item_M<'tcx>(
                         crate_id: *crate_id,
                         def_path: def_path.clone(),
                     },
+                    rvs_call_site_source(cx, observation.span),
                 ))
             } else {
                 None
@@ -106,16 +109,34 @@ pub(crate) fn rvs_collect_callgraph_for_item_M<'tcx>(
 
     node.calls = resolved_calls
         .iter()
-        .map(|(def_path, _)| def_path.clone())
+        .map(|(def_path, _, _)| def_path.clone())
         .collect();
     node.coverage_calls.insert(
         crate_id,
         resolved_calls
+            .iter()
+            .map(|(_, identity, _)| identity.clone())
+            .collect(),
+    );
+    node.coverage_call_sites.insert(
+        crate_id,
+        resolved_calls
             .into_iter()
-            .map(|(_, identity)| identity)
+            .enumerate()
+            .map(|(occurrence, (_, callee, source))| CallSiteIdentity {
+                callee,
+                occurrence: u32::try_from(occurrence)
+                    .expect("never: a function cannot contain more than u32::MAX resolved calls"),
+                source,
+            })
             .collect(),
     );
     node.sources_by_crate.insert(crate_id, node.sources.clone());
+    node.facts_by_crate.insert(crate_id, node.facts);
+    node.has_body_by_crate.insert(crate_id, true);
+    if is_entrypoint {
+        node.entrypoint_crate_ids.insert(crate_id);
+    }
     if subject.is_test {
         node.test_crate_ids.insert(crate_id);
         node.unresolved_test_calls = subject
@@ -158,7 +179,9 @@ pub(crate) fn rvs_collect_callgraph_for_signature_M(
     let local_def_id = hir_id.owner.def_id;
     let def_id = local_def_id.to_def_id();
     let caller_path = DefPath::rvs_new(rvs_def_path(cx, def_id));
-    let node = rvs_fn_node_from_signature(
+    let crate_id = cx.tcx.stable_crate_id(def_id.krate).as_u64();
+    let is_test_compilation = cx.tcx.sess.opts.test;
+    let mut node = rvs_fn_node_from_signature(
         cx,
         ident,
         sig,
@@ -166,9 +189,18 @@ pub(crate) fn rvs_collect_callgraph_for_signature_M(
         false,
         is_port_method,
         false,
-        cx.tcx.sess.opts.test,
+        is_test_compilation,
         cx.tcx.hir_span(hir_id),
     );
+    node.sources_by_crate.insert(crate_id, node.sources.clone());
+    node.facts_by_crate.insert(crate_id, node.facts);
+    node.has_body_by_crate.insert(crate_id, false);
+    node.coverage_calls.insert(crate_id, Default::default());
+    node.coverage_call_sites
+        .insert(crate_id, Default::default());
+    if !is_test_compilation {
+        node.production_crate_ids.insert(crate_id);
+    }
     callgraph.rvs_merge_node_M(caller_path.clone(), node);
     caller_path
 }
@@ -202,6 +234,31 @@ fn rvs_fn_source(cx: &LateContext<'_>, ident: Ident, declaration_span: Span) -> 
         return None;
     }
     Some(FnSource::rvs_new_relative(
+        file,
+        base,
+        start.pos.0,
+        end.pos.0,
+    ))
+}
+
+pub(crate) fn rvs_call_site_source(cx: &LateContext<'_>, span: Span) -> Option<CallSiteSource> {
+    let span = span.source_callsite();
+    let source_map = cx.tcx.sess.source_map();
+    let span_data = span.data();
+    let start = source_map.lookup_byte_offset(span_data.lo);
+    let end = source_map.lookup_byte_offset(span_data.hi);
+    if start.sf.name != end.sf.name || start.pos >= end.pos {
+        return None;
+    }
+    let file = rvs_real_file_name(&start.sf.name)?;
+    if file.is_absolute() {
+        return Some(CallSiteSource::rvs_new(file, start.pos.0, end.pos.0));
+    }
+    let base = cx.tcx.sess.opts.working_dir.local_path()?.to_path_buf();
+    if !base.is_absolute() {
+        return None;
+    }
+    Some(CallSiteSource::rvs_new_relative(
         file,
         base,
         start.pos.0,

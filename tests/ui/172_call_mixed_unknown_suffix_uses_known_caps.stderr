@@ -1,10 +1,8 @@
 error: caller lacks propagated capabilities required by callee; callee: 172_call_mixed_unknown_suffix_uses_known_caps::rvs_send_AEIS; caller declared caps: pure; callee caps: AIS; missing propagated caps: I, S
-  --> $DIR/tests/ui/172_call_mixed_unknown_suffix_uses_known_caps.rs:11:1
+  --> $DIR/tests/ui/172_call_mixed_unknown_suffix_uses_known_caps.rs:12:5
    |
-LL | / fn rvs_outer() {
-LL | |     rvs_send_AEIS();
-LL | | }
-   | |_^
+LL |     rvs_send_AEIS();
+   |     ^^^^^^^^^^^^^^^
    |
    = note: `#[deny(rivus::rvs_call_violation)]` on by default
 

@@ -1,3 +1,3 @@
-result=Err("infer-capsmap output cannot replace reserved caps layer 'seed'; expected 'deps'")
+result=Err("capsmap output parent '$TMP/CAPS' aliases canonical caps directory '$TMP/caps'; use the lowercase path")
 callgraph_exists=false
 output_exists=false

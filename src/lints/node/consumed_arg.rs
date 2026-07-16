@@ -1,8 +1,9 @@
 use rustc_hir;
 use rustc_lint::LateContext;
-use rustc_middle::ty::{TyKind, TypeVisitableExt};
+use rustc_middle::ty::{AliasTyKind, Ty, TyKind, TypeVisitableExt};
 
 use super::super::RVS_CONSUMED_ARG_ON_ERROR;
+use super::super::body::BodyFacts;
 use super::super::msg::rvs_emit_node_span_lint_S;
 use super::super::utils::rvs_tys;
 use super::result_return::rvs_result_return;
@@ -13,12 +14,19 @@ pub(crate) fn rvs_check_fn_MS<'tcx>(
     cx: &LateContext<'tcx>,
     sig: &'tcx rustc_hir::FnSig<'tcx>,
     params: &'tcx [rustc_hir::Param<'tcx>],
+    body_facts: &BodyFacts,
     fn_name: &str,
 ) {
     let Some(result) = rvs_result_return(cx, sig) else {
         return;
     };
     if !result.rvs_ok_is_unit() {
+        return;
+    }
+    if rvs_error_type_is_uninhabited(cx, result.error) {
+        return;
+    }
+    if !body_facts.has_potential_error_return {
         return;
     }
 
@@ -58,5 +66,29 @@ pub(crate) fn rvs_check_fn_MS<'tcx>(
                 ),
             );
         }
+    }
+}
+
+fn rvs_error_type_is_uninhabited<'tcx>(cx: &LateContext<'tcx>, error: Ty<'tcx>) -> bool {
+    let error = cx
+        .tcx
+        .try_normalize_erasing_regions(cx.typing_env(), error)
+        .unwrap_or(error);
+    let revealed = match error.kind() {
+        TyKind::Alias(alias) => match alias.kind {
+            AliasTyKind::Opaque { def_id } if def_id.is_local() => {
+                cx.tcx.type_of(def_id).instantiate(cx.tcx, alias.args)
+            }
+            _ => error,
+        },
+        _ => error,
+    };
+    rvs_type_is_uninhabited(cx, revealed)
+}
+
+fn rvs_type_is_uninhabited<'tcx>(cx: &LateContext<'tcx>, ty: Ty<'tcx>) -> bool {
+    match ty.kind() {
+        TyKind::Ref(_, inner, _) => rvs_type_is_uninhabited(cx, *inner),
+        _ => ty.is_privately_uninhabited(cx.tcx, cx.typing_env()),
     }
 }

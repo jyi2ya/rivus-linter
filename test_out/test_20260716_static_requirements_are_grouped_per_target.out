@@ -1,0 +1,2 @@
+anchors={DefPath("demo::rvs_read"): {10}} details=declared caps: pure; required caps from body facts: S; missing: S
+anchors={DefPath("demo::rvs_read"): {20}} details=declared caps: pure; required caps from body facts: ST; missing: S, T

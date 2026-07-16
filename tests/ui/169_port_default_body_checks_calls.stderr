@@ -1,10 +1,8 @@
 error: caller lacks propagated capabilities required by callee; callee: 169_port_default_body_checks_calls::rvs_read_BI; caller declared caps: P; callee caps: BI; missing propagated caps: B, I
-  --> $DIR/tests/ui/169_port_default_body_checks_calls.rs:13:5
+  --> $DIR/tests/ui/169_port_default_body_checks_calls.rs:14:9
    |
-LL | /     fn rvs_fetch_P(&self) -> i32 {
-LL | |         rvs_read_BI()
-LL | |     }
-   | |_____^
+LL |         rvs_read_BI()
+   |         ^^^^^^^^^^^^^
    |
    = note: `#[deny(rivus::rvs_call_violation)]` on by default
 

@@ -1,0 +1,3 @@
+error=cannot migrate caps layer $TMP/caps/seed: line 1: invalid capability string 'Z' for 'broken'
+original="broken=Z\n"
+backup_exists=false

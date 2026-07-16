@@ -1,1 +1,2 @@
-dep::Worker::rvs_run=BI # Blocking IO
+# rivus-caps-v2
+{"path":"dep::Worker::rvs_run","caps":"BI","basis":{"kind":"inferred"},"completeness":"complete"}

@@ -264,8 +264,43 @@ fn rvs_format_incomplete_inference_summary(count: usize) -> String {
     }
     debug_assert!(count > 0);
     format!(
-        "\nInference Status\n------------------------------\n{count} local function(s) depend on unknown callee capability data. Capability totals and rename suggestions are conservative lower bounds.\n"
+        "\nInference Status\n------------------------------\n{count} local function(s) depend on unknown callee capability data. Capability totals reflect declared suffixes; rename suggestions may omit unknown capabilities.\n"
     )
+}
+
+fn rvs_format_trait_outlier_summary(
+    outliers: &[crate::offline_caps::TargetTraitImplOutlierGroup],
+) -> String {
+    if outliers.is_empty() {
+        return String::new();
+    }
+    let mut output = format!(
+        "\nTrait Vote Outliers\n------------------------------\n{} target-specific local trait implementation group(s) have propagated capabilities outside their aggregate vote. Capability totals are unchanged.\n",
+        outliers.len()
+    );
+    for group in outliers.iter().take(10) {
+        let outlier = &group.outlier;
+        let targets = group
+            .crate_ids
+            .iter()
+            .map(u64::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        output.push_str(&format!(
+            "{}: {} outside {} for {} (threshold {}/{}, targets {targets})\n",
+            outlier.implementation,
+            outlier.unexpected_caps.rvs_letters(),
+            if outlier.selected_caps.rvs_is_empty() {
+                "pure".to_string()
+            } else {
+                outlier.selected_caps.rvs_letters()
+            },
+            outlier.trait_method,
+            outlier.threshold,
+            outlier.implementations,
+        ));
+    }
+    output
 }
 
 /// # Panics
@@ -277,6 +312,11 @@ pub(crate) fn rvs_run_report_BIMPS(path: &Path) -> Result<(), String> {
     let (mut callgraph, caps) =
         rvs_collect_callgraph_and_caps_BIMS(path, target_scope, &local_crate_names)?;
     let analysis = PreparedLocalAnalysis::rvs_prepare_M(&mut callgraph, &caps, &local_crate_names);
+    let target_outliers = crate::offline_caps::rvs_collect_report_trait_impl_outliers_M(
+        &mut callgraph,
+        &caps,
+        &local_crate_names,
+    );
     let report_entries = rvs_report_entries_from_callgraph(&callgraph, &local_crate_names)?;
     let report = rvs_build_report(&report_entries)?;
     let incomplete_count = rvs_incomplete_report_function_count(
@@ -285,12 +325,16 @@ pub(crate) fn rvs_run_report_BIMPS(path: &Path) -> Result<(), String> {
         analysis.rvs_incomplete_paths(),
     )?;
     let incomplete_output = rvs_format_incomplete_inference_summary(incomplete_count);
+    let outlier_output = rvs_format_trait_outlier_summary(&target_outliers);
     let mismatch_items = rvs_collect_contract_mismatch_items(&analysis.diffs);
     let mismatch_summary = rvs_summarize_contract_mismatch_items(&mismatch_items);
     let mismatch_output = rvs_format_contract_mismatch_summary(&mismatch_summary, &mismatch_items);
     print!("{report}");
     if !incomplete_output.is_empty() {
         print!("{incomplete_output}");
+    }
+    if !outlier_output.is_empty() {
+        print!("{outlier_output}");
     }
     if !mismatch_output.is_empty() {
         print!("{mismatch_output}");
@@ -301,26 +345,122 @@ pub(crate) fn rvs_run_report_BIMPS(path: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::artifacts::{FnNode, FnSource};
+    use crate::artifacts::{FnNode, FnSource, FunctionIdentity};
+    use crate::capability::CapabilityFacts;
     use crate::symbols::DefPath;
     use crate::test_support::{
-        rvs_make_cargo_project_BIS, rvs_make_temp_dir_BIS, rvs_snapshot_BIS,
+        rvs_make_capsmap, rvs_make_cargo_project_BIS, rvs_make_temp_dir_BIS, rvs_snapshot_BIS,
     };
 
+    fn rvs_report_target_node(crate_id: u64, calls: &[&str], is_trait_impl: bool) -> FnNode {
+        debug_assert!(crate_id > 0, "stable crate id is nonzero");
+        let mut node = FnNode::default();
+        node.calls = calls.iter().map(|call| DefPath::from(*call)).collect();
+        node.is_trait_impl = is_trait_impl;
+        node.production_crate_ids.insert(crate_id);
+        node.coverage_candidate_crate_ids.insert(crate_id);
+        node.sources
+            .insert(FnSource::rvs_new("src/lib.rs".into(), 1, 2));
+        node.sources_by_crate.insert(crate_id, node.sources.clone());
+        node.facts_by_crate
+            .insert(crate_id, CapabilityFacts::default());
+        node.has_body_by_crate.insert(crate_id, true);
+        node.coverage_calls.insert(
+            crate_id,
+            calls
+                .iter()
+                .map(|call| FunctionIdentity {
+                    crate_id: 900,
+                    def_path: DefPath::from(*call),
+                })
+                .collect(),
+        );
+        node
+    }
+
     #[test]
-    fn test_20260715_report_marks_incomplete_inference_as_lower_bound() {
+    fn test_20260715_report_describes_incomplete_inference_without_false_bounds() {
         let output = format!(
             "zero={:?}\nnonzero={}",
             rvs_format_incomplete_inference_summary(0),
             rvs_format_incomplete_inference_summary(3)
         );
         rvs_snapshot_BIS(
-            "test_20260715_report_marks_incomplete_inference_as_lower_bound",
+            "test_20260715_report_describes_incomplete_inference_without_false_bounds",
             &output,
         );
 
         assert!(output.contains("3 local function(s)"));
-        assert!(output.contains("conservative lower bounds"));
+        assert!(output.contains("Capability totals reflect declared suffixes"));
+        assert!(output.contains("rename suggestions may omit unknown capabilities"));
+        assert!(!output.contains("lower bounds"));
+    }
+
+    #[test]
+    fn test_20260715_report_formats_trait_vote_outliers_without_changing_totals() {
+        let outlier = crate::inference::TraitImplOutlier {
+            trait_method: DefPath::from("demo::FromString::rvs_parse"),
+            implementation: DefPath::from("demo::EnvValue::rvs_parse@demo::FromString"),
+            implementation_caps: CapabilitySet::rvs_from_validated("S"),
+            selected_caps: CapabilitySet::rvs_new(),
+            unexpected_caps: CapabilitySet::rvs_from_validated("S"),
+            implementations: 3,
+            threshold: 2,
+            counts: BTreeMap::from([(Capability::S, 1)]),
+        };
+        let group = crate::offline_caps::TargetTraitImplOutlierGroup {
+            outlier,
+            crate_ids: BTreeSet::from([7, 9]),
+        };
+        let output = format!(
+            "empty={:?}\nnonempty={}",
+            rvs_format_trait_outlier_summary(&[]),
+            rvs_format_trait_outlier_summary(&[group]),
+        );
+        rvs_snapshot_BIS(
+            "test_20260715_report_formats_trait_vote_outliers_without_changing_totals",
+            &output,
+        );
+
+        assert!(output.contains("Capability totals are unchanged"));
+        assert!(output.contains("S outside pure"));
+        assert!(output.contains("targets 7,9"));
+    }
+
+    #[test]
+    fn test_20260716_report_uses_cross_crate_target_trait_vote() {
+        let mut graph = FnGraph::rvs_new();
+        let mut declaration = rvs_report_target_node(100, &[], false);
+        declaration.has_body = false;
+        declaration.has_body_by_crate.insert(100, false);
+        graph.rvs_insert_M(DefPath::from("demo::Parser::rvs_parse"), declaration);
+        graph.rvs_insert_M(
+            DefPath::from("demo::Alpha::rvs_parse@demo::Parser"),
+            rvs_report_target_node(11, &[], true),
+        );
+        graph.rvs_insert_M(
+            DefPath::from("demo::Beta::rvs_parse@demo::Parser"),
+            rvs_report_target_node(12, &[], true),
+        );
+        graph.rvs_insert_M(
+            DefPath::from("demo::Gamma::rvs_parse@demo::Parser"),
+            rvs_report_target_node(13, &["dependency::effect"], true),
+        );
+        let local = BTreeSet::from([CrateName::from("demo")]);
+        let outliers = crate::offline_caps::rvs_collect_report_trait_impl_outliers_M(
+            &mut graph,
+            &rvs_make_capsmap(&[("dependency::effect", "S")]),
+            &local,
+        );
+        let output = rvs_format_trait_outlier_summary(&outliers);
+        rvs_snapshot_BIS(
+            "test_20260716_report_uses_cross_crate_target_trait_vote",
+            &output,
+        );
+
+        assert_eq!(outliers.len(), 1);
+        assert!(output.contains("demo::Gamma::rvs_parse@demo::Parser"));
+        assert!(output.contains("threshold 2/3"));
     }
 
     #[test]

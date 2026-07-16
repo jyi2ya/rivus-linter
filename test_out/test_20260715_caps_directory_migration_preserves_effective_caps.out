@@ -1,0 +1,4 @@
+winner=S
+std_only=I
+backup_std="winner=B\nstd_only=I\n"
+new_header=Some("# rivus-caps-v2")

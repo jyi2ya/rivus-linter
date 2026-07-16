@@ -1,0 +1,2 @@
+valid=true
+missing_identity=invalid callgraph artifact: entrypoint node for demo::main has no entrypoint crate identity

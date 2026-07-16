@@ -1,8 +1,12 @@
-caller_gets_io: my_crate::rvs_process=BI # Blocking IO
-std::fs::read_to_string=BI # Blocking IO
-propagation_chain: my_crate::A=S # SideEffect
-my_crate::B=S # SideEffect
-my_crate::C=S # SideEffect
-cycle_self: my_crate::rvs_loop=
-cycle_mutual: my_crate::A=
-my_crate::B=
+caller_gets_io: # rivus-caps-v2
+{"path":"my_crate::rvs_process","caps":"BI","basis":{"kind":"inferred"},"completeness":"complete"}
+{"path":"std::fs::read_to_string","caps":"BI","basis":{"kind":"inferred"},"completeness":"complete"}
+propagation_chain: # rivus-caps-v2
+{"path":"my_crate::A","caps":"S","basis":{"kind":"inferred"},"completeness":"complete"}
+{"path":"my_crate::B","caps":"S","basis":{"kind":"inferred"},"completeness":"complete"}
+{"path":"my_crate::C","caps":"S","basis":{"kind":"inferred"},"completeness":"complete"}
+cycle_self: # rivus-caps-v2
+{"path":"my_crate::rvs_loop","caps":"","basis":{"kind":"inferred"},"completeness":"complete"}
+cycle_mutual: # rivus-caps-v2
+{"path":"my_crate::A","caps":"","basis":{"kind":"inferred"},"completeness":"complete"}
+{"path":"my_crate::B","caps":"","basis":{"kind":"inferred"},"completeness":"complete"}

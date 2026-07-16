@@ -19,6 +19,7 @@ pub(crate) struct BodyFacts {
     pub(crate) has_static_mut_ref: bool,
     pub(crate) has_thread_local_ref: bool,
     pub(crate) has_stub: bool,
+    pub(crate) has_potential_error_return: bool,
     pub(crate) debug_assert_bindings: HashSet<HirId>,
     pub(crate) result_swallow_calls: Vec<(HirId, Span, super::super::utils::CallSyntax, String)>,
     pub(crate) result_drop_calls: Vec<(HirId, Span)>,
@@ -35,6 +36,9 @@ pub(crate) fn rvs_collect_body_facts_M<'tcx>(
         Symbol::intern("debug_assert_ne"),
     ];
     let root_expr = rvs_root_body_expr(cx.tcx, body);
+    facts.has_potential_error_return =
+        super::result_flow::rvs_mir_has_potential_error_return(cx, root_expr.hir_id.owner.def_id)
+            .unwrap_or(true);
     let async_param_aliases = rvs_async_param_aliases(cx, root_expr);
     rvs_visit_body_exprs_M(cx.tcx, root_expr, |expr, nested_body| {
         match &expr.kind {

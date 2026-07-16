@@ -1,0 +1,2 @@
+CallViolation={OfflineCapsEmissionAnchor { identity: FunctionIdentity { crate_id: 20, def_path: DefPath("demo::rvs_variant") }, call_site: None, expectation_only: false }}
+StaticRef={OfflineCapsEmissionAnchor { identity: FunctionIdentity { crate_id: 20, def_path: DefPath("demo::rvs_variant") }, call_site: None, expectation_only: false }}

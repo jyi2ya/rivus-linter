@@ -1,13 +1,8 @@
 error: caller lacks propagated capabilities required by callee; callee: 152_calls_in_let_else::rvs_handle_ABI; caller declared caps: pure; callee caps: ABI; missing propagated caps: B, I
-  --> $DIR/tests/ui/152_calls_in_let_else.rs:8:1
+  --> $DIR/tests/ui/152_calls_in_let_else.rs:10:9
    |
-LL | / fn rvs_outer(x: Option<i32>) {
-LL | |     let Some(_v) = x else {
-LL | |         rvs_handle_ABI();
-LL | |         return;
-LL | |     };
-LL | | }
-   | |_^
+LL |         rvs_handle_ABI();
+   |         ^^^^^^^^^^^^^^^^
    |
    = note: `#[deny(rivus::rvs_call_violation)]` on by default
 

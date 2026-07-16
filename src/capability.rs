@@ -1,5 +1,6 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::path::PathBuf;
 
 use crate::symbols::rvs_function_name_segment;
 
@@ -9,7 +10,7 @@ use snafu::Snafu;
 
 /// 能力之八德：异步、阻塞、读写、可变、端口、副作用、线程、不安。
 /// 八德既立，函数之名即为契约，调用之际便有章法。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Capability {
     A,
     B,
@@ -201,6 +202,307 @@ impl<'a> ParsedFunctionName<'a> {
 /// 旗上没画的，便是它干不了的。
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct CapabilitySet(BTreeSet<Capability>);
+
+impl Serialize for CapabilitySet {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.rvs_letters())
+    }
+}
+
+impl<'de> Deserialize<'de> for CapabilitySet {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::rvs_from_str(&value).map_err(serde::de::Error::custom)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum CapabilityCompleteness {
+    Complete,
+    Incomplete,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum CapabilityBasis {
+    Explicit,
+    Inferred,
+    TraitVote {
+        implementations: usize,
+        threshold: usize,
+        votes: BTreeMap<Capability, usize>,
+    },
+    Port,
+    MigratedV1,
+}
+
+impl CapabilityBasis {
+    pub(crate) fn rvs_name(&self) -> &'static str {
+        match self {
+            Self::Explicit => "explicit",
+            Self::Inferred => "inferred",
+            Self::TraitVote { .. } => "trait_vote",
+            Self::Port => "port",
+            Self::MigratedV1 => "migrated_v1",
+        }
+    }
+}
+
+impl CapabilityCompleteness {
+    pub(crate) fn rvs_name(self) -> &'static str {
+        match self {
+            Self::Complete => "complete",
+            Self::Incomplete => "incomplete",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CapabilitySource {
+    pub(crate) layer: String,
+    pub(crate) file: PathBuf,
+    pub(crate) line: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CapabilityInfo {
+    caps: CapabilitySet,
+    basis: CapabilityBasis,
+    completeness: CapabilityCompleteness,
+    #[serde(skip)]
+    source: Option<CapabilitySource>,
+}
+
+#[derive(Debug, Snafu, PartialEq, Eq)]
+pub(crate) enum CapabilityKnowledgeError {
+    #[snafu(display("basis '{basis}' requires completeness 'complete', got '{completeness}'"))]
+    CompleteBasis {
+        basis: &'static str,
+        completeness: &'static str,
+    },
+    #[snafu(display(
+        "basis 'inferred' requires completeness 'complete' or 'incomplete', got 'unknown'"
+    ))]
+    InferredUnknownCompleteness,
+    #[snafu(display("basis 'migrated_v1' requires completeness 'unknown', got '{completeness}'"))]
+    MigratedV1Completeness { completeness: &'static str },
+    #[snafu(display("Port knowledge must contain exactly P, got '{caps}'"))]
+    PortCaps { caps: String },
+    #[snafu(display("trait vote must contain at least one implementation"))]
+    TraitVoteWithoutImplementations,
+    #[snafu(display(
+        "trait vote threshold must be {expected} for {implementations} implementations, got {threshold}"
+    ))]
+    TraitVoteThreshold {
+        implementations: usize,
+        threshold: usize,
+        expected: usize,
+    },
+    #[snafu(display("trait vote completeness cannot be 'unknown'"))]
+    TraitVoteUnknownCompleteness,
+    #[snafu(display("trait vote capability {capability:?} is not propagated"))]
+    TraitVoteNonPropagatedCapability { capability: Capability },
+    #[snafu(display("trait vote count for {capability:?} must be positive"))]
+    TraitVoteZeroCount { capability: Capability },
+    #[snafu(display(
+        "trait vote count for {capability:?} exceeds implementation count: {count} > {implementations}"
+    ))]
+    TraitVoteCountExceedsImplementations {
+        capability: Capability,
+        count: usize,
+        implementations: usize,
+    },
+    #[snafu(display("trait vote selected caps '{actual}' do not match vote result '{expected}'"))]
+    TraitVoteSelectedCaps { actual: String, expected: String },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ValidatedCapabilityKnowledge;
+
+impl CapabilityInfo {
+    pub(crate) fn rvs_new(
+        caps: CapabilitySet,
+        basis: CapabilityBasis,
+        completeness: CapabilityCompleteness,
+    ) -> Self {
+        Self {
+            caps,
+            basis,
+            completeness,
+            source: None,
+        }
+    }
+
+    pub(crate) fn rvs_explicit(caps: CapabilitySet) -> Self {
+        Self::rvs_new(
+            caps,
+            CapabilityBasis::Explicit,
+            CapabilityCompleteness::Complete,
+        )
+    }
+
+    pub(crate) fn rvs_inferred(caps: CapabilitySet) -> Self {
+        Self::rvs_new(
+            caps,
+            CapabilityBasis::Inferred,
+            CapabilityCompleteness::Complete,
+        )
+    }
+
+    pub(crate) fn rvs_migrated_v1(
+        caps: CapabilitySet,
+        completeness: CapabilityCompleteness,
+    ) -> Self {
+        Self::rvs_new(caps, CapabilityBasis::MigratedV1, completeness)
+    }
+
+    pub(crate) fn rvs_trait_vote(
+        caps: CapabilitySet,
+        implementations: usize,
+        threshold: usize,
+        votes: BTreeMap<Capability, usize>,
+        completeness: CapabilityCompleteness,
+    ) -> Self {
+        debug_assert!(implementations > 0, "trait vote has implementations");
+        debug_assert!(threshold > 0, "trait vote threshold is positive");
+        debug_assert!(
+            threshold <= implementations,
+            "trait vote threshold does not exceed implementations"
+        );
+        Self::rvs_new(
+            caps,
+            CapabilityBasis::TraitVote {
+                implementations,
+                threshold,
+                votes,
+            },
+            completeness,
+        )
+    }
+
+    pub(crate) fn rvs_caps(&self) -> &CapabilitySet {
+        &self.caps
+    }
+
+    pub(crate) fn rvs_basis(&self) -> &CapabilityBasis {
+        &self.basis
+    }
+
+    pub(crate) fn rvs_completeness(&self) -> CapabilityCompleteness {
+        self.completeness
+    }
+
+    pub(crate) fn rvs_source(&self) -> Option<&CapabilitySource> {
+        self.source.as_ref()
+    }
+
+    pub(crate) fn rvs_with_source_M(&mut self, source: CapabilitySource) {
+        debug_assert!(source.line > 0, "capability source line is one-based");
+        self.source = Some(source);
+    }
+
+    pub(crate) fn rvs_check_invariants(
+        &self,
+    ) -> Result<ValidatedCapabilityKnowledge, CapabilityKnowledgeError> {
+        match &self.basis {
+            CapabilityBasis::Explicit => {
+                if self.completeness != CapabilityCompleteness::Complete {
+                    return Err(CapabilityKnowledgeError::CompleteBasis {
+                        basis: self.basis.rvs_name(),
+                        completeness: self.completeness.rvs_name(),
+                    });
+                }
+            }
+            CapabilityBasis::Inferred => {
+                if self.completeness == CapabilityCompleteness::Unknown {
+                    return Err(CapabilityKnowledgeError::InferredUnknownCompleteness);
+                }
+            }
+            CapabilityBasis::Port => {
+                if self.completeness != CapabilityCompleteness::Complete {
+                    return Err(CapabilityKnowledgeError::CompleteBasis {
+                        basis: self.basis.rvs_name(),
+                        completeness: self.completeness.rvs_name(),
+                    });
+                }
+                if self.caps != CapabilityPolicy::rvs_port_method_caps() {
+                    return Err(CapabilityKnowledgeError::PortCaps {
+                        caps: self.caps.rvs_letters(),
+                    });
+                }
+            }
+            CapabilityBasis::MigratedV1 => {
+                if self.completeness != CapabilityCompleteness::Unknown {
+                    return Err(CapabilityKnowledgeError::MigratedV1Completeness {
+                        completeness: self.completeness.rvs_name(),
+                    });
+                }
+            }
+            CapabilityBasis::TraitVote {
+                implementations,
+                threshold,
+                votes,
+            } => {
+                if *implementations == 0 {
+                    return Err(CapabilityKnowledgeError::TraitVoteWithoutImplementations);
+                }
+                let expected_threshold = implementations.div_ceil(2);
+                if *threshold != expected_threshold {
+                    return Err(CapabilityKnowledgeError::TraitVoteThreshold {
+                        implementations: *implementations,
+                        threshold: *threshold,
+                        expected: expected_threshold,
+                    });
+                }
+                if self.completeness == CapabilityCompleteness::Unknown {
+                    return Err(CapabilityKnowledgeError::TraitVoteUnknownCompleteness);
+                }
+                let mut selected = CapabilitySet::rvs_new();
+                for (capability, count) in votes {
+                    if !CapabilityPolicy::rvs_is_propagated_cap(*capability) {
+                        return Err(CapabilityKnowledgeError::TraitVoteNonPropagatedCapability {
+                            capability: *capability,
+                        });
+                    }
+                    if *count == 0 {
+                        return Err(CapabilityKnowledgeError::TraitVoteZeroCount {
+                            capability: *capability,
+                        });
+                    }
+                    if *count > *implementations {
+                        return Err(
+                            CapabilityKnowledgeError::TraitVoteCountExceedsImplementations {
+                                capability: *capability,
+                                count: *count,
+                                implementations: *implementations,
+                            },
+                        );
+                    }
+                    if *count >= *threshold {
+                        selected.rvs_insert_M(*capability);
+                    }
+                }
+                if self.caps != selected {
+                    return Err(CapabilityKnowledgeError::TraitVoteSelectedCaps {
+                        actual: self.caps.rvs_letters(),
+                        expected: selected.rvs_letters(),
+                    });
+                }
+            }
+        }
+        Ok(ValidatedCapabilityKnowledge)
+    }
+}
 
 /// Facts observed from a function signature/body before policy is applied.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -507,6 +809,141 @@ mod tests {
 
     fn rvs_caps_letters(caps: &CapabilitySet) -> String {
         caps.rvs_iter().map(|cap| cap.rvs_as_char()).collect()
+    }
+
+    #[test]
+    fn test_20260716_capability_knowledge_completeness_matrix() {
+        let cases = [
+            (
+                "explicit_complete",
+                "B",
+                CapabilityBasis::Explicit,
+                CapabilityCompleteness::Complete,
+                true,
+            ),
+            (
+                "explicit_incomplete",
+                "B",
+                CapabilityBasis::Explicit,
+                CapabilityCompleteness::Incomplete,
+                false,
+            ),
+            (
+                "explicit_unknown",
+                "B",
+                CapabilityBasis::Explicit,
+                CapabilityCompleteness::Unknown,
+                false,
+            ),
+            (
+                "inferred_complete",
+                "B",
+                CapabilityBasis::Inferred,
+                CapabilityCompleteness::Complete,
+                true,
+            ),
+            (
+                "inferred_incomplete",
+                "B",
+                CapabilityBasis::Inferred,
+                CapabilityCompleteness::Incomplete,
+                true,
+            ),
+            (
+                "inferred_unknown",
+                "B",
+                CapabilityBasis::Inferred,
+                CapabilityCompleteness::Unknown,
+                false,
+            ),
+            (
+                "port_complete",
+                "P",
+                CapabilityBasis::Port,
+                CapabilityCompleteness::Complete,
+                true,
+            ),
+            (
+                "port_incomplete",
+                "P",
+                CapabilityBasis::Port,
+                CapabilityCompleteness::Incomplete,
+                false,
+            ),
+            (
+                "migrated_unknown",
+                "B",
+                CapabilityBasis::MigratedV1,
+                CapabilityCompleteness::Unknown,
+                true,
+            ),
+            (
+                "migrated_complete",
+                "B",
+                CapabilityBasis::MigratedV1,
+                CapabilityCompleteness::Complete,
+                false,
+            ),
+            (
+                "trait_vote_complete",
+                "S",
+                CapabilityBasis::TraitVote {
+                    implementations: 2,
+                    threshold: 1,
+                    votes: BTreeMap::from([(Capability::S, 1)]),
+                },
+                CapabilityCompleteness::Complete,
+                true,
+            ),
+            (
+                "trait_vote_incomplete",
+                "S",
+                CapabilityBasis::TraitVote {
+                    implementations: 2,
+                    threshold: 1,
+                    votes: BTreeMap::from([(Capability::S, 1)]),
+                },
+                CapabilityCompleteness::Incomplete,
+                true,
+            ),
+            (
+                "trait_vote_unknown",
+                "S",
+                CapabilityBasis::TraitVote {
+                    implementations: 2,
+                    threshold: 1,
+                    votes: BTreeMap::from([(Capability::S, 1)]),
+                },
+                CapabilityCompleteness::Unknown,
+                false,
+            ),
+        ];
+        let mut output = String::new();
+        for (name, caps, basis, completeness, expected_valid) in cases {
+            let info = CapabilityInfo::rvs_new(
+                CapabilitySet::rvs_from_validated(caps),
+                basis,
+                completeness,
+            );
+            let result = info.rvs_check_invariants();
+            output.push_str(&format!(
+                "{name}: {}\n",
+                result
+                    .as_ref()
+                    .map_or_else(|error| format!("error={error}"), |_| "ok".to_string())
+            ));
+            assert_eq!(result.is_ok(), expected_valid, "{name}");
+            if name == "inferred_unknown" {
+                assert!(matches!(
+                    result,
+                    Err(CapabilityKnowledgeError::InferredUnknownCompleteness)
+                ));
+            }
+        }
+        rvs_snapshot_BIS(
+            "test_20260716_capability_knowledge_completeness_matrix",
+            &output,
+        );
     }
 
     #[test]

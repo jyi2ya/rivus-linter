@@ -1,0 +1,6 @@
+publish_error=true
+marker_after_failure=1
+backup_after_failure=true
+retry_ok=true
+marker_after_retry=0
+active=S

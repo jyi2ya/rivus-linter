@@ -1,10 +1,8 @@
 error: caller lacks propagated capabilities required by callee; callee: 237_block_wrapped_callee::rvs_blocking_BI; caller declared caps: pure; callee caps: BI; missing propagated caps: B, I
-  --> $DIR/tests/ui/237_block_wrapped_callee.rs:8:1
+  --> $DIR/tests/ui/237_block_wrapped_callee.rs:9:5
    |
-LL | / fn rvs_wrapped() {
-LL | |     ({ rvs_blocking_BI })();
-LL | | }
-   | |_^
+LL |     ({ rvs_blocking_BI })();
+   |     ^^^^^^^^^^^^^^^^^^^^^^^
    |
    = note: `#[deny(rivus::rvs_call_violation)]` on by default
 

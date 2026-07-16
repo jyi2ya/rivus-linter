@@ -7,9 +7,9 @@ use crate::capsmap::{CapsMap, rvs_reserved_layer_name};
 use crate::cargo_targets::{CargoTargetScope, rvs_detect_local_crate_prefixes_BIS};
 use crate::function_classification::LocalScope;
 use crate::inference::{
-    PreparedInference, rvs_build_impl_index, rvs_format_def_path_capsmap,
-    rvs_format_unknown_callees, rvs_generate_trait_aliases, rvs_infer_caps_with_index,
-    rvs_initial_caps, rvs_scope_port_methods_M,
+    PreparedInference, rvs_build_impl_index, rvs_format_def_path_capability_info,
+    rvs_format_unknown_callees, rvs_generate_trait_alias_infos, rvs_infer_caps_with_index,
+    rvs_scope_port_methods_M,
 };
 use crate::symbols::{CapsMapKey, DefPath};
 use crate::workspace::{
@@ -25,6 +25,20 @@ pub(crate) fn rvs_run_infer_capsmap_BIMPS(path: &Path, output: &Path) -> Result<
     let project_path = path
         .canonicalize()
         .map_err(|e| format!("cannot canonicalize '{}': {e}", path.display()))?;
+    let _caps_lock =
+        crate::fs_guard::rvs_try_lock_directory_BIS(&project_path).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::WouldBlock {
+                format!(
+                    "another caps migration or inference command is already running for {}",
+                    project_path.display()
+                )
+            } else {
+                format!(
+                    "cannot lock caps update directory {}: {error}",
+                    project_path.display()
+                )
+            }
+        })?;
     let target_scope = CargoTargetScope::Production;
     let local_crate_names = rvs_detect_local_crate_prefixes_BIS(&project_path, target_scope)?;
 
@@ -65,7 +79,7 @@ pub(crate) fn rvs_run_infer_capsmap_BIMPS(path: &Path, output: &Path) -> Result<
         ));
     }
 
-    let deps_result = rvs_format_def_path_capsmap(&direct_external_calls);
+    let deps_result = rvs_format_def_path_capability_info(&direct_external_calls);
     rvs_write_capsmap_result_BIS(&deps_result, &resolved_output, "deps capsmap")
 }
 
@@ -74,6 +88,20 @@ pub(crate) fn rvs_run_infer_std_BIMPS(path: &Path, output: &Path) -> Result<(), 
     let project_path = path
         .canonicalize()
         .map_err(|e| format!("cannot canonicalize '{}': {e}", path.display()))?;
+    let _caps_lock =
+        crate::fs_guard::rvs_try_lock_directory_BIS(&project_path).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::WouldBlock {
+                format!(
+                    "another caps migration or inference command is already running for {}",
+                    project_path.display()
+                )
+            } else {
+                format!(
+                    "cannot lock caps update directory {}: {error}",
+                    project_path.display()
+                )
+            }
+        })?;
     let target_scope = CargoTargetScope::Production;
     let local_crate_names = rvs_detect_local_crate_prefixes_BIS(&project_path, target_scope)?;
     let local_scope = LocalScope::rvs_new(&local_crate_names);
@@ -96,36 +124,31 @@ pub(crate) fn rvs_run_infer_std_BIMPS(path: &Path, output: &Path) -> Result<(), 
     rvs_require_complete_std_collection(&callgraph, &local_scope)?;
 
     let pre_index = rvs_build_impl_index(&callgraph);
-    let pre_inferred = rvs_initial_caps(&callgraph, &seed);
-    let std_pre_inferred: BTreeMap<DefPath, crate::capability::CapabilitySet> = pre_inferred
-        .iter()
-        .filter(|(k, _)| rvs_is_std_like_def_path(k.rvs_as_str()))
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect();
-    let mut alias_seed = seed.clone();
-    let pre_aliases = rvs_generate_trait_aliases(&std_pre_inferred, &pre_index, &callgraph);
-    alias_seed.rvs_extend_entries_M(
-        pre_aliases
-            .into_iter()
-            .map(|(key, caps)| (CapsMapKey::from(key), caps)),
+    let (mut inferred, incomplete_paths, post_alias_infos) =
+        rvs_infer_std_with_trait_aliases(&callgraph, &seed, &pre_index);
+    inferred.extend(
+        post_alias_infos
+            .iter()
+            .map(|(path, info)| (path.clone(), info.rvs_caps().clone())),
     );
 
-    let mut inferred = rvs_infer_caps_with_index(&callgraph, &alias_seed, &pre_index);
-    let std_inferred: BTreeMap<DefPath, crate::capability::CapabilitySet> = inferred
-        .iter()
-        .filter(|(k, _)| rvs_is_std_like_def_path(k.rvs_as_str()))
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect();
-    let post_aliases = rvs_generate_trait_aliases(&std_inferred, &pre_index, &callgraph);
-    inferred.extend(post_aliases);
-
-    let std_only: BTreeMap<DefPath, crate::capability::CapabilitySet> = inferred
+    let mut std_only: BTreeMap<DefPath, crate::capability::CapabilityInfo> = inferred
         .iter()
         .filter(|(name, _)| {
             !local_scope.rvs_contains(name) && rvs_is_std_like_def_path(name.rvs_as_str())
         })
-        .map(|(k, v)| (k.clone(), v.clone()))
+        .map(|(path, caps)| {
+            (
+                path.clone(),
+                rvs_std_inferred_capability_info(path, caps, &incomplete_paths),
+            )
+        })
         .collect();
+    for (path, info) in post_alias_infos {
+        if !local_scope.rvs_contains(&path) && rvs_is_std_like_def_path(path.rvs_as_str()) {
+            std_only.insert(path, info);
+        }
+    }
 
     let unknown = rvs_collect_std_unknown_callees(&callgraph, &inferred, &seed, &local_scope);
 
@@ -137,9 +160,67 @@ pub(crate) fn rvs_run_infer_std_BIMPS(path: &Path, output: &Path) -> Result<(), 
         ));
     }
 
-    let result = rvs_format_def_path_capsmap(&std_only);
+    let result = rvs_format_def_path_capability_info(&std_only);
     rvs_write_capsmap_result_BIS(&result, &resolved_output, "std capsmap")?;
     rvs_publish_std_callgraph_cache_BIS(&project_path, &callgraph)
+}
+
+fn rvs_infer_std_with_trait_aliases(
+    callgraph: &crate::artifacts::FnGraph,
+    seed: &CapsMap,
+    impl_index: &std::collections::HashMap<crate::symbols::TraitMethodKey, Vec<DefPath>>,
+) -> (
+    BTreeMap<DefPath, crate::capability::CapabilitySet>,
+    BTreeSet<DefPath>,
+    BTreeMap<DefPath, crate::capability::CapabilityInfo>,
+) {
+    let mut aliases: BTreeMap<DefPath, crate::capability::CapabilityInfo> = BTreeMap::new();
+    loop {
+        let mut alias_seed = seed.clone();
+        alias_seed.rvs_extend_info_entries_M(
+            aliases
+                .iter()
+                .map(|(path, info)| (CapsMapKey::from(path.clone()), info.clone())),
+        );
+        let inferred = rvs_infer_caps_with_index(callgraph, &alias_seed, impl_index);
+        let incomplete = crate::inference::rvs_incomplete_inference_paths(
+            callgraph,
+            &alias_seed,
+            &inferred,
+            impl_index,
+        );
+        let std_inferred = inferred
+            .iter()
+            .filter(|(path, _)| rvs_is_std_like_def_path(path.rvs_as_str()))
+            .map(|(path, caps)| (path.clone(), caps.clone()))
+            .collect();
+        let next_aliases =
+            rvs_generate_trait_alias_infos(&std_inferred, impl_index, callgraph, &incomplete)
+                .into_iter()
+                .filter(|(path, _)| seed.rvs_lookup_def_path(path).is_none())
+                .collect();
+        if next_aliases == aliases {
+            return (inferred, incomplete, aliases);
+        }
+        aliases = next_aliases;
+    }
+}
+
+fn rvs_std_inferred_capability_info(
+    path: &DefPath,
+    caps: &crate::capability::CapabilitySet,
+    incomplete_paths: &BTreeSet<DefPath>,
+) -> crate::capability::CapabilityInfo {
+    let completeness = if incomplete_paths.contains(path) {
+        crate::capability::CapabilityCompleteness::Incomplete
+    } else {
+        crate::capability::CapabilityCompleteness::Complete
+    };
+    crate::capability::CapabilityInfo::rvs_new(
+        caps.clone(),
+        crate::capability::CapabilityBasis::Inferred,
+        completeness,
+    )
 }
 
 fn rvs_require_inference_output_layer(
@@ -150,13 +231,25 @@ fn rvs_require_inference_output_layer(
     let Some(output_layer) = output_layer else {
         return Ok(());
     };
-    if let Some(reserved_layer) = rvs_reserved_layer_name(output_layer)
-        && reserved_layer != expected_layer
-    {
+    let output_name = output_layer.to_string_lossy();
+    if crate::fs_guard::rvs_is_atomic_sibling_temp_name(&output_name) {
         return Err(format!(
-            "{command} output cannot replace reserved caps layer '{}'; expected '{expected_layer}'",
-            output_layer.to_string_lossy()
+            "{command} output layer '{output_name}' uses a reserved temporary filename shape"
         ));
+    }
+    if let Some(reserved_layer) = rvs_reserved_layer_name(output_layer) {
+        if reserved_layer != expected_layer {
+            return Err(format!(
+                "{command} output cannot replace reserved caps layer '{}'; expected '{expected_layer}'",
+                output_layer.to_string_lossy()
+            ));
+        }
+        if *output_layer != OsStr::new(expected_layer) {
+            return Err(format!(
+                "{command} output layer '{}' must use canonical lowercase name '{expected_layer}'",
+                output_layer.to_string_lossy()
+            ));
+        }
     }
     Ok(())
 }
@@ -216,6 +309,33 @@ fn rvs_caps_output_layer_BIS(
     let Some(parent) = output_path.parent() else {
         return Ok(None);
     };
+    let alias_roots_match = match (parent.parent(), caps_dir.parent()) {
+        (Some(parent_root), Some(caps_root)) if parent_root == caps_root => true,
+        (Some(parent_root), Some(caps_root)) if parent_root.is_dir() && caps_root.is_dir() => {
+            same_file::is_same_file(parent_root, caps_root).map_err(|error| {
+                format!(
+                    "cannot compare capsmap output root '{}' with project root '{}': {error}",
+                    parent_root.display(),
+                    caps_root.display()
+                )
+            })?
+        }
+        _ => false,
+    };
+    let aliases_caps_name = parent != caps_dir
+        && parent
+            .file_name()
+            .and_then(OsStr::to_str)
+            .zip(caps_dir.file_name().and_then(OsStr::to_str))
+            .is_some_and(|(parent_name, caps_name)| parent_name.eq_ignore_ascii_case(caps_name))
+        && alias_roots_match;
+    if aliases_caps_name {
+        return Err(format!(
+            "capsmap output parent '{}' aliases canonical caps directory '{}'; use the lowercase path",
+            parent.display(),
+            caps_dir.display()
+        ));
+    }
     if !caps_dir_exists {
         let parent_targets_caps = if parent == caps_dir {
             true
@@ -348,8 +468,227 @@ fn rvs_collect_std_unknown_callees(
 mod tests {
     use super::*;
     use crate::test_support::{
-        rvs_make_cargo_project_BIS, rvs_make_temp_dir_BIS, rvs_snapshot_BIS,
+        rvs_caps_v2, rvs_make_cargo_project_BIS, rvs_make_temp_dir_BIS, rvs_snapshot_BIS,
     };
+
+    #[test]
+    fn test_20260716_infer_std_renders_complete_and_incomplete_inferred_records() {
+        let inferred = BTreeMap::from([
+            (
+                DefPath::from("core::complete"),
+                crate::capability::CapabilitySet::rvs_from_validated("B"),
+            ),
+            (
+                DefPath::from("std::incomplete"),
+                crate::capability::CapabilitySet::rvs_from_validated("IS"),
+            ),
+        ]);
+        let incomplete_paths = BTreeSet::from([DefPath::from("std::incomplete")]);
+        let infos = inferred
+            .iter()
+            .map(|(path, caps)| {
+                (
+                    path.clone(),
+                    rvs_std_inferred_capability_info(path, caps, &incomplete_paths),
+                )
+            })
+            .collect();
+        let rendered = rvs_format_def_path_capability_info(&infos);
+        rvs_snapshot_BIS(
+            "test_20260716_infer_std_renders_complete_and_incomplete_inferred_records",
+            &rendered,
+        );
+
+        let parsed = CapsMap::rvs_parse(&rendered).unwrap();
+        assert_eq!(
+            parsed
+                .rvs_lookup_info("core::complete")
+                .unwrap()
+                .rvs_completeness(),
+            crate::capability::CapabilityCompleteness::Complete
+        );
+        assert_eq!(
+            parsed
+                .rvs_lookup_info("std::incomplete")
+                .unwrap()
+                .rvs_completeness(),
+            crate::capability::CapabilityCompleteness::Incomplete
+        );
+    }
+
+    #[test]
+    fn test_20260716_infer_std_trait_alias_incompleteness_reaches_callers() {
+        let trait_path = DefPath::from("std::Parser::rvs_parse");
+        let impl_path = DefPath::from("std::Adapter::rvs_parse@std::Parser");
+        let caller_path = DefPath::from("std::rvs_use_parser");
+        let mut graph = crate::artifacts::FnGraph::rvs_new();
+        graph.rvs_insert_M(
+            trait_path.clone(),
+            crate::artifacts::FnNode {
+                has_body: false,
+                ..crate::artifacts::FnNode::default()
+            },
+        );
+        graph.rvs_insert_M(
+            impl_path,
+            crate::artifacts::FnNode {
+                calls: BTreeSet::from([DefPath::from("dependency::incomplete")]),
+                is_trait_impl: true,
+                ..crate::artifacts::FnNode::default()
+            },
+        );
+        graph.rvs_insert_M(
+            caller_path.clone(),
+            crate::artifacts::FnNode {
+                calls: BTreeSet::from([trait_path.clone()]),
+                ..crate::artifacts::FnNode::default()
+            },
+        );
+        let mut seed = CapsMap::rvs_new();
+        seed.rvs_insert_info_M(
+            CapsMapKey::from("dependency::incomplete"),
+            crate::capability::CapabilityInfo::rvs_migrated_v1(
+                crate::capability::CapabilitySet::rvs_from_validated("S"),
+                crate::capability::CapabilityCompleteness::Unknown,
+            ),
+        );
+        let impl_index = rvs_build_impl_index(&graph);
+
+        let (_, incomplete, aliases) = rvs_infer_std_with_trait_aliases(&graph, &seed, &impl_index);
+        let output = format!(
+            "trait_incomplete={}\ncaller_incomplete={}\nalias_completeness={}\n",
+            incomplete.contains(&trait_path),
+            incomplete.contains(&caller_path),
+            aliases
+                .get(&trait_path)
+                .map(|info| info.rvs_completeness().rvs_name())
+                .unwrap_or("missing"),
+        );
+        rvs_snapshot_BIS(
+            "test_20260716_infer_std_trait_alias_incompleteness_reaches_callers",
+            &output,
+        );
+
+        assert!(incomplete.contains(&caller_path));
+    }
+
+    #[test]
+    fn test_20260716_infer_std_seed_precedes_generated_trait_alias() {
+        let trait_path = DefPath::from("std::Parser::rvs_parse");
+        let impl_path = DefPath::from("std::Adapter::rvs_parse@std::Parser");
+        let caller_path = DefPath::from("std::rvs_use_parser");
+        let mut graph = crate::artifacts::FnGraph::rvs_new();
+        graph.rvs_insert_M(
+            trait_path.clone(),
+            crate::artifacts::FnNode {
+                has_body: false,
+                ..crate::artifacts::FnNode::default()
+            },
+        );
+        graph.rvs_insert_M(
+            impl_path.clone(),
+            crate::artifacts::FnNode {
+                is_trait_impl: true,
+                ..crate::artifacts::FnNode::default()
+            },
+        );
+        graph.rvs_insert_M(
+            caller_path.clone(),
+            crate::artifacts::FnNode {
+                calls: BTreeSet::from([trait_path.clone()]),
+                ..crate::artifacts::FnNode::default()
+            },
+        );
+        let mut seed = CapsMap::rvs_new();
+        seed.rvs_insert_info_M(
+            CapsMapKey::from(trait_path.clone()),
+            crate::capability::CapabilityInfo::rvs_explicit(
+                crate::capability::CapabilitySet::rvs_from_validated("B"),
+            ),
+        );
+        seed.rvs_insert_info_M(
+            CapsMapKey::from(impl_path),
+            crate::capability::CapabilityInfo::rvs_migrated_v1(
+                crate::capability::CapabilitySet::rvs_from_validated("S"),
+                crate::capability::CapabilityCompleteness::Unknown,
+            ),
+        );
+        let impl_index = rvs_build_impl_index(&graph);
+
+        let (inferred, incomplete, aliases) =
+            rvs_infer_std_with_trait_aliases(&graph, &seed, &impl_index);
+        let output = format!(
+            "caller_caps={}\ncaller_incomplete={}\ngenerated_alias={}\n",
+            inferred
+                .get(&caller_path)
+                .map_or("missing".to_string(), ToString::to_string),
+            incomplete.contains(&caller_path),
+            aliases.contains_key(&trait_path),
+        );
+        rvs_snapshot_BIS(
+            "test_20260716_infer_std_seed_precedes_generated_trait_alias",
+            &output,
+        );
+
+        assert_eq!(
+            inferred.get(&caller_path),
+            Some(&crate::capability::CapabilitySet::rvs_from_validated("B"))
+        );
+        assert!(!incomplete.contains(&caller_path));
+        assert!(!aliases.contains_key(&trait_path));
+    }
+
+    #[test]
+    fn test_20260716_inference_rejects_temporary_shaped_output_layer() {
+        let cases = [
+            ".deps.123.0.tmp",
+            ".caps-migration.123.0.tmp",
+            ".custom.123.0.tmp",
+        ];
+        let output = cases
+            .into_iter()
+            .map(|layer| {
+                format!(
+                    "{layer}: {:?}",
+                    rvs_require_inference_output_layer(
+                        &Some(OsStr::new(layer)),
+                        "deps",
+                        "infer-capsmap",
+                    )
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        rvs_snapshot_BIS(
+            "test_20260716_inference_rejects_temporary_shaped_output_layer",
+            &output,
+        );
+
+        assert!(output.lines().all(|line| line.contains("Err(")));
+    }
+
+    #[cfg(any(target_os = "android", target_os = "linux", target_vendor = "apple"))]
+    #[test]
+    fn test_20260715_inference_rejects_concurrent_caps_update() {
+        let dir = rvs_make_cargo_project_BIS(
+            "infer-concurrent-caps-update",
+            "infer-concurrent-caps-update",
+            &[("src/lib.rs", "pub fn rvs_value() -> u8 { 1 }\n")],
+        );
+        let lock = crate::fs_guard::rvs_try_lock_directory_BIS(&dir).unwrap();
+
+        let error = rvs_run_infer_capsmap_BIMPS(&dir, Path::new("caps/deps")).unwrap_err();
+        let output = format!("{error}\n").replace(&dir.to_string_lossy().into_owned(), "$TMP");
+        rvs_snapshot_BIS(
+            "test_20260715_inference_rejects_concurrent_caps_update",
+            &output,
+        );
+
+        assert!(error.contains("already running"));
+        drop(lock);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn test_20260702_infer_capsmap_rejects_workspace_root() {
@@ -490,7 +829,11 @@ mod tests {
             &[("src/lib.rs", "pub fn rvs_add() -> i32 { 1 }\n")],
         );
         std::fs::create_dir_all(dir.join("caps")).unwrap();
-        std::fs::write(dir.join("caps/seed"), "demo=Z\n").unwrap();
+        std::fs::write(
+            dir.join("caps/seed"),
+            "# rivus-caps-v2\n{\"path\":\"demo\",\"caps\":\"Z\",\"basis\":{\"kind\":\"explicit\"},\"completeness\":\"complete\"}\n",
+        )
+        .unwrap();
 
         let result = rvs_run_infer_std_BIMPS(&dir, Path::new("caps/std"));
         let callgraph_exists = dir.join("target/rivus-callgraph-std").exists();
@@ -572,7 +915,8 @@ mod tests {
         let output_exists = dir.join("CAPS/seed").exists();
         let output = format!(
             "result={result:?}\ncallgraph_exists={callgraph_exists}\noutput_exists={output_exists}\n"
-        );
+        )
+        .replace(&dir.to_string_lossy().into_owned(), "$TMP");
         rvs_snapshot_BIS(
             "test_20260715_infer_capsmap_rejects_case_aliased_missing_caps_seed",
             &output,
@@ -584,13 +928,73 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    #[test]
+    fn test_20260715_infer_capsmap_rejects_case_aliased_existing_caps_output() {
+        let dir = rvs_make_cargo_project_BIS(
+            "infer-capsmap-case-aliased-existing-caps",
+            "infer-capsmap-case-aliased-existing-caps",
+            &[("src/lib.rs", "pub fn rvs_add() -> i32 { 1 }\n")],
+        );
+        std::fs::create_dir(dir.join("caps")).unwrap();
+
+        let result = rvs_run_infer_capsmap_BIMPS(&dir, Path::new("CAPS/generated"));
+        let output = format!(
+            "result={result:?}\nshadow_exists={}\n",
+            dir.join("CAPS").exists()
+        )
+        .replace(&dir.to_string_lossy().into_owned(), "$TMP");
+        rvs_snapshot_BIS(
+            "test_20260715_infer_capsmap_rejects_case_aliased_existing_caps_output",
+            &output,
+        );
+
+        assert!(result.is_err());
+        assert!(!dir.join("CAPS").exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_20260715_infer_capsmap_rejects_case_alias_through_project_symlink() {
+        let dir = rvs_make_cargo_project_BIS(
+            "infer-capsmap-case-alias-project-symlink",
+            "infer-capsmap-case-alias-project-symlink",
+            &[("src/lib.rs", "pub fn rvs_add() -> i32 { 1 }\n")],
+        );
+        std::fs::create_dir(dir.join("caps")).unwrap();
+        let link = dir.with_file_name(format!(
+            "{}-link",
+            dir.file_name()
+                .expect("never: temp project has a file name")
+                .to_string_lossy()
+        ));
+        std::os::unix::fs::symlink(&dir, &link).unwrap();
+
+        let result = rvs_run_infer_capsmap_BIMPS(&dir, &link.join("CAPS/generated"));
+        let output = format!(
+            "result={result:?}\nshadow_exists={}\n",
+            link.join("CAPS").exists()
+        )
+        .replace(&link.to_string_lossy().into_owned(), "$LINK")
+        .replace(&dir.to_string_lossy().into_owned(), "$PROJECT");
+        rvs_snapshot_BIS(
+            "test_20260715_infer_capsmap_rejects_case_alias_through_project_symlink",
+            &output,
+        );
+
+        assert!(result.is_err());
+        assert!(!link.join("CAPS").exists());
+        std::fs::remove_file(link).unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[cfg(unix)]
     #[test]
     fn test_20260715_caps_output_layer_rejects_multiple_hardlink_names() {
         let dir = rvs_make_temp_dir_BIS("caps-output-hardlink-alias");
         let caps_dir = dir.join("caps");
         std::fs::create_dir_all(&caps_dir).unwrap();
-        std::fs::write(caps_dir.join("seed"), "manual=B\n").unwrap();
+        std::fs::write(caps_dir.join("seed"), rvs_caps_v2(&[("manual", "B")])).unwrap();
         std::fs::hard_link(caps_dir.join("seed"), caps_dir.join("alias")).unwrap();
 
         let result = rvs_caps_output_layer_BIS(&caps_dir, &caps_dir.join("alias"), true);
@@ -612,7 +1016,11 @@ mod tests {
             &[("src/lib.rs", "pub fn rvs_add() -> i32 { 1 }\n")],
         );
         std::fs::create_dir_all(dir.join("caps")).unwrap();
-        std::fs::write(dir.join("caps/seed"), "broken=Z\n").unwrap();
+        std::fs::write(
+            dir.join("caps/seed"),
+            "# rivus-caps-v2\n{\"path\":\"broken\",\"caps\":\"Z\",\"basis\":{\"kind\":\"explicit\"},\"completeness\":\"complete\"}\n",
+        )
+        .unwrap();
         let sentinel = "dependency::entry=I\n";
         std::fs::write(dir.join("caps/deps"), sentinel).unwrap();
 
@@ -685,7 +1093,7 @@ mod tests {
         let cases = [
             ("infer-capsmap", "deps", None, false),
             ("infer-capsmap", "deps", Some("deps"), false),
-            ("infer-capsmap", "deps", Some("DEPS"), false),
+            ("infer-capsmap", "deps", Some("DEPS"), true),
             ("infer-capsmap", "deps", Some("generated"), false),
             ("infer-capsmap", "deps", Some("std"), true),
             ("infer-capsmap", "deps", Some("seed"), true),
@@ -694,7 +1102,7 @@ mod tests {
             ("infer-capsmap", "deps", Some("ext"), true),
             ("infer-std", "std", None, false),
             ("infer-std", "std", Some("std"), false),
-            ("infer-std", "std", Some("STD"), false),
+            ("infer-std", "std", Some("STD"), true),
             ("infer-std", "std", Some("generated"), false),
             ("infer-std", "std", Some("deps"), true),
             ("infer-std", "std", Some("DEPS"), true),
@@ -779,7 +1187,11 @@ mod tests {
             &[("src/lib.rs", "pub fn rvs_add() -> i32 { 1 }\n")],
         );
         std::fs::create_dir_all(dir.join("caps")).unwrap();
-        std::fs::write(dir.join("caps/seed"), "demo=Z\n").unwrap();
+        std::fs::write(
+            dir.join("caps/seed"),
+            "# rivus-caps-v2\n{\"path\":\"demo\",\"caps\":\"Z\",\"basis\":{\"kind\":\"explicit\"},\"completeness\":\"complete\"}\n",
+        )
+        .unwrap();
 
         let result = rvs_run_infer_capsmap_BIMPS(&dir, Path::new("caps/deps"));
         let callgraph_exists = dir.join("target/rivus-callgraph").exists();
@@ -803,7 +1215,11 @@ mod tests {
             &[("src/lib.rs", "pub fn rvs_add() -> i32 { 1 }\n")],
         );
         std::fs::create_dir_all(dir.join("caps")).unwrap();
-        std::fs::write(dir.join("caps/deps"), "broken=Z\n").unwrap();
+        std::fs::write(
+            dir.join("caps/deps"),
+            "# rivus-caps-v2\n{\"path\":\"broken\",\"caps\":\"Z\",\"basis\":{\"kind\":\"inferred\"},\"completeness\":\"complete\"}\n",
+        )
+        .unwrap();
 
         let result = rvs_run_infer_capsmap_BIMPS(&dir, Path::new("caps/deps"));
         assert!(

@@ -1,0 +1,11 @@
+Offline Caps Check: 0 error(s), 1 warning(s)
+------------------------------------------------------------
+warning[incomplete_caps_knowledge]: demo::rvs_handle
+  calls rely on incomplete caps knowledge; checks use known capability lower bounds
+  layer: deps
+  file: caps/deps
+  completeness: unknown
+  affected callees: 1
+  callee: dependency::maybe_effectful (known caps: pure, basis=migrated_v1)
+  refresh generated layer 'deps' or add reviewed corrections to caps/ext
+  affected callers: 1

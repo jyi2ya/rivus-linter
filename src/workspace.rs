@@ -175,6 +175,8 @@ fn rvs_prepare_cargo_check_command_BIMS(
         "RIVUS_CALLGRAPH",
         "RIVUS_CALLGRAPH_DIR",
         "RIVUS_CAPSMAP",
+        "RIVUS_OFFLINE_EMISSIONS",
+        "RIVUS_OFFLINE_EMISSIONS_ACK_DIR",
         "RIVUS_OFFLINE_CAPS",
         "RIVUS_UI_TESTING",
         "RIVUS_UNTESTED_PATHS",
@@ -280,7 +282,7 @@ fn rvs_cargo_command_from_env_BS() -> OsString {
     env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"))
 }
 
-fn rvs_current_wrapper_exe_BIS() -> Result<PathBuf, std::io::Error> {
+pub(crate) fn rvs_current_wrapper_exe_BIS() -> Result<PathBuf, std::io::Error> {
     let current = env::current_exe()?;
     if let Some(parent) = current.parent()
         && parent.file_name().is_some_and(|name| name == "deps")
@@ -337,9 +339,13 @@ pub(crate) fn rvs_run_cargo_check_BIMS(extra_args: &[String]) -> Result<(), i32>
         }
         Err(e) => {
             eprintln!("offline caps check unavailable: {e}");
-            if let Err(lint_error) =
-                rvs_run_project_lints_BIMS(project_path, &target_scope, &extra_args_ref, &None)
-            {
+            if let Err(lint_error) = rvs_run_project_lints_BIMS(
+                project_path,
+                &target_scope,
+                &extra_args_ref,
+                &None,
+                None,
+            ) {
                 eprintln!("{lint_error}");
                 return Err(lint_error.rvs_exit_code());
             }
@@ -348,24 +354,22 @@ pub(crate) fn rvs_run_cargo_check_BIMS(extra_args: &[String]) -> Result<(), i32>
     };
     let uncovered =
         crate::offline_caps::rvs_uncovered_test_functions(&callgraph, &local_crate_names);
+    let report = crate::offline_caps::rvs_check_offline_caps(&callgraph, &caps, &local_crate_names);
+    let offline_emissions = report.rvs_emissions(&callgraph);
     let lint_result = rvs_run_project_lints_BIMS(
         project_path,
         &target_scope,
         &extra_args_ref,
         &Some(&uncovered),
+        Some(&offline_emissions),
     );
     if let Err(error) = lint_result {
         eprintln!("{error}");
         return Err(error.rvs_exit_code());
     }
 
-    let report = crate::offline_caps::rvs_check_offline_caps(&callgraph, &caps, &local_crate_names);
-    print!("{report}");
-    if report.rvs_has_errors() {
-        Err(1)
-    } else {
-        Ok(())
-    }
+    println!("Offline Caps Check: ok");
+    Ok(())
 }
 
 fn rvs_run_project_lints_BIMS(
@@ -373,6 +377,7 @@ fn rvs_run_project_lints_BIMS(
     target_scope: &CargoTargetScope,
     extra_args: &[&str],
     uncovered: &Option<&BTreeSet<crate::artifacts::FunctionIdentity>>,
+    offline_emissions: Option<&[crate::offline_caps::OfflineCapsEmission]>,
 ) -> Result<(), CargoCheckError> {
     let generation =
         rvs_reserve_run_generation_BIS(project_path, "lint").map_err(CargoCheckError::Message)?;
@@ -383,7 +388,23 @@ fn rvs_run_project_lints_BIMS(
                 .map_err(CargoCheckError::Message)?;
             extra_env.push(("RIVUS_UNTESTED_PATHS", path.as_os_str().to_os_string()));
         }
-        rvs_run_cargo_check_impl_BIMS(&CargoCheckConfig {
+        if let Some(offline_emissions) = offline_emissions {
+            let path = rvs_write_offline_emissions_BIS(generation.rvs_root(), offline_emissions)
+                .map_err(CargoCheckError::Message)?;
+            let ack_dir = generation.rvs_root().join("offline-emission-acks");
+            std::fs::create_dir(&ack_dir).map_err(|error| {
+                CargoCheckError::Message(format!(
+                    "cannot create offline emission acknowledgement directory {}: {error}",
+                    ack_dir.display()
+                ))
+            })?;
+            extra_env.push(("RIVUS_OFFLINE_EMISSIONS", path.as_os_str().to_os_string()));
+            extra_env.push((
+                "RIVUS_OFFLINE_EMISSIONS_ACK_DIR",
+                ack_dir.as_os_str().to_os_string(),
+            ));
+        }
+        let cargo_result = rvs_run_cargo_check_impl_BIMS(&CargoCheckConfig {
             project_path,
             wrap_all_crates: false,
             target_scope: *target_scope,
@@ -391,7 +412,15 @@ fn rvs_run_project_lints_BIMS(
             extra_env,
             extra_args: extra_args.to_vec(),
             target_subdir: Some(generation.rvs_target_subdir()),
-        })
+        });
+        let ack_result = if cargo_result.is_ok()
+            && let Some(offline_emissions) = offline_emissions
+        {
+            rvs_verify_offline_emission_acks_BIS(generation.rvs_root(), offline_emissions)
+        } else {
+            Ok(())
+        };
+        rvs_merge_lint_results(cargo_result, ack_result)
     })();
     let cleanup_result = rvs_cleanup_run_generation_BIS(&generation);
     match (lint_result, cleanup_result) {
@@ -403,6 +432,53 @@ fn rvs_run_project_lints_BIMS(
             Err(error)
         }
     }
+}
+
+fn rvs_merge_lint_results(
+    cargo_result: Result<(), CargoCheckError>,
+    ack_result: Result<(), String>,
+) -> Result<(), CargoCheckError> {
+    match (cargo_result, ack_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Ok(()), Err(message)) => Err(CargoCheckError::Message(message)),
+        (Err(error), _) => Err(error),
+    }
+}
+
+fn rvs_write_offline_emissions_BIS(
+    generation_root: &Path,
+    emissions: &[crate::offline_caps::OfflineCapsEmission],
+) -> Result<PathBuf, String> {
+    let path = generation_root.join("offline-emissions.json");
+    let json = crate::offline_caps::rvs_serialize_emissions(emissions)?;
+    let temp_path_for_attempt =
+        |attempt| generation_root.join(format!(".offline-emissions.{attempt}.tmp"));
+    crate::fs_guard::rvs_write_atomic_BIS(&path, json.as_bytes(), &temp_path_for_attempt).map_err(
+        |failure| rvs_render_atomic_write_failure(failure, &path, "offline caps emissions", false),
+    )?;
+    Ok(path)
+}
+
+fn rvs_verify_offline_emission_acks_BIS(
+    generation_root: &Path,
+    emissions: &[crate::offline_caps::OfflineCapsEmission],
+) -> Result<(), String> {
+    let ack_dir = generation_root.join("offline-emission-acks");
+    for (emission_index, emission) in emissions.iter().enumerate() {
+        for (anchor_index, anchor) in emission.span_anchors.iter().enumerate() {
+            let ack = ack_dir.join(crate::offline_caps::rvs_emission_ack_name(
+                emission_index,
+                anchor_index,
+            ));
+            if !ack.is_file() {
+                return Err(format!(
+                    "offline caps diagnostic was not matched by the final compilation: {} (crate id {})",
+                    anchor.identity.def_path, anchor.identity.crate_id
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn rvs_write_untested_selection_BIS(
@@ -521,6 +597,8 @@ fn rvs_reject_dangerous_forwarded_config(value: &str) -> Result<(), String> {
         "env.RIVUS_CAPSMAP",
         "env.RIVUS_CALLGRAPH",
         "env.RIVUS_CALLGRAPH_DIR",
+        "env.RIVUS_OFFLINE_EMISSIONS",
+        "env.RIVUS_OFFLINE_EMISSIONS_ACK_DIR",
         "env.RIVUS_OFFLINE_CAPS",
         "env.RIVUS_UI_TESTING",
         "env.RIVUS_UNTESTED_PATHS",
@@ -1024,11 +1102,25 @@ pub(crate) fn rvs_ensure_cargo_project_BIS(path: &Path) -> Result<(), String> {
 mod tests {
     use super::*;
     use crate::test_support::{
-        rvs_make_cargo_project_BIS, rvs_make_temp_dir_BIS, rvs_snapshot_BIS,
+        rvs_caps_v2, rvs_make_cargo_project_BIS, rvs_make_temp_dir_BIS, rvs_snapshot_BIS,
     };
 
     fn rvs_make_workspace_temp_dir_BIS(tag: &str) -> PathBuf {
         rvs_make_temp_dir_BIS(&format!("workspace-{tag}"))
+    }
+
+    fn rvs_targeted_test_node(crate_id: u64) -> crate::artifacts::FnNode {
+        debug_assert!(crate_id > 0, "test target crate id is nonzero");
+        let mut node = crate::artifacts::FnNode::default();
+        node.production_crate_ids.insert(crate_id);
+        node.coverage_candidate_crate_ids.insert(crate_id);
+        node.sources_by_crate.insert(crate_id, BTreeSet::new());
+        node.coverage_calls.insert(crate_id, BTreeSet::new());
+        node.coverage_call_sites.insert(crate_id, BTreeSet::new());
+        node.facts_by_crate
+            .insert(crate_id, crate::capability::CapabilityFacts::default());
+        node.has_body_by_crate.insert(crate_id, true);
+        node
     }
 
     #[test]
@@ -1254,6 +1346,414 @@ mod tests {
         assert!(!stderr.contains("unfulfilled_lint_expectations"));
         assert!(stderr.contains("good fn 'rvs_denied' not called by any test"));
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260715_merged_offline_caps_honors_lint_levels() {
+        let dir = rvs_make_workspace_temp_dir_BIS("merged-offline-caps-lint-levels");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"offline-levels\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("src/lib.rs"),
+            "#![feature(register_tool)]\n#![register_tool(rivus)]\n#![allow(non_snake_case)]\n#![allow(rivus::rvs_untested_good_fn)]\n#![forbid(unfulfilled_lint_expectations)]\n#![deny(rivus::rvs_call_violation)]\n\nstatic VALUE: u8 = 1;\n\nfn rvs_effect_S() -> u8 { VALUE }\n\n#[allow(rivus::rvs_call_violation)]\npub fn rvs_allowed() -> u8 { rvs_effect_S() }\n\n#[expect(rivus::rvs_call_violation)]\npub fn rvs_expected() -> u8 { rvs_effect_S() }\n\npub fn rvs_denied() -> u8 { rvs_effect_S() }\n",
+        )
+        .unwrap();
+
+        let output = Command::new(rvs_current_wrapper_exe_BIS().unwrap())
+            .arg("check")
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let violation_count = stderr
+            .matches("caller lacks propagated capabilities required by callee")
+            .count();
+        let summary = format!(
+            "success={}\nviolation_count={violation_count}\nexpect_unfulfilled={}\n",
+            output.status.success(),
+            stderr.contains("unfulfilled_lint_expectations"),
+        );
+        rvs_snapshot_BIS(
+            "test_20260715_merged_offline_caps_honors_lint_levels",
+            &summary,
+        );
+
+        assert!(!output.status.success());
+        assert_eq!(violation_count, 1, "{stderr}");
+        assert!(!stderr.contains("unfulfilled_lint_expectations"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260715_offline_caps_emission_respects_cfg_target_identity() {
+        let dir = rvs_make_workspace_temp_dir_BIS("offline-caps-cfg-target-identity");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"offline-cfg\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("src/lib.rs"),
+            "#![feature(register_tool)]\n#![register_tool(rivus)]\n#![allow(non_snake_case)]\n#![allow(rivus::rvs_untested_good_fn)]\n\nstatic VALUE: u8 = 1;\nfn rvs_effect_S() -> u8 { VALUE }\n\n#[cfg(not(test))]\n#[allow(rivus::rvs_call_violation)]\npub fn rvs_variant() -> u8 { rvs_effect_S() }\n\n#[cfg(test)]\n#[deny(rivus::rvs_call_violation)]\npub fn rvs_variant() -> u8 { 0 }\n",
+        )
+        .unwrap();
+
+        let output = Command::new(rvs_current_wrapper_exe_BIS().unwrap())
+            .arg("check")
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let summary = format!(
+            "success={}\ncall_violation={}\nunmatched_emission={}\n",
+            output.status.success(),
+            stderr.contains("caller lacks propagated capabilities required by callee"),
+            stderr.contains("diagnostic was not matched by the final compilation"),
+        );
+        rvs_snapshot_BIS(
+            "test_20260715_offline_caps_emission_respects_cfg_target_identity",
+            &summary,
+        );
+
+        assert!(output.status.success(), "{stderr}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260716_shared_def_path_entrypoint_is_target_scoped() {
+        let dir = rvs_make_workspace_temp_dir_BIS("shared-def-path-entrypoint");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"shared-entrypoint\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("src/lib.rs"),
+            "#![feature(register_tool)]\n#![register_tool(rivus)]\n#![allow(non_snake_case)]\n#![allow(rivus::rvs_non_rvs_fn)]\n#![allow(rivus::rvs_untested_good_fn)]\n\npub fn main() {}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("src/main.rs"),
+            "#![feature(register_tool)]\n#![register_tool(rivus)]\n#![allow(non_snake_case)]\n#![allow(rivus::rvs_untested_good_fn)]\n#![deny(rivus::rvs_non_rvs_fn)]\n\nstatic VALUE: u8 = 1;\nfn rvs_effect_S() -> u8 { VALUE }\nfn main() { let _ = rvs_effect_S(); }\n",
+        )
+        .unwrap();
+
+        let output = Command::new(rvs_current_wrapper_exe_BIS().unwrap())
+            .arg("check")
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let summary = format!(
+            "success={}\nmissing_prefix={}\nunmatched_emission={}\n",
+            output.status.success(),
+            stderr.contains("'main' is missing the rvs_ prefix"),
+            stderr.contains("diagnostic was not matched by the final compilation"),
+        );
+        rvs_snapshot_BIS(
+            "test_20260716_shared_def_path_entrypoint_is_target_scoped",
+            &summary,
+        );
+
+        assert!(output.status.success(), "{stderr}");
+        assert!(!stderr.contains("'main' is missing the rvs_ prefix"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260715_expectation_alias_preserves_stricter_test_lint_level() {
+        let dir = rvs_make_workspace_temp_dir_BIS("offline-caps-test-alias-lint-level");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"offline-test-alias-level\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("src/lib.rs"),
+            "#![feature(register_tool)]\n#![register_tool(rivus)]\n#![allow(non_snake_case)]\n#![allow(rivus::rvs_untested_good_fn)]\n#![cfg_attr(not(test), allow(rivus::rvs_call_violation))]\n#![cfg_attr(test, deny(rivus::rvs_call_violation))]\n\nstatic VALUE: u8 = 1;\nfn rvs_effect_S() -> u8 { VALUE }\npub fn rvs_variant() -> u8 { rvs_effect_S() }\n",
+        )
+        .unwrap();
+
+        let output = Command::new(rvs_current_wrapper_exe_BIS().unwrap())
+            .arg("check")
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let summary = format!(
+            "success={}\nviolation_reported={}\n",
+            output.status.success(),
+            stderr.contains("caller lacks propagated capabilities required by callee"),
+        );
+        rvs_snapshot_BIS(
+            "test_20260715_expectation_alias_preserves_stricter_test_lint_level",
+            &summary,
+        );
+
+        assert!(!output.status.success(), "{stderr}");
+        assert!(
+            stderr.contains("caller lacks propagated capabilities required by callee"),
+            "{stderr}"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260716_suffix_expectation_alias_fulfills_test_expectation() {
+        let dir = rvs_make_workspace_temp_dir_BIS("offline-suffix-test-alias-lint-level");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"offline-suffix-test-alias-level\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("src/lib.rs"),
+            "#![feature(register_tool)]\n#![register_tool(rivus)]\n#![allow(non_snake_case)]\n#![allow(rivus::rvs_contract_mismatch)]\n#![allow(rivus::rvs_untested_good_fn)]\n#![forbid(unfulfilled_lint_expectations)]\n#![cfg_attr(not(test), allow(rivus::rvs_non_alphabetical_suffix))]\n#![cfg_attr(test, expect(rivus::rvs_non_alphabetical_suffix))]\n\n/// Deliberately misordered suffix.\npub fn rvs_bad_SB() { let _value = 1; }\n",
+        )
+        .unwrap();
+
+        let output = Command::new(rvs_current_wrapper_exe_BIS().unwrap())
+            .arg("check")
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let summary = format!(
+            "success={}\nunfulfilled={}\nsuffix_reported={}\n",
+            output.status.success(),
+            stderr.contains("unfulfilled_lint_expectations"),
+            stderr.contains("should be alphabetically ordered"),
+        );
+        rvs_snapshot_BIS(
+            "test_20260716_suffix_expectation_alias_fulfills_test_expectation",
+            &summary,
+        );
+
+        assert!(output.status.success(), "{stderr}");
+        assert!(!stderr.contains("unfulfilled_lint_expectations"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260716_call_site_expectation_alias_fulfills_test_expectation() {
+        let dir = rvs_make_workspace_temp_dir_BIS("offline-call-site-expectation-alias");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"offline-call-site-expectation-alias\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("src/lib.rs"),
+            "#![feature(register_tool)]\n#![register_tool(rivus)]\n#![allow(non_snake_case)]\n#![allow(rivus::rvs_untested_good_fn)]\n#![forbid(unfulfilled_lint_expectations)]\n#![cfg_attr(not(test), allow(rivus::rvs_call_violation))]\n#![cfg_attr(test, expect(rivus::rvs_call_violation))]\n\n#[cfg(not(test))]\nstatic VALUE: u8 = 1;\n#[cfg(not(test))]\nfn rvs_effect_S() -> u8 { VALUE }\n#[cfg(test)]\nfn rvs_effect_S() -> u8 { 0 }\npub fn rvs_variant() -> u8 { rvs_effect_S() }\n",
+        )
+        .unwrap();
+
+        let output = Command::new(rvs_current_wrapper_exe_BIS().unwrap())
+            .arg("check")
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let summary = format!(
+            "success={}\nunfulfilled={}\nunmatched_emission={}\n",
+            output.status.success(),
+            stderr.contains("unfulfilled_lint_expectations"),
+            stderr.contains("diagnostic was not matched by the final compilation"),
+        );
+        rvs_snapshot_BIS(
+            "test_20260716_call_site_expectation_alias_fulfills_test_expectation",
+            &summary,
+        );
+
+        assert!(output.status.success(), "{stderr}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260716_expectation_only_alias_requires_expect_level() {
+        let mut summaries = Vec::new();
+
+        for lint_level in ["deny", "forbid", "force_warn", "expect"] {
+            let test_lint_level = if lint_level == "force_warn" {
+                "allow"
+            } else {
+                lint_level
+            };
+            let dir = rvs_make_workspace_temp_dir_BIS(&format!(
+                "offline-expectation-only-alias-{lint_level}"
+            ));
+            std::fs::create_dir_all(dir.join("src")).unwrap();
+            std::fs::write(
+                dir.join("Cargo.toml"),
+                format!(
+                    "[package]\nname = \"offline-expectation-only-{lint_level}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n"
+                ),
+            )
+            .unwrap();
+            std::fs::write(
+                dir.join("src/lib.rs"),
+                format!(
+                    "#![feature(register_tool)]\n#![register_tool(rivus)]\n#![allow(non_snake_case)]\n#![allow(rivus::rvs_non_rvs_fn)]\n#![allow(rivus::rvs_untested_good_fn)]\n#![forbid(unfulfilled_lint_expectations)]\n#![cfg_attr(not(test), allow(rivus::rvs_call_violation))]\n#![cfg_attr(test, {test_lint_level}(rivus::rvs_call_violation))]\n\n#[cfg(not(test))]\nstatic VALUE: u8 = 1;\n#[cfg(not(test))]\nfn effect() -> u8 {{ VALUE }}\n#[cfg(test)]\nfn effect() -> u8 {{ 0 }}\npub fn rvs_variant() -> u8 {{ effect() }}\n"
+                ),
+            )
+            .unwrap();
+
+            let mut command = Command::new(rvs_current_wrapper_exe_BIS().unwrap());
+            command.arg("check").current_dir(&dir);
+            if lint_level == "force_warn" {
+                command.env("RUSTFLAGS", "--force-warn=rivus::rvs_call_violation");
+            }
+            let output = command.output().unwrap();
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let violation_count = stderr
+                .matches("caller lacks propagated capabilities required by callee")
+                .count();
+            summaries.push(format!(
+                "{lint_level}: success={} violations={violation_count} unfulfilled={} unmatched={}",
+                output.status.success(),
+                stderr.contains("unfulfilled_lint_expectations"),
+                stderr.contains("diagnostic was not matched by the final compilation"),
+            ));
+
+            assert!(output.status.success(), "lint level {lint_level}: {stderr}");
+            assert_eq!(
+                violation_count,
+                usize::from(lint_level == "force_warn"),
+                "lint level {lint_level}: {stderr}"
+            );
+            assert!(
+                !stderr.contains("unfulfilled_lint_expectations"),
+                "lint level {lint_level}: {stderr}"
+            );
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+
+        rvs_snapshot_BIS(
+            "test_20260716_expectation_only_alias_requires_expect_level",
+            &(summaries.join("\n") + "\n"),
+        );
+    }
+
+    #[test]
+    fn test_20260716_offline_call_emission_respects_statement_allow() {
+        let dir = rvs_make_workspace_temp_dir_BIS("offline-call-statement-allow");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"offline-call-statement-allow\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("src/lib.rs"),
+            "#![feature(register_tool)]\n#![register_tool(rivus)]\n#![allow(non_snake_case)]\n#![allow(rivus::rvs_untested_good_fn)]\n#![deny(rivus::rvs_call_violation)]\n\nstatic VALUE: u8 = 1;\nfn rvs_effect_S() -> u8 { VALUE }\npub fn rvs_run() {\n    #[allow(rivus::rvs_call_violation)]\n    let _ = rvs_effect_S();\n}\n",
+        )
+        .unwrap();
+
+        let output = Command::new(rvs_current_wrapper_exe_BIS().unwrap())
+            .arg("check")
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let summary = format!(
+            "success={}\ncall_violation={}\nunmatched_emission={}\n",
+            output.status.success(),
+            stderr.contains("caller lacks propagated capabilities required by callee"),
+            stderr.contains("diagnostic was not matched by the final compilation"),
+        );
+        rvs_snapshot_BIS(
+            "test_20260716_offline_call_emission_respects_statement_allow",
+            &summary,
+        );
+
+        assert!(output.status.success(), "{stderr}");
+        assert!(!stderr.contains("caller lacks propagated capabilities required by callee"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260716_cfg_gated_call_does_not_emit_in_absent_test_variant() {
+        let dir = rvs_make_workspace_temp_dir_BIS("offline-call-cfg-statement");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"offline-call-cfg-statement\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("src/lib.rs"),
+            "#![feature(register_tool)]\n#![register_tool(rivus)]\n#![allow(non_snake_case)]\n#![allow(rivus::rvs_untested_good_fn)]\n#![cfg_attr(not(test), allow(rivus::rvs_call_violation))]\n#![cfg_attr(test, deny(rivus::rvs_call_violation))]\n\nstatic VALUE: u8 = 1;\nfn rvs_effect_S() -> u8 { VALUE }\npub fn rvs_variant() -> u8 {\n    #[cfg(not(test))]\n    { return rvs_effect_S(); }\n    #[cfg(test)]\n    { 0 }\n}\n",
+        )
+        .unwrap();
+
+        let output = Command::new(rvs_current_wrapper_exe_BIS().unwrap())
+            .arg("check")
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let summary = format!(
+            "success={}\ncall_violation={}\nunmatched_emission={}\n",
+            output.status.success(),
+            stderr.contains("caller lacks propagated capabilities required by callee"),
+            stderr.contains("diagnostic was not matched by the final compilation"),
+        );
+        rvs_snapshot_BIS(
+            "test_20260716_cfg_gated_call_does_not_emit_in_absent_test_variant",
+            &summary,
+        );
+
+        assert!(output.status.success(), "{stderr}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260715_offline_emission_acknowledgements_are_required() {
+        let generation = rvs_make_workspace_temp_dir_BIS("offline-emission-ack");
+        let ack_dir = generation.join("offline-emission-acks");
+        std::fs::create_dir(&ack_dir).unwrap();
+        let emissions = vec![crate::offline_caps::OfflineCapsEmission {
+            lint: crate::offline_caps::OfflineCapsLint::CallViolation,
+            span_anchors: BTreeSet::from([crate::offline_caps::OfflineCapsEmissionAnchor {
+                identity: crate::artifacts::FunctionIdentity {
+                    crate_id: 7,
+                    def_path: crate::symbols::DefPath::from("demo::rvs_call"),
+                },
+                call_site: None,
+                expectation_only: false,
+            }]),
+            message: "violation".to_string(),
+        }];
+
+        let missing = rvs_verify_offline_emission_acks_BIS(&generation, &emissions);
+        std::fs::write(
+            ack_dir.join(crate::offline_caps::rvs_emission_ack_name(0, 0)),
+            [],
+        )
+        .unwrap();
+        let present = rvs_verify_offline_emission_acks_BIS(&generation, &emissions);
+        let output = format!(
+            "missing_error={}\npresent_ok={}\n",
+            missing.is_err(),
+            present.is_ok()
+        );
+        rvs_snapshot_BIS(
+            "test_20260715_offline_emission_acknowledgements_are_required",
+            &output,
+        );
+
+        assert!(missing.is_err());
+        assert!(present.is_ok());
+        std::fs::remove_dir_all(generation).unwrap();
     }
 
     #[test]
@@ -2138,8 +2638,10 @@ name = "throughput-bench"
             None => "inherited",
         };
         let output = format!(
-            "callgraph={:?}\ncapsmap={capsmap_state}\nrustc={:?}\nrivus_enabled={:?}\nui_testing={:?}\nuntested_paths={:?}\n",
+            "callgraph={:?}\ncapsmap={capsmap_state}\noffline_emissions={:?}\noffline_acks={:?}\nrustc={:?}\nrivus_enabled={:?}\nui_testing={:?}\nuntested_paths={:?}\n",
             rvs_command_env_value(&cmd, "RIVUS_CALLGRAPH"),
+            rvs_command_env_value(&cmd, "RIVUS_OFFLINE_EMISSIONS"),
+            rvs_command_env_value(&cmd, "RIVUS_OFFLINE_EMISSIONS_ACK_DIR"),
             rvs_command_env_value(&cmd, "RUSTC"),
             rvs_command_env_value(&cmd, "RIVUS_ENABLED"),
             rvs_command_env_value(&cmd, "RIVUS_UI_TESTING"),
@@ -2222,7 +2724,7 @@ name = "throughput-bench"
     fn test_20260706_prepare_cargo_check_callgraph_env_requires_one() {
         let dir = rvs_make_workspace_temp_dir_BIS("callgraph-env-zero");
         std::fs::create_dir_all(dir.join("caps")).unwrap();
-        std::fs::write(dir.join("caps/ext"), "std::env::var=\n").unwrap();
+        std::fs::write(dir.join("caps/ext"), rvs_caps_v2(&[("std::env::var", "")])).unwrap();
         let config = CargoCheckConfig {
             project_path: &dir,
             wrap_all_crates: false,
@@ -2346,7 +2848,11 @@ name = "throughput-bench"
         let dir = rvs_make_workspace_temp_dir_BIS("invalid-extra-capsmap");
         let explicit_caps = dir.join("explicit-caps");
         std::fs::create_dir_all(&explicit_caps).unwrap();
-        std::fs::write(explicit_caps.join("ext"), "bad=Z\n").unwrap();
+        std::fs::write(
+            explicit_caps.join("ext"),
+            "# rivus-caps-v2\n{\"path\":\"bad\",\"caps\":\"Z\",\"basis\":{\"kind\":\"explicit\"},\"completeness\":\"complete\"}\n",
+        )
+        .unwrap();
         let config = CargoCheckConfig {
             project_path: &dir,
             wrap_all_crates: false,
@@ -2763,17 +3269,19 @@ name = "throughput-bench"
         ];
         let ui_env = vec!["--config=env.RIVUS_UI_TESTING.value=\"1\"".to_string()];
         let coverage_env = vec!["--config=env.RIVUS_UNTESTED_PATHS.value=\"bad\"".to_string()];
+        let emissions_env = vec!["--config=env.RIVUS_OFFLINE_EMISSIONS.value=\"bad\"".to_string()];
         let rustc_env = vec!["--config=env.RUSTC_WRAPPER.value=\"bad\"".to_string()];
         let path_config = vec!["--config".to_string(), "ci-cargo-config.toml".to_string()];
         let harmless = vec!["--config=net.offline=true".to_string()];
 
         let output = format!(
-            "build_rustc={}\nwrapper={}\nrivus_env={}\nui_env={}\ncoverage_env={}\nrustc_env={}\npath_config={}\nharmless={}\n",
+            "build_rustc={}\nwrapper={}\nrivus_env={}\nui_env={}\ncoverage_env={}\nemissions_env={}\nrustc_env={}\npath_config={}\nharmless={}\n",
             rvs_reject_forwarded_check_args(&build_rustc).is_err(),
             rvs_reject_forwarded_check_args(&wrapper).is_err(),
             rvs_reject_forwarded_check_args(&rivus_env).is_err(),
             rvs_reject_forwarded_check_args(&ui_env).is_err(),
             rvs_reject_forwarded_check_args(&coverage_env).is_err(),
+            rvs_reject_forwarded_check_args(&emissions_env).is_err(),
             rvs_reject_forwarded_check_args(&rustc_env).is_err(),
             rvs_reject_forwarded_check_args(&path_config).is_err(),
             rvs_reject_forwarded_check_args(&harmless).is_ok(),
@@ -2788,6 +3296,7 @@ name = "throughput-bench"
         assert!(rvs_reject_forwarded_check_args(&rivus_env).is_err());
         assert!(rvs_reject_forwarded_check_args(&ui_env).is_err());
         assert!(rvs_reject_forwarded_check_args(&coverage_env).is_err());
+        assert!(rvs_reject_forwarded_check_args(&emissions_env).is_err());
         assert!(rvs_reject_forwarded_check_args(&rustc_env).is_err());
         assert!(rvs_reject_forwarded_check_args(&path_config).is_err());
         assert!(rvs_reject_forwarded_check_args(&harmless).is_ok());
@@ -3136,7 +3645,11 @@ name = "throughput-bench"
     fn test_20260706_prepare_cargo_check_validates_project_caps_without_std_cache() {
         let dir = rvs_make_workspace_temp_dir_BIS("invalid-project-caps-no-std-cache");
         std::fs::create_dir_all(dir.join("caps")).unwrap();
-        std::fs::write(dir.join("caps/ext"), "bad=Z\n").unwrap();
+        std::fs::write(
+            dir.join("caps/ext"),
+            "# rivus-caps-v2\n{\"path\":\"bad\",\"caps\":\"Z\",\"basis\":{\"kind\":\"explicit\"},\"completeness\":\"complete\"}\n",
+        )
+        .unwrap();
         let config = CargoCheckConfig {
             project_path: &dir,
             wrap_all_crates: false,
@@ -3641,7 +4154,7 @@ name = "throughput-bench"
         let mut legacy = FnGraph::rvs_new();
         legacy.rvs_insert_M(
             crate::symbols::DefPath::from("std::rvs_legacy"),
-            crate::artifacts::FnNode::default(),
+            rvs_targeted_test_node(1),
         );
         std::fs::write(
             legacy_dir.join("legacy.json"),
@@ -3651,7 +4164,7 @@ name = "throughput-bench"
         let mut published = FnGraph::rvs_new();
         published.rvs_insert_M(
             crate::symbols::DefPath::from("std::rvs_published"),
-            crate::artifacts::FnNode::default(),
+            rvs_targeted_test_node(2),
         );
         crate::callgraph_cache::rvs_publish_std_callgraph_cache_BIS(&dir, &published).unwrap();
 
@@ -3679,7 +4192,7 @@ name = "throughput-bench"
         let mut previous = FnGraph::rvs_new();
         previous.rvs_insert_M(
             crate::symbols::DefPath::from("std::rvs_previous"),
-            crate::artifacts::FnNode::default(),
+            rvs_targeted_test_node(1),
         );
         crate::callgraph_cache::rvs_publish_std_callgraph_cache_BIS(&dir, &previous).unwrap();
         let target_dir = dir.join("target");
@@ -3696,7 +4209,7 @@ name = "throughput-bench"
         let mut replacement = FnGraph::rvs_new();
         replacement.rvs_insert_M(
             crate::symbols::DefPath::from("std::rvs_replacement"),
-            crate::artifacts::FnNode::default(),
+            rvs_targeted_test_node(2),
         );
 
         let result =
@@ -3725,13 +4238,13 @@ name = "throughput-bench"
         let mut previous = FnGraph::rvs_new();
         previous.rvs_insert_M(
             crate::symbols::DefPath::from("std::rvs_previous"),
-            crate::artifacts::FnNode::default(),
+            rvs_targeted_test_node(1),
         );
         crate::callgraph_cache::rvs_publish_std_callgraph_cache_BIS(&dir, &previous).unwrap();
         let mut replacement = FnGraph::rvs_new();
         replacement.rvs_insert_M(
             crate::symbols::DefPath::from("std::rvs_replacement"),
-            crate::artifacts::FnNode::default(),
+            rvs_targeted_test_node(2),
         );
 
         crate::callgraph_cache::rvs_publish_std_callgraph_cache_BIS(&dir, &replacement).unwrap();
@@ -4290,5 +4803,33 @@ name = "throughput-bench"
 
         assert_eq!(CargoCheckError::Message("oops".into()).rvs_exit_code(), 1);
         assert_eq!(CargoCheckError::ExitCode(101).rvs_exit_code(), 101);
+    }
+
+    #[test]
+    fn test_20260716_failed_cargo_check_ignores_missing_ack_error() {
+        let result = rvs_merge_lint_results(
+            Err(CargoCheckError::ExitCode(101)),
+            Err("offline diagnostic was unmatched".to_string()),
+        )
+        .unwrap_err();
+        let output = format!(
+            "error={result}\nexit={}\nunmatched={}\n",
+            result.rvs_exit_code(),
+            result
+                .to_string()
+                .contains("offline diagnostic was unmatched"),
+        );
+        rvs_snapshot_BIS(
+            "test_20260716_failed_cargo_check_ignores_missing_ack_error",
+            &output,
+        );
+
+        assert_eq!(result, CargoCheckError::ExitCode(101));
+        assert_eq!(result.rvs_exit_code(), 101);
+        assert!(
+            !result
+                .to_string()
+                .contains("offline diagnostic was unmatched")
+        );
     }
 }

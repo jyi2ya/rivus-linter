@@ -1,5 +1,115 @@
-use std::io::Write as _;
+use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
+
+#[cfg(any(target_os = "android", target_os = "linux", target_vendor = "apple"))]
+#[derive(Debug)]
+pub(crate) struct RivusDirectoryLock {
+    _directory: std::fs::File,
+}
+
+#[cfg(not(any(target_os = "android", target_os = "linux", target_vendor = "apple")))]
+#[derive(Debug)]
+pub(crate) struct RivusDirectoryLock;
+
+#[cfg(any(target_os = "android", target_os = "linux", target_vendor = "apple"))]
+pub(crate) fn rvs_try_lock_directory_BIS(directory: &Path) -> std::io::Result<RivusDirectoryLock> {
+    let file = std::fs::File::open(directory)?;
+    rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive)
+        .map_err(std::io::Error::from)?;
+    Ok(RivusDirectoryLock { _directory: file })
+}
+
+#[cfg(not(any(target_os = "android", target_os = "linux", target_vendor = "apple")))]
+pub(crate) fn rvs_try_lock_directory_BIS(_directory: &Path) -> std::io::Result<RivusDirectoryLock> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "directory locking is unsupported on this platform",
+    ))
+}
+
+#[cfg(unix)]
+fn rvs_open_regular_file_no_follow_BIS(path: &Path) -> std::io::Result<std::fs::File> {
+    let fd = rustix::fs::open(
+        path,
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC | rustix::fs::OFlags::NOFOLLOW,
+        rustix::fs::Mode::empty(),
+    )
+    .map_err(std::io::Error::from)?;
+    let file = std::fs::File::from(fd);
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{} is not a regular file", path.display()),
+        ));
+    }
+    Ok(file)
+}
+
+#[cfg(unix)]
+pub(crate) fn rvs_read_regular_file_no_follow_BIS(path: &Path) -> std::io::Result<String> {
+    let mut file = rvs_open_regular_file_no_follow_BIS(path)?;
+    let mut content = String::new();
+    file.read_to_string(&mut content)?;
+    Ok(content)
+}
+
+#[cfg(not(unix))]
+pub(crate) fn rvs_read_regular_file_no_follow_BIS(path: &Path) -> std::io::Result<String> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{} is not a regular file", path.display()),
+        ));
+    }
+    std::fs::read_to_string(path)
+}
+
+#[cfg(unix)]
+pub(crate) fn rvs_sync_regular_file_no_follow_BIS(path: &Path) -> std::io::Result<()> {
+    rvs_open_regular_file_no_follow_BIS(path)?.sync_all()
+}
+
+#[cfg(not(unix))]
+pub(crate) fn rvs_sync_regular_file_no_follow_BIS(path: &Path) -> std::io::Result<()> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{} is not a regular file", path.display()),
+        ));
+    }
+    std::fs::File::open(path)?.sync_all()
+}
+
+#[cfg(unix)]
+pub(crate) fn rvs_set_permissions_no_follow_BIS(
+    path: &Path,
+    permissions: std::fs::Permissions,
+) -> std::io::Result<()> {
+    let fd = rustix::fs::open(
+        path,
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC | rustix::fs::OFlags::NOFOLLOW,
+        rustix::fs::Mode::empty(),
+    )
+    .map_err(std::io::Error::from)?;
+    std::fs::File::from(fd).set_permissions(permissions)
+}
+
+#[cfg(not(unix))]
+pub(crate) fn rvs_set_permissions_no_follow_BIS(
+    path: &Path,
+    permissions: std::fs::Permissions,
+) -> std::io::Result<()> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{} must not be a symlink", path.display()),
+        ));
+    }
+    std::fs::File::open(path)?.set_permissions(permissions)
+}
 
 #[derive(Debug)]
 pub(crate) enum AtomicWriteFailureKind {
@@ -213,7 +323,59 @@ pub(crate) fn rvs_validate_optional_dir_BIS(path: &Path, label: &str) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use crate::test_support::rvs_make_temp_dir_BIS;
     use crate::test_support::rvs_snapshot_BIS;
+
+    #[cfg(unix)]
+    #[test]
+    fn test_20260716_set_permissions_does_not_follow_symlink() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let dir = rvs_make_temp_dir_BIS("permissions-no-follow");
+        let target = dir.join("target");
+        let link = dir.join("link");
+        std::fs::write(&target, "value").unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let result =
+            rvs_set_permissions_no_follow_BIS(&link, std::fs::Permissions::from_mode(0o644));
+        let target_mode = std::fs::symlink_metadata(&target)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        let output = format!(
+            "error={}\ntarget_mode={target_mode:o}\nlink_is_symlink={}\n",
+            result.is_err(),
+            std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+        );
+        rvs_snapshot_BIS(
+            "test_20260716_set_permissions_does_not_follow_symlink",
+            &output,
+        );
+
+        assert!(result.is_err());
+        assert_eq!(target_mode, 0o600);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "linux", target_vendor = "apple")))]
+    #[test]
+    fn test_20260716_unsupported_directory_lock_returns_unsupported() {
+        let error = rvs_try_lock_directory_BIS(Path::new(".")).unwrap_err();
+        let output = format!("kind={:?}\n", error.kind());
+        rvs_snapshot_BIS(
+            "test_20260716_unsupported_directory_lock_returns_unsupported",
+            &output,
+        );
+
+        assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
+    }
 
     #[derive(Clone, Copy, Debug)]
     enum AtomicWriteFailureCase {

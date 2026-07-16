@@ -4,5 +4,6 @@
 struct Payload;
 
 fn rvs_validate(payload: Payload) -> std::result::Result<(), std::io::Error> {
-    Ok(())
+    drop(payload);
+    Err(std::io::Error::other("failed"))
 }

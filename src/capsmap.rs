@@ -2,30 +2,51 @@ use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
 use snafu::Snafu;
 
-use crate::capability::{CapabilityParseError, CapabilitySet};
+use crate::capability::{
+    CapabilityBasis, CapabilityCompleteness, CapabilityInfo, CapabilityKnowledgeError,
+    CapabilitySet, CapabilitySource,
+};
 use crate::symbols::{CapsMapKey, DefPath};
+
+pub(crate) const CAPS_V2_HEADER: &str = "# rivus-caps-v2";
 
 /// 能力之鉴：非 rvs 函数的品行录。
 /// 外人虽无 rvs 前缀，登记在册，亦知其能。
 #[derive(Debug, Clone, Default)]
 pub struct CapsMap {
-    entries: BTreeMap<CapsMapKey, CapabilitySet>,
+    entries: BTreeMap<CapsMapKey, CapabilityInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CapsRecord {
+    path: CapsMapKey,
+    caps: CapabilitySet,
+    basis: CapabilityBasis,
+    completeness: CapabilityCompleteness,
 }
 
 #[derive(Debug, Snafu)]
 pub enum CapsMapError {
-    #[snafu(display("line {line}: invalid capability string '{caps}' for '{key}'"))]
-    InvalidCaps {
-        key: CapsMapKey,
-        caps: String,
+    #[snafu(display(
+        "capsmap v2 header '{expected}' is required; run `cargo rivus migrate-caps` for legacy v1 files"
+    ))]
+    MissingV2Header { expected: &'static str },
+    #[snafu(display("line {line}: invalid capsmap v2 record: {source}"))]
+    InvalidV2Record {
         line: usize,
-        source: CapabilityParseError,
+        source: serde_json::Error,
     },
-    #[snafu(display("line {line}: missing '=' separator"))]
-    MissingSeparator { line: usize },
-    #[snafu(display("line {line}: empty capsmap key"))]
+    #[snafu(display("line {line}: invalid capability knowledge for '{path}': {source}"))]
+    InvalidCapabilityKnowledge {
+        line: usize,
+        path: CapsMapKey,
+        source: CapabilityKnowledgeError,
+    },
+    #[snafu(display("line {line}: empty capsmap path"))]
     EmptyKey { line: usize },
     #[snafu(display(
         "line {line}: duplicate capsmap key '{key}' (first defined on line {first_line})"
@@ -50,6 +71,13 @@ pub enum CapsMapError {
     PathMustBeFile { path: String },
     #[snafu(display("capsmap layer name must be a single file name: {layer}"))]
     InvalidLayerName { layer: String },
+    #[snafu(display(
+        "capsmap layer '{layer}' aliases reserved layer '{expected}'; use the canonical lowercase name"
+    ))]
+    NonCanonicalLayerName {
+        layer: String,
+        expected: &'static str,
+    },
 }
 
 /// 固定层级顺序。后加载的覆盖先加载的。
@@ -77,91 +105,146 @@ impl CapsMap {
         Self::default()
     }
 
-    /// 解析文本为 capsmap。
-    ///
-    /// 格式：每行 `key=caps` 或 `key=`（表示纯函数）。
-    /// 注释以 `#` 开头，但仅从 `=` 之后的值部分剥离——
-    /// 键中可含 `#`（如 `closure#0`），因此不从键中剥离注释。
+    /// Parse a versioned JSON-lines capsmap.
     pub fn rvs_parse(content: &str) -> Result<Self, CapsMapError> {
+        Self::rvs_parse_with_source(content, None)
+    }
+
+    fn rvs_parse_with_source(
+        content: &str,
+        source: Option<(&str, &Path)>,
+    ) -> Result<Self, CapsMapError> {
         let mut entries = BTreeMap::new();
         let mut first_lines = BTreeMap::new();
+        let mut saw_header = false;
         for (i, raw_line) in content.lines().enumerate() {
             let line_num = i + 1;
             let trimmed = raw_line.trim();
-            if trimmed.is_empty() || trimmed.starts_with('#') {
+            if trimmed.is_empty() {
                 continue;
             }
-            let (key, value) = trimmed
-                .split_once('=')
-                .ok_or(CapsMapError::MissingSeparator { line: line_num })?;
-            if key.trim().is_empty() {
+            if !saw_header {
+                if trimmed != CAPS_V2_HEADER {
+                    return Err(CapsMapError::MissingV2Header {
+                        expected: CAPS_V2_HEADER,
+                    });
+                }
+                saw_header = true;
+                continue;
+            }
+            if trimmed.starts_with('#') {
+                continue;
+            }
+            let record: CapsRecord =
+                serde_json::from_str(trimmed).map_err(|source| CapsMapError::InvalidV2Record {
+                    line: line_num,
+                    source,
+                })?;
+            if record.path.rvs_as_str().is_empty() {
                 return Err(CapsMapError::EmptyKey { line: line_num });
             }
-            let key = CapsMapKey::rvs_new(key.trim().to_string());
-            if let Some(first_line) = first_lines.get(&key) {
+            if let Some(first_line) = first_lines.get(&record.path) {
                 return Err(CapsMapError::DuplicateKey {
-                    key,
+                    key: record.path,
                     first_line: *first_line,
                     line: line_num,
                 });
             }
-            let value = value.split('#').next().unwrap_or("").trim();
-            let caps =
-                CapabilitySet::rvs_from_str(value).map_err(|e| CapsMapError::InvalidCaps {
-                    key: key.clone(),
-                    caps: value.to_string(),
+            let key = record.path;
+            let mut info = CapabilityInfo::rvs_new(record.caps, record.basis, record.completeness);
+            info.rvs_check_invariants().map_err(|source| {
+                CapsMapError::InvalidCapabilityKnowledge {
                     line: line_num,
-                    source: e,
-                })?;
+                    path: key.clone(),
+                    source,
+                }
+            })?;
+            if let Some((layer, file)) = source {
+                info.rvs_with_source_M(CapabilitySource {
+                    layer: layer.to_string(),
+                    file: file.to_path_buf(),
+                    line: line_num,
+                });
+            }
             first_lines.insert(key.clone(), line_num);
-            entries.insert(key, caps);
+            entries.insert(key, info);
+        }
+        if !saw_header {
+            return Err(CapsMapError::MissingV2Header {
+                expected: CAPS_V2_HEADER,
+            });
         }
         Ok(Self { entries })
     }
 
     /// 精确匹配查找，不做后缀匹配。
+    #[cfg(test)]
     pub fn rvs_lookup(&self, name: &str) -> Option<&CapabilitySet> {
+        self.rvs_lookup_info(name).map(CapabilityInfo::rvs_caps)
+    }
+
+    pub(crate) fn rvs_lookup_info(&self, name: &str) -> Option<&CapabilityInfo> {
         self.entries.get(name)
     }
 
     /// Look up an exact internal path, then its user-facing wildcard path.
     pub(crate) fn rvs_lookup_def_path(&self, path: &DefPath) -> Option<&CapabilitySet> {
-        self.rvs_lookup(path.rvs_as_str()).or_else(|| {
+        self.rvs_lookup_info_def_path(path)
+            .map(CapabilityInfo::rvs_caps)
+    }
+
+    pub(crate) fn rvs_lookup_info_def_path(&self, path: &DefPath) -> Option<&CapabilityInfo> {
+        self.rvs_lookup_info(path.rvs_as_str()).or_else(|| {
             let user_path = path.rvs_user_path();
-            self.rvs_lookup(user_path.as_ref())
+            self.rvs_lookup_info(user_path.as_ref())
         })
     }
 
     /// Insert one typed exact-key entry, replacing any existing value.
+    #[cfg(test)]
     pub(crate) fn rvs_insert_M(&mut self, key: CapsMapKey, caps: CapabilitySet) {
-        self.entries.insert(key, caps);
+        self.rvs_insert_info_M(key, CapabilityInfo::rvs_explicit(caps));
+    }
+
+    pub(crate) fn rvs_insert_info_M(&mut self, key: CapsMapKey, info: CapabilityInfo) {
+        self.entries.insert(key, info);
     }
 
     /// Extend from typed exact-key entries, with later entries taking precedence.
-    pub(crate) fn rvs_extend_entries_M(
+    pub(crate) fn rvs_extend_info_entries_M(
         &mut self,
-        entries: impl IntoIterator<Item = (CapsMapKey, CapabilitySet)>,
+        entries: impl IntoIterator<Item = (CapsMapKey, CapabilityInfo)>,
     ) {
-        for (key, caps) in entries {
-            self.rvs_insert_M(key, caps);
+        for (key, info) in entries {
+            self.rvs_insert_info_M(key, info);
         }
     }
 
     /// 合并另一个 capsmap，后者覆盖前者。
     pub(crate) fn rvs_extend_from_M(&mut self, other: Self) {
-        self.rvs_extend_entries_M(other.entries);
+        self.rvs_extend_info_entries_M(other.entries);
     }
 
-    #[cfg(test)]
-    pub(crate) fn rvs_to_text(&self) -> String {
-        let mut out = String::new();
-        for (key, caps) in &self.entries {
-            out.push_str(key.rvs_as_str());
-            out.push('=');
-            out.push_str(&crate::inference::rvs_caps_to_string(caps));
+    pub(crate) fn rvs_render_v2(&self) -> String {
+        let mut out = String::from(CAPS_V2_HEADER);
+        out.push('\n');
+        for (path, info) in &self.entries {
+            let record = CapsRecord {
+                path: path.clone(),
+                caps: info.rvs_caps().clone(),
+                basis: info.rvs_basis().clone(),
+                completeness: info.rvs_completeness(),
+            };
+            let line = serde_json::to_string(&record)
+                .expect("never: capsmap records contain only JSON-compatible data");
+            out.push_str(&line);
             out.push('\n');
         }
         out
+    }
+
+    pub(crate) fn rvs_iter(&self) -> impl Iterator<Item = (&CapsMapKey, &CapabilityInfo)> {
+        self.entries.iter()
     }
 
     /// 加载目录中所有 caps 文件，按固定层级顺序合并。
@@ -223,20 +306,28 @@ fn rvs_load_caps_dir_BIS(
         {
             continue;
         }
-        let content = std::fs::read_to_string(&path).map_err(|e| CapsMapError::FileRead {
-            path: path.display().to_string(),
-            error: e.to_string(),
+        let content = crate::fs_guard::rvs_read_regular_file_no_follow_BIS(&path).map_err(|e| {
+            CapsMapError::FileRead {
+                path: path.display().to_string(),
+                error: e.to_string(),
+            }
         })?;
-        let partial = rvs_parse_caps_file(&path.display().to_string(), &content)?;
+        let partial = rvs_parse_caps_file(&path, &content)?;
         result.rvs_extend_from_M(partial);
     }
     Ok(result)
 }
 
-fn rvs_parse_caps_file(path: &str, content: &str) -> Result<CapsMap, CapsMapError> {
-    CapsMap::rvs_parse(content).map_err(|source| CapsMapError::FileParse {
-        path: path.to_string(),
-        source: Box::new(source),
+fn rvs_parse_caps_file(path: &Path, content: &str) -> Result<CapsMap, CapsMapError> {
+    let layer = path
+        .file_name()
+        .and_then(OsStr::to_str)
+        .unwrap_or("<unknown>");
+    CapsMap::rvs_parse_with_source(content, Some((layer, path))).map_err(|source| {
+        CapsMapError::FileParse {
+            path: path.display().to_string(),
+            source: Box::new(source),
+        }
     })
 }
 
@@ -256,10 +347,13 @@ fn rvs_collect_selected_caps_dir_files_BIS(
 ) -> Result<Vec<PathBuf>, CapsMapError> {
     match selection {
         CapsDirSelection::All => rvs_collect_caps_dir_files_BIS(dir, &[]),
-        CapsDirSelection::Include(layers) => layers
-            .iter()
-            .map(|layer| rvs_caps_layer_file_path(dir, layer))
-            .collect(),
+        CapsDirSelection::Include(layers) => {
+            let _ = rvs_collect_caps_dir_files_BIS(dir, &[])?;
+            layers
+                .iter()
+                .map(|layer| rvs_caps_layer_file_path(dir, layer))
+                .collect()
+        }
         CapsDirSelection::Exclude(exclude) => rvs_collect_caps_dir_files_BIS(dir, exclude),
     }
 }
@@ -285,12 +379,25 @@ fn rvs_collect_caps_dir_files_BIS(
             continue;
         }
         let name = raw_name.to_string_lossy().into_owned();
+        if let Some(expected) = rvs_reserved_layer_name(raw_name)
+            && name != expected
+        {
+            return Err(CapsMapError::NonCanonicalLayerName {
+                layer: name,
+                expected,
+            });
+        }
         if crate::fs_guard::rvs_is_atomic_sibling_temp_name(&name) {
             continue;
         }
-        if path.is_file() {
+        if file_type.is_symlink() {
+            return Err(CapsMapError::PathMustBeFile {
+                path: path.display().to_string(),
+            });
+        }
+        if file_type.is_file() {
             files.push(path);
-        } else if file_type.is_symlink() || LAYER_ORDER.contains(&name.as_str()) {
+        } else if LAYER_ORDER.contains(&name.as_str()) {
             return Err(CapsMapError::PathMustBeFile {
                 path: path.display().to_string(),
             });
@@ -360,7 +467,7 @@ fn rvs_optional_caps_layer_file_BIS(path: &Path) -> Result<bool, CapsMapError> {
 
 /// 按 LAYER_ORDER 对文件路径排序。
 /// 在 LAYER_ORDER 中的文件按层级顺序排，不在的按字母序排在后面。
-fn rvs_sort_by_layer_M(files: &mut [std::path::PathBuf]) {
+pub(crate) fn rvs_sort_by_layer_M(files: &mut [std::path::PathBuf]) {
     files.sort_by(|a, b| {
         let a_name = a
             .file_name()
@@ -387,7 +494,9 @@ fn rvs_sort_by_layer_M(files: &mut [std::path::PathBuf]) {
 mod tests {
     use super::*;
     use crate::capability::Capability;
-    use crate::test_support::{rvs_make_temp_dir_BIS, rvs_snapshot_BIS};
+    use crate::test_support::{
+        rvs_caps_v2, rvs_make_capsmap, rvs_make_temp_dir_BIS, rvs_snapshot_BIS,
+    };
 
     #[test]
     fn test_20260709_capsmap_parse_and_lookup_table() {
@@ -395,37 +504,43 @@ mod tests {
             ("new_empty", CapsMap::rvs_new(), "anything", None),
             (
                 "single",
-                CapsMap::rvs_parse("std::fs::read=BI").unwrap(),
+                CapsMap::rvs_parse(&rvs_caps_v2(&[("std::fs::read", "BI")])).unwrap(),
                 "std::fs::read",
                 Some("BI"),
             ),
             (
                 "empty_value",
-                CapsMap::rvs_parse("HashMap::new=").unwrap(),
+                CapsMap::rvs_parse(&rvs_caps_v2(&[("HashMap::new", "")])).unwrap(),
                 "HashMap::new",
                 Some(""),
             ),
             (
                 "comments",
-                CapsMap::rvs_parse("# comment\nfunc=BI # inline\n").unwrap(),
+                CapsMap::rvs_parse(&format!(
+                    "{CAPS_V2_HEADER}\n# comment\n{}",
+                    rvs_caps_v2(&[("func", "BI")])
+                        .lines()
+                        .skip(1)
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                ))
+                .unwrap(),
                 "func",
                 Some("BI"),
             ),
             (
                 "hash_in_key",
-                CapsMap::rvs_parse("exr::image::closure#0::crop_samples=S # SideEffect").unwrap(),
+                CapsMap::rvs_parse(&rvs_caps_v2(&[(
+                    "exr::image::closure#0::crop_samples",
+                    "S",
+                )]))
+                .unwrap(),
                 "exr::image::closure#0::crop_samples",
                 Some("S"),
             ),
             (
-                "empty_content",
-                CapsMap::rvs_parse("").unwrap(),
-                "anything",
-                None,
-            ),
-            (
                 "all_caps",
-                CapsMap::rvs_parse("danger=ABIMPSTU").unwrap(),
+                CapsMap::rvs_parse(&rvs_caps_v2(&[("danger", "ABIMPSTU")])).unwrap(),
                 "danger",
                 Some("ABIMPSTU"),
             ),
@@ -439,7 +554,7 @@ mod tests {
             assert_eq!(actual.as_deref(), expected, "{name}");
         }
 
-        let lookup = CapsMap::rvs_parse("HashMap::new=").unwrap();
+        let lookup = rvs_make_capsmap(&[("HashMap::new", "")]);
         assert!(lookup.rvs_lookup("HashMap::new").is_some());
         assert!(lookup.rvs_lookup("HashMap").is_none());
         assert!(lookup.rvs_lookup("nonexistent").is_none());
@@ -448,10 +563,13 @@ mod tests {
 
     #[test]
     fn test_20260715_capsmap_lookup_applies_readable_impl_path_to_all_specializations() {
-        let capsmap = CapsMap::rvs_parse(
-            "demo::Worker::rvs_run=BI\ndemo::Worker{impl#64656d6f3a3a576f726b65723c7531363e}::rvs_run=S\n",
-        )
-        .unwrap();
+        let capsmap = rvs_make_capsmap(&[
+            ("demo::Worker::rvs_run", "BI"),
+            (
+                "demo::Worker{impl#64656d6f3a3a576f726b65723c7531363e}::rvs_run",
+                "S",
+            ),
+        ]);
         let wildcard = capsmap
             .rvs_lookup_def_path(&DefPath::from(
                 "demo::Worker{impl#64656d6f3a3a576f726b65723c75383e}::rvs_run",
@@ -473,13 +591,44 @@ mod tests {
     }
 
     #[test]
+    fn test_20260715_capsmap_rejects_case_aliased_reserved_layer() {
+        let dir = rvs_make_temp_dir_BIS("capsmap-case-aliased-reserved-layer");
+        std::fs::write(dir.join("ext"), rvs_caps_v2(&[("winner", "S")])).unwrap();
+        std::fs::write(dir.join("DEPS"), rvs_caps_v2(&[("winner", "B")])).unwrap();
+
+        let all = CapsMap::rvs_load_dir_BIS(&dir);
+        let selected = CapsMap::rvs_load_dir_layers_BIS(&dir, &["seed", "suppress"]);
+        let output = format!("all={all:?}\nselected={selected:?}\n");
+        rvs_snapshot_BIS(
+            "test_20260715_capsmap_rejects_case_aliased_reserved_layer",
+            &output,
+        );
+
+        assert!(all.is_err());
+        assert!(selected.is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn test_20260709_capsmap_parse_error_table() {
         let cases = [
-            ("missing_separator", "no_separator"),
-            ("empty_key", "=BI"),
-            ("invalid_caps", "func=XYZ"),
-            ("duplicate_caps", "func=BB"),
-            ("duplicate_key", "func=B\nother=\nfunc=I"),
+            ("missing_header", "{}"),
+            (
+                "empty_key",
+                "# rivus-caps-v2\n{\"path\":\"\",\"caps\":\"BI\",\"basis\":{\"kind\":\"explicit\"},\"completeness\":\"complete\"}\n",
+            ),
+            (
+                "invalid_caps",
+                "# rivus-caps-v2\n{\"path\":\"func\",\"caps\":\"XYZ\",\"basis\":{\"kind\":\"explicit\"},\"completeness\":\"complete\"}\n",
+            ),
+            (
+                "duplicate_caps",
+                "# rivus-caps-v2\n{\"path\":\"func\",\"caps\":\"BB\",\"basis\":{\"kind\":\"explicit\"},\"completeness\":\"complete\"}\n",
+            ),
+            (
+                "duplicate_key",
+                "# rivus-caps-v2\n{\"path\":\"func\",\"caps\":\"B\",\"basis\":{\"kind\":\"explicit\"},\"completeness\":\"complete\"}\n{\"path\":\"other\",\"caps\":\"\",\"basis\":{\"kind\":\"explicit\"},\"completeness\":\"complete\"}\n{\"path\":\"func\",\"caps\":\"I\",\"basis\":{\"kind\":\"explicit\"},\"completeness\":\"complete\"}\n",
+            ),
         ];
         let mut output = String::new();
         for (name, input) in cases {
@@ -491,20 +640,128 @@ mod tests {
     }
 
     #[test]
+    fn test_20260715_capsmap_rejects_inconsistent_knowledge_metadata() {
+        let cases = [
+            (
+                "explicit_incomplete",
+                "{\"path\":\"func\",\"caps\":\"B\",\"basis\":{\"kind\":\"explicit\"},\"completeness\":\"incomplete\"}",
+            ),
+            (
+                "inferred_unknown",
+                "{\"path\":\"func\",\"caps\":\"B\",\"basis\":{\"kind\":\"inferred\"},\"completeness\":\"unknown\"}",
+            ),
+            (
+                "port_wrong_caps",
+                "{\"path\":\"func\",\"caps\":\"BI\",\"basis\":{\"kind\":\"port\"},\"completeness\":\"complete\"}",
+            ),
+            (
+                "migrated_complete",
+                "{\"path\":\"func\",\"caps\":\"B\",\"basis\":{\"kind\":\"migrated_v1\"},\"completeness\":\"complete\"}",
+            ),
+            (
+                "vote_without_implementations",
+                "{\"path\":\"func\",\"caps\":\"\",\"basis\":{\"kind\":\"trait_vote\",\"implementations\":0,\"threshold\":0,\"votes\":{}},\"completeness\":\"complete\"}",
+            ),
+            (
+                "vote_wrong_threshold",
+                "{\"path\":\"func\",\"caps\":\"\",\"basis\":{\"kind\":\"trait_vote\",\"implementations\":3,\"threshold\":1,\"votes\":{}},\"completeness\":\"complete\"}",
+            ),
+            (
+                "vote_non_propagated_cap",
+                "{\"path\":\"func\",\"caps\":\"\",\"basis\":{\"kind\":\"trait_vote\",\"implementations\":3,\"threshold\":2,\"votes\":{\"A\":1}},\"completeness\":\"complete\"}",
+            ),
+            (
+                "vote_count_exceeds_implementations",
+                "{\"path\":\"func\",\"caps\":\"B\",\"basis\":{\"kind\":\"trait_vote\",\"implementations\":3,\"threshold\":2,\"votes\":{\"B\":4}},\"completeness\":\"complete\"}",
+            ),
+            (
+                "vote_selected_caps_mismatch",
+                "{\"path\":\"func\",\"caps\":\"\",\"basis\":{\"kind\":\"trait_vote\",\"implementations\":3,\"threshold\":2,\"votes\":{\"S\":2}},\"completeness\":\"complete\"}",
+            ),
+        ];
+        let mut output = String::new();
+        for (name, record) in cases {
+            let input = format!("{CAPS_V2_HEADER}\n{record}\n");
+            let error = CapsMap::rvs_parse(&input)
+                .expect_err("invalid knowledge metadata must be rejected");
+            output.push_str(&format!("{name}: {error}\n"));
+        }
+        rvs_snapshot_BIS(
+            "test_20260715_capsmap_rejects_inconsistent_knowledge_metadata",
+            &output,
+        );
+    }
+
+    #[test]
     fn test_20260705_capsmap_to_text_is_deterministic() {
-        let cm = CapsMap::rvs_parse("zeta=S\nalpha=BI\n").unwrap();
-        let text = cm.rvs_to_text();
+        let cm = rvs_make_capsmap(&[("zeta", "S"), ("alpha", "BI")]);
+        let text = cm.rvs_render_v2();
         rvs_snapshot_BIS("test_20260705_capsmap_to_text_is_deterministic", &text);
 
-        assert_eq!(text, "alpha=BI\nzeta=S\n");
+        assert!(text.starts_with(CAPS_V2_HEADER));
+        assert!(text.find("alpha").unwrap() < text.find("zeta").unwrap());
+    }
+
+    #[test]
+    fn test_20260715_capsmap_v2_roundtrip_preserves_vote_metadata_and_source() {
+        let dir = rvs_make_temp_dir_BIS("capsmap-v2-vote-roundtrip");
+        let mut map = CapsMap::rvs_new();
+        map.rvs_insert_info_M(
+            CapsMapKey::from("demo::FromString::rvs_parse"),
+            CapabilityInfo::rvs_trait_vote(
+                CapabilitySet::rvs_new(),
+                3,
+                2,
+                BTreeMap::from([(Capability::S, 1)]),
+                CapabilityCompleteness::Complete,
+            ),
+        );
+        std::fs::write(dir.join("std"), map.rvs_render_v2()).unwrap();
+
+        let loaded = CapsMap::rvs_load_dir_BIS(&dir).unwrap();
+        let info = loaded
+            .rvs_lookup_info("demo::FromString::rvs_parse")
+            .unwrap();
+        let source = info.rvs_source().unwrap();
+        let output = format!(
+            "basis={:?}\ncompleteness={}\nsource_layer={}\nsource_file={}\nsource_line={}\n",
+            info.rvs_basis(),
+            info.rvs_completeness().rvs_name(),
+            source.layer,
+            source.file.file_name().unwrap().to_string_lossy(),
+            source.line,
+        );
+        rvs_snapshot_BIS(
+            "test_20260715_capsmap_v2_roundtrip_preserves_vote_metadata_and_source",
+            &output,
+        );
+
+        assert!(matches!(
+            info.rvs_basis(),
+            CapabilityBasis::TraitVote {
+                implementations: 3,
+                threshold: 2,
+                ..
+            }
+        ));
+        assert_eq!(source.line, 2);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn test_20260611_seed_overrides_std() {
         let dir = std::env::temp_dir().join("test_20260611_seed_overrides_std");
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("seed"), "func=S\nother_func=T\n").unwrap();
-        std::fs::write(dir.join("std"), "func=U\nother_func=U\nnew_func=M\n").unwrap();
+        std::fs::write(
+            dir.join("seed"),
+            rvs_caps_v2(&[("func", "S"), ("other_func", "T")]),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("std"),
+            rvs_caps_v2(&[("func", "U"), ("other_func", "U"), ("new_func", "M")]),
+        )
+        .unwrap();
         let cm = CapsMap::rvs_load_dir_BIS(&dir).unwrap();
         let caps = cm.rvs_lookup("func").unwrap();
         assert!(caps.rvs_contains(Capability::S));
@@ -521,9 +778,9 @@ mod tests {
     fn test_20260615_load_dir_layers() {
         let dir = std::env::temp_dir().join("test_20260615_load_dir_layers");
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("seed"), "func_a=S\n").unwrap();
-        std::fs::write(dir.join("suppress"), "func_b=\n").unwrap();
-        std::fs::write(dir.join("std"), "func_c=M\n").unwrap();
+        std::fs::write(dir.join("seed"), rvs_caps_v2(&[("func_a", "S")])).unwrap();
+        std::fs::write(dir.join("suppress"), rvs_caps_v2(&[("func_b", "")])).unwrap();
+        std::fs::write(dir.join("std"), rvs_caps_v2(&[("func_c", "M")])).unwrap();
         let cm = CapsMap::rvs_load_dir_layers_BIS(&dir, &["seed", "suppress"]).unwrap();
         assert!(cm.rvs_lookup("func_a").is_some());
         assert!(cm.rvs_lookup("func_b").is_some());
@@ -538,7 +795,7 @@ mod tests {
             std::fs::remove_dir_all(&dir).unwrap();
         }
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("seed"), "func=S\n").unwrap();
+        std::fs::write(dir.join("seed"), rvs_caps_v2(&[("func", "S")])).unwrap();
 
         let absolute = dir.join("seed").to_string_lossy().into_owned();
         assert!(rvs_caps_layer_file_path(&dir, "seed").is_ok());
@@ -576,8 +833,8 @@ mod tests {
             std::fs::remove_dir_all(&dir).unwrap();
         }
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("seed"), "func=S\n").unwrap();
-        std::fs::write(dir.join("suppress"), "func=\n").unwrap();
+        std::fs::write(dir.join("seed"), rvs_caps_v2(&[("func", "S")])).unwrap();
+        std::fs::write(dir.join("suppress"), rvs_caps_v2(&[("func", "")])).unwrap();
 
         let cm = CapsMap::rvs_load_dir_layers_BIS(&dir, &["suppress", "seed"]).unwrap();
         let caps = cm.rvs_lookup("func").unwrap();
@@ -602,7 +859,7 @@ mod tests {
             ("alpha", "S"),
             ("zeta", "U"),
         ] {
-            std::fs::write(dir.join(name), format!("winner={caps}\n")).unwrap();
+            std::fs::write(dir.join(name), rvs_caps_v2(&[("winner", caps)])).unwrap();
         }
 
         let cases = [
@@ -719,7 +976,10 @@ mod tests {
 
     #[test]
     fn test_20260705_capsmap_file_parse_error_includes_path() {
-        let result = rvs_parse_caps_file("caps/seed", "broken=E");
+        let result = rvs_parse_caps_file(
+            Path::new("caps/seed"),
+            "# rivus-caps-v2\n{\"path\":\"broken\",\"caps\":\"E\",\"basis\":{\"kind\":\"explicit\"},\"completeness\":\"complete\"}\n",
+        );
         let message = result.unwrap_err().to_string();
         rvs_snapshot_BIS(
             "test_20260705_capsmap_file_parse_error_includes_path",
@@ -733,9 +993,9 @@ mod tests {
     fn test_20260615_load_dir_excluding() {
         let dir = std::env::temp_dir().join("test_20260615_load_dir_excluding");
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("seed"), "func_a=S\n").unwrap();
-        std::fs::write(dir.join("deps"), "func_b=T\n").unwrap();
-        std::fs::write(dir.join("ext"), "func_c=M\n").unwrap();
+        std::fs::write(dir.join("seed"), rvs_caps_v2(&[("func_a", "S")])).unwrap();
+        std::fs::write(dir.join("deps"), rvs_caps_v2(&[("func_b", "T")])).unwrap();
+        std::fs::write(dir.join("ext"), rvs_caps_v2(&[("func_c", "M")])).unwrap();
         let cm = CapsMap::rvs_load_dir_excluding_BIS(&dir, &["deps"]).unwrap();
         assert!(cm.rvs_lookup("func_a").is_some());
         assert!(cm.rvs_lookup("func_b").is_none());
@@ -746,8 +1006,8 @@ mod tests {
     #[test]
     fn test_20260714_caps_loader_ignores_atomic_temp() {
         let dir = rvs_make_temp_dir_BIS("capsmap-ignore-atomic-temp");
-        std::fs::write(dir.join("ext"), "winner=P\n").unwrap();
-        std::fs::write(dir.join(".deps.123.0.tmp"), "winner=S\n").unwrap();
+        std::fs::write(dir.join("ext"), rvs_caps_v2(&[("winner", "P")])).unwrap();
+        std::fs::write(dir.join(".deps.123.0.tmp"), rvs_caps_v2(&[("winner", "S")])).unwrap();
 
         let caps = CapsMap::rvs_load_dir_BIS(&dir).unwrap();
         let winner = crate::inference::rvs_caps_to_string(caps.rvs_lookup("winner").unwrap());
@@ -771,6 +1031,25 @@ mod tests {
         let output = format!("is_err={}\n", result.is_err());
         rvs_snapshot_BIS(
             "test_20260714_caps_loader_rejects_broken_custom_layer_symlink",
+            &output,
+        );
+
+        assert!(result.is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_20260715_caps_loader_rejects_valid_custom_layer_symlink() {
+        let dir = rvs_make_temp_dir_BIS("capsmap-valid-custom-layer-symlink");
+        let source = dir.join("source");
+        std::fs::write(&source, rvs_caps_v2(&[("value", "S")])).unwrap();
+        std::os::unix::fs::symlink(&source, dir.join("custom")).unwrap();
+
+        let result = CapsMap::rvs_load_dir_BIS(&dir);
+        let output = format!("is_err={}\n", result.is_err());
+        rvs_snapshot_BIS(
+            "test_20260715_caps_loader_rejects_valid_custom_layer_symlink",
             &output,
         );
 
@@ -824,8 +1103,8 @@ mod tests {
 
     #[test]
     fn test_20260630_extend_from_and_sort_by_layer() {
-        let mut base = CapsMap::rvs_parse("alpha=B\n").unwrap();
-        let extra = CapsMap::rvs_parse("beta=I\n").unwrap();
+        let mut base = rvs_make_capsmap(&[("alpha", "B")]);
+        let extra = rvs_make_capsmap(&[("beta", "I")]);
         base.rvs_extend_from_M(extra);
         assert!(
             base.rvs_lookup("alpha")

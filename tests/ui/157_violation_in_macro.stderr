@@ -1,10 +1,8 @@
 error: caller lacks propagated capabilities required by callee; callee: std::fs::read_to_string; caller declared caps: pure; callee caps: BIS; missing propagated caps: B, I, S
-  --> $DIR/tests/ui/157_violation_in_macro.rs:4:1
+  --> $DIR/tests/ui/157_violation_in_macro.rs:5:35
    |
-LL | / fn rvs_pure_fn() {
-LL | |     let _ = format!("calling {}", std::fs::read_to_string("x").unwrap());
-LL | | }
-   | |_^
+LL |     let _ = format!("calling {}", std::fs::read_to_string("x").unwrap());
+   |                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
    = note: `#[deny(rivus::rvs_call_violation)]` on by default
 

@@ -1,0 +1,4 @@
+error=cannot atomically exchange original caps directory $TMP/caps with staged directory $TMP/staging: exchange failed
+original=old
+backup_exists=false
+staging_exists=false

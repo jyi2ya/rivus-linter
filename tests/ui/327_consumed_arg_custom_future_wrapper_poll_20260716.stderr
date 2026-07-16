@@ -1,0 +1,10 @@
+error: owned param 'String' consumed but not preserved in error type of rvs_process_M
+  --> $DIR/tests/ui/327_consumed_arg_custom_future_wrapper_poll_20260716.rs:24:24
+   |
+LL | fn rvs_process_M(data: String, context: &mut Context<'_>) -> Result<(), u8> {
+   |                        ^^^^^^
+   |
+   = note: `-D rivus::rvs-consumed-arg-on-error` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_consumed_arg_on_error)]`
+
+error: aborting due to 1 previous error

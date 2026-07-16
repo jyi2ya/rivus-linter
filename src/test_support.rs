@@ -1,6 +1,10 @@
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
+use crate::capability::CapabilitySet;
+use crate::capsmap::CapsMap;
+use crate::symbols::CapsMapKey;
+
 fn rvs_bless_value_enabled(value: Option<&OsStr>) -> bool {
     value.and_then(OsStr::to_str) == Some("1")
 }
@@ -104,6 +108,21 @@ pub(crate) fn rvs_make_cargo_project_BIS(
     }
 
     dir
+}
+
+pub(crate) fn rvs_make_capsmap(entries: &[(&str, &str)]) -> CapsMap {
+    let mut map = CapsMap::rvs_new();
+    for (path, caps) in entries {
+        map.rvs_insert_M(
+            CapsMapKey::from(*path),
+            CapabilitySet::rvs_from_str(caps).expect("never: test caps are valid"),
+        );
+    }
+    map
+}
+
+pub(crate) fn rvs_caps_v2(entries: &[(&str, &str)]) -> String {
+    rvs_make_capsmap(entries).rvs_render_v2()
 }
 
 #[cfg(test)]

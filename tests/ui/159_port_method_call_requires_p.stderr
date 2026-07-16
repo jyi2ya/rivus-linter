@@ -1,10 +1,8 @@
 error: caller lacks propagated capabilities required by callee; callee: 159_port_method_call_requires_p::UserRepository::rvs_find_by_id_P; caller declared caps: pure; callee caps: P; missing propagated caps: P
-  --> $DIR/tests/ui/159_port_method_call_requires_p.rs:26:5
+  --> $DIR/tests/ui/159_port_method_call_requires_p.rs:27:9
    |
-LL | /     fn rvs_load(&self) {
-LL | |         self.repo.rvs_find_by_id_P(1);
-LL | |     }
-   | |_____^
+LL |         self.repo.rvs_find_by_id_P(1);
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
    = note: `#[deny(rivus::rvs_call_violation)]` on by default
 

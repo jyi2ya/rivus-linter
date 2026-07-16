@@ -445,17 +445,6 @@ struct BodyExprVisitor<'a, 'tcx, F> {
     nested_body: bool,
 }
 
-impl<'tcx, F> BodyExprVisitor<'_, 'tcx, F>
-where
-    F: FnMut(&'tcx Expr<'tcx>, bool),
-{
-    fn rvs_visit_nested_body_M(&mut self, body_id: BodyId) {
-        let previous = std::mem::replace(&mut self.nested_body, true);
-        self.visit_expr(self.tcx.hir_body(body_id).value);
-        self.nested_body = previous;
-    }
-}
-
 impl<'tcx, F> Visitor<'tcx> for BodyExprVisitor<'_, 'tcx, F>
 where
     F: FnMut(&'tcx Expr<'tcx>, bool),
@@ -467,7 +456,9 @@ where
     }
 
     fn visit_nested_body(&mut self, body_id: BodyId) {
-        self.rvs_visit_nested_body_M(body_id);
+        let previous = std::mem::replace(&mut self.nested_body, true);
+        self.visit_expr(self.tcx.hir_body(body_id).value);
+        self.nested_body = previous;
     }
 
     fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {

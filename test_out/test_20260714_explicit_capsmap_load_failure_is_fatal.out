@@ -1,1 +1,1 @@
-error=CAPSMAP_PATH/seed: line 1: missing '=' separator
+error=CAPSMAP_PATH/seed: capsmap v2 header '# rivus-caps-v2' is required; run `cargo rivus migrate-caps` for legacy v1 files

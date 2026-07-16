@@ -1,0 +1,3 @@
+error=cargo check failed (exit code 101)
+exit=101
+unmatched=false

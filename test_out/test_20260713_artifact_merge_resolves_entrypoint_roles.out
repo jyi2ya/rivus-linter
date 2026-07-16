@@ -1,4 +1,5 @@
 retained_entry=false
+entrypoint_crate_ids={2}
 retained_sources={FnSource { file: "src/lib.rs", base: None, name_start: 7, name_end: 11 }}
 retained_calls={DefPath("std::fs::read_to_string")}
 entry_calls={DefPath("std::process::exit")}

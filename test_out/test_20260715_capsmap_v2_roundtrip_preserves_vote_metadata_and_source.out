@@ -1,0 +1,5 @@
+basis=TraitVote { implementations: 3, threshold: 2, votes: {S: 1} }
+completeness=complete
+source_layer=std
+source_file=std
+source_line=2

@@ -1,0 +1,2 @@
+result=Err("capsmap output parent '$LINK/CAPS' aliases canonical caps directory '$PROJECT/caps'; use the lowercase path")
+shadow_exists=false

@@ -8,12 +8,10 @@ LL |     (drop::<Result<(), String>> as fn(Result<(), String>))(result);
    = help: to override `-D warnings` add `#[allow(rivus::rvs_error_swallow)]`
 
 error: caller lacks propagated capabilities required by callee; callee: 227_cast_callee::rvs_blocking_BI; caller declared caps: pure; callee caps: BI; missing propagated caps: B, I
-  --> $DIR/tests/ui/227_cast_callee.rs:7:1
+  --> $DIR/tests/ui/227_cast_callee.rs:8:5
    |
-LL | / fn rvs_cast_call() {
-LL | |     (rvs_blocking_BI as fn())();
-LL | | }
-   | |_^
+LL |     (rvs_blocking_BI as fn())();
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
    = note: `#[deny(rivus::rvs_call_violation)]` on by default
 

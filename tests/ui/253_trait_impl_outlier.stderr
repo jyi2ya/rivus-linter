@@ -1,0 +1,13 @@
+error: trait implementation has capabilities outside the aggregate vote; trait method: 253_trait_impl_outlier::FromString::rvs_parse; implementation caps: S; voted caps: pure; outlier caps: S; vote threshold: 2/3; votes: B=0/3, I=0/3, P=0/3, S=1/3, T=0/3
+  --> $DIR/tests/ui/253_trait_impl_outlier.rs:28:5
+   |
+LL | /     fn rvs_parse(_input: &str) -> usize {
+LL | |         unsafe { rvs_environment_effect_S() };
+LL | |         0
+LL | |     }
+   | |_____^
+   |
+   = note: `-D rivus::rvs-trait-impl-outlier` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_trait_impl_outlier)]`
+
+error: aborting due to 1 previous error

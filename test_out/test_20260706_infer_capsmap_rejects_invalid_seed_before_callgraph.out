@@ -1,2 +1,2 @@
-result=Err("caps: $TMP/caps/seed: line 1: invalid capability string 'Z' for 'demo'")
+result=Err("caps: $TMP/caps/seed: line 2: invalid capsmap v2 record: invalid capability letter: 'Z' at line 1 column 25")
 callgraph_exists=false

@@ -1,3 +1,4 @@
-HashMap::new=
-std::fs::read=BI # Blocking IO
-std::process::exit=S # SideEffect
+# rivus-caps-v2
+{"path":"HashMap::new","caps":"","basis":{"kind":"inferred"},"completeness":"complete"}
+{"path":"std::fs::read","caps":"BI","basis":{"kind":"inferred"},"completeness":"complete"}
+{"path":"std::process::exit","caps":"S","basis":{"kind":"inferred"},"completeness":"complete"}

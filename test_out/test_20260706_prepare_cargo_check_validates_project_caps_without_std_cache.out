@@ -1,1 +1,1 @@
-Err(Message("caps/: $TMP/caps/ext: line 1: invalid capability string 'Z' for 'bad'"))
+Err(Message("caps/: $TMP/caps/ext: line 2: invalid capsmap v2 record: invalid capability letter: 'Z' at line 1 column 24"))

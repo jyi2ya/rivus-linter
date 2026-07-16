@@ -22,6 +22,7 @@ ra_ap_load-cargo = "0.0.336"
 ra_ap_paths = "0.0.336"
 ra_ap_project_model = "0.0.336"
 ra_ap_vfs = "0.0.336"
+rustix = { version = "1", features = ["fs"] }
 
 [lints]
 

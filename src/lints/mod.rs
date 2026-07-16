@@ -13,6 +13,7 @@ use rustc_lint::{LateContext, LateLintPass, LintPass};
 use rustc_session::declare_tool_lint;
 use rustc_span::{DUMMY_SP, Span};
 
+use crate::artifacts::{CallSiteIdentity, FunctionIdentity};
 use crate::capability::{CapabilityPolicy, ParsedFunctionName};
 use crate::capsmap::CapsMap;
 use crate::symbols::{CrateName, DefPath};
@@ -69,12 +70,22 @@ rvs_declare_lints!(
     (
         RVS_CONTRACT_MISMATCH,
         Warn,
-        "Port method name does not match inferred public contract"
+        "function name does not match inferred public contract"
     ),
     (
         RVS_UNKNOWN_CALLEE,
         Warn,
         "call to function neither rvs_-prefixed nor in capsmap"
+    ),
+    (
+        RVS_INCOMPLETE_CAPS_KNOWLEDGE,
+        Warn,
+        "call check relies on incomplete caps knowledge"
+    ),
+    (
+        RVS_TRAIT_IMPL_OUTLIER,
+        Warn,
+        "trait implementation has capabilities outside the aggregate vote"
     ),
     (
         RVS_MISSING_MUTABLE,
@@ -208,6 +219,7 @@ macro_rules! rvs_fn_check_data {
             ok_fns: &mut $pass.ok_fns,
             callgraph: &mut $pass.callgraph,
             diagnostic_spans: &mut $pass.diagnostic_spans,
+            diagnostic_call_spans: &mut $pass.diagnostic_call_spans,
             collect_caps_facts: $pass.collect_caps_facts,
             should_emit_lints: $pass.should_emit_lints,
         }
@@ -224,7 +236,8 @@ pub struct RivusLintPass {
     ok_fns: Vec<ctx::CoverageFn>,
     test_calls: HashSet<ctx::TestCallTarget>,
     callgraph: FnGraph,
-    diagnostic_spans: BTreeMap<DefPath, (rustc_hir::HirId, Span)>,
+    diagnostic_spans: BTreeMap<FunctionIdentity, (rustc_hir::HirId, Span)>,
+    diagnostic_call_spans: BTreeMap<(FunctionIdentity, CallSiteIdentity), (rustc_hir::HirId, Span)>,
     done_crate_level: bool,
     collect_callgraph: bool,
     collect_caps_facts: bool,
@@ -234,6 +247,8 @@ pub struct RivusLintPass {
     banned_import_statements: HashSet<(rustc_span::StableSourceFileId, u32, String)>,
     untested_functions: Option<BTreeSet<crate::artifacts::FunctionIdentity>>,
     untested_functions_error: Option<String>,
+    offline_emissions: Vec<crate::offline_caps::OfflineCapsEmission>,
+    offline_emissions_error: Option<String>,
 }
 
 impl RivusLintPass {
@@ -247,6 +262,11 @@ impl RivusLintPass {
             Ok(functions) => (functions, None),
             Err(error) => (None, Some(error)),
         };
+        let (offline_emissions, offline_emissions_error) = match rvs_load_offline_emissions_BIS() {
+            Ok(emissions) => (emissions, None),
+            Err(error) => (Vec::new(), Some(error)),
+        };
+        let has_offline_emissions = !offline_emissions.is_empty();
         Self {
             capsmap: None,
             test_names: BTreeMap::new(),
@@ -255,15 +275,20 @@ impl RivusLintPass {
             test_calls: HashSet::new(),
             callgraph: FnGraph::rvs_new(),
             diagnostic_spans: BTreeMap::new(),
+            diagnostic_call_spans: BTreeMap::new(),
             done_crate_level: false,
             collect_callgraph,
-            collect_caps_facts: collect_callgraph || should_emit_caps_report,
+            collect_caps_facts: collect_callgraph
+                || should_emit_caps_report
+                || has_offline_emissions,
             should_emit_lints: !collect_callgraph,
             should_emit_caps_report,
             test_fn_names: HashSet::new(),
             banned_import_statements: HashSet::new(),
             untested_functions,
             untested_functions_error,
+            offline_emissions,
+            offline_emissions_error,
         }
     }
 
@@ -319,15 +344,25 @@ fn rvs_load_untested_functions_BIS()
         .map_err(|error| format!("{}: {error}", path.display()))
 }
 
+fn rvs_load_offline_emissions_BIS() -> Result<Vec<crate::offline_caps::OfflineCapsEmission>, String>
+{
+    let Some(path) = std::env::var_os("RIVUS_OFFLINE_EMISSIONS") else {
+        return Ok(Vec::new());
+    };
+    let path = std::path::PathBuf::from(path);
+    let json = std::fs::read_to_string(&path).map_err(|error| {
+        format!(
+            "cannot read offline caps emissions {}: {error}",
+            path.display()
+        )
+    })?;
+    crate::offline_caps::rvs_parse_emissions(&json)
+        .map_err(|error| format!("{}: {error}", path.display()))
+}
+
 #[cfg(test)]
 fn rvs_env_flag_value_enabled(value: Option<&str>) -> bool {
     matches!(value, Some("1"))
-}
-
-impl Default for RivusLintPass {
-    fn default() -> Self {
-        Self::rvs_new_BIS()
-    }
 }
 
 impl LintPass for RivusLintPass {
@@ -345,6 +380,9 @@ impl<'tcx> LateLintPass<'tcx> for RivusLintPass {
             rvs_fulfill_collection_expectations_S(cx, rustc_hir::CRATE_HIR_ID, DUMMY_SP);
         }
         if let Some(error) = self.untested_functions_error.take() {
+            cx.tcx.dcx().err(error);
+        }
+        if let Some(error) = self.offline_emissions_error.take() {
             cx.tcx.dcx().err(error);
         }
         if self.should_emit_caps_report {
@@ -401,8 +439,20 @@ impl<'tcx> LateLintPass<'tcx> for RivusLintPass {
                 caps,
                 &local_crate_names,
             );
-            rvs_emit_offline_caps_diagnostics_S(cx, &report, &self.diagnostic_spans);
+            rvs_emit_offline_caps_diagnostics_BIS(
+                cx,
+                &report,
+                &self.callgraph,
+                &self.diagnostic_spans,
+                &self.diagnostic_call_spans,
+            );
         }
+        rvs_emit_offline_caps_emissions_BIS(
+            cx,
+            &self.offline_emissions,
+            &self.diagnostic_spans,
+            &self.diagnostic_call_spans,
+        );
 
         test_quality::rvs_check_crate_post_BIMS(
             cx,
@@ -493,46 +543,105 @@ impl<'tcx> LateLintPass<'tcx> for RivusLintPass {
 
 // ─── Dispatch functions ──────────────────────────────────────────────────
 
-fn rvs_emit_offline_caps_diagnostics_S(
+fn rvs_emit_offline_caps_diagnostics_BIS(
     cx: &LateContext<'_>,
     report: &crate::offline_caps::OfflineCapsReport,
-    spans: &BTreeMap<DefPath, (rustc_hir::HirId, Span)>,
+    graph: &FnGraph,
+    spans: &BTreeMap<FunctionIdentity, (rustc_hir::HirId, Span)>,
+    call_spans: &BTreeMap<(FunctionIdentity, CallSiteIdentity), (rustc_hir::HirId, Span)>,
 ) {
-    use crate::inference::FnContractMismatchKind;
-    use crate::offline_caps::OfflineCapsKind;
+    rvs_emit_offline_caps_emissions_BIS(cx, &report.rvs_emissions(graph), spans, call_spans);
+}
 
-    for diagnostic in &report.diagnostics {
-        let lint = match diagnostic.kind {
-            OfflineCapsKind::CallViolation => RVS_CALL_VIOLATION,
-            OfflineCapsKind::Contract(kind) => match kind {
-                FnContractMismatchKind::MissingAsync => RVS_MISSING_ASYNC,
-                FnContractMismatchKind::MissingBlocking
-                | FnContractMismatchKind::MissingIo
-                | FnContractMismatchKind::MissingPort
-                | FnContractMismatchKind::NameMismatch => RVS_CONTRACT_MISMATCH,
-                FnContractMismatchKind::MissingMutable => RVS_MISSING_MUTABLE,
-                FnContractMismatchKind::MissingRvsPrefix => RVS_NON_RVS_FN,
-                FnContractMismatchKind::MissingSideEffect => RVS_MISSING_SIDE_EFFECT,
-                FnContractMismatchKind::MissingThreadLocal => RVS_MISSING_THREAD_LOCAL,
-                FnContractMismatchKind::MissingUnsafe => RVS_MISSING_UNSAFE,
-            },
-            OfflineCapsKind::DuplicateSuffix => RVS_DUPLICATE_SUFFIX,
-            OfflineCapsKind::NonAlphabeticalSuffix => RVS_NON_ALPHABETICAL_SUFFIX,
-            OfflineCapsKind::StaticRefRequiresCaps => RVS_STATIC_REF,
-            OfflineCapsKind::UnknownCallee => RVS_UNKNOWN_CALLEE,
-            OfflineCapsKind::UnknownSuffixLetter => RVS_UNKNOWN_SUFFIX_LETTER,
-        };
-        let message = if diagnostic.details.is_empty() {
-            diagnostic.message.clone()
-        } else {
-            format!("{}; {}", diagnostic.message, diagnostic.details.join("; "))
-        };
-        for anchor in &diagnostic.span_anchors {
-            let Some((hir_id, span)) = spans.get(anchor).copied() else {
+fn rvs_emit_offline_caps_emissions_BIS(
+    cx: &LateContext<'_>,
+    emissions: &[crate::offline_caps::OfflineCapsEmission],
+    spans: &BTreeMap<FunctionIdentity, (rustc_hir::HirId, Span)>,
+    call_spans: &BTreeMap<(FunctionIdentity, CallSiteIdentity), (rustc_hir::HirId, Span)>,
+) {
+    let ack_dir = std::env::var_os("RIVUS_OFFLINE_EMISSIONS_ACK_DIR").map(std::path::PathBuf::from);
+    for (emission_index, emission) in emissions.iter().enumerate() {
+        if emission.lint == crate::offline_caps::OfflineCapsLint::IncompleteCapsKnowledge
+            && crate::rvs_env_flag_is_one_BS("RIVUS_UI_TESTING")
+        {
+            continue;
+        }
+        let lint = rvs_offline_caps_lint_S(emission.lint);
+        for (anchor_index, anchor) in emission.span_anchors.iter().enumerate() {
+            let location = rvs_resolve_emission_location(anchor, spans, call_spans);
+            let Some((hir_id, span)) = location else {
                 continue;
             };
-            msg::rvs_emit_node_span_lint_S(cx, lint, hir_id, span, message.clone());
+            let lint_level = cx.tcx.lint_level_at_node(lint, hir_id).level;
+            if !anchor.expectation_only || lint_level.as_str() == "expect" {
+                msg::rvs_emit_node_span_lint_S(cx, lint, hir_id, span, emission.message.clone());
+            }
+            if let Some(ack_dir) = ack_dir.as_deref()
+                && let Err(error) =
+                    rvs_write_offline_emission_ack_BIS(ack_dir, emission_index, anchor_index)
+            {
+                cx.tcx.dcx().err(error);
+            }
         }
+    }
+}
+
+fn rvs_resolve_emission_location<T: Copy>(
+    anchor: &crate::offline_caps::OfflineCapsEmissionAnchor,
+    spans: &BTreeMap<FunctionIdentity, T>,
+    call_spans: &BTreeMap<(FunctionIdentity, CallSiteIdentity), T>,
+) -> Option<T> {
+    match &anchor.call_site {
+        Some(call_site) => call_spans
+            .get(&(anchor.identity.clone(), call_site.clone()))
+            .copied(),
+        None => spans.get(&anchor.identity).copied(),
+    }
+}
+
+fn rvs_write_offline_emission_ack_BIS(
+    ack_dir: &std::path::Path,
+    emission_index: usize,
+    anchor_index: usize,
+) -> Result<(), String> {
+    debug_assert!(
+        emission_index < usize::MAX,
+        "emission index is representable"
+    );
+    debug_assert!(anchor_index < usize::MAX, "anchor index is representable");
+    let path = ack_dir.join(crate::offline_caps::rvs_emission_ack_name(
+        emission_index,
+        anchor_index,
+    ));
+    std::fs::write(&path, []).map_err(|error| {
+        format!(
+            "cannot acknowledge offline caps diagnostic {}: {error}",
+            path.display()
+        )
+    })
+}
+
+fn rvs_offline_caps_lint_S(
+    lint: crate::offline_caps::OfflineCapsLint,
+) -> &'static rustc_lint::Lint {
+    use crate::offline_caps::OfflineCapsLint;
+
+    match lint {
+        OfflineCapsLint::CallViolation => RVS_CALL_VIOLATION,
+        OfflineCapsLint::ContractMismatch => RVS_CONTRACT_MISMATCH,
+        OfflineCapsLint::DuplicateSuffix => RVS_DUPLICATE_SUFFIX,
+        OfflineCapsLint::IncompleteCapsKnowledge => RVS_INCOMPLETE_CAPS_KNOWLEDGE,
+        OfflineCapsLint::MissingAsync => RVS_MISSING_ASYNC,
+        OfflineCapsLint::MissingMutable => RVS_MISSING_MUTABLE,
+        OfflineCapsLint::MissingRvsPrefix => RVS_NON_RVS_FN,
+        OfflineCapsLint::MissingSideEffect => RVS_MISSING_SIDE_EFFECT,
+        OfflineCapsLint::MissingThreadLocal => RVS_MISSING_THREAD_LOCAL,
+        OfflineCapsLint::MissingUnsafe => RVS_MISSING_UNSAFE,
+        OfflineCapsLint::NonAlphabeticalSuffix => RVS_NON_ALPHABETICAL_SUFFIX,
+        OfflineCapsLint::StaticRef => RVS_STATIC_REF,
+        OfflineCapsLint::TraitImplOutlier => RVS_TRAIT_IMPL_OUTLIER,
+        OfflineCapsLint::UnknownCallee => RVS_UNKNOWN_CALLEE,
+        OfflineCapsLint::UnknownSuffixLetter => RVS_UNKNOWN_SUFFIX_LETTER,
     }
 }
 
@@ -575,7 +684,13 @@ fn rvs_run_fn_checks_MS<'tcx>(
         if subject.has_body && !is_stub {
             debug_assert::rvs_check_fn_MS(cx, subject.body, subject.body_facts);
             borrowed_param::rvs_check_fn_params_S(cx, subject.sig, subject.body.params);
-            consumed_arg::rvs_check_fn_MS(cx, subject.sig, subject.body.params, name);
+            consumed_arg::rvs_check_fn_MS(
+                cx,
+                subject.sig,
+                subject.body.params,
+                subject.body_facts,
+                name,
+            );
             validate::rvs_check_fn_S(cx, name, subject.sig);
         }
 
@@ -630,8 +745,46 @@ fn rvs_run_body_fn_pipeline_MS<'tcx, F>(
     }
     if data.collect_caps_facts {
         let def_path = callgraph::rvs_collect_callgraph_for_item_M(data.callgraph, cx, subject);
+        let caller_identity = FunctionIdentity {
+            crate_id: cx
+                .tcx
+                .stable_crate_id(subject.hir_id.owner.def_id.to_def_id().krate)
+                .as_u64(),
+            def_path,
+        };
         data.diagnostic_spans
-            .insert(def_path, (subject.hir_id, subject.span));
+            .insert(caller_identity.clone(), (subject.hir_id, subject.span));
+        for (occurrence, (observation, def_path, crate_id)) in subject
+            .body_facts
+            .calls
+            .iter()
+            .filter_map(|observation| {
+                let utils::CallTarget::Resolved {
+                    def_path,
+                    crate_id,
+                    def_kind: rustc_hir::def::DefKind::Fn | rustc_hir::def::DefKind::AssocFn,
+                } = &observation.target
+                else {
+                    return None;
+                };
+                Some((observation, def_path, crate_id))
+            })
+            .enumerate()
+        {
+            let call_site = CallSiteIdentity {
+                callee: FunctionIdentity {
+                    crate_id: *crate_id,
+                    def_path: def_path.clone(),
+                },
+                occurrence: u32::try_from(occurrence)
+                    .expect("never: a function cannot contain more than u32::MAX resolved calls"),
+                source: callgraph::rvs_call_site_source(cx, observation.span),
+            };
+            data.diagnostic_call_spans.insert(
+                (caller_identity.clone(), call_site),
+                (observation.hir_id, observation.span),
+            );
+        }
     }
 }
 
@@ -891,8 +1044,16 @@ fn rvs_check_trait_item_MS<'tcx>(
                     false,
                     is_port_trait,
                 );
-                data.diagnostic_spans
-                    .insert(def_path, (trait_item.hir_id(), trait_item.span));
+                data.diagnostic_spans.insert(
+                    FunctionIdentity {
+                        crate_id: cx
+                            .tcx
+                            .stable_crate_id(trait_item.hir_id().owner.def_id.to_def_id().krate)
+                            .as_u64(),
+                        def_path,
+                    },
+                    (trait_item.hir_id(), trait_item.span),
+                );
             }
         }
         _ => {}
@@ -948,5 +1109,37 @@ mod tests {
         for (value, expected) in cases {
             assert_eq!(rvs_env_flag_value_enabled(value), expected);
         }
+    }
+
+    #[test]
+    fn test_20260716_missing_call_site_does_not_fall_back_to_function_span() {
+        let identity = FunctionIdentity {
+            crate_id: 7,
+            def_path: crate::symbols::DefPath::from("demo::rvs_call"),
+        };
+        let call_site = CallSiteIdentity {
+            callee: FunctionIdentity {
+                crate_id: 9,
+                def_path: crate::symbols::DefPath::from("dependency::effect"),
+            },
+            occurrence: 0,
+            source: None,
+        };
+        let anchor = crate::offline_caps::OfflineCapsEmissionAnchor {
+            identity: identity.clone(),
+            call_site: Some(call_site),
+            expectation_only: false,
+        };
+        let function_locations = BTreeMap::from([(identity, "function")]);
+        let call_locations = BTreeMap::new();
+
+        let location = rvs_resolve_emission_location(&anchor, &function_locations, &call_locations);
+        let output = format!("location={location:?}\n");
+        rvs_snapshot_BIS(
+            "test_20260716_missing_call_site_does_not_fall_back_to_function_span",
+            &output,
+        );
+
+        assert_eq!(location, None);
     }
 }

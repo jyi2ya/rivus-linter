@@ -1,0 +1,3 @@
+# rivus-caps-v2
+{"path":"core::complete","caps":"B","basis":{"kind":"inferred"},"completeness":"complete"}
+{"path":"std::incomplete","caps":"IS","basis":{"kind":"inferred"},"completeness":"incomplete"}

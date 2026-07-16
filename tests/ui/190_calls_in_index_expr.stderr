@@ -1,10 +1,8 @@
 error: caller lacks propagated capabilities required by callee; callee: 190_calls_in_index_expr::rvs_index_S; caller declared caps: pure; callee caps: S; missing propagated caps: S
-  --> $DIR/tests/ui/190_calls_in_index_expr.rs:10:1
+  --> $DIR/tests/ui/190_calls_in_index_expr.rs:11:12
    |
-LL | / fn rvs_read(values: &[usize]) -> usize {
-LL | |     values[rvs_index_S()]
-LL | | }
-   | |_^
+LL |     values[rvs_index_S()]
+   |            ^^^^^^^^^^^^^
    |
    = note: `#[deny(rivus::rvs_call_violation)]` on by default
 

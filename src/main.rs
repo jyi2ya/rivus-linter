@@ -6,6 +6,7 @@
     reason = "rvs_ functions use uppercase capability suffixes"
 )]
 
+extern crate rustc_abi;
 extern crate rustc_ast;
 extern crate rustc_driver;
 extern crate rustc_errors;
@@ -32,6 +33,7 @@ mod analysis_commands;
 mod artifacts;
 mod callgraph_cache;
 mod capability;
+mod caps_migration;
 mod capsmap;
 mod cargo_targets;
 mod fs_guard;
@@ -225,6 +227,7 @@ fn rvs_is_cli_entry_arg(arg: &str) -> bool {
             | "report"
             | "setup"
             | "infer-capsmap"
+            | "migrate-caps"
             | "strip"
             | "annotate"
             | "infer-std"
@@ -447,6 +450,35 @@ mod tests {
 
         assert_eq!(error.kind(), clap::error::ErrorKind::DisplayVersion);
     }
+
+    #[test]
+    fn test_20260715_migrate_caps_cli_parses_default_and_explicit_paths() {
+        let default = Cli::try_parse_from(["cargo-rivus", "migrate-caps"]).unwrap();
+        let explicit =
+            Cli::try_parse_from(["cargo-rivus", "migrate-caps", "/workspace/project"]).unwrap();
+        let default_path = match default.command {
+            Some(Commands::MigrateCaps { path }) => path,
+            other => panic!("expected migrate-caps command, got {other:?}"),
+        };
+        let explicit_path = match explicit.command {
+            Some(Commands::MigrateCaps { path }) => path,
+            other => panic!("expected migrate-caps command, got {other:?}"),
+        };
+        let output = format!(
+            "default={}\nexplicit={}\ncli_entry={}\n",
+            default_path.display(),
+            explicit_path.display(),
+            rvs_is_cli_entry_arg("migrate-caps"),
+        );
+        rvs_snapshot_BIS(
+            "test_20260715_migrate_caps_cli_parses_default_and_explicit_paths",
+            &output,
+        );
+
+        assert_eq!(default_path, PathBuf::from("."));
+        assert_eq!(explicit_path, PathBuf::from("/workspace/project"));
+        assert!(rvs_is_cli_entry_arg("migrate-caps"));
+    }
 }
 
 // ─── CLI mode ────────────────────────────────────────────────────────────
@@ -488,6 +520,12 @@ enum Commands {
         /// Output path for direct external deps capsmap under caps/
         #[arg(short = 'o', long = "output", required = true)]
         output: PathBuf,
+    },
+    /// Convert the project's caps directory from legacy v1 text to v2 JSON lines
+    MigrateCaps {
+        /// Path to project directory (must contain Cargo.toml)
+        #[arg(default_value = ".")]
+        path: PathBuf,
     },
     /// Strip rvs_ prefix and capability suffix from all functions
     Strip {
@@ -561,6 +599,7 @@ fn main() -> ExitCode {
         Some(Commands::InferCapsmap { path, output }) => {
             infer_commands::rvs_run_infer_capsmap_BIMPS(&path, &output)
         }
+        Some(Commands::MigrateCaps { path }) => caps_migration::rvs_run_migrate_caps_BIS(&path),
         Some(Commands::InferStd { path, output }) => {
             infer_commands::rvs_run_infer_std_BIMPS(&path, &output)
         }

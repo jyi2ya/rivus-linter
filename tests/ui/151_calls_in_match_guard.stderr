@@ -14,15 +14,10 @@ LL | fn rvs_outer(x: i32) {
    |              ^
 
 error: caller lacks propagated capabilities required by callee; callee: 151_calls_in_match_guard::rvs_check_ABI; caller declared caps: pure; callee caps: ABI; missing propagated caps: B, I
-  --> $DIR/tests/ui/151_calls_in_match_guard.rs:8:1
+  --> $DIR/tests/ui/151_calls_in_match_guard.rs:10:14
    |
-LL | / fn rvs_outer(x: i32) {
-LL | |     match x {
-LL | |         n if rvs_check_ABI(n) => {}
-LL | |         _ => {}
-LL | |     }
-LL | | }
-   | |_^
+LL |         n if rvs_check_ABI(n) => {}
+   |              ^^^^^^^^^^^^^^^^
    |
    = note: `#[deny(rivus::rvs_call_violation)]` on by default
 

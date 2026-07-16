@@ -16,6 +16,7 @@
 | `cargo rivus report` | 统计项目能力分布和契约不一致摘要，输出好函数率 |
 | `cargo rivus infer-capsmap` | 从项目 `caps/` 推断 direct external deps，并写到 `-o` 指定路径 |
 | `cargo rivus infer-std` | 推断标准库函数能力标注并写到 `-o` 指定路径（需 nightly） |
+| `cargo rivus migrate-caps` | 将项目 capsmap v1 目录原子迁移为 v2 JSON Lines |
 | `cargo rivus setup` | 为新项目注入 AGENTS.md 和 clippy lint |
 | `cargo rivus strip` | 移除所有 `rvs_` 前缀和能力后缀 |
 | `cargo rivus annotate` | 推断能力并添加 `rvs_` 前缀和后缀 |
@@ -53,10 +54,10 @@ cargo rivus check -- --features foo  # 传递额外 cargo check 参数
 
 `check` 必须从待分析 package 的目录运行，不接受 `--workspace`、`--all`、`--package`/`-p` 或 `--exclude` 等 workspace package 选择参数；否则本地 crate 分类会与 Cargo 实际选择范围不一致。`--target-dir` 也不能透传，因为每次命令都会在项目 `target/.rivus-runs/` 下预留自己的隔离 target 和 artifact generation，并发命令不会清理或读取彼此的中间文件。其他不会覆盖 driver 环境或项目路径的 Cargo 参数可继续透传。
 
-注意：capsmap 只从项目 `caps/` 目录加载。CLI 不再支持 `-m/--capsmap`，也不再读取或生成 `target/rivus-std-capsmap.txt`、`target/rivus-inferred-capsmap.txt`、`target/rivus-deps-capsmap.txt`、`target/rivus-effective-capsmap/`。目录不存在时统一能力引擎使用空 capsmap。caps 目录使用统一的层级加载器（`CapsMap::rvs_load_dir_BIS`），按 `std → deps → seed → suppress → ext → 其余字母序` 的固定顺序合并；原子写入遗留的 `.层名.PID.序号.tmp` 临时文件会被忽略。
+注意：capsmap 只从项目 `caps/` 目录加载，且每个 layer 必须使用带 `# rivus-caps-v2` 版本头的 v2 JSON Lines。CLI 不再支持 `-m/--capsmap`，也不再读取或生成 `target/rivus-std-capsmap.txt`、`target/rivus-inferred-capsmap.txt`、`target/rivus-deps-capsmap.txt`、`target/rivus-effective-capsmap/`。目录不存在时统一能力引擎使用空 capsmap。caps 目录使用统一的层级加载器（`CapsMap::rvs_load_dir_BIS`），按 `std → deps → seed → suppress → ext → 其余字母序` 的固定顺序合并；原子写入遗留的 `.层名.PID.序号.tmp` 临时文件会被忽略。
 
 
-注意：`check` 默认编译 `--all-targets`，因此测试、示例和 benchmark 中的函数也会被分析。未测试 good/ok 函数在所有 target 的 callgraph 合并后统一判断；从 unit test 或 integration test 沿测试编译实际产生的调用边可达即视为覆盖，不要求测试直接调用每个 helper，`cfg(test)` 改写函数体时也不会误用 production 调用边。覆盖身份同时包含稳定 crate ID 和 `DefPath`，因此同名 library/binary target 不会互相借用覆盖；无法解析的同名调用只有在候选唯一时才作为回退，局部 closure 或函数指针 binding 不参与该回退。不同本地 target 若产生相同 `DefPath`，能力分析对兼容角色的事实和调用边取保守并集，报告仍按不同源码定义分别统计函数数和有效行数；Port/普通函数、test/production 或 trait impl/普通函数等不兼容角色不会被静默合并。测试覆盖候选和 report 排除项按每个 target 定义记录，不会因另一个同路径定义带有 `allow(dead_code)` 而整体消失。结果在最终 rustc lint 阶段发出，因此函数、参数、statement、expression、field、模块和 crate 上的 `allow`/`expect`/`deny` 等级仍然生效；中间 artifact 收集不会因任一 HIR 作用域中的 Rivus expectation 或 `forbid(unfulfilled_lint_expectations)` 提前失败。任一 target 编译失败时不会根据部分图输出覆盖结论。直接 rustc/UI 模式使用当前 crate 内存图做传递可达性判断，并采用相同的稳定 crate ID 和唯一名称回退规则。`infer-capsmap` 和 `infer-std` 只编译 production targets。
+注意：`check` 默认编译 `--all-targets`，因此测试、示例和 benchmark 中的函数也会被分析。未测试 good/ok 函数在所有 target 的 callgraph 合并后统一判断；从 unit test 或 integration test 沿测试编译实际产生的调用边可达即视为覆盖，不要求测试直接调用每个 helper，`cfg(test)` 改写函数体时也不会误用 production 调用边。覆盖身份同时包含稳定 crate ID 和 `DefPath`，因此同名 library/binary target 不会互相借用覆盖；可执行入口身份也按稳定 crate ID 保存，因此 library 中与 binary `main` 共享 `DefPath` 的普通函数仍接受一般契约检查，而 binary 入口继续获得入口豁免。无法解析的同名调用只有在候选唯一时才作为回退，局部 closure 或函数指针 binding 不参与该回退。不同本地 target 若产生相同 `DefPath`，能力分析对兼容角色的事实和调用边取保守并集，报告仍按不同源码定义分别统计函数数和有效行数；Port/普通函数、test/production 或 trait impl/普通函数等不兼容角色不会被静默合并。测试覆盖候选和 report 排除项按每个 target 定义记录，不会因另一个同路径定义带有 `allow(dead_code)` 而整体消失。结果在最终 rustc lint 阶段发出，因此函数、参数、statement、expression、field、模块和 crate 上的 `allow`/`expect`/`deny` 等级仍然生效；中间 artifact 收集不会因任一 HIR 作用域中的 Rivus expectation 或 `forbid(unfulfilled_lint_expectations)` 提前失败。任一 target 编译失败时不会根据部分图输出覆盖结论。直接 rustc/UI 模式使用当前 crate 内存图做传递可达性判断，并采用相同的稳定 crate ID 和唯一名称回退规则。`infer-capsmap` 和 `infer-std` 只编译 production targets。
 
 退出码：`check` 成功时返回 `0`；失败时透传底层 `cargo check` 的退出码。其他子命令成功时返回 `0`，工具自身运行失败时返回 `2`。warning 不影响退出码。
 
@@ -104,9 +105,11 @@ Total: 42 functions, 890 lines
 
 收集调用图并从种子标注自底向上推断 capsmap。对每个 `rvs_` 函数，聚合其所有被调用方的能力，得到推断结果。`PATH` 必须是一个可成功执行 `cargo check` 的本地 crate 项目；仅含 `[workspace]` 的虚拟根目录不受支持。
 
-推断分两步：首先对不在种子中的函数，直接从行为特征推断能力（`async fn` → A、`unsafe fn` → U、`&mut` 参数 → M、`static` 引用 → S、`static mut` 引用 → S+U、`thread_local!` 引用 → S+T）；然后通过固定点迭代，将所有被调用方的能力沿调用图向上传播。若同一函数同时被识别为普通 `static` 引用和 `thread_local!` 引用，结果会合并为 `S+T`（幂等）。种子中的条目作为推断的起点（下界），传播可能在其基础上累加更多能力。
+推断分两步：首先对不在 capsmap 精确边界中的函数，直接从行为特征推断能力（`async fn` → A、`unsafe fn` → U、`&mut` 参数 → M、`static` 引用 → S、`static mut` 引用 → S+U、`thread_local!` 引用 → S+T）；然后通过固定点迭代，将所有被调用方的传播能力沿调用图向上传播。若同一函数同时被识别为普通 `static` 引用和 `thread_local!` 引用，结果会合并为 `S+T`（幂等）。capsmap 精确条目是冻结的权威边界，不继续吸收其内部调用的能力。
 
-对于本地非 Port trait 方法，公开能力由各 impl 按能力逐项做 at-least-half vote（阈值为 `ceil(n/2)`）决定；trait 声明自身写的后缀只在没有 impl 可聚合时作为回退。因此 2 个 impl 中 1 个带能力会被抬升，3 个 impl 中仅 1 个带能力不会被抬升。Port trait 方法例外：公开能力固定为 `P`，不受 impl 实际行为影响。这一规则同样会影响 `annotate` 和 `why` 的显示结果。
+对于普通非 Port trait 方法，公开能力由各 impl 按传播能力逐项做 at-least-half vote（阈值为 `ceil(n/2)`）决定；trait 声明自身写的后缀只在没有 impl 可聚合时作为回退。因此 2 个 impl 中 1 个带能力会被抬升，3 个 impl 中仅 1 个带能力不会被抬升。Port trait 方法例外：公开能力固定为 `P`，不受 impl 实际行为影响。这一规则同样会影响 `annotate` 和 `why` 的显示结果。
+
+投票会保留参与实现数、阈值和逐能力票数。完整、可修改的本地实现若拥有投票未选中的传播能力，会产生 `TraitImplOutlierWarning`；该 warning 不改变投票结果和 capability totals。`why` 会显示 trait vote 详情和具体实现的 contribution/outlier caps，report 会列出最多十个本地 outlier 样本。
 
 ```bash
 cargo rivus infer-capsmap -o caps/deps       # 从项目 caps/ 推断，并把 direct external deps 写到指定文件
@@ -133,6 +136,28 @@ cargo rivus infer-std -o caps/std        # 将 std caps 写到指定文件（通
 选项：
 - `-o, --output <PATH>` — **必填**。std capsmap 输出路径；相对路径按目标项目目录解析。通常写到 `caps/std`。命令只写这个显式输出，不再写入 `target/rivus-std-capsmap.txt`。
 
+
+---
+
+## `cargo rivus migrate-caps [PATH]`
+
+将 `PATH/caps` 中的旧 v1 `path=CAPS` layer 转换为 capsmap v2 JSON Lines。普通 loader 不支持 v1；只有该显式迁移命令包含隔离的旧格式 reader。
+
+```bash
+cargo rivus migrate-caps .
+```
+
+迁移先读取并转换全部 layer，在 `caps` 的同级 staging 目录写出 v2 文件，并通过不跟随 symlink 的文件描述符把原目录及每个同名 layer 的权限复制到 v2 对象，再用生产 v2 loader 验证每个文件和最终有效能力映射。确认迁移前后路径、能力和层级覆盖结果一致后，原子交换 `caps` 与 staging。交换出的 v1 树会先同步每个 layer 和目录本身，再改名为 `caps.v1-backup` 并完成父目录持久化；中断恢复无论从 staging 还是已发布 backup 继续，也会先完成同样的同步。备份发布失败时会尝试原子交换回原目录；如果该二次交换也失败，错误会报告仍保存原 v1 目录的 staging 路径，而已发布的 v2 目录保留在 `caps`。
+
+迁移要求平台和底层文件系统支持原子目录交换以及 no-replace rename。不支持时命令会报错、清理 staging 并保留原 `caps`。
+
+同一项目的迁移、`infer-std` 和 `infer-capsmap` 通过项目目录 advisory lock 串行化。迁移在交换前还会重新读取 v1 layers，检测未遵守该锁的并发修改；维护者仍不应在迁移期间手工编辑 `caps/`。若进程在目录交换后中断，下次迁移会读取 active v2 目录中的 transaction marker，并验证 marker 指向的 v1 staging 或已经发布的 `caps.v1-backup` 与 active v2 的每个 layer 语义一致，再完成备份发布或清除 marker。staging 与 backup 同时存在、同时缺失或内容不匹配时拒绝猜测。
+
+- `caps` 必须是真实目录，不能是 symlink
+- `caps.v1-backup` 已存在时拒绝覆盖；仅当 active v2 的 transaction marker 能证明它就是当前迁移已发布且逐层语义一致的原 v1 目录时，重试会清除 marker 并成功结束
+- `caps/` 中每个 layer 必须是 regular file；symlink、子目录和其他非文件条目会被拒绝，避免迁移时静默丢失目录内容
+- 任一 v1 layer 无效时不修改原目录
+- 成功后保留 `caps.v1-backup`，由维护者确认后自行处理
 
 ---
 
@@ -202,7 +227,7 @@ cargo rivus annotate /path/to  # 指定目录
 
 ## capsmap
 
-为非 `rvs_` 函数声明能力。**只支持项目根目录下的 `caps/` 目录**：
+为非 `rvs_` 函数声明能力。**只支持项目根目录下的 `caps/` 目录和 capsmap v2 JSON Lines**：
 
 ```
 caps/
@@ -217,23 +242,21 @@ caps/
 `std` → `deps` → `seed` → `suppress` → `ext` → 其余文件按字母序。
 因此 `ext` 是固定标准层中的最高优先级；若目录中还有额外文件，额外文件会在 `ext` 之后按文件名顺序加载并可覆盖前面的条目。
 
-每行一个条目，格式：
+每个 layer 的第一条有效行必须是版本头，之后每行一个 JSON record：
 
-```
-完整函数路径=能力字母 # 可选注释
-```
-
-示例：
-
-```
-std::fs::read_to_string=BI     # 阻塞+I/O（失败由 Result 表达）
-std::collections::HashMap::new=  # 纯函数，无能力
-std::process::exit=S           # 副作用：终止进程
+```text
+# rivus-caps-v2
+{"path":"std::fs::read_to_string","caps":"BI","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::collections::HashMap::new","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
 ```
 
-- linter 对 capsmap 中的键做精确匹配（全限定路径完全一致）。不支持后缀匹配——caps 文件中的键必须使用 rustc 给出的 def_path
+`caps` 是按字母序排列的 `ABIMPSTU` 字符串，空字符串表示 pure。`basis.kind` 当前包括 `explicit`、`inferred`、`trait_vote`、`port` 和 `migrated_v1`。`completeness` 为 `complete`、`incomplete` 或 `unknown`。`trait_vote` basis 还保存 `implementations`、`threshold` 和逐能力 `votes`。
+
+- linter 对 capsmap 中的键做 def_path 精确匹配，不支持后缀匹配。specialized impl 会先匹配带内部 identity marker 的精确路径，再回退到诊断中显示的无 marker 可读 def_path；因此一个可读路径条目默认作用于该方法的所有 specialization
 - 如果 linter 报告某函数"既非 rvs_-prefixed nor in capsmap"，你需要补全 capsmap。方法优先级：检查源码 > 编写测试验证行为 > 合理猜测
-- caps 文件中的条目使用 rustc-driver 解析出的全限定路径（如 `core::result::impl::expect=`），而非源码中的短名
+- caps record 的 `path` 使用 rustc-driver 解析出的全限定路径（如 `core::result::impl::expect`），而非源码中的短名
+- 空行和版本头之后以 `#` 开头的完整注释行会被忽略；JSON record 不支持行尾注释
+- v1 `path=BI` 文件必须先运行 `cargo rivus migrate-caps`
 - capsmap 只支持 `caps/` 目录，不支持单文件 capsmap，也不支持 CLI `-m/--capsmap`
 - 不再读取或写入 `target/rivus-std-capsmap.txt`、`target/rivus-inferred-capsmap.txt`、`target/rivus-deps-capsmap.txt`、`target/rivus-effective-capsmap/`
 - 更新 `std` / `deps` 必须显式：
@@ -294,6 +317,7 @@ std::process::exit=S           # 副作用：终止进程
 | `ValidateReturnsUnitWarning` | 名为 `validate`/`check`/`verify` 的函数返回 `Result<(), E>`——应改用 `TryFrom` 返回 `Result<Target, Error>`（parse instead of validate） |
 | `SpawnWarning` | 函数调用了非结构化 spawn（`tokio::spawn`、`std::thread::spawn` 等）——应改用结构化并发原语 |
 | `ContractMismatchWarning` | 函数名与推断出的公开契约不一致；当前主要用于 Port trait 方法应公开为 `_P` 但名称缺失或后缀错误的情况 |
+| `TraitImplOutlierWarning` | 完整、可修改的普通 trait 实现拥有投票未选中的传播能力；不改变 trait 投票和 capability totals |
 
 ## 推断提示
 
@@ -324,9 +348,10 @@ std::process::exit=S           # 副作用：终止进程
    cargo rivus check    # 能力合规检查无违规
    ```
 3. **遇到 unknown callee warning 时**：linter 输出的 `Warning` 表示某个函数调用既非 `rvs_` 前缀也不在 capsmap 中。标准库路径运行 `cargo rivus infer-std -o caps/std`；若该推断命令自身报告未知前置函数，将精确 `def_path` 写入 `caps/seed`，因为 `infer-std` 只读取 `seed` 和 `suppress`。第三方依赖运行 `cargo rivus infer-capsmap -o caps/deps`。仅需修正当前项目普通检查结果时，将精确 `def_path` 写入 `caps/ext`
-4. **遇到其他 warning 时**：根据警告类型分别处理——缺少断言就加 `debug_assert!`，缺少文档就补 `///`，等等
-5. **遇到 violation 时**：调用链能力冲突。要么修改调用方的标记（可能级联影响），要么重构代码避免不合规的调用
-6. **遇到推断提示时**：推断性提示——函数的实际行为暗示应有某能力但名字里没写。审查后决定：补上能力标记（注意级联影响），或确认是误判则忽略
+4. **遇到 incomplete caps knowledge warning 时**：调用检查只使用已知能力下界，不能把记录当作 pure。`std` 层运行 `cargo rivus infer-std -o caps/std`，其他自动生成层重新运行对应推断命令；人工确认的修正写入 `caps/ext`
+5. **遇到其他 warning 时**：根据警告类型分别处理——缺少断言就加 `debug_assert!`，缺少文档就补 `///`，等等
+6. **遇到 violation 时**：调用链能力冲突。要么修改调用方的标记（可能级联影响），要么重构代码避免不合规的调用
+7. **遇到推断提示时**：推断性提示——函数的实际行为暗示应有某能力但名字里没写。审查后决定：补上能力标记（注意级联影响），或确认是误判则忽略
 
 ---
 

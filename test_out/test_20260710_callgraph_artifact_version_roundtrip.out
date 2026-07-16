@@ -1,4 +1,8 @@
-schema_version=4
+schema_version=9
 contains_version=true
 nodes=1
-previous_version_error=unsupported callgraph schema version 3; expected 4
+previous_version_error=unsupported callgraph schema version 3; expected 9
+missing_facts_error=invalid callgraph artifact: facts_by_crate is required for demo::rvs_run in schema version 9
+missing_has_body_error=invalid callgraph artifact: has_body_by_crate is required for demo::rvs_run in schema version 9
+missing_call_sites_error=invalid callgraph artifact: coverage_call_sites is required for demo::rvs_run in schema version 9
+missing_entrypoints_error=invalid callgraph artifact: entrypoint_crate_ids is required for demo::rvs_run in schema version 9

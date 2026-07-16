@@ -1,2 +1,2 @@
-known={DefPath("external_crate::shutdown_S"): CapabilitySet({S})}
+known={DefPath("external_crate::shutdown_S"): CapabilityInfo { caps: CapabilitySet({S}), basis: Inferred, completeness: Complete, source: None }}
 unknown={}
