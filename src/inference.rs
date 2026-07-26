@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 
 use crate::artifacts::{FnGraph, FnNode};
 use crate::capability::{
@@ -709,32 +709,54 @@ pub(crate) fn rvs_infer_caps_with_index(
         }
     }
 
-    loop {
-        let mut changed = false;
-        for (func, behavior) in graph.rvs_iter() {
-            if seed.rvs_lookup_def_path(func).is_some() {
-                continue;
-            }
-            if behavior.facts.is_port_method {
-                continue;
-            }
-            let mut combined = inferred
-                .get(func)
-                .cloned()
-                .unwrap_or_else(CapabilitySet::rvs_new);
-            let resolver = CalleeCapsResolver::rvs_new(graph, seed, &inferred, impl_index);
-            for callee in &behavior.calls {
-                let callee_caps = resolver.rvs_for_propagation_target(callee);
-                if let Some(cc) = callee_caps {
-                    changed |= combined.rvs_extend_filtered_M(&cc, |cap| {
-                        CapabilityPolicy::rvs_is_propagated_cap(cap)
-                    });
+    let dependents = rvs_build_inference_dependents(graph, impl_index);
+    let mut pending: VecDeque<DefPath> = inferred
+        .iter()
+        .filter(|(_, caps)| !rvs_propagated_caps(caps).rvs_is_empty())
+        .map(|(path, _)| path.clone())
+        .collect();
+    let mut queued: HashSet<DefPath> = pending.iter().cloned().collect();
+    let mut published: HashMap<DefPath, CapabilitySet> = HashMap::new();
+    while let Some(func) = pending.pop_front() {
+        queued.remove(&func);
+        let resolver = CalleeCapsResolver::rvs_new(graph, seed, &inferred, impl_index);
+        let Some(effective_caps) = resolver.rvs_for_propagation_target(&func) else {
+            continue;
+        };
+        let propagated_caps = rvs_propagated_caps(&effective_caps);
+        if propagated_caps.rvs_is_empty() {
+            continue;
+        }
+        let published_caps = published
+            .entry(func.clone())
+            .or_insert_with(CapabilitySet::rvs_new);
+        if !published_caps.rvs_extend_filtered_M(&propagated_caps, |_| true) {
+            continue;
+        }
+        if let Some(callers) = dependents.callers.get(&func) {
+            for caller in callers {
+                let Some(behavior) = graph.rvs_get(caller.rvs_as_str()) else {
+                    continue;
+                };
+                if seed.rvs_lookup_def_path(caller).is_some() || behavior.facts.is_port_method {
+                    continue;
+                }
+                let caller_caps = inferred
+                    .entry(caller.clone())
+                    .or_insert_with(CapabilitySet::rvs_new);
+                if caller_caps.rvs_extend_filtered_M(&propagated_caps, |_| true)
+                    && queued.insert(caller.clone())
+                {
+                    pending.push_back(caller.clone());
                 }
             }
-            inferred.insert(func.clone(), combined);
         }
-        if !changed {
-            break;
+        if let Some(trait_methods) = dependents.trait_methods.get(&func) {
+            for trait_method in trait_methods {
+                if queued.insert(trait_method.clone()) {
+                    pending.push_back(trait_method.clone());
+                }
+            }
         }
     }
     let bodyless_paths: Vec<DefPath> = graph
@@ -753,6 +775,46 @@ pub(crate) fn rvs_infer_caps_with_index(
         }
     }
     inferred
+}
+
+struct InferenceDependents {
+    callers: HashMap<DefPath, BTreeSet<DefPath>>,
+    trait_methods: HashMap<DefPath, BTreeSet<DefPath>>,
+}
+
+fn rvs_build_inference_dependents(
+    graph: &FnGraph,
+    impl_index: &HashMap<TraitMethodKey, Vec<DefPath>>,
+) -> InferenceDependents {
+    let mut callers: HashMap<DefPath, BTreeSet<DefPath>> = HashMap::new();
+    for (caller, behavior) in graph.rvs_iter() {
+        for callee in &behavior.calls {
+            callers
+                .entry(callee.clone())
+                .or_default()
+                .insert(caller.clone());
+        }
+    }
+    let mut trait_methods: HashMap<DefPath, BTreeSet<DefPath>> = HashMap::new();
+    for implementations in impl_index.values() {
+        let Some(trait_method) = implementations
+            .iter()
+            .find_map(|implementation| implementation.rvs_trait_method_identity())
+            .map(|identity| identity.rvs_trait_method_path())
+        else {
+            continue;
+        };
+        for implementation in implementations {
+            trait_methods
+                .entry(implementation.clone())
+                .or_default()
+                .insert(trait_method.clone());
+        }
+    }
+    InferenceDependents {
+        callers,
+        trait_methods,
+    }
 }
 
 pub(crate) fn rvs_initial_caps(
@@ -884,49 +946,46 @@ pub(crate) fn rvs_incomplete_inference_paths(
     impl_index: &HashMap<TraitMethodKey, Vec<DefPath>>,
 ) -> BTreeSet<DefPath> {
     let resolver = CalleeCapsResolver::rvs_new(graph, seed, inferred, impl_index);
+    let dependents = rvs_build_inference_dependents(graph, impl_index);
     let mut incomplete: BTreeSet<DefPath> = graph
         .rvs_iter()
         .filter(|(path, _)| !rvs_is_inference_taint_barrier(path, graph, seed))
-        .filter(|(path, node)| {
-            rvs_has_incomplete_capsmap_knowledge(path, graph, seed)
-                || node.calls.iter().any(|callee| {
-                    resolver.rvs_for_contract_check(callee).is_none()
-                        || rvs_has_incomplete_capsmap_knowledge(callee, graph, seed)
-                })
-        })
+        .filter(|(path, _)| rvs_has_incomplete_capsmap_knowledge(path, graph, seed))
         .map(|(path, _)| path.clone())
         .collect();
 
-    loop {
-        let mut newly_incomplete: BTreeSet<DefPath> = impl_index
-            .values()
-            .filter(|implementations| {
-                implementations
-                    .iter()
-                    .any(|implementation| incomplete.contains(implementation))
-            })
-            .filter_map(|implementations| {
-                implementations
-                    .iter()
-                    .find_map(|implementation| implementation.rvs_trait_method_identity())
-                    .map(|identity| identity.rvs_trait_method_path())
-            })
-            .filter(|path| !incomplete.contains(path))
-            .filter(|path| !rvs_is_inference_taint_barrier(path, graph, seed))
-            .collect();
-        newly_incomplete.extend(
-            graph
-                .rvs_iter()
-                .filter(|(path, _)| !incomplete.contains(*path))
-                .filter(|(path, _)| !rvs_is_inference_taint_barrier(path, graph, seed))
-                .filter(|(_, node)| node.calls.iter().any(|callee| incomplete.contains(callee)))
-                .map(|(path, _)| path.clone()),
-        );
-        if newly_incomplete.is_empty() {
-            return incomplete;
+    for (callee, callers) in &dependents.callers {
+        if resolver.rvs_for_contract_check(callee).is_some()
+            && !rvs_has_incomplete_capsmap_knowledge(callee, graph, seed)
+        {
+            continue;
         }
-        incomplete.extend(newly_incomplete);
+        incomplete.extend(
+            callers
+                .iter()
+                .filter(|caller| !rvs_is_inference_taint_barrier(caller, graph, seed))
+                .cloned(),
+        );
     }
+
+    let mut pending: VecDeque<DefPath> = incomplete.iter().cloned().collect();
+    while let Some(path) = pending.pop_front() {
+        let dependent_paths = dependents
+            .callers
+            .get(&path)
+            .into_iter()
+            .flatten()
+            .chain(dependents.trait_methods.get(&path).into_iter().flatten());
+        for dependent in dependent_paths {
+            if rvs_is_inference_taint_barrier(dependent, graph, seed) {
+                continue;
+            }
+            if incomplete.insert(dependent.clone()) {
+                pending.push_back(dependent.clone());
+            }
+        }
+    }
+    incomplete
 }
 
 fn rvs_is_inference_taint_barrier(
@@ -1259,6 +1318,101 @@ mod tests {
             )]),
             ..FnNode::default()
         }
+    }
+
+    #[test]
+    fn test_20260720_prepare_inference_scales_on_reverse_ordered_chain() {
+        const NODE_COUNT: usize = 2_000;
+        let mut graph = FnGraph::rvs_new();
+        for index in 0..NODE_COUNT {
+            let mut node = rvs_make_behavior();
+            if index + 1 < NODE_COUNT {
+                node.calls
+                    .insert(DefPath::from(format!("chain::rvs_node_{:04}", index + 1)));
+            } else {
+                node.facts.has_static_ref = true;
+            }
+            graph.rvs_insert_M(DefPath::from(format!("chain::rvs_node_{index:04}")), node);
+        }
+        let started = std::time::Instant::now();
+
+        let inference = PreparedInference::rvs_prepare_M(
+            &mut graph,
+            &capsmap::CapsMap::rvs_new(),
+            &BTreeSet::from([CrateName::from("chain")]),
+        );
+
+        let elapsed = started.elapsed();
+        let first_caps = inference
+            .rvs_inferred()
+            .get(&DefPath::from("chain::rvs_node_0000"))
+            .map(rvs_caps_to_string)
+            .unwrap_or_default();
+        let last_caps = inference
+            .rvs_inferred()
+            .get(&DefPath::from("chain::rvs_node_1999"))
+            .map(rvs_caps_to_string)
+            .unwrap_or_default();
+        let output = format!(
+            "nodes={}\nfirst_caps={first_caps}\nlast_caps={last_caps}\nincomplete={}\n",
+            inference.rvs_inferred().len(),
+            inference.rvs_incomplete_paths().len(),
+        );
+        rvs_snapshot_BIS(
+            "test_20260720_prepare_inference_scales_on_reverse_ordered_chain",
+            &output,
+        );
+
+        assert_eq!(first_caps, "S");
+        assert_eq!(last_caps, "S");
+        assert!(inference.rvs_incomplete_paths().is_empty());
+        assert!(
+            elapsed < std::time::Duration::from_secs(5),
+            "reverse-ordered propagation took {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn test_20260720_incomplete_propagation_scales_on_reverse_ordered_chain() {
+        const NODE_COUNT: usize = 2_000;
+        let mut graph = FnGraph::rvs_new();
+        for index in 0..NODE_COUNT {
+            let mut node = rvs_make_behavior();
+            node.calls.insert(if index + 1 < NODE_COUNT {
+                DefPath::from(format!("chain::rvs_node_{:04}", index + 1))
+            } else {
+                DefPath::from("opaque::missing")
+            });
+            graph.rvs_insert_M(DefPath::from(format!("chain::rvs_node_{index:04}")), node);
+        }
+        let started = std::time::Instant::now();
+
+        let inference = PreparedInference::rvs_prepare_M(
+            &mut graph,
+            &capsmap::CapsMap::rvs_new(),
+            &BTreeSet::from([CrateName::from("chain")]),
+        );
+
+        let elapsed = started.elapsed();
+        let first_incomplete = inference
+            .rvs_incomplete_paths()
+            .contains(&DefPath::from("chain::rvs_node_0000"));
+        let output = format!(
+            "nodes={}\nincomplete={}\nfirst_incomplete={first_incomplete}\n",
+            inference.rvs_inferred().len(),
+            inference.rvs_incomplete_paths().len(),
+        );
+        rvs_snapshot_BIS(
+            "test_20260720_incomplete_propagation_scales_on_reverse_ordered_chain",
+            &output,
+        );
+
+        assert!(first_incomplete);
+        assert_eq!(inference.rvs_incomplete_paths().len(), NODE_COUNT);
+        assert!(
+            elapsed < std::time::Duration::from_secs(2),
+            "reverse-ordered incomplete propagation took {elapsed:?}"
+        );
     }
 
     #[test]
