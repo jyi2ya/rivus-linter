@@ -30,8 +30,14 @@ pub(crate) fn rvs_check_fn_MS<'tcx>(cx: &LateContext<'tcx>, body: &Body<'tcx>, f
                 | "f32"
                 | "f64"
         ) {
-            if let PatKind::Binding(_, binding_hir_id, id, _) = p.pat.kind {
-                prims.push((binding_hir_id, id.name.to_string(), p.pat.span));
+            match p.pat.kind {
+                PatKind::Binding(_, binding_hir_id, id, _) => {
+                    prims.push((binding_hir_id, id.name.to_string(), p.pat.span));
+                }
+                PatKind::Wild => {
+                    prims.push((p.pat.hir_id, "_".to_string(), p.pat.span));
+                }
+                _ => {}
             }
         }
     }

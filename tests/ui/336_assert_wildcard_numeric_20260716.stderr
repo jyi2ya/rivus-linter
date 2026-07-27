@@ -1,0 +1,10 @@
+error: param '_' missing debug_assert!
+  --> $DIR/tests/ui/336_assert_wildcard_numeric_20260716.rs:6:15
+   |
+LL | fn rvs_ignore(_: usize) -> usize {
+   |               ^
+   |
+   = note: `-D rivus::rvs-missing-debug-assert` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_debug_assert)]`
+
+error: aborting due to 1 previous error
