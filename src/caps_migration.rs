@@ -541,7 +541,17 @@ fn rvs_write_migration_marker_BIS(staging: &Path) -> Result<(), String> {
         .expect("never: staging directory has a file name")
         .to_string_lossy();
     let marker = staging.join(format!(".caps-migration.{}.0.tmp", std::process::id()));
-    std::fs::write(&marker, staging_name.as_bytes()).map_err(|error| {
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&marker)
+        .map_err(|error| {
+            format!(
+                "cannot create caps migration marker {}: {error}",
+                marker.display()
+            )
+        })?;
+    file.write_all(staging_name.as_bytes()).map_err(|error| {
         format!(
             "cannot write caps migration marker {}: {error}",
             marker.display()
@@ -1024,6 +1034,37 @@ mod tests {
     };
 
     static RVS_SYNC_FAULT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[cfg(unix)]
+    #[test]
+    fn test_20260716_migration_marker_create_new_rejects_symlink() {
+        let project = rvs_make_temp_dir_BIS("caps-migration-marker-symlink");
+        let staging = project.join("staging");
+        let victim = project.join("victim");
+        std::fs::create_dir(&staging).unwrap();
+        std::fs::write(&victim, "safe").unwrap();
+        let marker = staging.join(format!(".caps-migration.{}.0.tmp", std::process::id()));
+        std::os::unix::fs::symlink(&victim, &marker).unwrap();
+
+        let result = rvs_write_migration_marker_BIS(&staging);
+        let victim_content = std::fs::read_to_string(&victim).unwrap();
+        let marker_is_symlink = std::fs::symlink_metadata(&marker)
+            .unwrap()
+            .file_type()
+            .is_symlink();
+        let output = format!(
+            "result_is_err={}\nvictim={victim_content:?}\nmarker_is_symlink={marker_is_symlink}\n",
+            result.is_err(),
+        );
+        rvs_snapshot_BIS(
+            "test_20260716_migration_marker_create_new_rejects_symlink",
+            &output,
+        );
+
+        assert!(result.is_err());
+        assert_eq!(victim_content, "safe");
+        std::fs::remove_dir_all(project).unwrap();
+    }
 
     #[test]
     fn test_20260715_v1_conversion_assigns_layer_knowledge() {
