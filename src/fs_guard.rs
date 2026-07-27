@@ -113,12 +113,20 @@ pub(crate) fn rvs_set_permissions_no_follow_BIS(
 
 #[derive(Debug)]
 pub(crate) enum AtomicWriteFailureKind {
+    Inspect {
+        path: PathBuf,
+        source: std::io::Error,
+    },
     Open {
         path: PathBuf,
         source: std::io::Error,
     },
     CreateExhausted,
     Write {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    SetPermissions {
         path: PathBuf,
         source: std::io::Error,
     },
@@ -197,6 +205,10 @@ pub(crate) fn rvs_render_atomic_write_failure(
         cleanup_error,
     } = failure;
     let message = match kind {
+        AtomicWriteFailureKind::Inspect { path, source } => format!(
+            "cannot inspect {}: {source}",
+            rvs_format_atomic_write_path(&path, quote_paths)
+        ),
         AtomicWriteFailureKind::Open { path, source } => format!(
             "cannot create {}: {source}",
             rvs_format_atomic_write_path(&path, quote_paths)
@@ -208,6 +220,10 @@ pub(crate) fn rvs_render_atomic_write_failure(
         ),
         AtomicWriteFailureKind::Write { path, source } => format!(
             "cannot write {}: {source}",
+            rvs_format_atomic_write_path(&path, quote_paths)
+        ),
+        AtomicWriteFailureKind::SetPermissions { path, source } => format!(
+            "cannot preserve permissions on {}: {source}",
             rvs_format_atomic_write_path(&path, quote_paths)
         ),
         AtomicWriteFailureKind::Sync { path, source } => format!(
@@ -237,6 +253,20 @@ pub(crate) fn rvs_write_atomic_BIS(
     content: &[u8],
     temp_path_for_attempt: &impl Fn(usize) -> PathBuf,
 ) -> Result<(), AtomicWriteFailure> {
+    let existing_permissions = match std::fs::symlink_metadata(final_path) {
+        Ok(metadata) if metadata.file_type().is_file() => Some(metadata.permissions()),
+        Ok(_) => None,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(source) => {
+            return Err(AtomicWriteFailure {
+                kind: AtomicWriteFailureKind::Inspect {
+                    path: final_path.to_path_buf(),
+                    source,
+                },
+                cleanup_error: None,
+            });
+        }
+    };
     let mut temp_path = None;
     let mut file = None;
     for attempt in 0..100usize {
@@ -277,6 +307,15 @@ pub(crate) fn rvs_write_atomic_BIS(
         .map_err(|source| AtomicWriteFailureKind::Write {
             path: temp_path.clone(),
             source,
+        })
+        .and_then(|()| match existing_permissions {
+            Some(permissions) => file.set_permissions(permissions).map_err(|source| {
+                AtomicWriteFailureKind::SetPermissions {
+                    path: temp_path.clone(),
+                    source,
+                }
+            }),
+            None => Ok(()),
         })
         .and_then(|()| {
             file.sync_all()
@@ -326,6 +365,39 @@ mod tests {
     #[cfg(unix)]
     use crate::test_support::rvs_make_temp_dir_BIS;
     use crate::test_support::rvs_snapshot_BIS;
+
+    #[cfg(unix)]
+    #[test]
+    fn test_20260716_atomic_write_preserves_existing_regular_file_permissions() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let dir = rvs_make_temp_dir_BIS("atomic-write-preserves-permissions");
+        let path = dir.join("output");
+        std::fs::write(&path, "old").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let temp_path_for_attempt = |attempt| rvs_atomic_sibling_temp_path_S(&path, attempt);
+
+        let result = rvs_write_atomic_BIS(&path, b"new", &temp_path_for_attempt);
+        let mode = std::fs::symlink_metadata(&path)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        let content = std::fs::read_to_string(&path).unwrap();
+        let output = format!(
+            "result_is_ok={}\nmode={mode:o}\ncontent={content:?}\n",
+            result.is_ok(),
+        );
+        rvs_snapshot_BIS(
+            "test_20260716_atomic_write_preserves_existing_regular_file_permissions",
+            &output,
+        );
+
+        assert!(result.is_ok());
+        assert_eq!(mode, 0o700);
+        assert_eq!(content, "new");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[cfg(unix)]
     #[test]
@@ -379,15 +451,21 @@ mod tests {
 
     #[derive(Clone, Copy, Debug)]
     enum AtomicWriteFailureCase {
+        Inspect,
         Open,
         CreateExhausted,
         Write,
+        SetPermissions,
         Sync,
         Rename,
     }
 
     fn rvs_failure(case: AtomicWriteFailureCase, cleanup_error: bool) -> AtomicWriteFailure {
         let kind = match case {
+            AtomicWriteFailureCase::Inspect => AtomicWriteFailureKind::Inspect {
+                path: PathBuf::from("/workspace/output"),
+                source: std::io::Error::other("inspect failed"),
+            },
             AtomicWriteFailureCase::Open => AtomicWriteFailureKind::Open {
                 path: PathBuf::from("/workspace/.output.tmp"),
                 source: std::io::Error::other("open failed"),
@@ -396,6 +474,10 @@ mod tests {
             AtomicWriteFailureCase::Write => AtomicWriteFailureKind::Write {
                 path: PathBuf::from("/workspace/.output.tmp"),
                 source: std::io::Error::other("write failed"),
+            },
+            AtomicWriteFailureCase::SetPermissions => AtomicWriteFailureKind::SetPermissions {
+                path: PathBuf::from("/workspace/.output.tmp"),
+                source: std::io::Error::other("permission preservation failed"),
             },
             AtomicWriteFailureCase::Sync => AtomicWriteFailureKind::Sync {
                 path: PathBuf::from("/workspace/.output.tmp"),
@@ -416,6 +498,14 @@ mod tests {
     #[test]
     fn test_20260710_atomic_write_failure_rendering_table() {
         let cases = [
+            (
+                "inspect",
+                AtomicWriteFailureCase::Inspect,
+                "/workspace/output",
+                "temp file",
+                false,
+                false,
+            ),
             (
                 "setup-open",
                 AtomicWriteFailureCase::Open,
@@ -451,6 +541,14 @@ mod tests {
             (
                 "write",
                 AtomicWriteFailureCase::Write,
+                "/workspace/output",
+                "temp file",
+                false,
+                false,
+            ),
+            (
+                "permissions",
+                AtomicWriteFailureCase::SetPermissions,
                 "/workspace/output",
                 "temp file",
                 false,

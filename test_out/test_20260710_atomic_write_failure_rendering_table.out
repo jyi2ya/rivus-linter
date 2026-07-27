@@ -1,3 +1,5 @@
+[inspect]
+cannot inspect /workspace/output: inspect failed
 [setup-open]
 cannot create '/workspace/.output.tmp': open failed
 [setup-collision]
@@ -8,6 +10,8 @@ cannot create temp capsmap file for /workspace/caps/deps: too many collisions
 cannot create temp artifact for /workspace/target/rivus-callgraph/demo.json: too many collisions
 [write]
 cannot write /workspace/.output.tmp: write failed
+[permissions]
+cannot preserve permissions on /workspace/.output.tmp: permission preservation failed
 [sync-quoted]
 cannot sync '/workspace/.output.tmp': sync failed
 [rename]
