@@ -1025,6 +1025,7 @@ fn rvs_check_trait_item_MS<'tcx>(
                         parsed_name.rvs_raw_suffix().unwrap_or(""),
                     );
                 }
+                validate::rvs_check_fn_S(cx, name, sig);
                 missing_doc::rvs_check_fn_S(cx, name, trait_item.span, attrs, is_pub);
                 missing_safety_doc::rvs_check_fn_S(
                     cx,

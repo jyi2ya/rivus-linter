@@ -1,0 +1,10 @@
+error: rvs_validate: validate returning Result<(),E> — use TryFrom returning Result<T,E>
+  --> $DIR/tests/ui/337_required_trait_validate_returns_unit_20260716.rs:6:5
+   |
+LL |     fn rvs_validate(&self, raw: &str) -> Result<(), String>;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-validate-returns-unit` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_validate_returns_unit)]`
+
+error: aborting due to 1 previous error
