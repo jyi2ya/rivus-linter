@@ -78,12 +78,39 @@ fn rvs_ui_filter_BS() -> Result<Option<String>, String> {
     Ok(Some(filter))
 }
 
+fn rvs_bless_value_enabled(value: Option<&OsStr>) -> bool {
+    value.and_then(OsStr::to_str) == Some("1")
+}
+
+fn rvs_bless_enabled_BS() -> bool {
+    rvs_bless_value_enabled(std::env::var_os("RUSTC_BLESS").as_deref())
+}
+
+#[test]
+fn test_20260716_ui_bless_requires_rustc_bless_one() {
+    let cases = [
+        ("missing", None, false),
+        ("empty", Some(OsStr::new("")), false),
+        ("zero", Some(OsStr::new("0")), false),
+        ("one", Some(OsStr::new("1")), true),
+        ("true", Some(OsStr::new("true")), false),
+    ];
+    let mut output = String::new();
+    for (label, value, expected) in cases {
+        let actual = rvs_bless_value_enabled(value);
+        output.push_str(&format!("{label}={actual}\n"));
+        assert_eq!(actual, expected);
+    }
+    let snapshot = fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("test_out/test_20260716_ui_bless_requires_rustc_bless_one.out"),
+    )
+    .unwrap();
+    assert_eq!(output, snapshot);
+}
+
 fn rvs_run_one_test_BIS(fixture: &Path, stderr_path: &Path) -> Result<(), String> {
-    let bless = std::env::var_os("RUSTC_BLESS")
-        .as_deref()
-        .and_then(OsStr::to_str)
-        == Some("1")
-        || std::env::args().any(|argument| argument == "--bless");
+    let bless = rvs_bless_enabled_BS();
     let driver = rvs_driver_path_BIS();
     if !driver.exists() {
         return Err(format!("cargo-rivus not found at {:?}", driver));
