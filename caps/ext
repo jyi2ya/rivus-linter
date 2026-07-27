@@ -145,6 +145,7 @@
 {"path":"rustix::backend::fs::types::Mode::empty","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
 {"path":"rustix::fs::abs::open","caps":"BIS","basis":{"kind":"explicit"},"completeness":"complete"}
 {"path":"rustix::fs::at::renameat_with","caps":"BIS","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"rustix::fs::fcntl::fcntl_lock","caps":"BIS","basis":{"kind":"explicit"},"completeness":"complete"}
 {"path":"rustix::fs::fd::flock","caps":"BIS","basis":{"kind":"explicit"},"completeness":"complete"}
 {"path":"same_file::is_same_file","caps":"BI","basis":{"kind":"explicit"},"completeness":"complete"}
 {"path":"serde_json::map::Map::contains_key","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}

@@ -1,0 +1,4 @@
+result_is_err=true
+victim="safe"
+lock_is_symlink=true
+retry_ok=true

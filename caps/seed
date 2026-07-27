@@ -1197,6 +1197,8 @@
 {"path":"std::backtrace_rs::backtrace::libunwind::uw::get_sp","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
 {"path":"std::panicking::__rust_panic_cleanup","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
 {"path":"std::panicking::__rust_start_panic","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::sync::nonpoison::mutex::Mutex::lock","caps":"B","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::sync::poison::mutex::Mutex::lock","caps":"B","basis":{"kind":"explicit"},"completeness":"complete"}
 {"path":"std::sys::cmath::acos","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
 {"path":"std::sys::cmath::acosf","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
 {"path":"std::sys::cmath::acosf128","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
