@@ -873,9 +873,11 @@ fn rvs_collect_converted_layers_BIS(
 }
 
 fn rvs_convert_v1_layer(layer: &str, content: &str) -> Result<CapsMap, LegacyCapsError> {
-    if let Some(line) = content
+    if let Some((line, first_nonempty)) = content
         .lines()
-        .position(|line| line.trim() == crate::capsmap::CAPS_V2_HEADER)
+        .enumerate()
+        .find(|(_, line)| !line.trim().is_empty())
+        && first_nonempty.trim() == crate::capsmap::CAPS_V2_HEADER
     {
         return Err(LegacyCapsError::AlreadyV2 { line: line + 1 });
     }
@@ -1064,6 +1066,27 @@ mod tests {
         assert!(result.is_err());
         assert_eq!(victim_content, "safe");
         std::fs::remove_dir_all(project).unwrap();
+    }
+
+    #[test]
+    fn test_20260716_v1_header_comment_after_entry_remains_legacy() {
+        let result = rvs_convert_v1_layer(
+            "seed",
+            "value=S\n# rivus-caps-v2\n# ordinary legacy comment\n",
+        );
+        let value = result
+            .as_ref()
+            .ok()
+            .and_then(|map| map.rvs_lookup("value"))
+            .map(CapabilitySet::rvs_letters);
+        let output = format!("result_is_ok={}\nvalue={value:?}\n", result.is_ok());
+        rvs_snapshot_BIS(
+            "test_20260716_v1_header_comment_after_entry_remains_legacy",
+            &output,
+        );
+
+        assert!(result.is_ok());
+        assert_eq!(value.as_deref(), Some("S"));
     }
 
     #[test]
