@@ -1,0 +1,7 @@
+version_kind=DisplayVersion
+version=cargo-rivus 0.2.0
+root_usage=Usage: cargo rivus [COMMAND]
+root_warns_about_linter_bugs=true
+infer_allows_arbitrary_output=true
+blank_kind=ValueValidation
+whitespace_kind=ValueValidation

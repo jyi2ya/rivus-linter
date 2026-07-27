@@ -8,10 +8,10 @@ LLM 很懒而且很笨。需要很多约束才能让它们写出看得过去的�
 
 =over
 
-=item 1. 将编译产物重命名为 rivus-linter，放到 C<$PATH> 中。
+=item 1. 安装 C<cargo-rivus> 二进制并放到 C<$PATH> 中。
 
-=item 2. 在项目中运行 C<rivus-linter setup>
+=item 2. 在项目中运行 C<cargo rivus setup>
 
-=item 3. 在 llm 交付的时候，运行 rivus-linter，并且根据结果训斥它们。
+=item 3. 在 LLM 交付时运行 C<cargo rivus>，并根据结果训斥它们。
 
 =back

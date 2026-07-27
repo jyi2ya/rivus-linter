@@ -248,10 +248,19 @@ fn rvs_is_cargo_rustc_leading_arg(arg: &str) -> bool {
     ) || arg.starts_with("--print=")
 }
 
+fn rvs_parse_function_query(function: &str) -> Result<String, String> {
+    if function.trim().is_empty() {
+        Err("function def_path must not be blank".to_string())
+    } else {
+        Ok(function.to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_support::rvs_snapshot_BIS;
+    use clap::CommandFactory;
 
     #[test]
     fn test_20260706_rewrite_cap_lints_preserves_allow_crate_name() {
@@ -452,6 +461,50 @@ mod tests {
     }
 
     #[test]
+    fn test_20260716_cli_identity_help_and_why_validation() {
+        let version = Cli::try_parse_from(["cargo-rivus", "--version"]).unwrap_err();
+        let root_help = Cli::command().render_long_help().to_string();
+        let root_usage = root_help
+            .lines()
+            .find(|line| line.starts_with("Usage:"))
+            .expect("never: root help has a usage line");
+        let mut command = Cli::command();
+        let infer_help = command
+            .find_subcommand_mut("infer-capsmap")
+            .expect("never: infer-capsmap subcommand exists")
+            .render_long_help()
+            .to_string();
+        let normalized_infer_help = infer_help.split_whitespace().collect::<Vec<_>>().join(" ");
+        let expected_infer_output_help =
+            "-o, --output <OUTPUT> Output path for direct external deps capsmap";
+        let infer_allows_arbitrary_output =
+            normalized_infer_help.contains(expected_infer_output_help);
+        let root_warns_about_linter_bugs = root_help.contains(
+            "stop modifying the target project and report it to a human; do not add workarounds",
+        );
+        let blank = Cli::try_parse_from(["cargo-rivus", "why", ""]).unwrap_err();
+        let whitespace = Cli::try_parse_from(["cargo-rivus", "why", "   "]).unwrap_err();
+        let output = format!(
+            "version_kind={:?}\nversion={}\nroot_usage={root_usage}\nroot_warns_about_linter_bugs={root_warns_about_linter_bugs}\ninfer_allows_arbitrary_output={infer_allows_arbitrary_output}\nblank_kind={:?}\nwhitespace_kind={:?}\n",
+            version.kind(),
+            version.to_string().trim(),
+            blank.kind(),
+            whitespace.kind(),
+        );
+        rvs_snapshot_BIS(
+            "test_20260716_cli_identity_help_and_why_validation",
+            &output,
+        );
+
+        assert_eq!(version.kind(), clap::error::ErrorKind::DisplayVersion);
+        assert_eq!(root_usage, "Usage: cargo rivus [COMMAND]");
+        assert_eq!(blank.kind(), clap::error::ErrorKind::ValueValidation);
+        assert_eq!(whitespace.kind(), clap::error::ErrorKind::ValueValidation);
+        assert!(root_warns_about_linter_bugs);
+        assert!(infer_allows_arbitrary_output);
+    }
+
+    #[test]
     fn test_20260715_migrate_caps_cli_parses_default_and_explicit_paths() {
         let default = Cli::try_parse_from(["cargo-rivus", "migrate-caps"]).unwrap();
         let explicit =
@@ -484,8 +537,11 @@ mod tests {
 // ─── CLI mode ────────────────────────────────────────────────────────────
 
 #[derive(Debug, Parser)]
-#[command(name = "rivus-linter")]
+#[command(name = "cargo-rivus", bin_name = "cargo rivus")]
 #[command(about = "Check function capability compliance in Rust source code")]
+#[command(
+    long_about = "Check function capability compliance in Rust source code.\n\nExperimental: cargo-rivus is under active development and has many known and unknown bugs. If a diagnostic or inferred capability appears to be a linter bug, stop modifying the target project and report it to a human; do not add workarounds."
+)]
 #[command(version)]
 struct Cli {
     #[command(subcommand)]
@@ -517,7 +573,7 @@ enum Commands {
         /// Path to project directory (must contain Cargo.toml)
         #[arg(default_value = ".")]
         path: PathBuf,
-        /// Output path for direct external deps capsmap under caps/
+        /// Output path for direct external deps capsmap
         #[arg(short = 'o', long = "output", required = true)]
         output: PathBuf,
     },
@@ -551,6 +607,7 @@ enum Commands {
     /// Show why a function has its caps (prints callees and their caps)
     Why {
         /// Function def_path to explain (e.g. std::fs::read)
+        #[arg(value_parser = rvs_parse_function_query)]
         function: String,
         /// Path to project directory (must contain Cargo.toml)
         #[arg(default_value = ".")]
