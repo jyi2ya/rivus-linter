@@ -858,15 +858,16 @@ fn rvs_callgraph_collection_env(
 fn rvs_load_required_std_callgraph_cache_BIS(path: &Path) -> Result<FnGraph, String> {
     match rvs_load_published_std_callgraph_cache_BIS(path) {
         Ok(Some(cg)) => {
-            let mut std_only = FnGraph::rvs_new();
-            rvs_merge_std_like_callgraph_M(&mut std_only, cg);
-            if std_only.rvs_is_empty() {
+            if !cg
+                .rvs_keys()
+                .any(|path| rvs_is_std_like_def_path(path.rvs_as_str()))
+            {
                 return Err(
                     "published std callgraph cache contains no std-like functions; run cargo rivus infer-std first"
                         .into(),
                 );
             }
-            return Ok(std_only);
+            return Ok(cg);
         }
         Ok(None) => {}
         Err(error) => return Err(format!("{error}; run cargo rivus infer-std first")),
@@ -1121,6 +1122,56 @@ mod tests {
             .insert(crate_id, crate::capability::CapabilityFacts::default());
         node.has_body_by_crate.insert(crate_id, true);
         node
+    }
+
+    fn rvs_support_inference_test_graph() -> FnGraph {
+        let support_path = crate::symbols::DefPath::from("support_crate::help");
+        let mut std_node = rvs_targeted_test_node(1);
+        let support_identity = crate::artifacts::FunctionIdentity {
+            crate_id: 2,
+            def_path: support_path.clone(),
+        };
+        std_node.calls.insert(support_path.clone());
+        std_node
+            .coverage_calls
+            .get_mut(&1)
+            .unwrap()
+            .insert(support_identity.clone());
+        std_node.coverage_call_sites.get_mut(&1).unwrap().insert(
+            crate::artifacts::CallSiteIdentity {
+                callee: support_identity,
+                occurrence: 0,
+                source: None,
+            },
+        );
+        let mut support_node = rvs_targeted_test_node(2);
+        let boundary_path = crate::symbols::DefPath::from("ffi_support::rvs_read_BI");
+        let boundary_identity = crate::artifacts::FunctionIdentity {
+            crate_id: 3,
+            def_path: boundary_path.clone(),
+        };
+        support_node.calls.insert(boundary_path);
+        support_node
+            .coverage_calls
+            .get_mut(&2)
+            .unwrap()
+            .insert(boundary_identity.clone());
+        support_node
+            .coverage_call_sites
+            .get_mut(&2)
+            .unwrap()
+            .insert(crate::artifacts::CallSiteIdentity {
+                callee: boundary_identity,
+                occurrence: 0,
+                source: None,
+            });
+        let mut graph = FnGraph::rvs_new();
+        graph.rvs_insert_M(
+            crate::symbols::DefPath::from("std::fs::read_to_string"),
+            std_node,
+        );
+        graph.rvs_insert_M(support_path, support_node);
+        graph
     }
 
     #[test]
@@ -4261,6 +4312,88 @@ name = "throughput-bench"
 
         assert!(!previous_present);
         assert!(replacement_present);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260728_published_std_cache_preserves_support_inference_for_why() {
+        let dir = rvs_make_workspace_temp_dir_BIS("std-cache-support-inference");
+        let support_path = crate::symbols::DefPath::from("support_crate::help");
+        let published = rvs_support_inference_test_graph();
+        crate::callgraph_cache::rvs_publish_std_callgraph_cache_BIS(&dir, &published).unwrap();
+
+        let (mut loaded, caps) = rvs_load_callgraph_and_caps_for_function_BIMS(
+            &dir,
+            "std::fs::read_to_string",
+            CargoTargetScope::WithTestExampleBench,
+            &BTreeSet::new(),
+        )
+        .unwrap();
+        let support_present = loaded.rvs_get(support_path.rvs_as_str()).is_some();
+        let analysis = crate::inference::PreparedLocalAnalysis::rvs_prepare_M(
+            &mut loaded,
+            &caps,
+            &BTreeSet::new(),
+        );
+        let resolver = analysis.rvs_resolver(&loaded, &caps);
+        let support_caps = resolver
+            .rvs_for_contract_check(&support_path)
+            .map(|caps| caps.rvs_letters())
+            .unwrap_or_else(|| "unknown".into());
+        let std_present = loaded.rvs_get("std::fs::read_to_string").is_some();
+        let output = format!(
+            "std_present={std_present}\nsupport_present={support_present}\nsupport_caps={support_caps}\n"
+        );
+        rvs_snapshot_BIS(
+            "test_20260728_published_std_cache_preserves_support_inference_for_why",
+            &output,
+        );
+
+        assert!(std_present);
+        assert!(support_present);
+        assert_eq!(support_caps, "BI");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260728_std_why_cache_respects_current_caps_override() {
+        let dir = rvs_make_workspace_temp_dir_BIS("std-cache-current-caps-override");
+        let support_path = crate::symbols::DefPath::from("support_crate::help");
+        let published = rvs_support_inference_test_graph();
+        crate::callgraph_cache::rvs_publish_std_callgraph_cache_BIS(&dir, &published).unwrap();
+        std::fs::create_dir_all(dir.join("caps")).unwrap();
+        std::fs::write(
+            dir.join("caps/ext"),
+            rvs_caps_v2(&[(support_path.rvs_as_str(), "S")]),
+        )
+        .unwrap();
+
+        let (mut loaded, caps) = rvs_load_callgraph_and_caps_for_function_BIMS(
+            &dir,
+            "std::fs::read_to_string",
+            CargoTargetScope::WithTestExampleBench,
+            &BTreeSet::new(),
+        )
+        .unwrap();
+        let analysis = crate::inference::PreparedLocalAnalysis::rvs_prepare_M(
+            &mut loaded,
+            &caps,
+            &BTreeSet::new(),
+        );
+        let resolver = analysis.rvs_resolver(&loaded, &caps);
+        let support_caps = resolver
+            .rvs_for_contract_check(&support_path)
+            .map(|caps| caps.rvs_letters())
+            .unwrap_or_else(|| "unknown".into());
+        let support_present = loaded.rvs_get(support_path.rvs_as_str()).is_some();
+        let output = format!("support_present={support_present}\nsupport_caps={support_caps}\n");
+        rvs_snapshot_BIS(
+            "test_20260728_std_why_cache_respects_current_caps_override",
+            &output,
+        );
+
+        assert!(support_present);
+        assert_eq!(support_caps, "S");
         std::fs::remove_dir_all(dir).unwrap();
     }
 

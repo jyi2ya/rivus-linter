@@ -135,7 +135,7 @@ cargo rivus infer-capsmap -o caps/deps       # 从项目 caps/ 推断，并把 d
 
 通过 `-Zbuild-std` 编译 std/core/alloc，推断标准库函数的能力标注。需要 nightly Rust；命令实际会设置 `RUSTUP_TOOLCHAIN=nightly` 并运行 `cargo check -Zbuild-std=std,core,alloc`，如果本机没有可用的 nightly toolchain 会直接失败。`PATH` 必须是一个有效的本地 crate 项目；仅含 `[workspace]` 的虚拟根目录不受支持。
 
-注意：该命令只会从 `PATH/caps` 加载 `seed` 和 `suppress` 文件（不加载 `std`/`deps`/`ext`，因为那些是上一次生成的结果，会干扰重新生成），并在其基础上推断标准库条目。命令不会允许输出覆盖 `deps`、`seed`、`suppress` 或 `ext` 等其他保留层；如果没有完整收集到非本地 `std`、`core`、`alloc` 三个 crate，也会报错并保留原输出。成功写出 caps 后，命令会把本次完整合并的 versioned 函数图原子发布到 `target/rivus-callgraph-std.json`，供后续 std `why` 使用；任一前置步骤失败都保留上一个缓存。旧版 `target/rivus-callgraph-std/` 目录仍可只读加载。
+注意：该命令只会从 `PATH/caps` 加载 `seed` 和 `suppress` 文件（不加载 `std`/`deps`/`ext`，因为那些是上一次生成的结果，会干扰重新生成），并在其基础上推断标准库条目。命令不会允许输出覆盖 `deps`、`seed`、`suppress` 或 `ext` 等其他保留层；如果没有完整收集到非本地 `std`、`core`、`alloc` 三个 crate，也会报错并保留原输出。成功写出 caps 后，命令会把本次完整合并的 versioned 函数图原子发布到 `target/rivus-callgraph-std.json`，包括标准库调用的支持 crate 上下文，供后续 std `why` 展示图证据。`why` 仍按查询时的完整 caps 层级解释当前有效能力，因此 `ext` 等人工覆盖优先于缓存中的历史推断上下文。任一前置步骤失败都保留上一个缓存。旧版 `target/rivus-callgraph-std/` 目录仍可只读加载，并保持原有的 std-only 读取行为。
 
 ```bash
 cargo rivus infer-std -o caps/std        # 将 std caps 写到指定文件（通常 caps/std）

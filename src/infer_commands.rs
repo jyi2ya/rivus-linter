@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
@@ -7,11 +7,11 @@ use crate::capsmap::{CapsMap, rvs_reserved_layer_name};
 use crate::cargo_targets::{CargoTargetScope, rvs_detect_local_crate_prefixes_BIS};
 use crate::function_classification::LocalScope;
 use crate::inference::{
-    PreparedInference, rvs_build_impl_index, rvs_format_def_path_capability_info,
-    rvs_format_unknown_callees, rvs_generate_trait_alias_infos, rvs_infer_caps_with_index,
-    rvs_scope_port_methods_M,
+    CalleeCapsResolver, PreparedInference, rvs_build_impl_index,
+    rvs_format_def_path_capability_info, rvs_format_unknown_callees,
+    rvs_generate_trait_alias_infos, rvs_infer_caps_with_index, rvs_scope_port_methods_M,
 };
-use crate::symbols::{CapsMapKey, DefPath};
+use crate::symbols::{CapsMapKey, DefPath, TraitMethodKey};
 use crate::workspace::{
     rvs_collect_callgraph_BIMS, rvs_ensure_cargo_project_BIS, rvs_preflight_capsmap_file_BIS,
     rvs_validate_optional_capsmap_dir_BIS, rvs_write_capsmap_result_BIS,
@@ -108,9 +108,7 @@ pub(crate) fn rvs_run_infer_std_BIMPS(path: &Path, output: &Path) -> Result<(), 
 
     let mut std_only: BTreeMap<DefPath, crate::capability::CapabilityInfo> = inferred
         .iter()
-        .filter(|(name, _)| {
-            !local_scope.rvs_contains(name) && rvs_is_std_like_def_path(name.rvs_as_str())
-        })
+        .filter(|(name, _)| rvs_should_emit_std_capability(name, &local_scope))
         .map(|(path, caps)| {
             (
                 path.clone(),
@@ -119,12 +117,13 @@ pub(crate) fn rvs_run_infer_std_BIMPS(path: &Path, output: &Path) -> Result<(), 
         })
         .collect();
     for (path, info) in post_alias_infos {
-        if !local_scope.rvs_contains(&path) && rvs_is_std_like_def_path(path.rvs_as_str()) {
+        if rvs_should_emit_std_capability(&path, &local_scope) {
             std_only.insert(path, info);
         }
     }
 
-    let unknown = rvs_collect_std_unknown_callees(&callgraph, &inferred, &seed, &local_scope);
+    let unknown =
+        rvs_collect_std_unknown_callees(&callgraph, &inferred, &seed, &pre_index, &local_scope);
 
     if !unknown.is_empty() {
         return Err(rvs_format_unknown_callees(
@@ -213,6 +212,10 @@ fn rvs_std_inferred_capability_info(
         crate::capability::CapabilityBasis::Inferred,
         completeness,
     )
+}
+
+fn rvs_should_emit_std_capability(path: &DefPath, local_scope: &LocalScope) -> bool {
+    !local_scope.rvs_contains(path) && rvs_is_std_like_def_path(path.rvs_as_str())
 }
 
 fn rvs_require_inference_output_layer(
@@ -421,9 +424,11 @@ fn rvs_collect_std_unknown_callees(
     callgraph: &crate::artifacts::FnGraph,
     inferred: &BTreeMap<DefPath, crate::capability::CapabilitySet>,
     seed: &CapsMap,
+    impl_index: &HashMap<TraitMethodKey, Vec<DefPath>>,
     local_scope: &LocalScope,
 ) -> BTreeMap<DefPath, BTreeSet<DefPath>> {
     let mut unknown: BTreeMap<DefPath, BTreeSet<DefPath>> = BTreeMap::new();
+    let resolver = CalleeCapsResolver::rvs_new(callgraph, seed, inferred, impl_index);
     for (func, behavior) in callgraph.rvs_iter() {
         let is_std = rvs_is_std_like_def_path(func.rvs_as_str());
         let is_local = local_scope.rvs_contains(func);
@@ -431,10 +436,7 @@ fn rvs_collect_std_unknown_callees(
             continue;
         }
         for callee in behavior.rvs_dependency_calls() {
-            let callee_is_emitted_std = rvs_is_std_like_def_path(callee.rvs_as_str());
-            if seed.rvs_lookup_def_path(callee).is_some()
-                || (callee_is_emitted_std && inferred.contains_key(callee))
-            {
+            if resolver.rvs_for_contract_check(callee).is_some() {
                 continue;
             }
             unknown
@@ -1332,42 +1334,81 @@ mod tests {
     }
 
     #[test]
-    fn test_20260704_collect_std_unknown_callees_reports_non_emitted_support_crate() {
+    fn test_20260717_collect_std_unknown_callees_accepts_inferred_support_crate() {
         let mut callgraph = crate::artifacts::FnGraph::rvs_new();
         let mut std_node = crate::artifacts::FnNode::default();
-        std_node
-            .calls
-            .insert(DefPath::from("support_crate::rvs_help_BI"));
+        std_node.calls.insert(DefPath::from("support_crate::help"));
         callgraph.rvs_insert_M(DefPath::from("std::fs::read_to_string"), std_node);
-        callgraph.rvs_insert_M(
-            DefPath::from("support_crate::rvs_help_BI"),
-            crate::artifacts::FnNode::default(),
-        );
-        let inferred = BTreeMap::from([
-            (
-                DefPath::from("std::fs::read_to_string"),
-                crate::capability::CapabilitySet::rvs_from_validated("BI"),
-            ),
-            (
-                DefPath::from("support_crate::rvs_help_BI"),
-                crate::capability::CapabilitySet::rvs_from_validated("BI"),
-            ),
-        ]);
+        let mut support_node = crate::artifacts::FnNode::default();
+        support_node
+            .calls
+            .insert(DefPath::from("ffi_support::rvs_read_BI"));
+        callgraph.rvs_insert_M(DefPath::from("support_crate::help"), support_node);
 
         let local_scope = LocalScope::rvs_new(&BTreeSet::new());
+        let impl_index = rvs_build_impl_index(&callgraph);
+        let inferred = rvs_infer_caps_with_index(&callgraph, &CapsMap::rvs_new(), &impl_index);
         let unknown = rvs_collect_std_unknown_callees(
             &callgraph,
             &inferred,
             &CapsMap::rvs_new(),
+            &impl_index,
+            &local_scope,
+        );
+        let support_caps = inferred
+            .get("support_crate::help")
+            .map(crate::capability::CapabilitySet::rvs_letters)
+            .unwrap_or_else(|| "missing".into());
+        let std_emitted =
+            rvs_should_emit_std_capability(&DefPath::from("std::fs::read_to_string"), &local_scope);
+        let support_emitted =
+            rvs_should_emit_std_capability(&DefPath::from("support_crate::help"), &local_scope);
+        let output = format!(
+            "support_caps={support_caps}\nstd_emitted={std_emitted}\nsupport_emitted={support_emitted}\nunknown={unknown:?}\n"
+        );
+        rvs_snapshot_BIS(
+            "test_20260717_collect_std_unknown_callees_accepts_inferred_support_crate",
+            &output,
+        );
+
+        assert_eq!(support_caps, "BI");
+        assert!(std_emitted);
+        assert!(!support_emitted);
+        assert!(unknown.is_empty());
+    }
+
+    #[test]
+    fn test_20260717_collect_std_unknown_callees_reports_bodyless_support_boundary() {
+        let mut callgraph = crate::artifacts::FnGraph::rvs_new();
+        let mut std_node = crate::artifacts::FnNode::default();
+        std_node
+            .calls
+            .insert(DefPath::from("support_crate::opaque_boundary"));
+        callgraph.rvs_insert_M(DefPath::from("std::fs::read_to_string"), std_node);
+        callgraph.rvs_insert_M(
+            DefPath::from("support_crate::opaque_boundary"),
+            crate::artifacts::FnNode {
+                has_body: false,
+                ..crate::artifacts::FnNode::default()
+            },
+        );
+        let local_scope = LocalScope::rvs_new(&BTreeSet::new());
+        let impl_index = rvs_build_impl_index(&callgraph);
+        let inferred = rvs_infer_caps_with_index(&callgraph, &CapsMap::rvs_new(), &impl_index);
+        let unknown = rvs_collect_std_unknown_callees(
+            &callgraph,
+            &inferred,
+            &CapsMap::rvs_new(),
+            &impl_index,
             &local_scope,
         );
         let output = format!("unknown={unknown:?}\n");
         rvs_snapshot_BIS(
-            "test_20260704_collect_std_unknown_callees_reports_non_emitted_support_crate",
+            "test_20260717_collect_std_unknown_callees_reports_bodyless_support_boundary",
             &output,
         );
 
-        assert!(unknown.contains_key("support_crate::rvs_help_BI"));
+        assert!(unknown.contains_key("support_crate::opaque_boundary"));
     }
 
     #[test]
@@ -1426,11 +1467,13 @@ mod tests {
         )]);
         let local_scope =
             LocalScope::rvs_new(&BTreeSet::from([crate::symbols::CrateName::from("std")]));
+        let impl_index = rvs_build_impl_index(&callgraph);
 
         let unknown = rvs_collect_std_unknown_callees(
             &callgraph,
             &inferred,
             &CapsMap::rvs_new(),
+            &impl_index,
             &local_scope,
         );
         let output = format!("unknown={unknown:?}\n");
