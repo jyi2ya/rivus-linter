@@ -312,7 +312,7 @@ caps/
 | `BorrowedParamWarning` | 参数或结构体字段使用 `&String`/`&Vec<T>`/`&Box<T>`——应改用 `&str`/`&[T]`/`&T` |
 | `MissingDebugWarning` | public struct/enum 缺少 `#[derive(Debug)]` |
 | `IntoImplWarning` | 直接实现 `Into`——应实现 `From`，`Into` 会自动提供 |
-| `ConsumedArgOnErrorWarning` | 函数返回标准库 `Result<(), E>` 时消费了非 `Copy` owned 参数但错误类型中未保留该参数。注意：仅检查错误类型名称中是否包含参数类型标识符（如 `RunError<Cli>` 包含 `Cli`），无法深入检查错误枚举的变体字段——如果参数确实被保留在变体中（如 `AppError::Failed { cli: Box<Cli> }`），属于误报 |
+| `ConsumedArgOnErrorWarning` | 函数返回标准库 `Result<(), E>` 时消费了非 `Copy` owned 参数但错误类型中未保留该参数。检查会规范化 rustc 类型，并判断错误类型结构是否包含参数类型（例如 `RunError<Cli>` 的泛型参数包含 `Cli`）；不会递归检查 ADT 的枚举变体或结构体字段，因此 `AppError::Failed { cli: Box<Cli> }` 仍可能误报 |
 | `DerefPolymorphismWarning` | 实现了 `Deref`——可能用 Deref 模拟继承，应改用组合 |
 | `ReflectionUsageWarning` | 使用了 `std::any::Any`/`type_name`/`type_id`——应改用 trait 分发 |
 | `TodoCommentWarning` | 代码中包含 `// TODO` 或 `// FIXME` 注释（含 `/* */` 块注释，仅检测以 `//` 或 `/*` 开头的行） |

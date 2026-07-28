@@ -1,0 +1,1 @@
+consumed=| `ConsumedArgOnErrorWarning` | 函数返回标准库 `Result<(), E>` 时消费了非 `Copy` owned 参数但错误类型中未保留该参数。检查会规范化 rustc 类型，并判断错误类型结构是否包含参数类型（例如 `RunError<Cli>` 的泛型参数包含 `Cli`）；不会递归检查 ADT 的枚举变体或结构体字段，因此 `AppError::Failed { cli: Box<Cli> }` 仍可能误报 |

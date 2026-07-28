@@ -553,6 +553,23 @@ mod tests {
     }
 
     #[test]
+    fn test_20260728_manual_documents_consumed_argument_type_structure() {
+        let consumed_arg = RIVUS_MANUAL
+            .lines()
+            .find(|line| line.contains("ConsumedArgOnErrorWarning"))
+            .expect("never: manual documents ConsumedArgOnErrorWarning");
+        let output = format!("consumed={consumed_arg}\n");
+        rvs_snapshot_BIS(
+            "test_20260728_manual_documents_consumed_argument_type_structure",
+            &output,
+        );
+
+        assert!(consumed_arg.contains("规范化 rustc 类型"));
+        assert!(consumed_arg.contains("错误类型结构"));
+        assert!(consumed_arg.contains("不会递归检查 ADT"));
+    }
+
+    #[test]
     fn test_20260715_migrate_caps_cli_parses_default_and_explicit_paths() {
         let default = Cli::try_parse_from(["cargo-rivus", "migrate-caps"]).unwrap();
         let explicit =
