@@ -159,7 +159,7 @@ cargo rivus migrate-caps .
 
 迁移要求平台和底层文件系统支持原子目录交换以及 no-replace rename。不支持时命令会报错、清理 staging 并保留原 `caps`。
 
-同一项目的迁移、`infer-std` 和 `infer-capsmap` 通过项目目录 advisory lock 串行化。迁移在交换前还会重新读取 v1 layers，检测未遵守该锁的并发修改；维护者仍不应在迁移期间手工编辑 `caps/`。若进程在目录交换后中断，下次迁移会读取 active v2 目录中的 transaction marker，并验证 marker 指向的 v1 staging 或已经发布的 `caps.v1-backup` 与 active v2 的每个 layer 语义一致，再完成备份发布或清除 marker。staging 与 backup 同时存在、同时缺失或内容不匹配时拒绝猜测。
+同一项目的迁移、`infer-std` 和 `infer-capsmap` 通过项目根目录下的 `.rivus-caps.lock` 串行化。该 regular file 持久保留；进程内 registry 排斥同进程线程，POSIX record lock 排斥其他进程且不会被 fork 后尚未 exec 的子进程继承。迁移在交换前还会重新读取 v1 layers，检测未遵守该锁的并发修改；维护者仍不应在迁移期间手工编辑 `caps/`。若进程在目录交换后中断，下次迁移会读取 active v2 目录中的 transaction marker，并验证 marker 指向的 v1 staging 或已经发布的 `caps.v1-backup` 与 active v2 的每个 layer 语义一致，再完成备份发布或清除 marker。staging 与 backup 同时存在、同时缺失或内容不匹配时拒绝猜测。
 
 - `caps` 必须是真实目录，不能是 symlink
 - `caps.v1-backup` 已存在时拒绝覆盖；仅当 active v2 的 transaction marker 能证明它就是当前迁移已发布且逐层语义一致的原 v1 目录时，重试会清除 marker 并成功结束

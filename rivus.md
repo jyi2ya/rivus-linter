@@ -305,7 +305,7 @@ cargo rivus migrate-caps .
 迁移先在同级 staging 目录写出并验证全部 v2 layer，确认迁移前后的有效能力映射一致后才原子交换目录。成功后原目录保存在 `caps.v1-backup`；该备份已存在时迁移拒绝覆盖，除非 active v2 的 transaction marker 验证它正是当前中断迁移已经发布的原 v1 目录。
 不支持原子目录交换或 no-replace rename 的平台/文件系统会拒绝迁移并保留原 `caps`。
 备份发布失败时迁移会尝试原子回滚；如果回滚交换本身也失败，错误会报告仍保存原 v1 数据的 staging 路径，不能声称 `caps` 原路径已经恢复。
-同一项目的迁移与 caps 推断写入通过项目目录锁串行化；交换后中断时，后续迁移根据 active v2 中的 transaction marker 验证原 v1 staging 或已发布 backup，只有逐层语义一致时才完成恢复。
+同一项目的迁移与 caps 推断写入通过项目根目录下持久存在的 `.rivus-caps.lock` 串行化；进程内 registry 排斥同进程线程，POSIX record lock 排斥其他进程且不被 fork 后尚未 exec 的子进程继承。交换后中断时，后续迁移根据 active v2 中的 transaction marker 验证原 v1 staging 或已发布 backup，只有逐层语义一致时才完成恢复。
 迁移要求 `caps/` 中每个 layer 都是 regular file；symlink、子目录和其他非文件条目会被拒绝，避免静默丢失内容。
 
 - linter 对 capsmap 中的键做 def_path 精确匹配，不支持后缀匹配。specialized impl 会先匹配带内部 identity marker 的精确路径，再回退到诊断中显示的无 marker 可读 def_path；因此一个可读路径条目默认作用于该方法的所有 specialization

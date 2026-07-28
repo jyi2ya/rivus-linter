@@ -570,6 +570,42 @@ mod tests {
     }
 
     #[test]
+    fn test_20260728_persistent_caps_update_lock_is_documented() {
+        let root_agents = include_str!("../AGENTS.md");
+        let theory = include_str!("../docs/theory/capability-knowledge.md");
+        let setup_lock = RIVUS_MD
+            .lines()
+            .find(|line| line.contains(".rivus-caps.lock"))
+            .expect("never: setup template documents the persistent caps lock");
+        let manual_lock = RIVUS_MANUAL
+            .lines()
+            .find(|line| line.contains(".rivus-caps.lock"))
+            .expect("never: manual documents the persistent caps lock");
+        let theory_lock = theory
+            .lines()
+            .find(|line| line.contains(".rivus-caps.lock"))
+            .expect("never: capability theory documents the persistent caps lock");
+        let agents_matches_template = root_agents == RIVUS_MD;
+        let output = format!(
+            "agents_matches_template={agents_matches_template}\nsetup_lock={setup_lock}\nmanual_lock={manual_lock}\ntheory_lock={theory_lock}\n"
+        );
+        rvs_snapshot_BIS(
+            "test_20260728_persistent_caps_update_lock_is_documented",
+            &output,
+        );
+
+        assert!(agents_matches_template);
+        for documented_lock in [setup_lock, manual_lock, theory_lock] {
+            assert!(documented_lock.contains("进程内 registry"));
+            assert!(documented_lock.contains("POSIX record lock"));
+            assert!(documented_lock.contains("fork"));
+        }
+        assert!(setup_lock.contains("项目根目录下持久存在"));
+        assert!(manual_lock.contains("regular file 持久保留"));
+        assert!(theory_lock.contains("regular file 承载"));
+    }
+
+    #[test]
     fn test_20260715_migrate_caps_cli_parses_default_and_explicit_paths() {
         let default = Cli::try_parse_from(["cargo-rivus", "migrate-caps"]).unwrap();
         let explicit =
