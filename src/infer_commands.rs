@@ -75,7 +75,7 @@ pub(crate) fn rvs_run_infer_capsmap_BIMPS(path: &Path, output: &Path) -> Result<
         return Err(rvs_format_unknown_callees(
             &unknown_callees,
             "error: the following external functions have no capability data.\n\
-             Add them to caps/seed or caps/ext with the correct capability markers:\n\n",
+             Add them to caps/ext with the correct capability markers:\n\n",
         ));
     }
 
@@ -1386,6 +1386,47 @@ mod tests {
         );
 
         assert!(unknown.contains_key("support_crate::rvs_help_BI"));
+    }
+
+    #[test]
+    fn test_20260716_infer_capsmap_unknown_callee_recommends_ext_only() {
+        let dir = rvs_make_cargo_project_BIS(
+            "infer-capsmap-unknown-callee-guidance",
+            "infer-capsmap-unknown-callee-guidance",
+            &[(
+                "src/lib.rs",
+                "pub fn rvs_call() { unsafe { fixture_dep::mystery(); } }\n",
+            )],
+        );
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"infer-capsmap-unknown-callee-guidance\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nfixture-dep = { path = \"fixture-dep\" }\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.join("fixture-dep/src")).unwrap();
+        std::fs::write(
+            dir.join("fixture-dep/Cargo.toml"),
+            "[package]\nname = \"fixture-dep\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("fixture-dep/src/lib.rs"),
+            "unsafe extern \"C\" { pub fn mystery(); }\n",
+        )
+        .unwrap();
+
+        let error = rvs_run_infer_capsmap_BIMPS(&dir, Path::new("caps/deps")).unwrap_err();
+        let mentions_ext = error.contains("caps/ext");
+        let mentions_seed = error.contains("caps/seed");
+        let output = format!("mentions_ext={mentions_ext}\nmentions_seed={mentions_seed}\n");
+        rvs_snapshot_BIS(
+            "test_20260716_infer_capsmap_unknown_callee_recommends_ext_only",
+            &output,
+        );
+
+        assert!(mentions_ext);
+        assert!(!mentions_seed);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
