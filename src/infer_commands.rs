@@ -309,19 +309,7 @@ fn rvs_caps_output_layer_BIS(
     let Some(parent) = output_path.parent() else {
         return Ok(None);
     };
-    let alias_roots_match = match (parent.parent(), caps_dir.parent()) {
-        (Some(parent_root), Some(caps_root)) if parent_root == caps_root => true,
-        (Some(parent_root), Some(caps_root)) if parent_root.is_dir() && caps_root.is_dir() => {
-            same_file::is_same_file(parent_root, caps_root).map_err(|error| {
-                format!(
-                    "cannot compare capsmap output root '{}' with project root '{}': {error}",
-                    parent_root.display(),
-                    caps_root.display()
-                )
-            })?
-        }
-        _ => false,
-    };
+    let alias_roots_match = rvs_caps_output_roots_match_BIS(parent, caps_dir)?;
     let aliases_caps_name = parent != caps_dir
         && parent
             .file_name()
@@ -347,21 +335,7 @@ fn rvs_caps_output_layer_BIS(
                 .is_some_and(|(parent_name, caps_name)| {
                     parent_name.eq_ignore_ascii_case(caps_name)
                 });
-            let roots_match = match (parent.parent(), caps_dir.parent()) {
-                (Some(parent_root), Some(caps_root)) if parent_root == caps_root => true,
-                (Some(parent_root), Some(caps_root))
-                    if parent_root.is_dir() && caps_root.is_dir() =>
-                {
-                    same_file::is_same_file(parent_root, caps_root).map_err(|error| {
-                        format!(
-                            "cannot compare capsmap output root '{}' with project root '{}': {error}",
-                            parent_root.display(),
-                            caps_root.display()
-                        )
-                    })?
-                }
-                _ => false,
-            };
+            let roots_match = rvs_caps_output_roots_match_BIS(parent, caps_dir)?;
             names_match && roots_match
         };
         return Ok(parent_targets_caps
@@ -432,6 +406,22 @@ fn rvs_caps_output_layer_BIS(
             output_path.display(),
             caps_dir.display()
         )),
+    }
+}
+
+fn rvs_caps_output_roots_match_BIS(parent: &Path, caps_dir: &Path) -> Result<bool, String> {
+    match (parent.parent(), caps_dir.parent()) {
+        (Some(parent_root), Some(caps_root)) if parent_root == caps_root => Ok(true),
+        (Some(parent_root), Some(caps_root)) if parent_root.is_dir() && caps_root.is_dir() => {
+            same_file::is_same_file(parent_root, caps_root).map_err(|error| {
+                format!(
+                    "cannot compare capsmap output root '{}' with project root '{}': {error}",
+                    parent_root.display(),
+                    caps_root.display()
+                )
+            })
+        }
+        _ => Ok(false),
     }
 }
 
