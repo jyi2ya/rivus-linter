@@ -1,0 +1,8 @@
+dispatch_incomplete=true
+implementation_incomplete=false
+known=true
+unknown=false
+direct=# rivus-caps-v2
+{"path":"dep::Fetcher::rvs_fetch_S","caps":"S","basis":{"kind":"inferred"},"completeness":"incomplete"}
+alias=# rivus-caps-v2
+{"path":"dep::Fetcher::rvs_fetch_S","caps":"S","basis":{"kind":"inferred"},"completeness":"incomplete"}

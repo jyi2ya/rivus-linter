@@ -51,22 +51,38 @@ impl TraitCapabilityVote {
             .all(|implementation| !implementation.incomplete)
     }
 
+    #[cfg(test)]
     pub(crate) fn rvs_capability_info(&self) -> CapabilityInfo {
+        self.rvs_capability_info_with_lower_bound(&self.selected_caps, false)
+    }
+
+    fn rvs_capability_info_with_lower_bound(
+        &self,
+        lower_bound: &CapabilitySet,
+        trait_method_incomplete: bool,
+    ) -> CapabilityInfo {
         debug_assert!(
             !self.port_short_circuit,
             "Port methods use fixed P knowledge instead of trait vote knowledge"
         );
-        CapabilityInfo::rvs_trait_vote(
-            self.selected_caps.clone(),
-            self.implementations.len(),
-            self.threshold,
-            self.counts.clone(),
-            if self.rvs_is_complete() {
-                CapabilityCompleteness::Complete
-            } else {
-                CapabilityCompleteness::Incomplete
-            },
-        )
+        let mut combined = self.selected_caps.clone();
+        let _ = combined.rvs_extend_filtered_M(lower_bound, |_| true);
+        let completeness = if !trait_method_incomplete && self.rvs_is_complete() {
+            CapabilityCompleteness::Complete
+        } else {
+            CapabilityCompleteness::Incomplete
+        };
+        if combined == self.selected_caps {
+            CapabilityInfo::rvs_trait_vote(
+                combined,
+                self.implementations.len(),
+                self.threshold,
+                self.counts.clone(),
+                completeness,
+            )
+        } else {
+            CapabilityInfo::rvs_new(combined, CapabilityBasis::Inferred, completeness)
+        }
     }
 }
 
@@ -145,18 +161,24 @@ impl PreparedInference {
                 if local_scope.rvs_contains(callee) || seed.rvs_lookup_def_path(callee).is_some() {
                     continue;
                 }
-                if self.incomplete_paths.contains(callee) {
-                    unknown
-                        .entry(callee.clone())
-                        .or_default()
-                        .insert(func.clone());
-                } else if let Some(caps) = resolver.rvs_for_propagation_target(callee) {
-                    let info = self
+                if let Some(caps) = resolver.rvs_for_propagation_target(callee) {
+                    let incomplete = self.incomplete_paths.contains(callee);
+                    let info = match self
                         .trait_votes
                         .get(callee)
                         .filter(|vote| !vote.port_short_circuit)
-                        .map(TraitCapabilityVote::rvs_capability_info)
-                        .unwrap_or_else(|| CapabilityInfo::rvs_inferred(caps));
+                    {
+                        Some(vote) => vote.rvs_capability_info_with_lower_bound(&caps, incomplete),
+                        None => CapabilityInfo::rvs_new(
+                            caps,
+                            CapabilityBasis::Inferred,
+                            if incomplete {
+                                CapabilityCompleteness::Incomplete
+                            } else {
+                                CapabilityCompleteness::Complete
+                            },
+                        ),
+                    };
                     known.entry(callee.clone()).or_insert(info);
                 } else {
                     unknown
@@ -667,7 +689,11 @@ pub(crate) fn rvs_generate_trait_alias_infos(
                 CapabilityCompleteness::Complete,
             )
         } else {
-            vote.rvs_capability_info()
+            let lower_bound = inferred.get(&alias).unwrap_or(&vote.selected_caps);
+            vote.rvs_capability_info_with_lower_bound(
+                lower_bound,
+                incomplete_paths.contains(&alias),
+            )
         };
         aliases.insert(alias, info);
     }
@@ -1681,15 +1707,17 @@ mod tests {
     }
 
     #[test]
-    fn test_20260715_direct_external_dep_rejects_incomplete_wrapper_caps() {
+    fn test_20260718_direct_external_dep_emits_incomplete_wrapper_caps() {
         let mut graph = FnGraph::rvs_new();
+        let wrapper_path = DefPath::from("dep::log");
         let mut caller = rvs_make_behavior();
-        caller.calls.insert(DefPath::from("dep::log"));
+        caller.calls.insert(wrapper_path.clone());
         graph.rvs_insert_M(DefPath::from("demo::rvs_run"), caller);
 
         let mut wrapper = rvs_make_behavior();
+        wrapper.facts.has_static_ref = true;
         wrapper.calls.insert(DefPath::from("dep::Log::log"));
-        graph.rvs_insert_M(DefPath::from("dep::log"), wrapper);
+        graph.rvs_insert_M(wrapper_path.clone(), wrapper);
         graph.rvs_insert_M(
             DefPath::from("dep::Log::log"),
             FnNode {
@@ -1701,38 +1729,37 @@ mod tests {
         let local = BTreeSet::from([CrateName::from("demo")]);
         let seed = capsmap::CapsMap::rvs_new();
         let inference = PreparedInference::rvs_prepare_M(&mut graph, &seed, &local);
-        let (known, unknown) = rvs_collect_direct_external_deps(
-            &graph,
-            &local,
-            &seed,
-            inference.rvs_inferred(),
-            inference.rvs_impl_index(),
-        );
+        let (known, unknown) = inference.rvs_collect_direct_external_deps(&graph, &local, &seed);
+        let rendered = rvs_format_def_path_capability_info(&known);
         let output = format!(
-            "known={}\nunknown={}\ncaller_recorded={}\n",
-            known.contains_key("dep::log"),
-            unknown.contains_key("dep::log"),
-            unknown
-                .get("dep::log")
-                .is_some_and(|callers| callers.contains("demo::rvs_run")),
+            "wrapper_incomplete={}\nknown={}\nunknown={}\nrendered={rendered}",
+            inference.rvs_incomplete_paths().contains(&wrapper_path),
+            known.contains_key(&wrapper_path),
+            unknown.contains_key(&wrapper_path),
         );
         rvs_snapshot_BIS(
-            "test_20260715_direct_external_dep_rejects_incomplete_wrapper_caps",
+            "test_20260718_direct_external_dep_emits_incomplete_wrapper_caps",
             &output,
         );
 
-        assert!(!known.contains_key("dep::log"));
-        assert!(unknown.contains_key("dep::log"));
+        let info = known
+            .get(&wrapper_path)
+            .expect("never: resolvable wrapper emits its known lower bound");
+        assert!(!unknown.contains_key(&wrapper_path));
+        assert_eq!(info.rvs_caps().rvs_letters(), "S");
+        assert_eq!(info.rvs_basis(), &CapabilityBasis::Inferred);
+        assert_eq!(info.rvs_completeness(), CapabilityCompleteness::Incomplete);
     }
 
     #[test]
-    fn test_20260715_direct_external_trait_dispatch_rejects_incomplete_impl() {
+    fn test_20260718_direct_external_trait_dispatch_emits_incomplete_vote() {
         let mut graph = FnGraph::rvs_new();
-        let dispatch_path = DefPath::from("dep::Fetcher::rvs_fetch_BI");
+        let dispatch_path = DefPath::from("dep::Fetcher::rvs_fetch_S");
+        let implementation_path = DefPath::from("dep::MemoryFetcher::rvs_fetch_S@dep::Fetcher");
 
         let mut caller = rvs_make_behavior();
         caller.calls.insert(dispatch_path.clone());
-        graph.rvs_insert_M(DefPath::from("demo::rvs_run_BI"), caller);
+        graph.rvs_insert_M(DefPath::from("demo::rvs_run_S"), caller);
         graph.rvs_insert_M(
             dispatch_path.clone(),
             FnNode {
@@ -1743,33 +1770,162 @@ mod tests {
 
         let mut implementation = rvs_make_behavior();
         implementation.is_trait_impl = true;
+        implementation.facts.has_static_ref = true;
         implementation.calls.insert(DefPath::from("dep::unknown"));
-        graph.rvs_insert_M(
-            DefPath::from("dep::MemoryFetcher::rvs_fetch_BI@dep::Fetcher"),
-            implementation,
-        );
+        graph.rvs_insert_M(implementation_path.clone(), implementation);
 
         let local = BTreeSet::from([CrateName::from("demo")]);
         let seed = capsmap::CapsMap::rvs_new();
         let inference = PreparedInference::rvs_prepare_M(&mut graph, &seed, &local);
         let (known, unknown) = inference.rvs_collect_direct_external_deps(&graph, &local, &seed);
+        let rendered = rvs_format_def_path_capability_info(&known);
         let output = format!(
-            "dispatch_incomplete={}\nknown={}\nunknown={}\ncaller_recorded={}\n",
+            "dispatch_incomplete={}\nimplementation_incomplete={}\nknown={}\nunknown={}\nrendered={rendered}",
             inference.rvs_incomplete_paths().contains(&dispatch_path),
+            inference
+                .rvs_incomplete_paths()
+                .contains(&implementation_path),
             known.contains_key(&dispatch_path),
             unknown.contains_key(&dispatch_path),
-            unknown
-                .get(&dispatch_path)
-                .is_some_and(|callers| callers.contains("demo::rvs_run_BI")),
         );
         rvs_snapshot_BIS(
-            "test_20260715_direct_external_trait_dispatch_rejects_incomplete_impl",
+            "test_20260718_direct_external_trait_dispatch_emits_incomplete_vote",
             &output,
         );
 
-        assert!(inference.rvs_incomplete_paths().contains(&dispatch_path));
-        assert!(!known.contains_key(&dispatch_path));
-        assert!(unknown.contains_key(&dispatch_path));
+        let info = known
+            .get(&dispatch_path)
+            .expect("never: resolvable trait vote emits its known lower bound");
+        assert!(!unknown.contains_key(&dispatch_path));
+        assert_eq!(info.rvs_caps().rvs_letters(), "S");
+        assert_eq!(info.rvs_completeness(), CapabilityCompleteness::Incomplete);
+        let CapabilityBasis::TraitVote {
+            implementations,
+            threshold,
+            votes,
+        } = info.rvs_basis()
+        else {
+            panic!("expected trait vote basis, got {:?}", info.rvs_basis());
+        };
+        assert_eq!((*implementations, *threshold), (1, 1));
+        assert_eq!(votes, &BTreeMap::from([(Capability::S, 1)]));
+    }
+
+    #[test]
+    fn test_20260728_provided_trait_body_taints_complete_override_vote() {
+        let mut graph = FnGraph::rvs_new();
+        let dispatch_path = DefPath::from("dep::Fetcher::rvs_fetch_S");
+        let implementation_path = DefPath::from("dep::MemoryFetcher::rvs_fetch_S@dep::Fetcher");
+
+        let mut caller = rvs_make_behavior();
+        caller.calls.insert(dispatch_path.clone());
+        graph.rvs_insert_M(DefPath::from("demo::rvs_run_S"), caller);
+
+        let mut provided_method = rvs_make_behavior();
+        provided_method.facts.has_static_ref = true;
+        provided_method.calls.insert(DefPath::from("dep::unknown"));
+        graph.rvs_insert_M(dispatch_path.clone(), provided_method);
+
+        let mut implementation = rvs_make_behavior();
+        implementation.is_trait_impl = true;
+        graph.rvs_insert_M(implementation_path.clone(), implementation);
+
+        let local = BTreeSet::from([CrateName::from("demo")]);
+        let seed = capsmap::CapsMap::rvs_new();
+        let inference = PreparedInference::rvs_prepare_M(&mut graph, &seed, &local);
+        let (known, unknown) = inference.rvs_collect_direct_external_deps(&graph, &local, &seed);
+        let aliases = rvs_generate_trait_alias_infos(
+            inference.rvs_inferred(),
+            inference.rvs_impl_index(),
+            &graph,
+            inference.rvs_incomplete_paths(),
+        );
+        let direct_rendered = rvs_format_def_path_capability_info(&known);
+        let alias_rendered = rvs_format_def_path_capability_info(&aliases);
+        let output = format!(
+            "dispatch_incomplete={}\nimplementation_incomplete={}\nknown={}\nunknown={}\ndirect={direct_rendered}alias={alias_rendered}",
+            inference.rvs_incomplete_paths().contains(&dispatch_path),
+            inference
+                .rvs_incomplete_paths()
+                .contains(&implementation_path),
+            known.contains_key(&dispatch_path),
+            unknown.contains_key(&dispatch_path),
+        );
+        rvs_snapshot_BIS(
+            "test_20260728_provided_trait_body_taints_complete_override_vote",
+            &output,
+        );
+
+        let info = known
+            .get(&dispatch_path)
+            .expect("never: resolvable provided trait vote emits its known lower bound");
+        assert!(!unknown.contains_key(&dispatch_path));
+        assert_eq!(info.rvs_caps().rvs_letters(), "S");
+        assert_eq!(info.rvs_completeness(), CapabilityCompleteness::Incomplete);
+        assert_eq!(info.rvs_basis(), &CapabilityBasis::Inferred);
+        assert_eq!(aliases.get(&dispatch_path), Some(info));
+        let vote = inference
+            .rvs_trait_votes()
+            .get(&dispatch_path)
+            .expect("never: provided trait method has an override vote");
+        assert!(vote.selected_caps.rvs_is_empty());
+        assert!(vote.rvs_is_complete());
+    }
+
+    #[test]
+    fn test_20260728_bodyless_trait_alias_preserves_signature_lower_bound() {
+        let mut graph = FnGraph::rvs_new();
+        let dispatch_path = DefPath::from("dep::Transformer::rvs_transform_AMU");
+        let implementation_path =
+            DefPath::from("dep::MemoryTransformer::rvs_transform_AMU@dep::Transformer");
+
+        let mut caller = rvs_make_behavior();
+        caller.calls.insert(dispatch_path.clone());
+        graph.rvs_insert_M(DefPath::from("demo::rvs_run_S"), caller);
+
+        let mut required_method = rvs_make_behavior();
+        required_method.has_body = false;
+        required_method.facts.has_async = true;
+        required_method.facts.has_mut_param = true;
+        required_method.facts.is_unsafe_fn = true;
+        graph.rvs_insert_M(dispatch_path.clone(), required_method);
+
+        let mut implementation = rvs_make_behavior();
+        implementation.is_trait_impl = true;
+        implementation.facts.has_static_ref = true;
+        graph.rvs_insert_M(implementation_path, implementation);
+
+        let local = BTreeSet::from([CrateName::from("demo")]);
+        let seed = capsmap::CapsMap::rvs_new();
+        let inference = PreparedInference::rvs_prepare_M(&mut graph, &seed, &local);
+        let (known, unknown) = inference.rvs_collect_direct_external_deps(&graph, &local, &seed);
+        let aliases = rvs_generate_trait_alias_infos(
+            inference.rvs_inferred(),
+            inference.rvs_impl_index(),
+            &graph,
+            inference.rvs_incomplete_paths(),
+        );
+        let direct_rendered = rvs_format_def_path_capability_info(&known);
+        let alias_rendered = rvs_format_def_path_capability_info(&aliases);
+        let output = format!(
+            "dispatch_incomplete={}\nknown={}\nunknown={}\ndirect={direct_rendered}alias={alias_rendered}",
+            inference.rvs_incomplete_paths().contains(&dispatch_path),
+            known.contains_key(&dispatch_path),
+            unknown.contains_key(&dispatch_path),
+        );
+        rvs_snapshot_BIS(
+            "test_20260728_bodyless_trait_alias_preserves_signature_lower_bound",
+            &output,
+        );
+
+        let info = known
+            .get(&dispatch_path)
+            .expect("never: bodyless trait method emits signature and vote lower bounds");
+        assert!(!unknown.contains_key(&dispatch_path));
+        assert_eq!(info.rvs_caps().rvs_letters(), "AMSU");
+        assert_eq!(info.rvs_basis(), &CapabilityBasis::Inferred);
+        assert_eq!(info.rvs_completeness(), CapabilityCompleteness::Complete);
+        assert_eq!(aliases.get(&dispatch_path), Some(info));
     }
 
     #[test]

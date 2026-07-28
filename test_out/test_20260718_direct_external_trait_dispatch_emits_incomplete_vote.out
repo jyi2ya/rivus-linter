@@ -1,0 +1,6 @@
+dispatch_incomplete=true
+implementation_incomplete=true
+known=true
+unknown=false
+rendered=# rivus-caps-v2
+{"path":"dep::Fetcher::rvs_fetch_S","caps":"S","basis":{"kind":"trait_vote","implementations":1,"threshold":1,"votes":{"S":1}},"completeness":"incomplete"}

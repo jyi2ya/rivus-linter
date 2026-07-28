@@ -29,6 +29,8 @@
 
 覆盖改变最终采用的能力知识，不改变被覆盖记录曾经存在的事实。解释工具至少需要指出最终记录的来源；是否保留完整覆盖历史属于诊断细节，不属于能力集合语义。
 
+自动推断命令必须发布已经得到的能力下界及其真实完整度。direct external dependency 的函数体、声明签名或 trait vote 若可解析但被不完整依赖污染，`infer-capsmap` 应写出 `completeness=incomplete`，不能把它降格为完全 unknown 并要求维护者为每个 wrapper 伪造显式边界。同一可解析声明的函数体、签名和投票各自证明的能力取并集；组合结果不能由投票证据单独表达时，记录使用 inferred 来源，不能伪造与能力集合不一致的 trait vote。只有 resolver 没有函数体、声明、trait 实现或现有能力记录可用时，命令才因 opaque unknown 边界停止。
+
 多个 specialized identity 归一化到同一个可读路径时，能力集合取并集，完整度取其中最弱者；归一化不能把任一不完整 specialization 提升为完整。标准库 trait alias 既参与能力传播也参与完整度传播，alias 记录必须携带投票完整度，并与 caller 推断迭代到固定点后才能发布。
 
 自动生成的 trait alias 是派生知识，不能覆盖人工提供的 `seed` 或 `suppress` 记录。固定点迭代和最终输出都必须保留人工记录的能力集合、来源与完整度；派生 alias 只填补尚无权威记录的路径。

@@ -1,0 +1,5 @@
+wrapper_incomplete=true
+known=true
+unknown=false
+rendered=# rivus-caps-v2
+{"path":"dep::log","caps":"S","basis":{"kind":"inferred"},"completeness":"incomplete"}
