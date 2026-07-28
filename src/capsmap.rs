@@ -293,6 +293,11 @@ fn rvs_load_caps_dir_BIS(
     dir: &Path,
     selection: CapsDirSelection<'_>,
 ) -> Result<CapsMap, CapsMapError> {
+    if let CapsDirSelection::Include(layers) = selection {
+        for layer in layers {
+            let _ = rvs_caps_layer_file_path(dir, layer)?;
+        }
+    }
     let mut result = CapsMap::rvs_new();
     if !rvs_caps_dir_exists_BIS(dir)? {
         return Ok(result);
@@ -333,12 +338,24 @@ fn rvs_parse_caps_file(path: &Path, content: &str) -> Result<CapsMap, CapsMapErr
 
 fn rvs_caps_layer_file_path(dir: &Path, layer: &str) -> Result<PathBuf, CapsMapError> {
     let mut components = Path::new(layer).components();
-    match (components.next(), components.next()) {
-        (Some(Component::Normal(_)), None) => Ok(dir.join(layer)),
-        _ => Err(CapsMapError::InvalidLayerName {
+    if !matches!(
+        (components.next(), components.next()),
+        (Some(Component::Normal(_)), None)
+    ) || crate::fs_guard::rvs_is_atomic_sibling_temp_name(layer)
+    {
+        return Err(CapsMapError::InvalidLayerName {
             layer: layer.to_string(),
-        }),
+        });
     }
+    if let Some(expected) = rvs_reserved_layer_name(OsStr::new(layer))
+        && layer != expected
+    {
+        return Err(CapsMapError::NonCanonicalLayerName {
+            layer: layer.to_string(),
+            expected,
+        });
+    }
+    Ok(dir.join(layer))
 }
 
 fn rvs_collect_selected_caps_dir_files_BIS(
@@ -497,6 +514,49 @@ mod tests {
     use crate::test_support::{
         rvs_caps_v2, rvs_make_capsmap, rvs_make_temp_dir_BIS, rvs_snapshot_BIS,
     };
+
+    #[test]
+    fn test_20260716_selected_layer_validation_rejects_missing_escape_and_atomic_temp() {
+        let root = rvs_make_temp_dir_BIS("capsmap-selected-layer-validation");
+        let missing = root.join("missing");
+        let caps = root.join("caps");
+        std::fs::create_dir(&caps).unwrap();
+        let temporary_layer = ".deps.123.0.tmp";
+        std::fs::write(
+            caps.join(temporary_layer),
+            rvs_caps_v2(&[("temporary", "S")]),
+        )
+        .unwrap();
+
+        let missing_escape = CapsMap::rvs_load_dir_layers_BIS(&missing, &["../seed"]);
+        let selected_temporary = CapsMap::rvs_load_dir_layers_BIS(&caps, &[temporary_layer]);
+        let missing_alias = CapsMap::rvs_load_dir_layers_BIS(&missing, &["DEPS"]);
+        let output = format!(
+            "missing_escape_error={:?}\nselected_temporary_error={:?}\nmissing_alias_error={:?}\n",
+            missing_escape.as_ref().err(),
+            selected_temporary.as_ref().err(),
+            missing_alias.as_ref().err(),
+        );
+        std::fs::remove_dir_all(root).unwrap();
+        rvs_snapshot_BIS(
+            "test_20260716_selected_layer_validation_rejects_missing_escape_and_atomic_temp",
+            &output,
+        );
+
+        assert!(matches!(
+            missing_escape,
+            Err(CapsMapError::InvalidLayerName { layer }) if layer == "../seed"
+        ));
+        assert!(matches!(
+            selected_temporary,
+            Err(CapsMapError::InvalidLayerName { layer }) if layer == temporary_layer
+        ));
+        assert!(matches!(
+            missing_alias,
+            Err(CapsMapError::NonCanonicalLayerName { layer, expected })
+                if layer == "DEPS" && expected == "deps"
+        ));
+    }
 
     #[test]
     fn test_20260709_capsmap_parse_and_lookup_table() {
