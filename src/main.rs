@@ -505,6 +505,54 @@ mod tests {
     }
 
     #[test]
+    fn test_20260728_suspected_linter_bug_policy_is_documented() {
+        let root_agents = include_str!("../AGENTS.md");
+        let readme = include_str!("../readme.pod");
+        let setup_status = RIVUS_MD
+            .lines()
+            .find(|line| line.contains("开发状态警告（给 LLM）"))
+            .expect("never: setup template documents the development warning");
+        let setup_issue = RIVUS_MD
+            .lines()
+            .find(|line| line.contains("实际使用问题记录（给 LLM）"))
+            .expect("never: setup template documents issue recording");
+        let manual_policy = RIVUS_MANUAL
+            .lines()
+            .find(|line| line.contains("给 LLM 的强制规则"))
+            .expect("never: manual documents suspected linter bug handling");
+        let readme_status = readme
+            .lines()
+            .find(|line| line.contains("仍在积极开发"))
+            .expect("never: README documents development status");
+        let readme_policy = readme
+            .lines()
+            .find(|line| line.contains("必须立即停止当前工作"))
+            .expect("never: README documents suspected linter bug handling");
+        let agents_matches_template = root_agents == RIVUS_MD;
+        let output = format!(
+            "agents_matches_template={agents_matches_template}\nsetup_status={setup_status}\nsetup_issue={setup_issue}\nmanual_policy={manual_policy}\nreadme_status={readme_status}\nreadme_policy={readme_policy}\n"
+        );
+        rvs_snapshot_BIS(
+            "test_20260728_suspected_linter_bug_policy_is_documented",
+            &output,
+        );
+
+        assert!(agents_matches_template);
+        assert!(setup_status.contains("立即停止当前工作并向人类汇报"));
+        assert!(setup_status.contains("workaround"));
+        assert!(setup_issue.contains("~/var/linter-issues/"));
+        for required in ["环境与版本", "复现命令", "实际结果", "预期结果", "影响"]
+        {
+            assert!(setup_issue.contains(required));
+        }
+        assert!(manual_policy.contains("等待进一步决定"));
+        assert!(manual_policy.contains("workaround"));
+        assert!(readme_status.contains("已知和未知 bug"));
+        assert!(readme_policy.contains("等待进一步决定"));
+        assert!(readme_policy.contains("workaround"));
+    }
+
+    #[test]
     fn test_20260715_migrate_caps_cli_parses_default_and_explicit_paths() {
         let default = Cli::try_parse_from(["cargo-rivus", "migrate-caps"]).unwrap();
         let explicit =

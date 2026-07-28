@@ -1,0 +1,6 @@
+agents_matches_template=true
+setup_status=> **开发状态警告（给 LLM）**：`cargo rivus` 仍在积极开发，存在许多已知和未知 bug，也可能误报或漏报。如果你认为某个诊断、能力传播、推断结果或工具失败可能是 linter 的 bug，**立即停止当前工作并向人类汇报，等待进一步决定**。不要修改业务代码来迎合可疑诊断，也不要通过改名、添加能力后缀、修改 capsmap、添加 `allow`/`suppress`、降低检查级别、重构或其他 workaround 绕过它。
+setup_issue=> **实际使用问题记录（给 LLM）**：实际使用 `cargo rivus` 时发现的问题必须记录到 `~/var/linter-issues/`，每个问题使用独立的 Markdown 文件，文件名以日期开头。记录至少应包含环境与版本、复现命令、最小相关代码或项目路径、实际结果、预期结果和影响；不得只在对话中报告而不留下记录。
+manual_policy=> **给 LLM 的强制规则**：如果你认为某个诊断、能力传播、推断结果或工具失败可能是 linter 的 bug，立即停止当前工作并向人类汇报，等待进一步决定。不要修改业务代码来迎合可疑诊断，也不要通过改名、添加能力后缀、修改 capsmap、添加 `allow`/`suppress`、降低检查级别、重构或其他 workaround 绕过它。
+readme_status=C<cargo-rivus> 仍在积极开发，存在许多已知和未知 bug，也可能误报或漏报。
+readme_policy=如果 LLM 认为某个诊断、能力传播、推断结果或工具失败可能是 linter 的 bug，必须立即停止当前工作并向人类汇报，等待进一步决定。不得修改业务代码来迎合可疑诊断，也不得通过改名、添加能力后缀、修改 capsmap、添加 C<allow>/C<suppress>、降低检查级别、重构或其他 workaround 绕过它。
