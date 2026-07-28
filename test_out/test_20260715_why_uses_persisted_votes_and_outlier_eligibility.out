@@ -1,7 +1,10 @@
 persisted:
 caps knowledge: basis=trait_vote, completeness=complete
 persisted trait vote: selected=B, threshold=2/3, votes: B=2/3, I=0/3, P=0/3, S=1/3, T=0/3
+persisted empty:
+caps knowledge: basis=trait_vote, completeness=complete
+persisted trait vote: selected=none, threshold=1/2, votes: B=0/2, I=0/2, P=0/2, S=0/2, T=0/2
 generated:
-trait vote: selected=(pure), threshold=2/3, completeness=complete
+trait vote: selected=none, threshold=2/3, completeness=complete
 trait votes: B=0/3, I=0/3, P=0/3, S=1/3, T=0/3
 trait impl contribution: S

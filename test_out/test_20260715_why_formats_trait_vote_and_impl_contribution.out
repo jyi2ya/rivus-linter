@@ -1,8 +1,12 @@
 trait:
-trait vote: selected=(pure), threshold=2/3, completeness=complete
+trait vote: selected=none, threshold=2/3, completeness=complete
 trait votes: B=0/3, I=0/3, P=0/3, S=1/3, T=0/3
 impl:
-trait vote: selected=(pure), threshold=2/3, completeness=complete
+trait vote: selected=none, threshold=2/3, completeness=complete
 trait votes: B=0/3, I=0/3, P=0/3, S=1/3, T=0/3
 trait impl contribution: S
 trait impl outlier caps: S
+signature-only impl:
+trait vote: selected=none, threshold=2/3, completeness=complete
+trait votes: B=0/3, I=0/3, P=0/3, S=1/3, T=0/3
+trait impl contribution: none

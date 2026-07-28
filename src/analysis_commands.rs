@@ -81,18 +81,7 @@ pub(crate) fn rvs_run_why_BIMPS(function: &str, path: &Path) -> Result<(), Strin
             }
             eprintln!("Exact match not found. Did you mean:");
             for c in &candidates {
-                let caps_str = analysis
-                    .rvs_inferred()
-                    .get(c)
-                    .map(|cs| {
-                        let s = cs.rvs_letters();
-                        if s.is_empty() {
-                            " (pure)".to_string()
-                        } else {
-                            format!(" = {s}")
-                        }
-                    })
-                    .unwrap_or_else(|| " (unknown)".to_string());
+                let caps_str = rvs_format_why_path_caps(c, &analysis, &resolver);
                 eprintln!("  {c}{caps_str}");
             }
             return Err(format!(
@@ -110,17 +99,13 @@ pub(crate) fn rvs_run_why_BIMPS(function: &str, path: &Path) -> Result<(), Strin
     let behavior = callgraph.rvs_get(function_key);
     let is_synthetic = analysis.rvs_synthetic_paths().contains(&function_path);
 
-    let own_caps = resolver.rvs_for_explanation_view(&function_path);
-    let caps_str = rvs_format_why_caps(
-        own_caps.as_ref(),
-        analysis.rvs_incomplete_paths().contains(&function_path),
-    );
+    let knowledge_completeness = rvs_why_path_completeness(&function_path, &analysis, &resolver);
+    let caps_str = rvs_format_why_path_caps(&function_path, &analysis, &resolver);
     println!("{function_path}{caps_str}");
-    let inference_incomplete = analysis.rvs_incomplete_paths().contains(&function_path);
     for line in rvs_format_enforced_contract_diff_summary(
         &analysis.diffs,
         function_key,
-        inference_incomplete,
+        knowledge_completeness,
     ) {
         println!("  {line}");
     }
@@ -149,28 +134,9 @@ pub(crate) fn rvs_run_why_BIMPS(function: &str, path: &Path) -> Result<(), Strin
         return Ok(());
     }
 
-    let mut callees: Vec<(&DefPath, Option<crate::capability::CapabilitySet>)> = behavior
-        .calls
-        .iter()
-        .map(|callee| {
-            let caps = resolver.rvs_for_explanation_view(callee);
-            (callee, caps)
-        })
-        .collect();
-    callees.sort_by(|a, b| a.0.cmp(b.0));
-
     println!("  callees:");
-    for (callee, caps) in &callees {
-        let s = match caps {
-            Some(cs) if !cs.rvs_is_empty() => {
-                let chars = cs.rvs_letters();
-                let desc = cs.rvs_descriptions();
-                format!("{chars} ({desc})")
-            }
-            Some(_) => "(pure)".to_string(),
-            None => "(unknown)".to_string(),
-        };
-        println!("    {callee}: {s}");
+    for line in rvs_format_why_callees(behavior, &analysis, &resolver) {
+        println!("{line}");
     }
 
     Ok(())
@@ -209,9 +175,18 @@ fn rvs_format_capsmap_knowledge(caps: &crate::capsmap::CapsMap, function: &DefPa
         })
         .collect::<Vec<_>>()
         .join(", ");
+        let selected = if info.rvs_caps().rvs_is_empty() {
+            if info.rvs_completeness() == crate::capability::CapabilityCompleteness::Complete {
+                "none".to_string()
+            } else {
+                "(no known propagated caps)".to_string()
+            }
+        } else {
+            rvs_format_caps_letters(info.rvs_caps())
+        };
         lines.push(format!(
             "persisted trait vote: selected={}, threshold={threshold}/{implementations}, votes: {counts}",
-            rvs_format_caps_letters(info.rvs_caps())
+            selected
         ));
     }
     if let Some(source) = info.rvs_source() {
@@ -239,7 +214,16 @@ fn rvs_format_trait_vote_summary(
     if vote.port_short_circuit {
         return vec!["trait vote: bypassed by fixed Port capability".to_string()];
     }
-    let selected = rvs_format_caps_letters(&vote.selected_caps);
+    let vote_complete = vote.rvs_is_complete();
+    let selected = if vote.selected_caps.rvs_is_empty() {
+        if vote_complete {
+            "none".to_string()
+        } else {
+            "(no known propagated caps)".to_string()
+        }
+    } else {
+        rvs_format_caps_letters(&vote.selected_caps)
+    };
     let counts = [
         crate::capability::Capability::B,
         crate::capability::Capability::I,
@@ -262,20 +246,52 @@ fn rvs_format_trait_vote_summary(
         "trait vote: selected={selected}, threshold={}/{}, completeness={}",
         vote.threshold,
         vote.implementations.len(),
-        if vote.rvs_is_complete() {
+        if vote_complete {
             "complete"
         } else {
             "incomplete"
         }
     )];
     lines.push(format!("trait votes: {counts}"));
+    if *function == trait_method {
+        let incomplete_implementations: Vec<&crate::inference::TraitVoteImplementation> = vote
+            .implementations
+            .iter()
+            .filter(|implementation| implementation.incomplete)
+            .collect();
+        lines.extend(
+            incomplete_implementations
+                .iter()
+                .take(5)
+                .map(|implementation| {
+                    format!(
+                        "incomplete trait implementation: {} (known propagated caps: {})",
+                        implementation.path,
+                        rvs_format_known_propagated_caps(&implementation.propagated_caps)
+                    )
+                }),
+        );
+        if incomplete_implementations.len() > 5 {
+            lines.push(format!(
+                "... and {} more incomplete trait implementations",
+                incomplete_implementations.len() - 5
+            ));
+        }
+    }
     if let Some(implementation) = vote
         .implementations
         .iter()
         .find(|implementation| implementation.path == *function)
     {
-        let contribution = rvs_format_caps_letters(&implementation.propagated_caps);
-        lines.push(format!("trait impl contribution: {contribution}"));
+        if implementation.incomplete {
+            lines.push(format!(
+                "known trait impl contribution (incomplete): {}",
+                rvs_format_known_propagated_caps(&implementation.propagated_caps)
+            ));
+        } else {
+            let contribution = rvs_format_known_propagated_caps(&implementation.propagated_caps);
+            lines.push(format!("trait impl contribution: {contribution}"));
+        }
         if let Some(outlier) = analysis
             .trait_impl_outliers
             .iter()
@@ -288,6 +304,93 @@ fn rvs_format_trait_vote_summary(
         }
     }
     lines
+}
+
+fn rvs_format_why_callees(
+    behavior: &crate::artifacts::FnNode,
+    analysis: &PreparedLocalAnalysis,
+    resolver: &crate::inference::CalleeCapsResolver<'_>,
+) -> Vec<String> {
+    behavior
+        .calls
+        .iter()
+        .map(|callee| {
+            let caps = resolver.rvs_for_explanation_view(callee);
+            let completeness = rvs_why_path_completeness(callee, analysis, resolver);
+            format!(
+                "    {callee}: {}",
+                rvs_format_why_callee_caps(caps.as_ref(), completeness)
+            )
+        })
+        .collect()
+}
+
+fn rvs_format_why_path_caps(
+    path: &DefPath,
+    analysis: &PreparedLocalAnalysis,
+    resolver: &crate::inference::CalleeCapsResolver<'_>,
+) -> String {
+    let caps = resolver.rvs_for_explanation_view(path);
+    rvs_format_why_caps(
+        caps.as_ref(),
+        rvs_why_path_completeness(path, analysis, resolver),
+    )
+}
+
+fn rvs_why_path_completeness(
+    path: &DefPath,
+    analysis: &PreparedLocalAnalysis,
+    resolver: &crate::inference::CalleeCapsResolver<'_>,
+) -> crate::capability::CapabilityCompleteness {
+    if let Some(info) = resolver.rvs_incomplete_exact_caps_info(path) {
+        info.rvs_completeness()
+    } else if analysis.rvs_incomplete_paths().contains(path) {
+        crate::capability::CapabilityCompleteness::Incomplete
+    } else {
+        crate::capability::CapabilityCompleteness::Complete
+    }
+}
+
+fn rvs_format_why_callee_caps(
+    caps: Option<&crate::capability::CapabilitySet>,
+    completeness: crate::capability::CapabilityCompleteness,
+) -> String {
+    use crate::capability::CapabilityCompleteness::{Complete, Incomplete, Unknown};
+
+    match (caps, completeness) {
+        (Some(caps), Complete) if caps.rvs_is_empty() => "(pure)".to_string(),
+        (Some(caps), Complete) => {
+            format!("{} ({})", caps.rvs_letters(), caps.rvs_descriptions())
+        }
+        (Some(caps), Incomplete) if caps.rvs_is_empty() => {
+            "(no known caps) [incomplete]".to_string()
+        }
+        (Some(caps), Incomplete) => format!(
+            "{} ({}) [incomplete]",
+            caps.rvs_letters(),
+            caps.rvs_descriptions()
+        ),
+        (Some(caps), Unknown) if caps.rvs_is_empty() => {
+            "(no known caps) [completeness unknown]".to_string()
+        }
+        (Some(caps), Unknown) => format!(
+            "{} ({}) [completeness unknown]",
+            caps.rvs_letters(),
+            caps.rvs_descriptions()
+        ),
+        (None, Complete) => "(unknown)".to_string(),
+        (None, Incomplete) => "(unknown) [incomplete]".to_string(),
+        (None, Unknown) => "(unknown) [completeness unknown]".to_string(),
+    }
+}
+
+fn rvs_format_known_propagated_caps(caps: &crate::capability::CapabilitySet) -> String {
+    let letters = caps.rvs_letters();
+    if letters.is_empty() {
+        "none".to_string()
+    } else {
+        letters
+    }
 }
 
 fn rvs_format_caps_letters(caps: &crate::capability::CapabilitySet) -> String {
@@ -318,17 +421,23 @@ fn rvs_why_function_matches(
 
 fn rvs_format_why_caps(
     caps: Option<&crate::capability::CapabilitySet>,
-    inference_incomplete: bool,
+    completeness: crate::capability::CapabilityCompleteness,
 ) -> String {
+    use crate::capability::CapabilityCompleteness::{Complete, Incomplete, Unknown};
+
     let Some(caps) = caps else {
-        return " (unknown)".to_string();
+        return match completeness {
+            Complete => " (unknown)".to_string(),
+            Incomplete => " (unknown; inference incomplete)".to_string(),
+            Unknown => " (unknown; completeness unknown)".to_string(),
+        };
     };
     let letters = caps.rvs_letters();
     if letters.is_empty() {
-        if inference_incomplete {
-            " (incomplete; no known caps)".to_string()
-        } else {
-            " (pure)".to_string()
+        match completeness {
+            Complete => " (pure)".to_string(),
+            Incomplete => " (incomplete; no known caps)".to_string(),
+            Unknown => " (no known caps; completeness unknown)".to_string(),
         }
     } else {
         let mut description = caps
@@ -336,8 +445,10 @@ fn rvs_format_why_caps(
             .map(|capability| capability.rvs_description())
             .collect::<Vec<_>>()
             .join(" ");
-        if inference_incomplete {
-            description.push_str("; inference incomplete");
+        match completeness {
+            Complete => {}
+            Incomplete => description.push_str("; inference incomplete"),
+            Unknown => description.push_str("; completeness unknown"),
         }
         format!(" = {letters} ({description})")
     }
@@ -355,8 +466,10 @@ fn rvs_callee_absence_message(had_collected_body: bool, is_synthetic: bool) -> &
 
 fn rvs_format_contract_diff_summary(
     diff: &FnContractDiff,
-    inference_incomplete: bool,
+    completeness: crate::capability::CapabilityCompleteness,
 ) -> Vec<String> {
+    use crate::capability::CapabilityCompleteness::{Complete, Incomplete, Unknown};
+
     let mut lines = Vec::new();
     if diff.expected_name != diff.actual_name {
         lines.push(format!("expected name: {}", diff.expected_name));
@@ -365,15 +478,17 @@ fn rvs_format_contract_diff_summary(
         "declared caps: {}",
         rvs_format_optional_caps(diff.declared_public_caps.as_ref())
     ));
-    let expected_label = if inference_incomplete {
-        "known expected caps (incomplete)"
-    } else {
-        "expected caps"
+    let expected_label = match completeness {
+        Complete => "expected caps",
+        Incomplete => "known expected caps (incomplete)",
+        Unknown => "known expected caps (completeness unknown)",
     };
-    lines.push(format!(
-        "{expected_label}: {}",
+    let expected_caps = if completeness != Complete && diff.expected_public_caps.rvs_is_empty() {
+        "(no known caps)".to_string()
+    } else {
         rvs_format_optional_caps(Some(&diff.expected_public_caps))
-    ));
+    };
+    lines.push(format!("{expected_label}: {}", expected_caps));
     if let Some(declared) = diff.declared_public_caps.as_ref() {
         let expected = &diff.expected_public_caps;
         let missing: Vec<_> = expected
@@ -392,7 +507,7 @@ fn rvs_format_contract_diff_summary(
                 missing.iter().copied().collect::<String>()
             ));
         }
-        if !inference_incomplete && !extra.is_empty() {
+        if completeness == Complete && !extra.is_empty() {
             lines.push(format!(
                 "extra declared caps: {}",
                 extra.iter().copied().collect::<String>()
@@ -427,7 +542,7 @@ fn rvs_format_optional_caps(caps: Option<&crate::capability::CapabilitySet>) -> 
 fn rvs_format_enforced_contract_diff_summary(
     diffs: &[FnContractDiff],
     function: &str,
-    inference_incomplete: bool,
+    completeness: crate::capability::CapabilityCompleteness,
 ) -> Vec<String> {
     let Some(diff) = diffs
         .iter()
@@ -435,7 +550,7 @@ fn rvs_format_enforced_contract_diff_summary(
     else {
         return Vec::new();
     };
-    rvs_format_contract_diff_summary(diff, inference_incomplete)
+    rvs_format_contract_diff_summary(diff, completeness)
 }
 
 #[cfg(test)]
@@ -459,15 +574,38 @@ mod tests {
             declared_public_caps: Some(crate::capability::CapabilitySet::rvs_from_validated("ABI")),
             expected_public_caps: crate::capability::CapabilitySet::rvs_from_validated("AP"),
         };
-        let complete_lines = rvs_format_contract_diff_summary(&diff, false);
-        let incomplete_lines = rvs_format_contract_diff_summary(&diff, true);
+        let complete_lines = rvs_format_contract_diff_summary(
+            &diff,
+            crate::capability::CapabilityCompleteness::Complete,
+        );
+        let incomplete_lines = rvs_format_contract_diff_summary(
+            &diff,
+            crate::capability::CapabilityCompleteness::Incomplete,
+        );
+        let empty_lower_bound_diff = FnContractDiff {
+            def_path: DefPath::from("demo::rvs_parse_S"),
+            actual_name: FnName::from("rvs_parse_S"),
+            expected_name: FnName::from("rvs_parse_S"),
+            declared_public_caps: Some(crate::capability::CapabilitySet::rvs_from_validated("S")),
+            expected_public_caps: crate::capability::CapabilitySet::rvs_new(),
+        };
+        let empty_lower_bound_lines = rvs_format_contract_diff_summary(
+            &empty_lower_bound_diff,
+            crate::capability::CapabilityCompleteness::Incomplete,
+        );
+        let unknown_completeness_lines = rvs_format_contract_diff_summary(
+            &empty_lower_bound_diff,
+            crate::capability::CapabilityCompleteness::Unknown,
+        );
         let none_caps = rvs_format_optional_caps(None);
         rvs_snapshot_BIS(
             "test_20260703_format_contract_diff_summary",
             &format!(
-                "complete:\n{}\nincomplete:\n{}\nnone={none_caps}\n",
+                "complete:\n{}\nincomplete:\n{}\nempty lower bound:\n{}\nunknown completeness:\n{}\nnone={none_caps}\n",
                 complete_lines.join("\n"),
-                incomplete_lines.join("\n")
+                incomplete_lines.join("\n"),
+                empty_lower_bound_lines.join("\n"),
+                unknown_completeness_lines.join("\n")
             ),
         );
 
@@ -492,6 +630,20 @@ mod tests {
                 "mismatches: name_mismatch, missing_port".to_string(),
             ]
         );
+        assert_eq!(
+            empty_lower_bound_lines,
+            vec![
+                "declared caps: S".to_string(),
+                "known expected caps (incomplete): (no known caps)".to_string(),
+            ]
+        );
+        assert_eq!(
+            unknown_completeness_lines,
+            vec![
+                "declared caps: S".to_string(),
+                "known expected caps (completeness unknown): (no known caps)".to_string(),
+            ]
+        );
     }
 
     #[test]
@@ -504,14 +656,17 @@ mod tests {
         let mut declaration = node();
         declaration.has_body = false;
         graph.rvs_insert_M(DefPath::from("demo::FromString::rvs_parse"), declaration);
-        for implementation in ["demo::Alpha", "demo::Beta"] {
-            let mut implementation_node = node();
-            implementation_node.is_trait_impl = true;
-            graph.rvs_insert_M(
-                DefPath::from(format!("{implementation}::rvs_parse@demo::FromString")),
-                implementation_node,
-            );
-        }
+        let signature_only_path = DefPath::from("demo::Alpha::rvs_parse@demo::FromString");
+        let mut signature_only = node();
+        signature_only.is_trait_impl = true;
+        signature_only.facts.has_async = true;
+        graph.rvs_insert_M(signature_only_path.clone(), signature_only);
+        let mut beta = node();
+        beta.is_trait_impl = true;
+        graph.rvs_insert_M(
+            DefPath::from("demo::Beta::rvs_parse@demo::FromString"),
+            beta,
+        );
         let mut outlier = node();
         outlier.is_trait_impl = true;
         outlier.calls.insert(DefPath::from("dep::environment"));
@@ -526,10 +681,12 @@ mod tests {
         let trait_lines =
             rvs_format_trait_vote_summary(&analysis, &DefPath::from("demo::FromString::rvs_parse"));
         let impl_lines = rvs_format_trait_vote_summary(&analysis, &outlier_path);
+        let signature_only_lines = rvs_format_trait_vote_summary(&analysis, &signature_only_path);
         let output = format!(
-            "trait:\n{}\nimpl:\n{}\n",
+            "trait:\n{}\nimpl:\n{}\nsignature-only impl:\n{}\n",
             trait_lines.join("\n"),
             impl_lines.join("\n"),
+            signature_only_lines.join("\n"),
         );
         rvs_snapshot_BIS(
             "test_20260715_why_formats_trait_vote_and_impl_contribution",
@@ -538,7 +695,188 @@ mod tests {
 
         assert!(output.contains("threshold=2/3"));
         assert!(output.contains("trait impl contribution: S"));
+        assert!(output.contains("trait impl contribution: none"));
+        assert!(!output.contains("selected=(pure)"));
         assert!(output.contains("trait impl outlier caps: S"));
+    }
+
+    #[test]
+    fn test_20260721_why_lists_incomplete_trait_vote_implementations() {
+        let node = || FnNode {
+            sources: BTreeSet::from([FnSource::rvs_new("src/lib.rs".into(), 1, 2)]),
+            ..FnNode::default()
+        };
+        let mut graph = FnGraph::rvs_new();
+        let mut declaration = node();
+        declaration.has_body = false;
+        let trait_path = DefPath::from("demo::Parser::rvs_parse");
+        graph.rvs_insert_M(trait_path.clone(), declaration);
+
+        let mut complete_impl = node();
+        complete_impl.is_trait_impl = true;
+        graph.rvs_insert_M(
+            DefPath::from("demo::Complete::rvs_parse@demo::Parser"),
+            complete_impl,
+        );
+
+        let mut empty_incomplete_impl = node();
+        empty_incomplete_impl.is_trait_impl = true;
+        empty_incomplete_impl
+            .calls
+            .insert(DefPath::from("dep::opaque_empty"));
+        let empty_incomplete_path = DefPath::from("demo::EmptyIncomplete::rvs_parse@demo::Parser");
+        graph.rvs_insert_M(empty_incomplete_path.clone(), empty_incomplete_impl);
+
+        let mut stateful_incomplete_impl = node();
+        stateful_incomplete_impl.is_trait_impl = true;
+        stateful_incomplete_impl.facts.has_static_ref = true;
+        stateful_incomplete_impl
+            .calls
+            .insert(DefPath::from("dep::opaque_stateful"));
+        graph.rvs_insert_M(
+            DefPath::from("demo::StatefulIncomplete::rvs_parse@demo::Parser"),
+            stateful_incomplete_impl,
+        );
+
+        let analysis = PreparedLocalAnalysis::rvs_prepare_M(
+            &mut graph,
+            &crate::capsmap::CapsMap::rvs_new(),
+            &BTreeSet::from([CrateName::from("demo")]),
+        );
+        let graph_output = rvs_format_trait_vote_summary(&analysis, &trait_path).join("\n");
+        let implementation_output =
+            rvs_format_trait_vote_summary(&analysis, &empty_incomplete_path).join("\n");
+
+        let mut persisted_caps = crate::capsmap::CapsMap::rvs_new();
+        persisted_caps.rvs_insert_info_M(
+            crate::symbols::CapsMapKey::from("dep::Parser::rvs_parse"),
+            crate::capability::CapabilityInfo::rvs_trait_vote(
+                crate::capability::CapabilitySet::rvs_new(),
+                3,
+                2,
+                std::collections::BTreeMap::from([(crate::capability::Capability::S, 1)]),
+                crate::capability::CapabilityCompleteness::Incomplete,
+            ),
+        );
+        let persisted_output =
+            rvs_format_capsmap_knowledge(&persisted_caps, &DefPath::from("dep::Parser::rvs_parse"))
+                .join("\n");
+        let output = format!(
+            "graph:\n{graph_output}\nimplementation:\n{implementation_output}\npersisted:\n{persisted_output}\n"
+        );
+        rvs_snapshot_BIS(
+            "test_20260721_why_lists_incomplete_trait_vote_implementations",
+            &output,
+        );
+
+        assert!(output.contains("selected=(no known propagated caps)"));
+        assert!(output.contains(
+            "demo::EmptyIncomplete::rvs_parse@demo::Parser (known propagated caps: none)"
+        ));
+        assert!(output.contains(
+            "demo::StatefulIncomplete::rvs_parse@demo::Parser (known propagated caps: S)"
+        ));
+        assert!(persisted_output.contains("selected=(no known propagated caps)"));
+        assert!(!persisted_output.contains("implementation:"));
+        assert!(implementation_output.contains("known trait impl contribution (incomplete): none"));
+    }
+
+    #[test]
+    fn test_20260721_why_marks_incomplete_direct_callees() {
+        let node = || FnNode {
+            sources: BTreeSet::from([FnSource::rvs_new("src/lib.rs".into(), 1, 2)]),
+            ..FnNode::default()
+        };
+        let mut graph = FnGraph::rvs_new();
+        let caller_path = DefPath::from("demo::rvs_run_BS");
+        let mut caller = node();
+        caller.calls.extend(
+            [
+                "demo::rvs_complete",
+                "demo::rvs_partial_S",
+                "dep::cached_blocking",
+                "dep::cached_empty",
+                "dep::migrated_blocking",
+                "dep::migrated_empty",
+                "dep::opaque",
+            ]
+            .into_iter()
+            .map(DefPath::from),
+        );
+        graph.rvs_insert_M(caller_path.clone(), caller);
+        graph.rvs_insert_M(DefPath::from("demo::rvs_complete"), node());
+
+        let mut partial = node();
+        partial.facts.has_static_ref = true;
+        partial.calls.insert(DefPath::from("dep::opaque_nested"));
+        graph.rvs_insert_M(DefPath::from("demo::rvs_partial_S"), partial);
+
+        let mut caps = crate::capsmap::CapsMap::rvs_new();
+        caps.rvs_insert_info_M(
+            crate::symbols::CapsMapKey::from("dep::cached_blocking"),
+            crate::capability::CapabilityInfo::rvs_new(
+                crate::capability::CapabilitySet::rvs_from_validated("B"),
+                crate::capability::CapabilityBasis::Inferred,
+                crate::capability::CapabilityCompleteness::Incomplete,
+            ),
+        );
+        caps.rvs_insert_info_M(
+            crate::symbols::CapsMapKey::from("dep::cached_empty"),
+            crate::capability::CapabilityInfo::rvs_new(
+                crate::capability::CapabilitySet::rvs_new(),
+                crate::capability::CapabilityBasis::Inferred,
+                crate::capability::CapabilityCompleteness::Incomplete,
+            ),
+        );
+        caps.rvs_insert_info_M(
+            crate::symbols::CapsMapKey::from("dep::migrated_blocking"),
+            crate::capability::CapabilityInfo::rvs_migrated_v1(
+                crate::capability::CapabilitySet::rvs_from_validated("B"),
+                crate::capability::CapabilityCompleteness::Unknown,
+            ),
+        );
+        caps.rvs_insert_info_M(
+            crate::symbols::CapsMapKey::from("dep::migrated_empty"),
+            crate::capability::CapabilityInfo::rvs_migrated_v1(
+                crate::capability::CapabilitySet::rvs_new(),
+                crate::capability::CapabilityCompleteness::Unknown,
+            ),
+        );
+        let analysis = PreparedLocalAnalysis::rvs_prepare_M(
+            &mut graph,
+            &caps,
+            &BTreeSet::from([CrateName::from("demo")]),
+        );
+        let resolver = analysis.rvs_resolver(&graph, &caps);
+        let cached_empty_path = DefPath::from("dep::cached_empty");
+        let queried_caps = rvs_format_why_path_caps(&cached_empty_path, &analysis, &resolver);
+        let migrated_empty_path = DefPath::from("dep::migrated_empty");
+        let migrated_caps = rvs_format_why_path_caps(&migrated_empty_path, &analysis, &resolver);
+        let behavior = graph
+            .rvs_get(caller_path.rvs_as_str())
+            .expect("never: test caller exists");
+        let callee_output = rvs_format_why_callees(behavior, &analysis, &resolver).join("\n");
+        let output = format!(
+            "query=dep::cached_empty{queried_caps}\nmigrated=dep::migrated_empty{migrated_caps}\n{callee_output}\n"
+        );
+        rvs_snapshot_BIS("test_20260721_why_marks_incomplete_direct_callees", &output);
+
+        assert_eq!(queried_caps, " (incomplete; no known caps)");
+        assert_eq!(migrated_caps, " (no known caps; completeness unknown)");
+        assert_eq!(
+            rvs_format_why_callee_caps(
+                Some(&crate::capability::CapabilitySet::rvs_new()),
+                crate::capability::CapabilityCompleteness::Incomplete,
+            ),
+            "(no known caps) [incomplete]"
+        );
+        assert!(!output.contains("(pure) [incomplete]"));
+        assert!(output.contains("dep::cached_empty: (no known caps) [incomplete]"));
+        assert!(output.contains("dep::cached_blocking: B (Blocking) [incomplete]"));
+        assert!(output.contains("dep::migrated_blocking: B (Blocking) [completeness unknown]"));
+        assert!(output.contains("dep::migrated_empty: (no known caps) [completeness unknown]"));
+        assert!(output.contains("demo::rvs_partial_S: S (SideEffect) [incomplete]"));
+        assert!(output.contains("dep::opaque: (unknown)"));
     }
 
     #[test]
@@ -559,6 +897,18 @@ mod tests {
         );
         let persisted =
             rvs_format_capsmap_knowledge(&caps, &DefPath::from("demo::Parser::rvs_parse"));
+        caps.rvs_insert_info_M(
+            crate::symbols::CapsMapKey::from("demo::Marker::rvs_mark"),
+            crate::capability::CapabilityInfo::rvs_trait_vote(
+                crate::capability::CapabilitySet::rvs_new(),
+                2,
+                1,
+                std::collections::BTreeMap::new(),
+                crate::capability::CapabilityCompleteness::Complete,
+            ),
+        );
+        let persisted_empty =
+            rvs_format_capsmap_knowledge(&caps, &DefPath::from("demo::Marker::rvs_mark"));
 
         let node = || FnNode {
             sources: BTreeSet::from([FnSource::rvs_new("src/lib.rs".into(), 1, 2)]),
@@ -590,8 +940,9 @@ mod tests {
         );
         let generated_lines = rvs_format_trait_vote_summary(&analysis, &generated_path);
         let output = format!(
-            "persisted:\n{}\ngenerated:\n{}\n",
+            "persisted:\n{}\npersisted empty:\n{}\ngenerated:\n{}\n",
             persisted.join("\n"),
+            persisted_empty.join("\n"),
             generated_lines.join("\n")
         );
         rvs_snapshot_BIS(
@@ -600,6 +951,8 @@ mod tests {
         );
 
         assert!(output.contains("persisted trait vote: selected=B, threshold=2/3"));
+        assert!(output.contains("persisted trait vote: selected=none, threshold=1/2"));
+        assert!(!output.contains("selected=(pure)"));
         assert!(output.contains("trait impl contribution: S"));
         assert!(!output.contains("trait impl outlier caps"));
         assert!(analysis.trait_impl_outliers.is_empty());
@@ -756,7 +1109,11 @@ mod tests {
             &crate::capsmap::CapsMap::rvs_new(),
             &std::collections::BTreeSet::from([CrateName::from("demo")]),
         );
-        let lines = rvs_format_enforced_contract_diff_summary(&analysis.diffs, "demo::main", false);
+        let lines = rvs_format_enforced_contract_diff_summary(
+            &analysis.diffs,
+            "demo::main",
+            crate::capability::CapabilityCompleteness::Complete,
+        );
         rvs_snapshot_BIS(
             "test_20260703_why_contract_summary_skips_executable_entry",
             &format!("lines={lines:?}\n"),
@@ -913,16 +1270,27 @@ mod tests {
         let pure = crate::capability::CapabilitySet::rvs_new();
         let side_effect = crate::capability::CapabilitySet::rvs_from_validated("S");
         let output = format!(
-            "pure={}\nincomplete_pure={}\nincomplete_known={}\nunknown={}\n",
-            rvs_format_why_caps(Some(&pure), false),
-            rvs_format_why_caps(Some(&pure), true),
-            rvs_format_why_caps(Some(&side_effect), true),
-            rvs_format_why_caps(None, false),
+            "pure={}\nincomplete_pure={}\nincomplete_known={}\nunknown={}\nunknown_incomplete={}\n",
+            rvs_format_why_caps(
+                Some(&pure),
+                crate::capability::CapabilityCompleteness::Complete,
+            ),
+            rvs_format_why_caps(
+                Some(&pure),
+                crate::capability::CapabilityCompleteness::Incomplete,
+            ),
+            rvs_format_why_caps(
+                Some(&side_effect),
+                crate::capability::CapabilityCompleteness::Incomplete,
+            ),
+            rvs_format_why_caps(None, crate::capability::CapabilityCompleteness::Complete),
+            rvs_format_why_caps(None, crate::capability::CapabilityCompleteness::Incomplete,),
         );
         rvs_snapshot_BIS("test_20260715_why_marks_incomplete_capabilities", &output);
 
         assert!(output.contains("inference incomplete"));
         assert!(output.contains("unknown"));
+        assert!(output.contains("unknown; inference incomplete"));
     }
 
     #[test]

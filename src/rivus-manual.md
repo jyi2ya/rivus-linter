@@ -117,7 +117,7 @@ Total: 42 functions, 890 lines
 
 对于普通非 Port trait 方法，公开能力由各 impl 按传播能力逐项做 at-least-half vote（阈值为 `ceil(n/2)`）决定；trait 声明自身写的后缀只在没有 impl 可聚合时作为回退。因此 2 个 impl 中 1 个带能力会被抬升，3 个 impl 中仅 1 个带能力不会被抬升。Port trait 方法例外：公开能力固定为 `P`，不受 impl 实际行为影响。这一规则同样会影响 `annotate` 和 `why` 的显示结果。
 
-投票会保留参与实现数、阈值和逐能力票数。完整、可修改的本地实现若拥有投票未选中的传播能力，会产生 `TraitImplOutlierWarning`；该 warning 不改变投票结果和 capability totals。`why` 会显示 trait vote 详情和具体实现的 contribution/outlier caps，report 会列出最多十个本地 outlier 样本。
+投票会保留参与实现数、阈值和逐能力票数。完整、可修改的本地实现若拥有投票未选中的传播能力，会产生 `TraitImplOutlierWarning`；该 warning 不改变投票结果和 capability totals。`why` 会显示 trait vote 详情，并保留 `incomplete` 与 `unknown` 完整度的区别；空的传播能力子集显示为 `none`，不等同于完整函数能力为 pure。相关实现图已加载时，`why` 还会显示不完整实现的已知传播能力以及具体实现的 contribution/outlier caps。持久化投票记录本身不保存实现路径，因此脱离实现图时不能列出具体实现。report 会列出最多十个本地 outlier 样本。
 
 ```bash
 cargo rivus infer-capsmap -o caps/deps       # 从项目 caps/ 推断，并把 direct external deps 写到指定文件

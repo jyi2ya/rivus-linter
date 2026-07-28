@@ -11,4 +11,10 @@ declared caps: ABI
 known expected caps (incomplete): AP
 missing caps: P
 mismatches: name_mismatch, missing_port
+empty lower bound:
+declared caps: S
+known expected caps (incomplete): (no known caps)
+unknown completeness:
+declared caps: S
+known expected caps (completeness unknown): (no known caps)
 none=(not declared)

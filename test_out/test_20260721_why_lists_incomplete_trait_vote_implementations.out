@@ -1,0 +1,12 @@
+graph:
+trait vote: selected=(no known propagated caps), threshold=2/3, completeness=incomplete
+trait votes: B=0/3, I=0/3, P=0/3, S=1/3, T=0/3
+incomplete trait implementation: demo::EmptyIncomplete::rvs_parse@demo::Parser (known propagated caps: none)
+incomplete trait implementation: demo::StatefulIncomplete::rvs_parse@demo::Parser (known propagated caps: S)
+implementation:
+trait vote: selected=(no known propagated caps), threshold=2/3, completeness=incomplete
+trait votes: B=0/3, I=0/3, P=0/3, S=1/3, T=0/3
+known trait impl contribution (incomplete): none
+persisted:
+caps knowledge: basis=trait_vote, completeness=incomplete
+persisted trait vote: selected=(no known propagated caps), threshold=2/3, votes: B=0/3, I=0/3, P=0/3, S=1/3, T=0/3

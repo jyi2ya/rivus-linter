@@ -1,0 +1,9 @@
+query=dep::cached_empty (incomplete; no known caps)
+migrated=dep::migrated_empty (no known caps; completeness unknown)
+    demo::rvs_complete: (pure)
+    demo::rvs_partial_S: S (SideEffect) [incomplete]
+    dep::cached_blocking: B (Blocking) [incomplete]
+    dep::cached_empty: (no known caps) [incomplete]
+    dep::migrated_blocking: B (Blocking) [completeness unknown]
+    dep::migrated_empty: (no known caps) [completeness unknown]
+    dep::opaque: (unknown)
