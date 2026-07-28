@@ -338,6 +338,8 @@ caps/
 
 ## 日常开发流程
 
+测试快照需要有意更新时，只使用 `RUSTC_BLESS=1 cargo test`（UI 测试可加 `--test ui_tests`）；libtest 不支持 `cargo test -- --bless`。
+
 1. **写代码时**：确保每个 `rvs_` 函数名的后缀与其实际行为一致
 2. **交付前必跑**（全部通过才算交付完成）：
    ```bash
