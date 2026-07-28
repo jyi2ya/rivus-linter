@@ -1168,12 +1168,12 @@ fn rvs_target_trait_contributions(
         .collect()
 }
 
-pub(crate) fn rvs_collect_report_trait_impl_outliers_M(
-    graph: &mut FnGraph,
+pub(crate) fn rvs_collect_report_trait_impl_outliers(
+    graph: &FnGraph,
     caps: &CapsMap,
     local_crate_names: &BTreeSet<CrateName>,
+    analysis: &PreparedLocalAnalysis,
 ) -> Vec<TargetTraitImplOutlierGroup> {
-    let analysis = PreparedLocalAnalysis::rvs_prepare_M(graph, caps, local_crate_names);
     let resolver = analysis.rvs_resolver(graph, caps);
     let target_inference = rvs_infer_target_caps(graph, &resolver);
     let local_scope = LocalScope::rvs_new(local_crate_names);

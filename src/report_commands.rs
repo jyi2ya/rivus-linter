@@ -312,10 +312,11 @@ pub(crate) fn rvs_run_report_BIMPS(path: &Path) -> Result<(), String> {
     let (mut callgraph, caps) =
         rvs_collect_callgraph_and_caps_BIMS(path, target_scope, &local_crate_names)?;
     let analysis = PreparedLocalAnalysis::rvs_prepare_M(&mut callgraph, &caps, &local_crate_names);
-    let target_outliers = crate::offline_caps::rvs_collect_report_trait_impl_outliers_M(
-        &mut callgraph,
+    let target_outliers = crate::offline_caps::rvs_collect_report_trait_impl_outliers(
+        &callgraph,
         &caps,
         &local_crate_names,
+        &analysis,
     );
     let report_entries = rvs_report_entries_from_callgraph(&callgraph, &local_crate_names)?;
     let report = rvs_build_report(&report_entries)?;
@@ -447,10 +448,10 @@ mod tests {
             rvs_report_target_node(13, &["dependency::effect"], true),
         );
         let local = BTreeSet::from([CrateName::from("demo")]);
-        let outliers = crate::offline_caps::rvs_collect_report_trait_impl_outliers_M(
-            &mut graph,
-            &rvs_make_capsmap(&[("dependency::effect", "S")]),
-            &local,
+        let caps = rvs_make_capsmap(&[("dependency::effect", "S")]);
+        let analysis = PreparedLocalAnalysis::rvs_prepare_M(&mut graph, &caps, &local);
+        let outliers = crate::offline_caps::rvs_collect_report_trait_impl_outliers(
+            &graph, &caps, &local, &analysis,
         );
         let output = rvs_format_trait_outlier_summary(&outliers);
         rvs_snapshot_BIS(
