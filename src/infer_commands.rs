@@ -25,20 +25,7 @@ pub(crate) fn rvs_run_infer_capsmap_BIMPS(path: &Path, output: &Path) -> Result<
     let project_path = path
         .canonicalize()
         .map_err(|e| format!("cannot canonicalize '{}': {e}", path.display()))?;
-    let _caps_lock =
-        crate::fs_guard::rvs_try_lock_directory_BIS(&project_path).map_err(|error| {
-            if error.kind() == std::io::ErrorKind::WouldBlock {
-                format!(
-                    "another caps migration or inference command is already running for {}",
-                    project_path.display()
-                )
-            } else {
-                format!(
-                    "cannot lock caps update directory {}: {error}",
-                    project_path.display()
-                )
-            }
-        })?;
+    let _caps_lock = rvs_lock_caps_update_BIS(&project_path)?;
     let target_scope = CargoTargetScope::Production;
     let local_crate_names = rvs_detect_local_crate_prefixes_BIS(&project_path, target_scope)?;
 
@@ -88,20 +75,7 @@ pub(crate) fn rvs_run_infer_std_BIMPS(path: &Path, output: &Path) -> Result<(), 
     let project_path = path
         .canonicalize()
         .map_err(|e| format!("cannot canonicalize '{}': {e}", path.display()))?;
-    let _caps_lock =
-        crate::fs_guard::rvs_try_lock_directory_BIS(&project_path).map_err(|error| {
-            if error.kind() == std::io::ErrorKind::WouldBlock {
-                format!(
-                    "another caps migration or inference command is already running for {}",
-                    project_path.display()
-                )
-            } else {
-                format!(
-                    "cannot lock caps update directory {}: {error}",
-                    project_path.display()
-                )
-            }
-        })?;
+    let _caps_lock = rvs_lock_caps_update_BIS(&project_path)?;
     let target_scope = CargoTargetScope::Production;
     let local_crate_names = rvs_detect_local_crate_prefixes_BIS(&project_path, target_scope)?;
     let local_scope = LocalScope::rvs_new(&local_crate_names);
@@ -163,6 +137,24 @@ pub(crate) fn rvs_run_infer_std_BIMPS(path: &Path, output: &Path) -> Result<(), 
     let result = rvs_format_def_path_capability_info(&std_only);
     rvs_write_capsmap_result_BIS(&result, &resolved_output, "std capsmap")?;
     rvs_publish_std_callgraph_cache_BIS(&project_path, &callgraph)
+}
+
+fn rvs_lock_caps_update_BIS(
+    project_path: &Path,
+) -> Result<crate::fs_guard::RivusDirectoryLock, String> {
+    crate::fs_guard::rvs_try_lock_directory_BIS(project_path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::WouldBlock {
+            format!(
+                "another caps migration or inference command is already running for {}",
+                project_path.display()
+            )
+        } else {
+            format!(
+                "cannot lock caps update directory {}: {error}",
+                project_path.display()
+            )
+        }
+    })
 }
 
 fn rvs_infer_std_with_trait_aliases(
