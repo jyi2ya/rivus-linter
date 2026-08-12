@@ -1,0 +1,8 @@
+Offline Caps Check: 1 error(s), 0 warning(s)
+------------------------------------------------------------
+error[call_violation]: demo::EffectAdapter::rvs_fetch_P@demo::Transport
+  caller lacks propagated capabilities required by callee
+  callee: dep::effect
+  caller declared caps: P
+  callee caps: S
+  missing propagated caps: S

@@ -18,6 +18,8 @@ C<cargo-rivus> 仍在积极开发，存在许多已知和未知 bug，也可能�
 
 =item 2. 在项目中运行 C<cargo rivus setup>
 
+C<setup> 只在 C<AGENTS.md> 的显式受管理区域中合并公开消费者规则，并向 C<Cargo.toml> 结构化添加缺失的 clippy lint。它保留未标记的项目策略和既有 lint 值，不修改 C<clippy.toml>、C<.cargo/config.toml> 或其他配置文件，也不提供强制覆盖选项。
+
 =item 3. 在 LLM 交付时运行 C<cargo rivus>，并根据结果训斥它们。
 
 =back

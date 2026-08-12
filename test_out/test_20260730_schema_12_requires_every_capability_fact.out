@@ -1,0 +1,10 @@
+has_async: rejected=true
+is_unsafe_fn: rejected=true
+has_mut_param: rejected=true
+has_static_ref: rejected=true
+has_static_mut_ref: rejected=true
+has_thread_local_ref: rejected=true
+is_port_method: rejected=true
+legacy_accepted=true
+legacy_async=true
+legacy_static_mut=false

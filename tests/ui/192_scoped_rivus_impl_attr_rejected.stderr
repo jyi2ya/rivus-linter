@@ -1,0 +1,7 @@
+error: scoped Rivus lint levels are unsupported; configure Rivus lints only at crate root
+  --> $DIR/tests/ui/192_scoped_rivus_impl_attr_rejected.rs:11:5
+   |
+LL |     fn catch_unwind(&self) {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: aborting due to 1 previous error

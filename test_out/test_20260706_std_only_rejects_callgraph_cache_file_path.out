@@ -1,1 +1,1 @@
-Err("std callgraph cache must be a directory: $TMP/target/rivus-callgraph-std")
+Err("std callgraph cache '$TMP/target/rivus-callgraph-std' is not a directory")

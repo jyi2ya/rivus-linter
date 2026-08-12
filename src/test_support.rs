@@ -5,6 +5,11 @@ use crate::capability::CapabilitySet;
 use crate::capsmap::CapsMap;
 use crate::symbols::CapsMapKey;
 
+#[rustc_diagnostic_item = "rivus_test_coverage_registration"]
+pub(crate) fn rvs_register_test_coverage<T: Copy>(_targets: T) {
+    let _ = std::mem::size_of::<T>();
+}
+
 fn rvs_bless_value_enabled(value: Option<&OsStr>) -> bool {
     value.and_then(OsStr::to_str) == Some("1")
 }

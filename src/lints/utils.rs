@@ -5,16 +5,19 @@ use rustc_hir::{
     Pat, PathSegment, QPath, Ty, TyKind,
     attrs::AttributeKind,
     def::DefKind,
-    def_id::DefId,
+    def_id::{CrateNum, DefId, LocalDefId},
     intravisit::{self, Visitor},
 };
 use rustc_lexer::{FrontmatterAllowed, TokenKind};
 use rustc_lint::LateContext;
-use rustc_middle::{hir::nested_filter, ty::TyCtxt};
+use rustc_middle::{
+    hir::nested_filter,
+    ty::{self, Ty as MiddleTy, TyCtxt, TypeSuperVisitable, TypeVisitable, TypeVisitor},
+};
 use rustc_span::{Span, Symbol};
 
 use super::body::macro_expansion::rvs_span_has_bang_macro;
-use crate::symbols::DefPath;
+use crate::symbols::{DefPath, rvs_attach_generated_definition_marker_M};
 
 // ─── Constants ───────────────────────────────────────────────────────────
 
@@ -50,6 +53,111 @@ struct ImplTypeIdentity {
     readable_path: String,
     marker: String,
     is_nominal_path: bool,
+}
+
+#[allow(
+    clippy::allow_attributes,
+    reason = "rustc TyCtxt does not implement Debug"
+)]
+struct ImplNominalIdentityVisitor<'tcx> {
+    tcx: TyCtxt<'tcx>,
+    impl_crate: CrateNum,
+    identities: Vec<String>,
+}
+
+impl<'tcx> ImplNominalIdentityVisitor<'tcx> {
+    fn rvs_new(tcx: TyCtxt<'tcx>, impl_crate: CrateNum) -> Self {
+        Self {
+            tcx,
+            impl_crate,
+            identities: Vec::new(),
+        }
+    }
+
+    fn rvs_record_M(&mut self, kind: &str, def_id: DefId) {
+        debug_assert!(!kind.is_empty(), "nominal identity kind is nonempty");
+        let crate_identity = if def_id.krate == self.impl_crate {
+            "local".to_string()
+        } else {
+            let crate_id = self.tcx.stable_crate_id(def_id.krate).as_u64();
+            debug_assert!(crate_id > 0, "external stable crate id is nonzero");
+            format!("{crate_id:016x}")
+        };
+        self.identities.push(format!("{kind}:{crate_identity}"));
+    }
+
+    fn rvs_finish(self) -> String {
+        self.identities.join(",")
+    }
+}
+
+impl<'tcx> TypeVisitor<TyCtxt<'tcx>> for ImplNominalIdentityVisitor<'tcx> {
+    fn visit_ty(&mut self, ty: MiddleTy<'tcx>) {
+        match *ty.kind() {
+            ty::TyKind::Adt(definition, _) => self.rvs_record_M("adt", definition.did()),
+            ty::TyKind::Foreign(def_id) => self.rvs_record_M("foreign", def_id),
+            ty::TyKind::FnDef(def_id, _) => self.rvs_record_M("fn", def_id),
+            ty::TyKind::Closure(def_id, _) => self.rvs_record_M("closure", def_id),
+            ty::TyKind::CoroutineClosure(def_id, _) => {
+                self.rvs_record_M("coroutine-closure", def_id);
+            }
+            ty::TyKind::Coroutine(def_id, _) => self.rvs_record_M("coroutine", def_id),
+            ty::TyKind::CoroutineWitness(def_id, _) => {
+                self.rvs_record_M("coroutine-witness", def_id);
+            }
+            ty::TyKind::Alias(alias) => {
+                self.rvs_record_M("alias", alias.kind.def_id());
+            }
+            ty::TyKind::Dynamic(predicates, _) => {
+                for predicate in predicates {
+                    match predicate.skip_binder() {
+                        ty::ExistentialPredicate::Trait(trait_ref) => {
+                            self.rvs_record_M("trait", trait_ref.def_id);
+                        }
+                        ty::ExistentialPredicate::Projection(projection) => {
+                            self.rvs_record_M("associated-type", projection.def_id);
+                            self.rvs_record_M("trait", self.tcx.parent(projection.def_id));
+                        }
+                        ty::ExistentialPredicate::AutoTrait(def_id) => {
+                            self.rvs_record_M("trait", def_id);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        ty.super_visit_with(self);
+    }
+
+    fn visit_const(&mut self, constant: ty::Const<'tcx>) {
+        if let ty::ConstKind::Unevaluated(unevaluated) = constant.kind() {
+            self.rvs_record_M("const", unevaluated.def);
+        }
+        constant.super_visit_with(self);
+    }
+
+    fn visit_predicate(&mut self, predicate: ty::Predicate<'tcx>) {
+        match predicate.kind().skip_binder() {
+            ty::PredicateKind::Clause(ty::ClauseKind::Trait(trait_predicate)) => {
+                self.rvs_record_M("trait", trait_predicate.trait_ref.def_id);
+            }
+            ty::PredicateKind::Clause(ty::ClauseKind::HostEffect(host_effect)) => {
+                self.rvs_record_M("trait", host_effect.trait_ref.def_id);
+            }
+            ty::PredicateKind::Clause(ty::ClauseKind::Projection(projection)) => {
+                self.rvs_record_M("associated-type", projection.projection_term.def_id);
+                self.rvs_record_M("trait", projection.trait_def_id(self.tcx));
+            }
+            ty::PredicateKind::DynCompatible(def_id) => {
+                self.rvs_record_M("trait", def_id);
+            }
+            ty::PredicateKind::NormalizesTo(normalizes) => {
+                self.rvs_record_M("alias", normalizes.alias.def_id);
+            }
+            _ => {}
+        }
+        predicate.super_visit_with(self);
+    }
 }
 
 pub(crate) fn rvs_is_spawn_S(path: &str) -> bool {
@@ -252,12 +360,47 @@ fn rvs_expr_from_debug_assert_macro(tcx: rustc_middle::ty::TyCtxt<'_>, e: &Expr<
         Symbol::intern("debug_assert_eq"),
         Symbol::intern("debug_assert_ne"),
     ];
-    rvs_span_has_bang_macro(tcx, e.span, &names)
+    rvs_span_has_bang_macro(tcx, e.span, names.as_slice())
+}
+
+macro_rules! rvs_impl_suppress_noop_visitor_methods {
+    ($lt:lifetime) => {
+        fn visit_ty(&mut self, _ty: &$lt Ty<$lt, AmbigArg>) {}
+        fn visit_qpath(&mut self, _qpath: &$lt QPath<$lt>, _id: HirId, _span: Span) {}
+        fn visit_path_segment(&mut self, _segment: &$lt PathSegment<$lt>) {}
+    };
+}
+
+fn rvs_walk_inline_asm_operand_exprs_M<'v, V: Visitor<'v, Result = ()>>(
+    visitor: &mut V,
+    asm: &'v InlineAsm<'v>,
+) {
+    for (operand, _) in asm.operands {
+        match operand {
+            InlineAsmOperand::In { expr, .. }
+            | InlineAsmOperand::InOut { expr, .. }
+            | InlineAsmOperand::Out {
+                expr: Some(expr), ..
+            }
+            | InlineAsmOperand::SymFn { expr } => visitor.visit_expr(expr),
+            InlineAsmOperand::SplitInOut {
+                in_expr, out_expr, ..
+            } => {
+                visitor.visit_expr(in_expr);
+                if let Some(expr) = out_expr {
+                    visitor.visit_expr(expr);
+                }
+            }
+            InlineAsmOperand::Out { expr: None, .. }
+            | InlineAsmOperand::Const { .. }
+            | InlineAsmOperand::SymStatic { .. }
+            | InlineAsmOperand::Label { .. } => {}
+        }
+    }
 }
 
 #[allow(
     clippy::allow_attributes,
-    rivus::rvs_missing_debug_derive,
     reason = "rustc LateContext does not implement Debug"
 )]
 struct LocalBindingVisitor<'a, 'tcx> {
@@ -284,38 +427,12 @@ impl<'hir, 'tcx> Visitor<'hir> for LocalBindingVisitor<'_, 'tcx> {
     }
 
     fn visit_nested_body(&mut self, _body_id: BodyId) {}
-
     fn visit_pat(&mut self, _pat: &'hir Pat<'hir>) {}
 
-    fn visit_ty(&mut self, _ty: &'hir Ty<'hir, AmbigArg>) {}
-
-    fn visit_qpath(&mut self, _qpath: &'hir QPath<'hir>, _id: HirId, _span: Span) {}
-
-    fn visit_path_segment(&mut self, _segment: &'hir PathSegment<'hir>) {}
+    rvs_impl_suppress_noop_visitor_methods!('hir);
 
     fn visit_inline_asm(&mut self, asm: &'hir InlineAsm<'hir>, _id: HirId) {
-        for (operand, _) in asm.operands {
-            match operand {
-                InlineAsmOperand::In { expr, .. }
-                | InlineAsmOperand::InOut { expr, .. }
-                | InlineAsmOperand::Out {
-                    expr: Some(expr), ..
-                }
-                | InlineAsmOperand::SymFn { expr } => self.visit_expr(expr),
-                InlineAsmOperand::SplitInOut {
-                    in_expr, out_expr, ..
-                } => {
-                    self.visit_expr(in_expr);
-                    if let Some(expr) = out_expr {
-                        self.visit_expr(expr);
-                    }
-                }
-                InlineAsmOperand::Out { expr: None, .. }
-                | InlineAsmOperand::Const { .. }
-                | InlineAsmOperand::SymStatic { .. }
-                | InlineAsmOperand::Label { .. } => {}
-            }
-        }
+        rvs_walk_inline_asm_operand_exprs_M(self, asm);
     }
 }
 
@@ -329,6 +446,21 @@ pub(crate) fn rvs_collect_local_bindings_M(
 
 pub(crate) fn rvs_static_is_thread_local(cx: &LateContext<'_>, did: DefId) -> bool {
     cx.tcx.is_thread_local_static(did)
+}
+
+pub(crate) fn rvs_is_sysroot_crate_id(
+    cx: &LateContext<'_>,
+    crate_id: u64,
+    crate_name: &str,
+) -> bool {
+    debug_assert!(crate_id > 0, "stable crate identity must be nonzero");
+    let marker = match crate_name {
+        "core" => cx.tcx.lang_items().sized_trait(),
+        "alloc" => cx.tcx.lang_items().owned_box(),
+        "std" => cx.tcx.get_diagnostic_item(Symbol::intern("File")),
+        _ => return false,
+    };
+    marker.is_some_and(|def_id| cx.tcx.stable_crate_id(def_id.krate).as_u64() == crate_id)
 }
 
 pub(crate) fn rvs_count_effective_lines_M<'tcx>(
@@ -436,18 +568,17 @@ pub(crate) fn rvs_root_body_expr<'tcx>(
 
 #[allow(
     clippy::allow_attributes,
-    rivus::rvs_missing_debug_derive,
     reason = "rustc TyCtxt does not implement Debug"
 )]
 struct BodyExprVisitor<'a, 'tcx, F> {
     tcx: TyCtxt<'tcx>,
     callback: &'a mut F,
-    nested_body: bool,
+    body_owner: LocalDefId,
 }
 
 impl<'tcx, F> Visitor<'tcx> for BodyExprVisitor<'_, 'tcx, F>
 where
-    F: FnMut(&'tcx Expr<'tcx>, bool),
+    F: FnMut(&'tcx Expr<'tcx>, LocalDefId),
 {
     type NestedFilter = nested_filter::OnlyBodies;
 
@@ -456,30 +587,37 @@ where
     }
 
     fn visit_nested_body(&mut self, body_id: BodyId) {
-        let previous = std::mem::replace(&mut self.nested_body, true);
-        self.visit_expr(self.tcx.hir_body(body_id).value);
-        self.nested_body = previous;
+        let body = self.tcx.hir_body(body_id);
+        let previous = std::mem::replace(&mut self.body_owner, body_id.hir_id.owner.def_id);
+        self.visit_expr(body.value);
+        self.body_owner = previous;
     }
 
     fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
-        (self.callback)(expr, self.nested_body);
+        (self.callback)(expr, self.body_owner);
         match expr.kind {
-            ExprKind::Closure(closure) => self.visit_nested_body(closure.body),
+            ExprKind::Closure(closure) => {
+                let previous = std::mem::replace(&mut self.body_owner, closure.def_id);
+                self.visit_expr(self.tcx.hir_body(closure.body).value);
+                self.body_owner = previous;
+            }
             ExprKind::Assign(lhs, rhs, _) | ExprKind::AssignOp(_, lhs, rhs) => {
                 self.visit_expr(lhs);
                 self.visit_expr(rhs);
+            }
+            ExprKind::ConstBlock(_) => {}
+            ExprKind::Repeat(element, _) => {
+                self.visit_expr(element);
             }
             _ => intravisit::walk_expr(self, expr),
         }
     }
 
-    fn visit_pat(&mut self, _pat: &'tcx Pat<'tcx>) {}
+    rvs_impl_suppress_noop_visitor_methods!('tcx);
 
-    fn visit_ty(&mut self, _ty: &'tcx Ty<'tcx, AmbigArg>) {}
-
-    fn visit_qpath(&mut self, _qpath: &'tcx QPath<'tcx>, _id: HirId, _span: Span) {}
-
-    fn visit_path_segment(&mut self, _segment: &'tcx PathSegment<'tcx>) {}
+    fn visit_pat(&mut self, pat: &'tcx Pat<'tcx>) {
+        intravisit::walk_pat(self, pat);
+    }
 
     fn visit_inline_asm(&mut self, asm: &'tcx InlineAsm<'tcx>, _id: HirId) {
         for (operand, _) in asm.operands {
@@ -498,21 +636,9 @@ where
                         self.visit_expr(expr);
                     }
                 }
-                InlineAsmOperand::Out { expr: None, .. }
-                | InlineAsmOperand::Const { .. }
-                | InlineAsmOperand::SymStatic { .. }
-                | InlineAsmOperand::Label { .. } => {}
-            }
-        }
-        for (operand, _) in asm.operands {
-            match operand {
-                InlineAsmOperand::Const { anon_const } => self.visit_inline_const(anon_const),
                 InlineAsmOperand::Label { block } => self.visit_block(block),
-                InlineAsmOperand::In { .. }
-                | InlineAsmOperand::Out { .. }
-                | InlineAsmOperand::InOut { .. }
-                | InlineAsmOperand::SplitInOut { .. }
-                | InlineAsmOperand::SymFn { .. }
+                InlineAsmOperand::Const { .. }
+                | InlineAsmOperand::Out { expr: None, .. }
                 | InlineAsmOperand::SymStatic { .. } => {}
             }
         }
@@ -524,12 +650,12 @@ pub(crate) fn rvs_visit_body_exprs_M<'tcx, F>(
     expr: &'tcx Expr<'tcx>,
     mut callback: F,
 ) where
-    F: FnMut(&'tcx Expr<'tcx>, bool),
+    F: FnMut(&'tcx Expr<'tcx>, LocalDefId),
 {
     BodyExprVisitor {
         tcx,
         callback: &mut callback,
-        nested_body: false,
+        body_owner: expr.hir_id.owner.def_id,
     }
     .visit_expr(expr);
 }
@@ -540,7 +666,21 @@ pub(crate) enum CallSyntax {
     Method,
 }
 
-#[derive(Debug)]
+/// How a call observation was discovered in HIR.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ObservationKind {
+    /// A direct `ExprKind::Call` or `ExprKind::MethodCall`.
+    Direct,
+    /// A function-item path referenced but not directly called (function pointer,
+    /// callback argument, etc.).
+    FunctionReference,
+    /// A call through a local callable whose concrete target cannot be resolved
+    /// at the HIR level — e.g. `f()` where `f` is a `fn()` parameter, a closure
+    /// variable, or a generic `F: Fn()` parameter.
+    UnsupportedIndirect,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) enum CallTarget {
     Resolved {
         def_path: DefPath,
@@ -555,12 +695,14 @@ pub(crate) enum CallTarget {
     },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct CallObservation {
+    pub kind: ObservationKind,
     pub syntax: CallSyntax,
     pub target: CallTarget,
     pub hir_id: HirId,
     pub span: Span,
+    pub body_owner: LocalDefId,
 }
 
 pub(crate) fn rvs_resolve_call(cx: &LateContext<'_>, expr: &Expr<'_>) -> Option<CallObservation> {
@@ -584,30 +726,85 @@ pub(crate) fn rvs_resolve_call(cx: &LateContext<'_>, expr: &Expr<'_>) -> Option<
                 }
             }
             let ExprKind::Path(qpath) = &callee.kind else {
-                return None;
+                return Some(CallObservation {
+                    kind: ObservationKind::UnsupportedIndirect,
+                    syntax: CallSyntax::Function,
+                    target: CallTarget::UnresolvedPath {
+                        path: String::new(),
+                    },
+                    hir_id: expr.hir_id,
+                    span: expr.span,
+                    body_owner: expr.hir_id.owner.def_id,
+                });
             };
             let target = match cx.qpath_res(qpath, callee.hir_id) {
+                rustc_hir::def::Res::Def(def_kind, def_id)
+                    if rvs_def_id_is_fn_trait_operation(cx, def_id)
+                        || matches!(
+                            def_kind,
+                            DefKind::Const { .. }
+                                | DefKind::AssocConst { .. }
+                                | DefKind::Static { .. }
+                        ) =>
+                {
+                    return Some(CallObservation {
+                        kind: ObservationKind::UnsupportedIndirect,
+                        syntax: CallSyntax::Function,
+                        target: CallTarget::UnresolvedPath {
+                            path: rvs_qp(qpath),
+                        },
+                        hir_id: expr.hir_id,
+                        span: expr.span,
+                        body_owner: expr.hir_id.owner.def_id,
+                    });
+                }
                 rustc_hir::def::Res::Def(def_kind, def_id) => CallTarget::Resolved {
                     def_path: DefPath::rvs_new(rvs_def_path(cx, def_id)),
                     def_kind,
                     crate_id: cx.tcx.stable_crate_id(def_id.krate).as_u64(),
                 },
-                rustc_hir::def::Res::Local(_) => return None,
+                rustc_hir::def::Res::Local(_) => {
+                    return Some(CallObservation {
+                        kind: ObservationKind::UnsupportedIndirect,
+                        syntax: CallSyntax::Function,
+                        target: CallTarget::UnresolvedPath {
+                            path: rvs_qp(qpath),
+                        },
+                        hir_id: expr.hir_id,
+                        span: expr.span,
+                        body_owner: expr.hir_id.owner.def_id,
+                    });
+                }
                 _ => CallTarget::UnresolvedPath {
                     path: rvs_qp(qpath),
                 },
             };
             Some(CallObservation {
+                kind: ObservationKind::Direct,
                 syntax: CallSyntax::Function,
                 target,
                 hir_id: expr.hir_id,
                 span: expr.span,
+                body_owner: expr.hir_id.owner.def_id,
             })
         }
         ExprKind::MethodCall(path, ..) => {
             let owner = expr.hir_id.owner.def_id;
             let typeck = cx.tcx.typeck(owner);
-            let resolved = typeck.type_dependent_def_id(expr.hir_id).map(|def_id| {
+            let resolved_def_id = typeck.type_dependent_def_id(expr.hir_id);
+            if resolved_def_id.is_some_and(|def_id| rvs_def_id_is_fn_trait_operation(cx, def_id)) {
+                return Some(CallObservation {
+                    kind: ObservationKind::UnsupportedIndirect,
+                    syntax: CallSyntax::Method,
+                    target: CallTarget::UnresolvedMethod {
+                        name: path.ident.name.to_string(),
+                    },
+                    hir_id: expr.hir_id,
+                    span: expr.span,
+                    body_owner: expr.hir_id.owner.def_id,
+                });
+            }
+            let resolved = resolved_def_id.map(|def_id| {
                 (
                     DefPath::rvs_new(rvs_def_path(cx, def_id)),
                     cx.tcx.def_kind(def_id),
@@ -615,14 +812,28 @@ pub(crate) fn rvs_resolve_call(cx: &LateContext<'_>, expr: &Expr<'_>) -> Option<
                 )
             });
             Some(CallObservation {
+                kind: ObservationKind::Direct,
                 syntax: CallSyntax::Method,
                 target: rvs_method_call_target(resolved, path.ident.name.as_str()),
                 hir_id: expr.hir_id,
                 span: expr.span,
+                body_owner: expr.hir_id.owner.def_id,
             })
         }
         _ => None,
     }
+}
+
+pub(crate) fn rvs_def_id_is_fn_trait_operation(cx: &LateContext<'_>, def_id: DefId) -> bool {
+    cx.tcx.trait_of_assoc(def_id).is_some_and(|trait_def_id| {
+        cx.tcx.is_lang_item(trait_def_id, rustc_hir::LangItem::Fn)
+            || cx
+                .tcx
+                .is_lang_item(trait_def_id, rustc_hir::LangItem::FnMut)
+            || cx
+                .tcx
+                .is_lang_item(trait_def_id, rustc_hir::LangItem::FnOnce)
+    })
 }
 
 fn rvs_method_call_target(
@@ -676,15 +887,30 @@ pub(crate) fn rvs_def_path(cx: &LateContext<'_>, did: DefId) -> String {
     let dp = tcx.def_path(did);
     let impl_def_id = rvs_enclosing_impl_def_id(cx, did);
     let impl_ty = impl_def_id.and_then(|impl_def_id| rvs_impl_type_identity(cx, impl_def_id));
+    let is_sourceless = tcx.def_span(did).is_dummy();
+    let definition_marker = cx
+        .tcx
+        .opt_associated_item(did)
+        .is_none()
+        .then(|| rvs_definition_identity(cx, did))
+        .flatten()
+        .map(|identity| rvs_encode_identity_marker(&identity));
 
     let mut parts = vec![tcx.crate_name(dp.krate).to_string()];
     let mut has_impl = false;
     for d in &dp.data {
         match d.data {
             rustc_hir::definitions::DefPathData::TypeNs(s)
-            | rustc_hir::definitions::DefPathData::ValueNs(s)
             | rustc_hir::definitions::DefPathData::MacroNs(s) => {
                 parts.push(s.to_string());
+            }
+            rustc_hir::definitions::DefPathData::ValueNs(s) => {
+                let mut value = s.to_string();
+                if is_sourceless && d.disambiguator > 0 {
+                    value.push('#');
+                    value.push_str(&d.disambiguator.to_string());
+                }
+                parts.push(value);
             }
             rustc_hir::definitions::DefPathData::Impl => {
                 if let Some(identity) = &impl_ty {
@@ -707,10 +933,17 @@ pub(crate) fn rvs_def_path(cx: &LateContext<'_>, did: DefId) -> String {
                 has_impl = true;
             }
             rustc_hir::definitions::DefPathData::Closure => {
-                parts.push(format!("closure#{}", d.disambiguator));
+                if definition_marker.is_some() {
+                    parts.push("closure".to_string());
+                } else {
+                    parts.push(format!("closure#{}", d.disambiguator));
+                }
             }
             _ => {}
         }
+    }
+    if let Some(marker) = definition_marker {
+        rvs_attach_generated_definition_marker_M(&mut parts, &marker);
     }
     let mut path = parts.join("::");
 
@@ -730,6 +963,142 @@ pub(crate) fn rvs_def_path(cx: &LateContext<'_>, did: DefId) -> String {
     path
 }
 
+fn rvs_definition_identity(cx: &LateContext<'_>, did: DefId) -> Option<String> {
+    let definition_span = cx.tcx.def_span(did);
+    if definition_span.from_expansion() {
+        return rvs_generated_definition_identity(cx, did);
+    }
+    if !rvs_is_body_nested_definition(cx, did) {
+        return None;
+    }
+    rvs_span_source_identity(cx, definition_span)
+        .map(|definition| format!("definition={definition}"))
+}
+
+fn rvs_is_body_nested_definition(cx: &LateContext<'_>, did: DefId) -> bool {
+    if did.is_crate_root() {
+        return false;
+    }
+    matches!(
+        cx.tcx.def_kind(cx.tcx.parent(did)),
+        rustc_hir::def::DefKind::Fn
+            | rustc_hir::def::DefKind::AssocFn
+            | rustc_hir::def::DefKind::Const { .. }
+            | rustc_hir::def::DefKind::AssocConst { .. }
+            | rustc_hir::def::DefKind::Static { .. }
+            | rustc_hir::def::DefKind::AnonConst
+            | rustc_hir::def::DefKind::InlineConst
+            | rustc_hir::def::DefKind::Closure
+            | rustc_hir::def::DefKind::SyntheticCoroutineBody
+    )
+}
+
+fn rvs_generated_definition_identity(cx: &LateContext<'_>, did: DefId) -> Option<String> {
+    let mut identity = rvs_generated_definition_base_identity(cx, did)?;
+    if let Some(ordinal) = rvs_generated_definition_repetition_ordinal(cx, did, &identity) {
+        identity.push_str("|same-source-ordinal=");
+        identity.push_str(&ordinal.to_string());
+    }
+    Some(identity)
+}
+
+fn rvs_generated_definition_base_identity(cx: &LateContext<'_>, did: DefId) -> Option<String> {
+    let definition_span = cx.tcx.def_span(did);
+    if !definition_span.from_expansion() {
+        return None;
+    }
+
+    let mut identity = Vec::new();
+    if let Some(definition) = rvs_span_source_identity(cx, definition_span) {
+        identity.push(format!("definition={definition}"));
+    }
+
+    let mut expansion = definition_span.ctxt().outer_expn();
+    while expansion != rustc_span::ExpnId::root() {
+        let data = expansion.expn_data();
+        let mut component = format!("kind={}", data.kind.descr());
+        if let Some(macro_def_id) = data.macro_def_id {
+            component.push_str(";macro=");
+            component.push_str(cx.tcx.crate_name(macro_def_id.krate).as_str());
+            component.push_str(&cx.tcx.def_path(macro_def_id).to_string_no_crate_verbose());
+            if let Some(definition) = rvs_span_source_identity(cx, cx.tcx.def_span(macro_def_id)) {
+                component.push_str(";macro_definition=");
+                component.push_str(&definition);
+            }
+        }
+        if let Some(call_site) = rvs_span_source_identity(cx, data.call_site) {
+            component.push_str(";call_site=");
+            component.push_str(&call_site);
+        }
+        identity.push(component);
+
+        let parent_expansion = data.call_site.ctxt().outer_expn();
+        if parent_expansion == expansion {
+            break;
+        }
+        expansion = parent_expansion;
+    }
+
+    (!identity.is_empty()).then(|| identity.join("|"))
+}
+
+fn rvs_generated_definition_repetition_ordinal(
+    cx: &LateContext<'_>,
+    did: DefId,
+    base_identity: &str,
+) -> Option<usize> {
+    debug_assert!(
+        !base_identity.is_empty(),
+        "generated base identity is nonempty"
+    );
+    let local_did = did.as_local()?;
+    let definition_kind = cx.tcx.def_kind(did);
+    let mut matching_definitions = 0usize;
+    let mut ordinal = None;
+    for owner in cx.tcx.hir_crate_items(()).owners() {
+        let candidate = owner.def_id.to_def_id();
+        if cx.tcx.def_kind(candidate) != definition_kind
+            || rvs_generated_definition_base_identity(cx, candidate).as_deref()
+                != Some(base_identity)
+        {
+            continue;
+        }
+        if owner.def_id == local_did {
+            ordinal = Some(matching_definitions);
+        }
+        matching_definitions += 1;
+    }
+    if matching_definitions > 1 {
+        ordinal
+    } else {
+        None
+    }
+}
+
+fn rvs_span_source_identity(cx: &LateContext<'_>, span: Span) -> Option<String> {
+    if span.is_dummy() {
+        return None;
+    }
+    let source_map = cx.tcx.sess.source_map();
+    let span = span.data();
+    let start = source_map.lookup_byte_offset(span.lo);
+    let end = source_map.lookup_byte_offset(span.hi);
+    if start.sf.name != end.sf.name {
+        return None;
+    }
+    Some(format!(
+        "{:?}:{}:{}:{}",
+        start
+            .sf
+            .name
+            .prefer_remapped_unconditionally()
+            .to_string_lossy(),
+        start.sf.src_hash,
+        start.pos.0,
+        end.pos.0,
+    ))
+}
+
 fn rvs_enclosing_impl_def_id(cx: &LateContext<'_>, did: DefId) -> Option<DefId> {
     let mut current = did;
     loop {
@@ -746,6 +1115,37 @@ fn rvs_enclosing_impl_def_id(cx: &LateContext<'_>, did: DefId) -> Option<DefId> 
     }
 }
 
+fn rvs_type_nominal_crate_identities<'tcx>(
+    cx: &LateContext<'tcx>,
+    impl_crate: CrateNum,
+    ty: MiddleTy<'tcx>,
+) -> String {
+    let mut visitor = ImplNominalIdentityVisitor::rvs_new(cx.tcx, impl_crate);
+    ty.visit_with(&mut visitor);
+    visitor.rvs_finish()
+}
+
+fn rvs_trait_nominal_crate_identities<'tcx>(
+    cx: &LateContext<'tcx>,
+    impl_crate: CrateNum,
+    trait_ref: ty::TraitRef<'tcx>,
+) -> String {
+    let mut visitor = ImplNominalIdentityVisitor::rvs_new(cx.tcx, impl_crate);
+    visitor.rvs_record_M("trait", trait_ref.def_id);
+    trait_ref.args.visit_with(&mut visitor);
+    visitor.rvs_finish()
+}
+
+fn rvs_predicate_nominal_crate_identities<'tcx>(
+    cx: &LateContext<'tcx>,
+    impl_crate: CrateNum,
+    predicates: &[ty::Clause<'tcx>],
+) -> String {
+    let mut visitor = ImplNominalIdentityVisitor::rvs_new(cx.tcx, impl_crate);
+    predicates.visit_with(&mut visitor);
+    visitor.rvs_finish()
+}
+
 fn rvs_impl_type_identity(cx: &LateContext<'_>, impl_def_id: DefId) -> Option<ImplTypeIdentity> {
     let self_ty = cx.tcx.type_of(impl_def_id).skip_binder();
     let self_type_text = rustc_middle::ty::print::with_resolve_crate_name!(
@@ -753,34 +1153,120 @@ fn rvs_impl_type_identity(cx: &LateContext<'_>, impl_def_id: DefId) -> Option<Im
             rustc_middle::ty::print::with_no_trimmed_paths!(self_ty.to_string())
         )
     );
-    let (readable_path, is_nominal_path) = match self_ty.kind() {
-        rustc_middle::ty::TyKind::Adt(adt_def, _) => (rvs_def_path(cx, adt_def.did()), true),
+    let self_nominal_crate_identities =
+        rvs_type_nominal_crate_identities(cx, impl_def_id.krate, self_ty);
+    let (readable_path, is_nominal_path, generated_self_type_identity) = match self_ty.kind() {
+        rustc_middle::ty::TyKind::Adt(adt_def, _) => (
+            rvs_def_path(cx, adt_def.did()),
+            true,
+            rvs_generated_definition_identity(cx, adt_def.did()),
+        ),
         _ => (
             self_type_text.rsplit("::").next().map(str::to_string)?,
             false,
+            None,
         ),
     };
-    let mut identity_text = self_type_text;
-    if let rustc_hir::def::DefKind::Impl { of_trait: true } = cx.tcx.def_kind(impl_def_id) {
-        let trait_ref = cx.tcx.impl_trait_ref(impl_def_id);
-        let trait_ref = trait_ref.skip_binder();
-        let trait_identity = rustc_middle::ty::print::with_resolve_crate_name!(
-            rustc_middle::ty::print::with_no_visible_paths!(
-                rustc_middle::ty::print::with_no_trimmed_paths!(trait_ref.to_string())
+    let impl_predicates = cx
+        .tcx
+        .predicates_of(impl_def_id)
+        .instantiate_identity(cx.tcx);
+    let impl_predicates_text = rustc_middle::ty::print::with_resolve_crate_name!(
+        rustc_middle::ty::print::with_no_visible_paths!(
+            rustc_middle::ty::print::with_no_trimmed_paths!(
+                impl_predicates
+                    .predicates
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(",")
             )
-        );
-        identity_text.push('@');
-        identity_text.push_str(&trait_identity);
-    }
-    let mut marker = String::new();
-    for byte in identity_text.bytes() {
-        marker.push_str(&format!("{byte:02x}"));
-    }
+        )
+    );
+    let predicate_nominal_crate_identities =
+        rvs_predicate_nominal_crate_identities(cx, impl_def_id.krate, &impl_predicates.predicates);
+    let trait_identity =
+        if let rustc_hir::def::DefKind::Impl { of_trait: true } = cx.tcx.def_kind(impl_def_id) {
+            let trait_ref = cx.tcx.impl_trait_ref(impl_def_id);
+            let trait_ref = trait_ref.skip_binder();
+            let trait_text = rustc_middle::ty::print::with_resolve_crate_name!(
+                rustc_middle::ty::print::with_no_visible_paths!(
+                    rustc_middle::ty::print::with_no_trimmed_paths!(trait_ref.to_string())
+                )
+            );
+            Some((
+                trait_text,
+                rvs_trait_nominal_crate_identities(cx, impl_def_id.krate, trait_ref),
+            ))
+        } else {
+            None
+        };
+    let generated_impl_identity = rvs_generated_definition_identity(cx, impl_def_id);
+    let generated_definition_identity = generated_impl_identity.or(generated_self_type_identity);
+    let marker = rvs_impl_identity_marker(
+        &self_type_text,
+        &self_nominal_crate_identities,
+        trait_identity
+            .as_ref()
+            .map(|(trait_text, crate_identities)| (trait_text.as_str(), crate_identities.as_str())),
+        &impl_predicates_text,
+        &predicate_nominal_crate_identities,
+        generated_definition_identity.as_deref(),
+    );
     Some(ImplTypeIdentity {
         readable_path,
         marker,
         is_nominal_path,
     })
+}
+
+fn rvs_impl_identity_marker(
+    self_type_text: &str,
+    self_nominal_crate_identities: &str,
+    trait_identity: Option<(&str, &str)>,
+    impl_predicates_text: &str,
+    predicate_nominal_crate_identities: &str,
+    generated_definition_identity: Option<&str>,
+) -> String {
+    debug_assert!(!self_type_text.is_empty(), "self type identity is nonempty");
+    debug_assert!(
+        trait_identity.is_none_or(|(trait_text, _)| !trait_text.is_empty()),
+        "trait identity text is nonempty"
+    );
+    let mut identity_text = self_type_text.to_string();
+    if !self_nominal_crate_identities.is_empty() {
+        identity_text.push_str("@self-nominal-crates=");
+        identity_text.push_str(self_nominal_crate_identities);
+    }
+    if let Some((trait_text, nominal_crate_identities)) = trait_identity {
+        identity_text.push('@');
+        identity_text.push_str(trait_text);
+        if !nominal_crate_identities.is_empty() {
+            identity_text.push_str("@trait-nominal-crates=");
+            identity_text.push_str(nominal_crate_identities);
+        }
+    }
+    if !impl_predicates_text.is_empty() {
+        identity_text.push_str("@predicates=");
+        identity_text.push_str(impl_predicates_text);
+    }
+    if !predicate_nominal_crate_identities.is_empty() {
+        identity_text.push_str("@predicate-nominal-crates=");
+        identity_text.push_str(predicate_nominal_crate_identities);
+    }
+    if let Some(generated_definition_identity) = generated_definition_identity {
+        identity_text.push_str("@generated-definition=");
+        identity_text.push_str(generated_definition_identity);
+    }
+    rvs_encode_identity_marker(&identity_text)
+}
+
+fn rvs_encode_identity_marker(identity_text: &str) -> String {
+    let mut marker = String::new();
+    for byte in identity_text.bytes() {
+        marker.push_str(&format!("{byte:02x}"));
+    }
+    marker
 }
 
 // ─── Utility ─────────────────────────────────────────────────────────────
@@ -802,7 +1288,7 @@ pub(crate) fn rvs_valid_test(n: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::rvs_snapshot_BIS;
+    use crate::test_support::{rvs_register_test_coverage, rvs_snapshot_BIS};
 
     #[test]
     fn test_20260715_effective_line_count_uses_rust_lexer() {
@@ -929,47 +1415,152 @@ mod tests {
     }
 
     #[test]
-    #[expect(
-        unreachable_code,
-        reason = "coverage-only unreachable branch keeps helper names visible to rivus test-call collection"
-    )]
+    fn test_20260730_impl_marker_distinguishes_defining_crates() {
+        let first = rvs_impl_identity_marker(
+            "app::Worker",
+            "adt:000000000000000b",
+            Some(("dependency::api::Runner", "trait:0000000000000015")),
+            "",
+            "",
+            None,
+        );
+        let same = rvs_impl_identity_marker(
+            "app::Worker",
+            "adt:000000000000000b",
+            Some(("dependency::api::Runner", "trait:0000000000000015")),
+            "",
+            "",
+            None,
+        );
+        let other_trait_version = rvs_impl_identity_marker(
+            "app::Worker",
+            "adt:000000000000000b",
+            Some(("dependency::api::Runner", "trait:0000000000000016")),
+            "",
+            "",
+            None,
+        );
+        let other_self_version = rvs_impl_identity_marker(
+            "app::Worker",
+            "adt:000000000000000c",
+            Some(("dependency::api::Runner", "trait:0000000000000015")),
+            "",
+            "",
+            None,
+        );
+        let local_production = rvs_impl_identity_marker(
+            "app::Worker",
+            "adt:local",
+            Some(("app::Runner", "trait:local")),
+            "",
+            "",
+            None,
+        );
+        let local_test = rvs_impl_identity_marker(
+            "app::Worker",
+            "adt:local",
+            Some(("app::Runner", "trait:local")),
+            "",
+            "",
+            None,
+        );
+        let output = format!(
+            "same_input={}\ntrait_versions_distinct={}\nself_versions_distinct={}\nlocal_targets_stable={}\n",
+            first == same,
+            first != other_trait_version,
+            first != other_self_version,
+            local_production == local_test,
+        );
+        rvs_snapshot_BIS(
+            "test_20260730_impl_marker_distinguishes_defining_crates",
+            &output,
+        );
+
+        assert_eq!(first, same);
+        assert_ne!(first, other_trait_version);
+        assert_ne!(first, other_self_version);
+        assert_eq!(local_production, local_test);
+    }
+
+    #[test]
+    fn test_20260731_impl_marker_distinguishes_specialization_predicates() {
+        let clone_impl = rvs_impl_identity_marker(
+            "T",
+            "",
+            Some(("app::Specialized", "trait:local")),
+            "T: app::Clone",
+            "trait:local",
+            None,
+        );
+        let same_clone_impl = rvs_impl_identity_marker(
+            "T",
+            "",
+            Some(("app::Specialized", "trait:local")),
+            "T: app::Clone",
+            "trait:local",
+            None,
+        );
+        let copy_impl = rvs_impl_identity_marker(
+            "T",
+            "",
+            Some(("app::Specialized", "trait:local")),
+            "T: app::Copy",
+            "trait:local",
+            None,
+        );
+        let first_generated = rvs_impl_identity_marker(
+            "[T; ($n - 1)]",
+            "",
+            Some(("core::default::Default", "trait:0000000000000001")),
+            "T: core::default::Default",
+            "trait:0000000000000001",
+            Some("first"),
+        );
+        let second_generated = rvs_impl_identity_marker(
+            "[T; ($n - 1)]",
+            "",
+            Some(("core::default::Default", "trait:0000000000000001")),
+            "T: core::default::Default",
+            "trait:0000000000000001",
+            Some("second"),
+        );
+        let output = format!(
+            "same_predicates_stable={}\nspecialization_predicates_distinct={}\ngenerated_impls_distinct={}\n",
+            clone_impl == same_clone_impl,
+            clone_impl != copy_impl,
+            first_generated != second_generated,
+        );
+        rvs_snapshot_BIS(
+            "test_20260731_impl_marker_distinguishes_specialization_predicates",
+            &output,
+        );
+
+        assert_eq!(clone_impl, same_clone_impl);
+        assert_ne!(clone_impl, copy_impl);
+        assert_ne!(first_generated, second_generated);
+    }
+
+    #[test]
     fn test_20260630_utils_helper_coverage() {
         assert!(rvs_valid_test("test_20260630_utils_helper_coverage"));
-
-        if std::hint::black_box(false) {
-            let _attrs: &[rustc_hir::Attribute] = unreachable!();
-            let _cx: &LateContext<'_> = unreachable!();
-            let _hir_id: HirId = unreachable!();
-            let _def_id: DefId = unreachable!();
-            let _sig: &rustc_hir::FnSig<'_> = unreachable!();
-            let _body: &Body<'_> = unreachable!();
-            let _expr: &Expr<'_> = unreachable!();
-            let _qpath: &QPath<'_> = unreachable!();
-            let _ty: &rustc_hir::Ty<'_> = unreachable!();
-            let _tcx: rustc_middle::ty::TyCtxt<'_> = unreachable!();
-            let mut set = HashSet::new();
-
-            rvs_has_attr(_attrs, "test");
-            rvs_has_allow(_attrs, "dead_code");
-            rvs_allows_non_snake_case(_cx, _hir_id);
-            rvs_has_doc_section(_cx, _hir_id, "Safety");
-            rvs_has_any_doc(_attrs);
-            rvs_has_debug_derive(_cx, _def_id);
-            rvs_has_mutable_params(_sig);
-            rvs_is_empty_body(_tcx, _body);
-            rvs_debug_assert_only(_tcx, _expr);
-            rvs_expr_from_debug_assert_macro(_tcx, _expr);
-            rvs_collect_local_bindings_M(_cx, _expr, &mut set);
-            rvs_static_is_thread_local(_cx, _def_id);
-            rvs_count_effective_lines_M(_cx, _body);
-            rvs_root_body_expr(_tcx, _body);
-            rvs_visit_body_exprs_M(_tcx, _expr, |_, _| {});
-            rvs_qp(_qpath);
-            rvs_tys(_ty);
-            rvs_def_path(_cx, _def_id);
-            rvs_enclosing_impl_def_id(_cx, _def_id);
-            rvs_impl_type_identity(_cx, _def_id);
-            rvs_resolve_call(_cx, _expr);
-        }
+        rvs_register_test_coverage((
+            rvs_has_attr,
+            rvs_has_allow,
+            rvs_allows_non_snake_case,
+            rvs_has_doc_section,
+            rvs_has_any_doc,
+            rvs_has_debug_derive,
+            rvs_has_mutable_params,
+            rvs_is_empty_body,
+            rvs_collect_local_bindings_M,
+            rvs_static_is_thread_local,
+            rvs_count_effective_lines_M,
+            rvs_root_body_expr,
+            rvs_qp,
+            rvs_tys,
+            rvs_def_path,
+            rvs_resolve_call,
+            rvs_is_sysroot_crate_id,
+        ));
     }
 }

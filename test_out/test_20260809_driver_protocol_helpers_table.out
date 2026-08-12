@@ -1,0 +1,17 @@
+require_one_ok=true
+require_zero_err=true
+require_two_err=true
+require_missing_err=true
+optional_one_true=true
+optional_none_false=true
+optional_zero_err=true
+utf8_ok=true
+utf8_missing=true
+path_ok=true
+path_missing=true
+reject_present=true
+reject_absent=true
+path_match_ok=true
+path_match_mismatch=true
+authority_empty=true
+authority_wrapper=true

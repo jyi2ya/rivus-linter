@@ -1,0 +1,3 @@
+core::result::Result::as_ref: PreservesContents
+core::result::Result::map_err: Map { callback_on: 4 }
+dependency::transform: Other

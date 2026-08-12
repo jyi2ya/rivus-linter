@@ -1,2 +1,2 @@
-missing_facts=invalid callgraph artifact: facts_by_crate for demo::rvs_run is missing crate id 7
-missing_has_body=invalid callgraph artifact: has_body_by_crate for demo::rvs_run is missing crate id 7
+missing_facts=invalid callgraph artifact: missing field `facts`
+missing_has_body=invalid callgraph artifact: missing field `has_body`

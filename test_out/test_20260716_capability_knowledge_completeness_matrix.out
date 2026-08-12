@@ -3,11 +3,9 @@ explicit_incomplete: error=basis 'explicit' requires completeness 'complete', go
 explicit_unknown: error=basis 'explicit' requires completeness 'complete', got 'unknown'
 inferred_complete: ok
 inferred_incomplete: ok
-inferred_unknown: error=basis 'inferred' requires completeness 'complete' or 'incomplete', got 'unknown'
+inferred_unknown: ok
 port_complete: ok
 port_incomplete: error=basis 'port' requires completeness 'complete', got 'incomplete'
-migrated_unknown: ok
-migrated_complete: error=basis 'migrated_v1' requires completeness 'unknown', got 'complete'
 trait_vote_complete: ok
 trait_vote_incomplete: ok
 trait_vote_unknown: error=trait vote completeness cannot be 'unknown'

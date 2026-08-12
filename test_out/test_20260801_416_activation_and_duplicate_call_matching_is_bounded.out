@@ -1,0 +1,8 @@
+sites=186
+lookups=51
+comparisons=186
+bounded=true
+all_select_first=true
+identity_comparisons=2
+exact_callee_matches=true
+fallback_preserved=true

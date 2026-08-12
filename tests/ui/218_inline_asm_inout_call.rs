@@ -1,5 +1,8 @@
 // compile-flags: --test
+#![feature(register_tool)]
+#![register_tool(rivus)]
 #![allow(non_snake_case)]
+#![allow(rivus::rvs_unsupported_implicit_execution)]
 
 fn rvs_read_BI() -> usize {
     1

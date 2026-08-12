@@ -146,6 +146,7 @@ impl<'a> TraitMethodIdentity<'a> {
             return None;
         }
         let method_name = implementation_path.rsplit("::").next()?;
+        let method_name = rvs_function_segment_without_identity_marker(method_name);
         if method_name.is_empty() {
             return None;
         }
@@ -210,10 +211,33 @@ pub(crate) fn rvs_function_name_segment(name: &str) -> &str {
     TraitMethodIdentity::rvs_parse(name).map_or_else(
         || {
             let method_path = name.split_once('@').map_or(name, |(method, _)| method);
-            method_path.rsplit("::").next().unwrap_or(method_path)
+            rvs_function_segment_without_identity_marker(
+                method_path.rsplit("::").next().unwrap_or(method_path),
+            )
         },
         TraitMethodIdentity::rvs_method_name,
     )
+}
+
+pub(crate) fn rvs_attach_generated_definition_marker_M(parts: &mut [String], marker: &str) {
+    debug_assert!(!parts.is_empty(), "def path has a crate or item segment");
+    debug_assert!(
+        !marker.is_empty(),
+        "generated definition marker is nonempty"
+    );
+    if let Some(generated_item) = parts.last_mut() {
+        generated_item.push_str("{def#");
+        generated_item.push_str(marker);
+        generated_item.push('}');
+    }
+}
+
+fn rvs_function_segment_without_identity_marker(segment: &str) -> &str {
+    rvs_next_identity_marker(segment, 0).map_or(segment, |(start, _)| {
+        segment
+            .get(..start)
+            .expect("never: marker starts on a UTF-8 boundary")
+    })
 }
 
 impl DefPath {
@@ -227,9 +251,9 @@ impl DefPath {
         &self.0
     }
 
-    /// Return the user-facing path without internal impl identity markers.
+    /// Return the user-facing path without internal identity markers.
     pub(crate) fn rvs_user_path(&self) -> Cow<'_, str> {
-        rvs_strip_impl_markers(&self.0)
+        rvs_strip_identity_markers(&self.0)
     }
 
     /// Return the last function-name segment of the def-path.
@@ -253,34 +277,51 @@ impl DefPath {
     }
 }
 
-fn rvs_strip_impl_markers(path: &str) -> Cow<'_, str> {
-    const PREFIX: &str = "{impl#";
+pub(crate) fn rvs_strip_identity_markers(path: &str) -> Cow<'_, str> {
     let mut cursor = 0usize;
     let mut output = String::new();
-    let mut changed = false;
-    while let Some(relative_start) = path.get(cursor..).and_then(|rest| rest.find(PREFIX)) {
+    while let Some((start, end)) = rvs_next_identity_marker(path, cursor) {
+        output.push_str(
+            path.get(cursor..start)
+                .expect("never: marker starts on a UTF-8 boundary"),
+        );
+        cursor = end;
+    }
+    if cursor == 0 {
+        Cow::Borrowed(path)
+    } else {
+        output.push_str(
+            path.get(cursor..)
+                .expect("never: marker ends on a UTF-8 boundary"),
+        );
+        Cow::Owned(output)
+    }
+}
+
+fn rvs_next_identity_marker(path: &str, start_at: usize) -> Option<(usize, usize)> {
+    debug_assert!(start_at <= path.len(), "marker search starts inside path");
+    const PREFIXES: [&str; 2] = ["{impl#", "{def#"];
+    let mut cursor = start_at;
+    while let Some((relative_start, prefix)) = path.get(cursor..).and_then(|rest| {
+        PREFIXES
+            .into_iter()
+            .filter_map(|prefix| rest.find(prefix).map(|start| (start, prefix)))
+            .min_by_key(|(start, _)| *start)
+    }) {
         let start = cursor + relative_start;
-        let digits_start = start + PREFIX.len();
+        let digits_start = start + prefix.len();
         let Some(relative_end) = path.get(digits_start..).and_then(|rest| rest.find('}')) else {
             break;
         };
         let end = digits_start + relative_end;
         let digits = path.get(digits_start..end).unwrap_or("");
         if !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-            output.push_str(path.get(cursor..start).unwrap_or(""));
-            cursor = end + 1;
-            changed = true;
+            return Some((start, end + 1));
         } else {
-            output.push_str(path.get(cursor..digits_start).unwrap_or(""));
             cursor = digits_start;
         }
     }
-    if !changed {
-        Cow::Borrowed(path)
-    } else {
-        output.push_str(path.get(cursor..).unwrap_or(""));
-        Cow::Owned(output)
-    }
+    None
 }
 
 impl fmt::Display for DefPath {
@@ -431,5 +472,26 @@ mod tests {
         );
         assert_eq!(path.rvs_fn_name_str(), "rvs_run_BI");
         assert!(path.rvs_contains("Worker::rvs_run_BI"));
+    }
+
+    #[test]
+    fn test_20260731_def_path_hides_generated_definition_marker() {
+        let path =
+            DefPath::rvs_new("demo::rvs_parent::rvs_generated_S{def#4465665061746848617368}");
+        let output = format!(
+            "raw={}\nuser={}\nfunction={}\ncontains_user_path={}\n",
+            path.rvs_as_str(),
+            path,
+            path.rvs_fn_name_str(),
+            path.rvs_contains("rvs_parent::rvs_generated_S"),
+        );
+        rvs_snapshot_BIS(
+            "test_20260731_def_path_hides_generated_definition_marker",
+            &output,
+        );
+
+        assert_eq!(path.rvs_user_path(), "demo::rvs_parent::rvs_generated_S");
+        assert_eq!(path.rvs_fn_name_str(), "rvs_generated_S");
+        assert!(path.rvs_contains("rvs_parent::rvs_generated_S"));
     }
 }

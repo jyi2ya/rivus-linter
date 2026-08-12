@@ -1,0 +1,55 @@
+error: custom operator or indexing trait implementation cannot be represented in the Rivus callgraph
+  --> $DIR/tests/ui/427_unsupported_implicit_execution.rs:14:1
+   |
+LL | / impl Add for Number {
+LL | |     type Output = Self;
+LL | |
+LL | |     fn add(self, rhs: Self) -> Self::Output {
+...  |
+LL | | }
+   | |_^
+   |
+note: the lint level is defined here
+  --> $DIR/tests/ui/427_unsupported_implicit_execution.rs:7:9
+   |
+LL | #![deny(rivus::rvs_unsupported_implicit_execution)]
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: custom operator or indexing trait implementation cannot be represented in the Rivus callgraph
+  --> $DIR/tests/ui/427_unsupported_implicit_execution.rs:24:1
+   |
+LL | / impl Index<usize> for Values {
+LL | |     type Output = u8;
+LL | |
+LL | |     fn index(&self, index: usize) -> &Self::Output {
+...  |
+LL | | }
+   | |_^
+
+error: custom Drop executes implicitly and cannot be represented in the Rivus callgraph
+  --> $DIR/tests/ui/427_unsupported_implicit_execution.rs:34:1
+   |
+LL | / impl Drop for Resource {
+LL | |     fn drop(&mut self) {}
+LL | | }
+   | |_^
+
+error: explicit Fn/FnMut/FnOnce invocation hides the callable target from Rivus
+  --> $DIR/tests/ui/427_unsupported_implicit_execution.rs:49:13
+   |
+LL |     let _ = FnOnce::call_once(callback, ());
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: explicit Fn/FnMut/FnOnce invocation hides the callable target from Rivus
+  --> $DIR/tests/ui/427_unsupported_implicit_execution.rs:51:13
+   |
+LL |     let _ = callback.call_once(());
+   |             ^^^^^^^^^^^^^^^^^^^^^^
+
+error: inline asm execution is opaque to Rivus capability analysis
+  --> $DIR/tests/ui/427_unsupported_implicit_execution.rs:56:9
+   |
+LL |         core::arch::asm!("nop");
+   |         ^^^^^^^^^^^^^^^^^^^^^^^
+
+error: aborting due to 6 previous errors

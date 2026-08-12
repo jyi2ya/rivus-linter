@@ -1,2 +1,2 @@
-MissingSideEffect={OfflineCapsEmissionAnchor { identity: FunctionIdentity { crate_id: 10, def_path: DefPath("demo::rvs_read_cache") }, call_site: None, expectation_only: false }}
-StaticRef={OfflineCapsEmissionAnchor { identity: FunctionIdentity { crate_id: 10, def_path: DefPath("demo::rvs_read_cache") }, call_site: None, expectation_only: false }}
+MissingSideEffect={OfflineCapsEmissionAnchor { identity: FunctionIdentity { crate_id: 10, def_path: DefPath("demo::rvs_read_cache") }, call_site: None }}
+StaticRef={OfflineCapsEmissionAnchor { identity: FunctionIdentity { crate_id: 10, def_path: DefPath("demo::rvs_read_cache") }, call_site: None }}

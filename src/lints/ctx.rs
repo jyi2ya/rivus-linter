@@ -4,7 +4,7 @@ use rustc_hir::HirId;
 use rustc_span::{Ident, Span};
 
 use super::body::BodyFacts;
-use crate::artifacts::{CallSiteIdentity, FnGraph, FunctionIdentity};
+use crate::artifacts::{CallSiteIdentity, CrateProvenance, FnGraph, FunctionIdentity};
 
 #[derive(Debug)]
 pub(crate) struct CoverageFn {
@@ -75,29 +75,15 @@ impl<'facts, 'tcx> FnSubject<'facts, 'tcx> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::rvs_snapshot_BIS;
+    use crate::test_support::{rvs_register_test_coverage, rvs_snapshot_BIS};
 
     #[test]
-    #[expect(
-        unreachable_code,
-        reason = "coverage-only branch links the constructor exercised by rustc UI fixtures"
-    )]
     fn test_20260714_fn_subject_body_constructor_coverage() {
         rvs_snapshot_BIS(
             "test_20260714_fn_subject_body_constructor_coverage",
             "covered\n",
         );
-        if std::hint::black_box(false) {
-            let _ident: Ident = unreachable!();
-            let _hir_id: HirId = unreachable!();
-            let _span: Span = unreachable!();
-            let _sig: &rustc_hir::FnSig<'_> = unreachable!();
-            let _body: &rustc_hir::Body<'_> = unreachable!();
-            let _facts: &BodyFacts = unreachable!();
-            let _ = FnSubject::rvs_body(
-                _ident, _hir_id, _span, _sig, _body, _facts, true, false, false, false,
-            );
-        }
+        rvs_register_test_coverage(FnSubject::rvs_body);
     }
 }
 
@@ -113,4 +99,5 @@ pub(crate) struct FnCheckData<'a> {
         &'a mut BTreeMap<(FunctionIdentity, CallSiteIdentity), (HirId, Span)>,
     pub collect_caps_facts: bool,
     pub should_emit_lints: bool,
+    pub crate_provenance: CrateProvenance,
 }

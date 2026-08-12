@@ -6,4 +6,6 @@ signature_m_ignored: can_call=true missing=
 signature_a_ignored: can_call=true missing=
 signature_u_ignored: can_call=true missing=
 port_propagates: can_call=false missing=P
+port_hides_effects: can_call=true missing=
+port_still_required: can_call=false missing=P
 amu_excluded_from_missing: can_call=false missing=ST

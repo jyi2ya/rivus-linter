@@ -1,0 +1,7 @@
+diagnostics=1
+anchor_count=3
+first_anchor_caller=10:demo::rvs_alpha
+first_anchor_callee=0:<none>
+first_anchor_source=None
+exact_identity_detail=true
+why_context=true

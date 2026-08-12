@@ -1,11 +1,15 @@
 use std::collections::BTreeSet;
 
-use crate::artifacts::FnNode;
-use crate::symbols::{CrateName, DefPath, DefPathPrefix, TraitMethodIdentity};
+use crate::artifacts::{CrateProvenance, FnGraph, FnNode, FunctionIdentity};
+use crate::symbols::{
+    CrateName, DefPath, DefPathPrefix, TraitMethodIdentity, rvs_strip_identity_markers,
+};
 
 #[derive(Debug)]
 pub(crate) struct LocalScope {
     prefixes: Vec<DefPathPrefix>,
+    primary_crate_ids: BTreeSet<u64>,
+    dependency_crate_ids: BTreeSet<u64>,
 }
 
 impl LocalScope {
@@ -14,7 +18,34 @@ impl LocalScope {
             .iter()
             .map(CrateName::rvs_prefix)
             .collect();
-        Self { prefixes }
+        Self {
+            prefixes,
+            primary_crate_ids: BTreeSet::new(),
+            dependency_crate_ids: BTreeSet::new(),
+        }
+    }
+
+    pub(crate) fn rvs_for_graph(local_crate_names: &BTreeSet<CrateName>, graph: &FnGraph) -> Self {
+        let mut scope = Self::rvs_new(local_crate_names);
+        for node in graph.nodes.values() {
+            for (crate_id, target) in &node.targets {
+                match target.crate_provenance {
+                    CrateProvenance::PrimaryPackage => {
+                        scope.primary_crate_ids.insert(*crate_id);
+                    }
+                    CrateProvenance::Dependency => {
+                        scope.dependency_crate_ids.insert(*crate_id);
+                    }
+                    CrateProvenance::LegacyUnknown => {}
+                }
+            }
+        }
+        debug_assert!(
+            scope
+                .primary_crate_ids
+                .is_disjoint(&scope.dependency_crate_ids)
+        );
+        scope
     }
 
     pub(crate) fn rvs_contains(&self, def_path: &DefPath) -> bool {
@@ -22,11 +53,35 @@ impl LocalScope {
     }
 
     pub(crate) fn rvs_contains_str(&self, def_path: &str) -> bool {
+        let user_path = rvs_strip_identity_markers(def_path);
         self.prefixes
             .iter()
-            .any(|prefix| def_path.starts_with(prefix.rvs_as_str()))
-            || TraitMethodIdentity::rvs_parse(def_path)
+            .any(|prefix| user_path.starts_with(prefix.rvs_as_str()))
+            || TraitMethodIdentity::rvs_parse(user_path.as_ref())
                 .is_some_and(|identity| self.rvs_contains(&identity.rvs_trait_method_path()))
+    }
+
+    pub(crate) fn rvs_contains_target(
+        &self,
+        def_path: &DefPath,
+        provenance: CrateProvenance,
+    ) -> bool {
+        match provenance {
+            CrateProvenance::PrimaryPackage => true,
+            CrateProvenance::Dependency => false,
+            CrateProvenance::LegacyUnknown => self.rvs_contains(def_path),
+        }
+    }
+
+    pub(crate) fn rvs_contains_identity(&self, identity: &FunctionIdentity) -> bool {
+        debug_assert!(identity.crate_id > 0, "stable crate id is nonzero");
+        if self.primary_crate_ids.contains(&identity.crate_id) {
+            return true;
+        }
+        if self.dependency_crate_ids.contains(&identity.crate_id) {
+            return false;
+        }
+        self.rvs_contains(&identity.def_path)
     }
 }
 
@@ -41,9 +96,19 @@ pub(crate) struct FunctionClassification {
 }
 
 impl FunctionClassification {
+    /// Build the aggregate compatibility view used by identity-less legacy graphs.
+    /// Targeted graphs retain the graph's deduplicated aggregate roles, while locality is true
+    /// only when at least one selected target belongs to the primary package.
     pub(crate) fn rvs_new(scope: &LocalScope, def_path: &DefPath, node: &FnNode) -> Self {
         Self {
-            is_local: scope.rvs_contains(def_path),
+            is_local: node.complete
+                && if node.targets.is_empty() {
+                    scope.rvs_contains(def_path)
+                } else {
+                    node.targets
+                        .values()
+                        .any(|target| scope.rvs_contains_target(def_path, target.crate_provenance))
+                },
             is_entrypoint: node.is_entrypoint,
             is_test: node.is_test,
             is_trait_impl: node.is_trait_impl,
@@ -59,9 +124,22 @@ impl FunctionClassification {
         crate_id: u64,
     ) -> Self {
         debug_assert!(crate_id > 0, "stable crate id is nonzero");
-        let mut classification = Self::rvs_new(scope, def_path, node);
-        classification.is_entrypoint = node.rvs_is_entrypoint_for_crate(crate_id);
-        classification
+        let target = node.rvs_target(crate_id);
+        Self {
+            is_local: node.complete
+                && target.rvs_exists()
+                && scope.rvs_contains_target(def_path, target.rvs_crate_provenance()),
+            is_entrypoint: target.rvs_is_entrypoint(),
+            is_test: target.rvs_is_test(),
+            is_trait_impl: target.rvs_is_trait_impl(),
+            is_port_method: target.rvs_facts().is_port_method,
+            has_source: target.rvs_has_source(),
+        }
+    }
+
+    pub(crate) fn rvs_with_port(mut self, is_port_method: bool) -> Self {
+        self.is_port_method = is_port_method;
+        self
     }
 
     pub(crate) fn rvs_is_contract_enforced(self) -> bool {
@@ -226,6 +304,47 @@ mod tests {
     }
 
     #[test]
+    fn test_20260801_415_generated_identity_retains_canonical_crate_prefix() {
+        let scope = LocalScope::rvs_new(&BTreeSet::from([CrateName::from("demo")]));
+        let mut local_parts = vec!["demo".to_string(), "rvs_generated".to_string()];
+        crate::symbols::rvs_attach_generated_definition_marker_M(
+            &mut local_parts,
+            "657870616e73696f6e",
+        );
+        let mut std_parts = vec!["std".to_string(), "rvs_generated".to_string()];
+        crate::symbols::rvs_attach_generated_definition_marker_M(
+            &mut std_parts,
+            "657870616e73696f6e",
+        );
+        let local = DefPath::rvs_new(local_parts.join("::"));
+        let std = DefPath::rvs_new(std_parts.join("::"));
+        let output = format!(
+            "local_raw={}\nlocal_user={}\nlocal_function={}\nlocal_classified={}\nstd_raw={}\nstd_user={}\nstd_function={}\nstd_classified={}\n",
+            local.rvs_as_str(),
+            local,
+            local.rvs_fn_name_str(),
+            scope.rvs_contains(&local),
+            std.rvs_as_str(),
+            std,
+            std.rvs_fn_name_str(),
+            crate::callgraph::rvs_is_std_like_def_path(std.rvs_as_str()),
+        );
+        rvs_snapshot_BIS(
+            "test_20260801_415_generated_identity_retains_canonical_crate_prefix",
+            &output,
+        );
+
+        assert!(local.rvs_as_str().starts_with("demo::"));
+        assert_eq!(local.rvs_user_path(), "demo::rvs_generated");
+        assert_eq!(local.rvs_fn_name_str(), "rvs_generated");
+        assert!(scope.rvs_contains(&local));
+        assert!(std.rvs_as_str().starts_with("std::"));
+        assert_eq!(std.rvs_user_path(), "std::rvs_generated");
+        assert_eq!(std.rvs_fn_name_str(), "rvs_generated");
+        assert!(crate::callgraph::rvs_is_std_like_def_path(std.rvs_as_str()));
+    }
+
+    #[test]
     fn test_20260715_local_trait_impl_for_external_type_stays_local() {
         let scope = LocalScope::rvs_new(&BTreeSet::from([CrateName::from("demo")]));
         let path = DefPath::from(
@@ -261,10 +380,15 @@ mod tests {
         let scope = LocalScope::rvs_new(&BTreeSet::from([CrateName::from("demo")]));
         let path = DefPath::from("demo::main");
         let mut node = FnNode::default();
-        node.sources
-            .insert(FnSource::rvs_new("/workspace/src/lib.rs".into(), 1, 2));
-        node.production_crate_ids.extend([1, 2]);
-        node.entrypoint_crate_ids.insert(2);
+        let source = FnSource::rvs_new("/workspace/src/lib.rs".into(), 1, 2);
+        node.sources.insert(source.clone());
+        let library_target = node.rvs_test_target_M(1);
+        library_target.is_production = true;
+        library_target.sources.insert(source.clone());
+        let binary_target = node.rvs_test_target_M(2);
+        binary_target.is_production = true;
+        binary_target.is_entrypoint = true;
+        binary_target.sources.insert(source);
 
         let library = FunctionClassification::rvs_new_for_crate(&scope, &path, &node, 1);
         let binary = FunctionClassification::rvs_new_for_crate(&scope, &path, &node, 2);
@@ -284,5 +408,105 @@ mod tests {
         assert!(library.rvs_is_offline_checked());
         assert!(!binary.rvs_is_contract_enforced());
         assert!(!binary.rvs_is_offline_checked());
+    }
+
+    #[test]
+    fn test_20260726_function_classification_uses_target_facts_and_sources() {
+        let scope = LocalScope::rvs_new(&BTreeSet::from([CrateName::from("demo")]));
+        let path = DefPath::from("demo::Worker::rvs_run@demo::Runner");
+        let source = FnSource::rvs_new("/workspace/src/lib.rs".into(), 1, 2);
+        let mut node = FnNode {
+            is_trait_impl: true,
+            ..FnNode::default()
+        };
+        node.facts.is_port_method = true;
+        node.sources.insert(source.clone());
+        let ordinary_target = node.rvs_test_target_M(10);
+        ordinary_target.is_trait_impl = true;
+        ordinary_target.sources = BTreeSet::from([source]);
+        let port_target = node.rvs_test_target_M(20);
+        port_target.is_trait_impl = true;
+        port_target.facts = crate::capability::CapabilityFacts {
+            is_port_method: true,
+            ..Default::default()
+        };
+
+        let ordinary_impl = FunctionClassification::rvs_new_for_crate(&scope, &path, &node, 10);
+        let port_without_source =
+            FunctionClassification::rvs_new_for_crate(&scope, &path, &node, 20);
+        let output = format!(
+            "ordinary_impl: offline={} report={} outlier={}\nport_without_source: offline={} report={} outlier={}\n",
+            ordinary_impl.rvs_is_offline_checked(),
+            ordinary_impl.rvs_is_report_candidate(),
+            ordinary_impl.rvs_is_trait_vote_outlier_candidate(),
+            port_without_source.rvs_is_offline_checked(),
+            port_without_source.rvs_is_report_candidate(),
+            port_without_source.rvs_is_trait_vote_outlier_candidate(),
+        );
+        rvs_snapshot_BIS(
+            "test_20260726_function_classification_uses_target_facts_and_sources",
+            &output,
+        );
+
+        assert!(ordinary_impl.rvs_is_trait_vote_outlier_candidate());
+        assert!(!ordinary_impl.rvs_is_offline_checked());
+        assert!(port_without_source.rvs_is_report_candidate());
+        assert!(!port_without_source.rvs_is_offline_checked());
+    }
+
+    #[test]
+    fn test_20260729_per_target_classification_does_not_inherit_roles() {
+        let scope = LocalScope::rvs_new(&BTreeSet::from([CrateName::from("demo")]));
+        let path = DefPath::from("demo::rvs_shared");
+        let production_source = FnSource::rvs_new("/workspace/src/lib.rs".into(), 7, 17);
+        let test_source = FnSource::rvs_new("/workspace/tests/shared.rs".into(), 11, 21);
+        let mut node = FnNode {
+            is_entrypoint: true,
+            is_test: true,
+            is_trait_impl: true,
+            sources: BTreeSet::from([production_source.clone(), test_source.clone()]),
+            ..FnNode::default()
+        };
+        let production = node.rvs_test_target_M(10);
+        production.is_production = true;
+        production.sources.insert(production_source);
+        let test = node.rvs_test_target_M(20);
+        test.is_entrypoint = true;
+        test.is_test = true;
+        test.is_test_compilation = true;
+        test.is_trait_impl = true;
+        test.sources.insert(test_source);
+
+        let production = FunctionClassification::rvs_new_for_crate(&scope, &path, &node, 10);
+        let test = FunctionClassification::rvs_new_for_crate(&scope, &path, &node, 20);
+        let output = format!(
+            "production: contract={} offline={} report={} outlier={} strip={}\n\
+test: contract={} offline={} report={} outlier={} strip={}\n",
+            production.rvs_is_contract_enforced(),
+            production.rvs_is_offline_checked(),
+            production.rvs_is_report_candidate(),
+            production.rvs_is_trait_vote_outlier_candidate(),
+            production.rvs_is_strip_candidate(),
+            test.rvs_is_contract_enforced(),
+            test.rvs_is_offline_checked(),
+            test.rvs_is_report_candidate(),
+            test.rvs_is_trait_vote_outlier_candidate(),
+            test.rvs_is_strip_candidate(),
+        );
+        rvs_snapshot_BIS(
+            "test_20260729_per_target_classification_does_not_inherit_roles",
+            &output,
+        );
+
+        assert!(production.rvs_is_contract_enforced());
+        assert!(production.rvs_is_offline_checked());
+        assert!(production.rvs_is_report_candidate());
+        assert!(!production.rvs_is_trait_vote_outlier_candidate());
+        assert!(production.rvs_is_strip_candidate());
+        assert!(!test.rvs_is_contract_enforced());
+        assert!(!test.rvs_is_offline_checked());
+        assert!(!test.rvs_is_report_candidate());
+        assert!(test.rvs_is_trait_vote_outlier_candidate());
+        assert!(!test.rvs_is_strip_candidate());
     }
 }

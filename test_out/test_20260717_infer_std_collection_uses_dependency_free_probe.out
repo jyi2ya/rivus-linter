@@ -1,0 +1,5 @@
+child_success=true
+cwd_is_probe=true
+dependency_free=true
+standalone=true
+std_debug_assertions_disabled=true

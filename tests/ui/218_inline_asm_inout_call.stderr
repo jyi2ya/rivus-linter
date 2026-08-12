@@ -1,5 +1,5 @@
 error: caller lacks propagated capabilities required by callee; callee: 218_inline_asm_inout_call::rvs_read_BI; caller declared caps: pure; callee caps: BI; missing propagated caps: B, I
-  --> $DIR/tests/ui/218_inline_asm_inout_call.rs:12:32
+  --> $DIR/tests/ui/218_inline_asm_inout_call.rs:15:32
    |
 LL |             value = inout(reg) rvs_read_BI() => _,
    |                                ^^^^^^^^^^^^^

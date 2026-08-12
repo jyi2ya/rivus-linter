@@ -1,0 +1,13 @@
+error: scoped Rivus lint levels are unsupported; configure Rivus lints only at crate root
+  --> $DIR/tests/ui/243_scoped_rivus_test_attr_rejected.rs:8:5
+   |
+LL |     fn test_20260714_duplicate_test_allow_ok() {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: scoped Rivus lint levels are unsupported; configure Rivus lints only at crate root
+  --> $DIR/tests/ui/243_scoped_rivus_test_attr_rejected.rs:14:5
+   |
+LL |     fn test_20260714_duplicate_test_allow_ok() {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: aborting due to 2 previous errors

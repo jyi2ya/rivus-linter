@@ -1,0 +1,6 @@
+begin_only: rejected=true actionable=true cargo_unchanged=true agents_unchanged=true
+end_only: rejected=true actionable=true cargo_unchanged=true agents_unchanged=true
+end_before_begin: rejected=true actionable=true cargo_unchanged=true agents_unchanged=true
+duplicate_begin: rejected=true actionable=true cargo_unchanged=true agents_unchanged=true
+duplicate_end: rejected=true actionable=true cargo_unchanged=true agents_unchanged=true
+inline_begin: rejected=true actionable=true cargo_unchanged=true agents_unchanged=true

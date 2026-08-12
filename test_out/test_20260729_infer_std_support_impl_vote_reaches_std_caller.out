@@ -1,0 +1,5 @@
+caller_caps=S
+alias_caps=S
+support_inferred=true
+support_serialized=false
+serialized_paths=std::Parser::rvs_parse,std::rvs_use_parser

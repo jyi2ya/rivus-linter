@@ -1,0 +1,13 @@
+error: scoped Rivus lint levels are unsupported; configure Rivus lints only at crate root
+  --> $DIR/tests/ui/201_scoped_rivus_attr_rejected.rs:9:5
+   |
+LL |     value: &'static String,
+   |     ^^^^^^^^^^^^^^^^^^^^^^
+
+error: scoped Rivus lint levels are unsupported; configure Rivus lints only at crate root
+  --> $DIR/tests/ui/201_scoped_rivus_attr_rejected.rs:14:5
+   |
+LL |     let _ = Result::<(), ()>::Err(()).ok();
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: aborting due to 2 previous errors

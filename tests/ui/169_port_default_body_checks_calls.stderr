@@ -1,5 +1,5 @@
 error: caller lacks propagated capabilities required by callee; callee: 169_port_default_body_checks_calls::rvs_read_BI; caller declared caps: P; callee caps: BI; missing propagated caps: B, I
-  --> $DIR/tests/ui/169_port_default_body_checks_calls.rs:14:9
+  --> $DIR/tests/ui/169_port_default_body_checks_calls.rs:16:9
    |
 LL |         rvs_read_BI()
    |         ^^^^^^^^^^^^^

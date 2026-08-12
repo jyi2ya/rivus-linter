@@ -3,8 +3,10 @@
 #![allow(non_snake_case)]
 #![allow(rivus::rvs_untested_ok_fn)]
 
-trait ApiClient {
-    fn rvs_fetch_BI(&self) -> i32 {
+trait FetchApi {
+    type World;
+
+    fn rvs_fetch_BI(_world: &Self::World) -> i32 {
         1
     }
 }
@@ -12,9 +14,14 @@ trait ApiClient {
 #[derive(Debug)]
 struct Api;
 
-impl ApiClient for Api {}
+#[derive(Debug)]
+struct ApiWorld;
+
+impl FetchApi for Api {
+    type World = ApiWorld;
+}
 
 #[test]
 fn test_20260703_fetch_default() {
-    let _ = Api.rvs_fetch_BI();
+    let _ = Api::rvs_fetch_BI(&ApiWorld);
 }

@@ -4,7 +4,7 @@
 
 fn rvs_banned_imports_ok() {
     use std::collections::HashMap;
-    let _: Option<HashMap<i32, i32>> = None;
+    let _: Option<&HashMap<i32, i32>> = None;
 }
 
 #[test]

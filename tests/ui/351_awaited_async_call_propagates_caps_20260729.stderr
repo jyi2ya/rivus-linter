@@ -1,0 +1,9 @@
+error: caller lacks propagated capabilities required by callee; callee: 351_awaited_async_call_propagates_caps_20260729::rvs_effect_ABI; caller declared caps: A; callee caps: ABI; missing propagated caps: B, I
+  --> $DIR/tests/ui/351_awaited_async_call_propagates_caps_20260729.rs:12:5
+   |
+LL |     rvs_effect_ABI().await;
+   |     ^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(rivus::rvs_call_violation)]` on by default
+
+error: aborting due to 1 previous error

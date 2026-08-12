@@ -10,4 +10,5 @@ fn rvs_nested_result_drop_S() {
         let result: Fallible = Err(Error);
         drop(result);
     };
+    _closure();
 }

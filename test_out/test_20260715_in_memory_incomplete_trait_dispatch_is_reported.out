@@ -5,7 +5,9 @@ warning[incomplete_caps_knowledge]: demo::rvs_use_parser
   layer: <inference>
   file: <callgraph>
   completeness: incomplete
+  knowledge bases: inferred
   affected callees: 1
-  callee: demo::Parser::rvs_parse (known caps: pure, basis=inferred)
-  refresh generated layer '<inference>' or add reviewed corrections to caps/ext
+  callee: demo::Parser::rvs_parse [crate_id=1] (known caps: pure, basis=inferred)
   affected callers: 1
+  caller: demo::rvs_use_parser [crate_id=1]
+  local inference is incomplete because the call graph reaches unknown or incomplete knowledge (callee target crate_id=1: demo::Parser::rvs_parse); inspect `cargo rivus why 'demo::Parser::rvs_parse' .`; `<inference>` is computed during check and is not a refreshable caps layer

@@ -1,4 +1,11 @@
+// check-pass
+// const-eval calls are compile-time only; they are excluded from the
+// runtime callgraph and do not propagate capabilities.
+#![feature(register_tool)]
+#![register_tool(rivus)]
 #![allow(non_snake_case)]
+#![allow(rivus::rvs_unsupported_implicit_execution)]
+#![allow(rivus::rvs_untested_good_fn)]
 
 const fn rvs_count_B() -> usize {
     1

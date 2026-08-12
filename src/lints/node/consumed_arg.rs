@@ -3,7 +3,6 @@ use rustc_lint::LateContext;
 use rustc_middle::ty::{AliasTyKind, Ty, TyKind, TypeVisitableExt};
 
 use super::super::RVS_CONSUMED_ARG_ON_ERROR;
-use super::super::body::BodyFacts;
 use super::super::msg::rvs_emit_node_span_lint_S;
 use super::super::utils::rvs_tys;
 use super::result_return::rvs_result_return;
@@ -14,7 +13,6 @@ pub(crate) fn rvs_check_fn_MS<'tcx>(
     cx: &LateContext<'tcx>,
     sig: &'tcx rustc_hir::FnSig<'tcx>,
     params: &'tcx [rustc_hir::Param<'tcx>],
-    body_facts: &BodyFacts,
     fn_name: &str,
 ) {
     let Some(result) = rvs_result_return(cx, sig) else {
@@ -26,10 +24,6 @@ pub(crate) fn rvs_check_fn_MS<'tcx>(
     if rvs_error_type_is_uninhabited(cx, result.error) {
         return;
     }
-    if !body_facts.has_potential_error_return {
-        return;
-    }
-
     let Some(first_input) = sig.decl.inputs.first() else {
         return;
     };

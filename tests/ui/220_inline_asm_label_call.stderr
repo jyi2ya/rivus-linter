@@ -1,5 +1,5 @@
 error: caller lacks propagated capabilities required by callee; callee: 220_inline_asm_label_call::rvs_read_BI; caller declared caps: pure; callee caps: BI; missing propagated caps: B, I
-  --> $DIR/tests/ui/220_inline_asm_label_call.rs:11:13
+  --> $DIR/tests/ui/220_inline_asm_label_call.rs:14:13
    |
 LL |             rvs_read_BI();
    |             ^^^^^^^^^^^^^

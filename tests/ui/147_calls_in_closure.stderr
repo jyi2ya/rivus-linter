@@ -1,9 +1,20 @@
-error: caller lacks propagated capabilities required by callee; callee: 147_calls_in_closure::rvs_inner_ABI; caller declared caps: pure; callee caps: ABI; missing propagated caps: B, I
-  --> $DIR/tests/ui/147_calls_in_closure.rs:10:9
+error[E0710]: unknown tool name `rivus` found in scoped lint: `rivus::rvs_unsupported_indirect_call`
+  --> $DIR/tests/ui/147_calls_in_closure.rs:3:10
    |
-LL |         rvs_inner_ABI();
-   |         ^^^^^^^^^^^^^^^
+LL | #![allow(rivus::rvs_unsupported_indirect_call)]
+   |          ^^^^^
    |
-   = note: `#[deny(rivus::rvs_call_violation)]` on by default
+   = help: add `#![register_tool(rivus)]` to the crate root
 
-error: aborting due to 1 previous error
+error[E0710]: unknown tool name `rivus` found in scoped lint: `rivus::rvs_unsupported_indirect_call`
+  --> $DIR/tests/ui/147_calls_in_closure.rs:3:10
+   |
+LL | #![allow(rivus::rvs_unsupported_indirect_call)]
+   |          ^^^^^
+   |
+   = help: add `#![register_tool(rivus)]` to the crate root
+   = note: duplicate diagnostic emitted due to `-Z deduplicate-diagnostics=no`
+
+error: aborting due to 2 previous errors
+
+For more information about this error, try `rustc --explain E0710`.

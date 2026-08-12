@@ -1,1 +1,1 @@
-Err("$TMP/target/rivus-callgraph/a.json: invalid callgraph JSON: expected ident at line 1 column 2")
+Err(ParseArtifact { path: "$TMP/target/rivus-callgraph/a.json", source: InvalidJson { source: Error("expected ident", line: 1, column: 2) } })

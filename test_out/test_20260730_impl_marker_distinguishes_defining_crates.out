@@ -1,0 +1,4 @@
+same_input=true
+trait_versions_distinct=true
+self_versions_distinct=true
+local_targets_stable=true

@@ -71,25 +71,11 @@ pub(crate) fn rvs_result_return<'tcx>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::rvs_snapshot_BIS;
+    use crate::test_support::{rvs_register_test_coverage, rvs_snapshot_BIS};
 
     #[test]
-    #[expect(
-        unreachable_code,
-        reason = "coverage-only branch links rustc-context logic exercised by Result-return UI fixtures"
-    )]
     fn test_20260714_result_return_ui_coverage() {
         rvs_snapshot_BIS("test_20260714_result_return_ui_coverage", "covered\n");
-        if std::hint::black_box(false) {
-            let _cx: &LateContext<'_> = unreachable!();
-            let _sig: &rustc_hir::FnSig<'_> = unreachable!();
-            let _ty: Ty<'_> = unreachable!();
-            let result = ResultReturn {
-                ok: _ty,
-                error: _ty,
-            };
-            let _ = result.rvs_ok_is_unit();
-            let _ = rvs_result_return(_cx, _sig);
-        }
+        rvs_register_test_coverage((ResultReturn::rvs_ok_is_unit, rvs_result_return));
     }
 }

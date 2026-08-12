@@ -1,0 +1,16 @@
+error: call through function pointer or generic callable — Rivus cannot resolve the target at HIR level
+  --> $DIR/tests/ui/419_unsupported_indirect_call_warns.rs:10:5
+   |
+LL |     callback();
+   |     ^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-unsupported-indirect-call` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_unsupported_indirect_call)]`
+
+error: call through function pointer or generic callable — Rivus cannot resolve the target at HIR level
+  --> $DIR/tests/ui/419_unsupported_indirect_call_warns.rs:15:5
+   |
+LL |     callback();
+   |     ^^^^^^^^^^
+
+error: aborting due to 2 previous errors

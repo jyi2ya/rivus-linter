@@ -1,0 +1,4 @@
+weak_edge=Some(Weak)
+strong_edge=Some(Strong)
+occurrence_of_weak=Some(0)
+occurrence_of_strong=Some(1)

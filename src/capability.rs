@@ -232,6 +232,7 @@ pub(crate) enum CapabilityCompleteness {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(deny_unknown_fields)]
 pub(crate) enum CapabilityBasis {
     Explicit,
     Inferred,
@@ -241,7 +242,6 @@ pub(crate) enum CapabilityBasis {
         votes: BTreeMap<Capability, usize>,
     },
     Port,
-    MigratedV1,
 }
 
 impl CapabilityBasis {
@@ -251,7 +251,6 @@ impl CapabilityBasis {
             Self::Inferred => "inferred",
             Self::TraitVote { .. } => "trait_vote",
             Self::Port => "port",
-            Self::MigratedV1 => "migrated_v1",
         }
     }
 }
@@ -290,12 +289,6 @@ pub(crate) enum CapabilityKnowledgeError {
         basis: &'static str,
         completeness: &'static str,
     },
-    #[snafu(display(
-        "basis 'inferred' requires completeness 'complete' or 'incomplete', got 'unknown'"
-    ))]
-    InferredUnknownCompleteness,
-    #[snafu(display("basis 'migrated_v1' requires completeness 'unknown', got '{completeness}'"))]
-    MigratedV1Completeness { completeness: &'static str },
     #[snafu(display("Port knowledge must contain exactly P, got '{caps}'"))]
     PortCaps { caps: String },
     #[snafu(display("trait vote must contain at least one implementation"))]
@@ -343,6 +336,7 @@ impl CapabilityInfo {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn rvs_explicit(caps: CapabilitySet) -> Self {
         Self::rvs_new(
             caps,
@@ -357,13 +351,6 @@ impl CapabilityInfo {
             CapabilityBasis::Inferred,
             CapabilityCompleteness::Complete,
         )
-    }
-
-    pub(crate) fn rvs_migrated_v1(
-        caps: CapabilitySet,
-        completeness: CapabilityCompleteness,
-    ) -> Self {
-        Self::rvs_new(caps, CapabilityBasis::MigratedV1, completeness)
     }
 
     pub(crate) fn rvs_trait_vote(
@@ -423,11 +410,7 @@ impl CapabilityInfo {
                     });
                 }
             }
-            CapabilityBasis::Inferred => {
-                if self.completeness == CapabilityCompleteness::Unknown {
-                    return Err(CapabilityKnowledgeError::InferredUnknownCompleteness);
-                }
-            }
+            CapabilityBasis::Inferred => {}
             CapabilityBasis::Port => {
                 if self.completeness != CapabilityCompleteness::Complete {
                     return Err(CapabilityKnowledgeError::CompleteBasis {
@@ -438,13 +421,6 @@ impl CapabilityInfo {
                 if self.caps != CapabilityPolicy::rvs_port_method_caps() {
                     return Err(CapabilityKnowledgeError::PortCaps {
                         caps: self.caps.rvs_letters(),
-                    });
-                }
-            }
-            CapabilityBasis::MigratedV1 => {
-                if self.completeness != CapabilityCompleteness::Unknown {
-                    return Err(CapabilityKnowledgeError::MigratedV1Completeness {
-                        completeness: self.completeness.rvs_name(),
                     });
                 }
             }
@@ -506,24 +482,29 @@ impl CapabilityInfo {
 
 /// Facts observed from a function signature/body before policy is applied.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CapabilityFacts {
-    #[serde(default)]
     pub has_async: bool,
-    #[serde(default)]
     pub is_unsafe_fn: bool,
-    #[serde(default)]
     pub has_mut_param: bool,
-    #[serde(default)]
     pub has_static_ref: bool,
-    #[serde(default)]
     pub has_static_mut_ref: bool,
-    #[serde(default)]
     pub has_thread_local_ref: bool,
-    #[serde(default)]
     pub is_port_method: bool,
 }
 
 impl CapabilityFacts {
+    /// Merge observations from another compilation of the same function.
+    pub fn rvs_merge_M(&mut self, other: Self) {
+        self.has_async |= other.has_async;
+        self.is_unsafe_fn |= other.is_unsafe_fn;
+        self.has_mut_param |= other.has_mut_param;
+        self.has_static_ref |= other.has_static_ref;
+        self.has_static_mut_ref |= other.has_static_mut_ref;
+        self.has_thread_local_ref |= other.has_thread_local_ref;
+        self.is_port_method |= other.is_port_method;
+    }
+
     /// Build capability facts from a function signature and precomputed mutability.
     pub fn rvs_from_signature(
         sig: &rustc_hir::FnSig<'_>,
@@ -563,7 +544,18 @@ impl CapabilityFacts {
 pub struct CapabilityPolicy;
 
 impl CapabilityPolicy {
-    /// Return the public capability view of every Port trait method.
+    /// Return capabilities propagated from callees to callers in canonical order.
+    pub const fn rvs_propagated_caps() -> [Capability; 5] {
+        [
+            Capability::B,
+            Capability::I,
+            Capability::P,
+            Capability::S,
+            Capability::T,
+        ]
+    }
+
+    /// Return the capability that every World Port operation has by structure.
     pub fn rvs_port_method_caps() -> CapabilitySet {
         let mut caps = CapabilitySet::rvs_new();
         caps.rvs_insert_M(Capability::P);
@@ -572,10 +564,10 @@ impl CapabilityPolicy {
 
     /// Infer initial capabilities from function facts before call propagation.
     pub fn rvs_signature_caps(facts: CapabilityFacts) -> CapabilitySet {
-        if facts.is_port_method {
-            return Self::rvs_port_method_caps();
-        }
         let mut caps = CapabilitySet::rvs_new();
+        if facts.is_port_method {
+            caps.rvs_insert_M(Capability::P);
+        }
         if facts.has_async {
             caps.rvs_insert_M(Capability::A);
         }
@@ -585,6 +577,28 @@ impl CapabilityPolicy {
         if facts.has_mut_param {
             caps.rvs_insert_M(Capability::M);
         }
+        let _ = caps.rvs_extend_filtered_M(&Self::rvs_static_caps(facts), |_| true);
+        caps
+    }
+
+    /// Infer the operation-owned portion of a World Port contract.
+    ///
+    /// Body observations are checked against the voted contract rather than
+    /// defining the contract they are meant to satisfy.
+    pub fn rvs_port_operation_signature_caps(mut facts: CapabilityFacts) -> CapabilitySet {
+        debug_assert!(
+            facts.is_port_method,
+            "operation must belong to a World Port"
+        );
+        facts.has_static_ref = false;
+        facts.has_static_mut_ref = false;
+        facts.has_thread_local_ref = false;
+        Self::rvs_signature_caps(facts)
+    }
+
+    /// Return capabilities required by static and thread-local observations.
+    pub fn rvs_static_caps(facts: CapabilityFacts) -> CapabilitySet {
+        let mut caps = CapabilitySet::rvs_new();
         if facts.has_static_mut_ref {
             caps.rvs_insert_M(Capability::S);
             caps.rvs_insert_M(Capability::U);
@@ -598,9 +612,49 @@ impl CapabilityPolicy {
         caps
     }
 
+    /// Aggregate propagated capabilities selected by an at-least-half vote.
+    pub(crate) fn rvs_at_least_half_vote<'a>(
+        implementations: impl IntoIterator<Item = &'a CapabilitySet>,
+    ) -> Option<(CapabilitySet, usize, BTreeMap<Capability, usize>)> {
+        let implementations: Vec<&CapabilitySet> = implementations.into_iter().collect();
+        if implementations.is_empty() {
+            return None;
+        }
+        let threshold = implementations.len().div_ceil(2);
+        let mut counts = BTreeMap::new();
+        for caps in &implementations {
+            for capability in caps
+                .rvs_iter()
+                .filter(|capability| Self::rvs_is_propagated_cap(*capability))
+            {
+                *counts.entry(capability).or_default() += 1;
+            }
+        }
+        let mut selected = CapabilitySet::rvs_new();
+        for (capability, count) in &counts {
+            if *count >= threshold {
+                selected.rvs_insert_M(*capability);
+            }
+        }
+        Some((selected, threshold, counts))
+    }
+
     /// Return whether a capability propagates from callees to callers.
     pub fn rvs_is_propagated_cap(cap: Capability) -> bool {
-        !matches!(cap, Capability::A | Capability::M | Capability::U)
+        Self::rvs_propagated_caps().contains(&cap)
+    }
+
+    /// Return the capabilities required across a call edge.
+    ///
+    /// A callee containing `P` is reached through a Port boundary, so its
+    /// concrete implementation effects do not propagate to the caller.
+    pub fn rvs_call_edge_caps(callee: &CapabilitySet) -> CapabilitySet {
+        if callee.rvs_contains(Capability::P) {
+            return Self::rvs_port_method_caps();
+        }
+        let mut propagated = CapabilitySet::rvs_new();
+        let _ = propagated.rvs_extend_filtered_M(callee, Self::rvs_is_propagated_cap);
+        propagated
     }
 
     /// Return whether signature inference requires a suffix capability.
@@ -639,19 +693,17 @@ impl CapabilityPolicy {
 
     /// Return whether `caller` is allowed to call `callee`.
     pub fn rvs_can_call(caller: &CapabilitySet, callee: &CapabilitySet) -> bool {
-        callee
+        Self::rvs_call_edge_caps(callee)
             .0
             .iter()
-            .all(|cap| !Self::rvs_is_propagated_cap(*cap) || caller.0.contains(cap))
+            .all(|cap| caller.0.contains(cap))
     }
 
     /// Return the capabilities missing from `caller` when calling `callee`.
     pub fn rvs_missing_for(caller: &CapabilitySet, callee: &CapabilitySet) -> BTreeSet<Capability> {
-        callee
+        Self::rvs_call_edge_caps(callee)
             .0
-            .iter()
-            .filter(|cap| Self::rvs_is_propagated_cap(**cap))
-            .copied()
+            .into_iter()
             .filter(|cap| !caller.0.contains(cap))
             .collect()
     }
@@ -791,7 +843,7 @@ pub enum CapabilityParseError {
 /// 亦能处理路径限定之名，如 `CapsMap::rvs_parse`，
 /// 取末段路径片段而拆之。
 ///
-/// 例：rvs_write_db_ABI     → 基名 write_db，能力 {A, B, I}
+/// 例：rvs_write_db_AIS     → 基名 write_db，能力 {A, I, S}
 /// 例：rvs_add               → 基名 add，能力 {}
 /// 例：CapsMap::rvs_parse  → 基名 parse，能力 {}
 pub fn rvs_parse_function(name: &str) -> Option<(&str, CapabilitySet)> {
@@ -805,7 +857,7 @@ pub fn rvs_parse_function(name: &str) -> Option<(&str, CapabilitySet)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::rvs_snapshot_BIS;
+    use crate::test_support::{rvs_register_test_coverage, rvs_snapshot_BIS};
 
     fn rvs_caps_letters(caps: &CapabilitySet) -> String {
         caps.rvs_iter().map(|cap| cap.rvs_as_char()).collect()
@@ -854,7 +906,7 @@ mod tests {
                 "B",
                 CapabilityBasis::Inferred,
                 CapabilityCompleteness::Unknown,
-                false,
+                true,
             ),
             (
                 "port_complete",
@@ -868,20 +920,6 @@ mod tests {
                 "P",
                 CapabilityBasis::Port,
                 CapabilityCompleteness::Incomplete,
-                false,
-            ),
-            (
-                "migrated_unknown",
-                "B",
-                CapabilityBasis::MigratedV1,
-                CapabilityCompleteness::Unknown,
-                true,
-            ),
-            (
-                "migrated_complete",
-                "B",
-                CapabilityBasis::MigratedV1,
-                CapabilityCompleteness::Complete,
                 false,
             ),
             (
@@ -933,10 +971,10 @@ mod tests {
                     .map_or_else(|error| format!("error={error}"), |_| "ok".to_string())
             ));
             assert_eq!(result.is_ok(), expected_valid, "{name}");
-            if name == "inferred_unknown" {
+            if name == "explicit_incomplete" {
                 assert!(matches!(
                     result,
-                    Err(CapabilityKnowledgeError::InferredUnknownCompleteness)
+                    Err(CapabilityKnowledgeError::CompleteBasis { .. })
                 ));
             }
         }
@@ -1034,6 +1072,8 @@ mod tests {
             ("signature_a_ignored", "B", "BA", true, ""),
             ("signature_u_ignored", "B", "BU", true, ""),
             ("port_propagates", "B", "BP", false, "P"),
+            ("port_hides_effects", "P", "BIPST", true, ""),
+            ("port_still_required", "BIST", "BIPST", false, "P"),
             ("amu_excluded_from_missing", "B", "ABSTU", false, "ST"),
         ];
         let mut output = String::new();
@@ -1053,10 +1093,6 @@ mod tests {
     }
 
     #[test]
-    #[expect(
-        unreachable_code,
-        reason = "coverage-only unreachable branch keeps builder helpers visible to rivus test-call collection"
-    )]
     fn test_20260702_capability_policy_signature_caps() {
         let mut facts = CapabilityFacts::default();
         facts.has_async = true;
@@ -1086,8 +1122,7 @@ mod tests {
         let mut port_facts = facts;
         port_facts.is_port_method = true;
         let port_caps = CapabilityPolicy::rvs_signature_caps(port_facts);
-        assert_eq!(port_caps.rvs_len(), 1);
-        assert!(port_caps.rvs_contains(Capability::P));
+        assert_eq!(port_caps.rvs_letters(), "AMPSTU");
         assert!(CapabilityPolicy::rvs_is_propagated_cap(Capability::P));
         assert!(!CapabilityPolicy::rvs_is_propagated_cap(Capability::A));
         assert!(!CapabilityPolicy::rvs_is_propagated_cap(Capability::M));
@@ -1095,10 +1130,7 @@ mod tests {
 
         let _ = CapabilityFacts::default().rvs_with_static_refs(true, false, true);
 
-        if std::hint::black_box(false) {
-            let _sig: &rustc_hir::FnSig<'_> = unreachable!();
-            CapabilityFacts::rvs_from_signature(_sig, true, false);
-        }
+        rvs_register_test_coverage(CapabilityFacts::rvs_from_signature);
     }
 
     #[test]
@@ -1306,5 +1338,67 @@ mod tests {
             assert_eq!(actual, expected, "{input}");
         }
         rvs_snapshot_BIS("test_20260709_capability_set_display_table", &output);
+    }
+
+    #[test]
+    fn test_20260725_capability_policy_centralizes_static_and_trait_vote_rules() {
+        let mut facts = CapabilityFacts {
+            has_async: true,
+            ..CapabilityFacts::default()
+        };
+        facts.rvs_merge_M(CapabilityFacts {
+            has_mut_param: true,
+            has_static_mut_ref: true,
+            has_thread_local_ref: true,
+            ..CapabilityFacts::default()
+        });
+        let static_caps = CapabilityPolicy::rvs_static_caps(facts);
+        let implementations = [
+            CapabilitySet::rvs_from_validated("BS"),
+            CapabilitySet::rvs_from_validated("B"),
+            CapabilitySet::rvs_from_validated("IS"),
+        ];
+        let (selected, threshold, votes) =
+            CapabilityPolicy::rvs_at_least_half_vote(implementations.iter())
+                .expect("never: non-empty implementations produce a vote");
+        let vote_text = votes
+            .iter()
+            .map(|(capability, count)| format!("{}:{count}", capability.rvs_as_char()))
+            .collect::<Vec<_>>()
+            .join(",");
+        let output = format!(
+            "merged_facts={}\nstatic_caps={}\nselected={}\nthreshold={threshold}\nvotes={vote_text}\n",
+            CapabilityPolicy::rvs_signature_caps(facts).rvs_letters(),
+            static_caps.rvs_letters(),
+            selected.rvs_letters(),
+        );
+        rvs_snapshot_BIS(
+            "test_20260725_capability_policy_centralizes_static_and_trait_vote_rules",
+            &output,
+        );
+
+        assert_eq!(selected.rvs_letters(), "BS");
+        assert_eq!(threshold, 2);
+    }
+
+    #[test]
+    fn test_20260729_persisted_capability_objects_reject_unknown_fields() {
+        let facts =
+            serde_json::from_str::<CapabilityFacts>(r#"{"has_async":false,"future_fact":true}"#);
+        let basis = serde_json::from_str::<CapabilityBasis>(
+            r#"{"kind":"trait_vote","implementations":1,"threshold":1,"votes":{},"future_vote":true}"#,
+        );
+        let output = format!(
+            "facts_rejected={}\nbasis_rejected={}\n",
+            facts.is_err(),
+            basis.is_err(),
+        );
+        rvs_snapshot_BIS(
+            "test_20260729_persisted_capability_objects_reject_unknown_fields",
+            &output,
+        );
+
+        assert!(facts.is_err());
+        assert!(basis.is_err());
     }
 }

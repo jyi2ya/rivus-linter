@@ -1,1 +1,1 @@
-Err("no callgraph JSON artifacts found in $TMP/target/rivus-callgraph")
+Err(NoArtifacts { path: "$TMP/target/rivus-callgraph" })

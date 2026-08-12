@@ -1,9 +1,0 @@
-contract_diffs=0
-Offline Caps Check: 1 error(s), 0 warning(s)
-------------------------------------------------------------
-error[call_violation]: demo::Adapter::rvs_fetch_P@demo::ApiClient
-  caller lacks propagated capabilities required by callee
-  callee: dep::effect
-  caller declared caps: P
-  callee caps: S
-  missing propagated caps: S

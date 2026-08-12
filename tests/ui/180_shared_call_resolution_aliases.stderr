@@ -22,10 +22,10 @@ error: reflection — use trait dispatch instead
 LL |     let _ = value.type_id();
    |             ^^^^^^^^^^^^^^^
 
-error: pub fn 'rvs_run_ABIMS' missing /// doc comment
+error: pub fn 'rvs_run_ABIMST' missing /// doc comment
   --> $DIR/tests/ui/180_shared_call_resolution_aliases.rs:6:1
    |
-LL | / pub fn rvs_run_ABIMS() {
+LL | / pub fn rvs_run_ABIMST() {
 LL | |     launch(|| {});
 LL | |     let _ = reflected_name::<u8>();
 LL | |     let value: &dyn Any = &1u8;

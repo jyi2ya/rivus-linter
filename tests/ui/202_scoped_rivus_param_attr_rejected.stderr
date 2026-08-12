@@ -1,0 +1,13 @@
+error: scoped Rivus lint levels are unsupported; configure Rivus lints only at crate root
+  --> $DIR/tests/ui/202_scoped_rivus_param_attr_rejected.rs:6:17
+   |
+LL | fn rvs_borrowed(#[expect(rivus::rvs_borrowed_param)] value: &String) -> usize {
+   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: scoped Rivus lint levels are unsupported; configure Rivus lints only at crate root
+  --> $DIR/tests/ui/202_scoped_rivus_param_attr_rejected.rs:11:5
+   |
+LL |     #[expect(rivus::rvs_consumed_arg_on_error)] value: String,
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: aborting due to 2 previous errors

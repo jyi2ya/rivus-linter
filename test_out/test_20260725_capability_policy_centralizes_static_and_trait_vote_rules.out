@@ -1,0 +1,5 @@
+merged_facts=AMSTU
+static_caps=STU
+selected=BS
+threshold=2
+votes=B:2,I:1,S:2

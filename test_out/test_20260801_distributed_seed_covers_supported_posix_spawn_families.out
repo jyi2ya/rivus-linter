@@ -1,0 +1,3 @@
+linux-android: exact_source_records=10/10 spawn_caps=BIS spawnp_caps=BIS
+apple-source-declaration: exact_source_records=10/10 spawn_caps=BIS spawnp_caps=BIS
+apple_runtime_executed=false

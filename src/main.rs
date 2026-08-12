@@ -1,12 +1,28 @@
 #![feature(rustc_private)]
+#![feature(rustc_attrs)]
 #![feature(register_tool)]
 #![register_tool(rivus)]
+#![allow(
+    internal_features,
+    reason = "rustc driver integration and the typed test-coverage diagnostic item require internal features"
+)]
 #![allow(
     non_snake_case,
     reason = "rvs_ functions use uppercase capability suffixes"
 )]
+#![allow(
+    rivus::rvs_unsupported_implicit_execution,
+    reason = "RAII guard Drop impls must clean up generation directories during panic unwinding"
+)]
+#![allow(
+    rivus::rvs_untested_good_fn,
+    reason = "rustc-driver internal helpers, tested via full lint pass"
+)]
+#![allow(
+    rivus::rvs_missing_debug_derive,
+    reason = "rustc TyCtxt and LateContext do not implement Debug"
+)]
 
-extern crate rustc_abi;
 extern crate rustc_ast;
 extern crate rustc_driver;
 extern crate rustc_errors;
@@ -29,46 +45,50 @@ use rustc_driver::Callbacks;
 use rustc_interface::interface;
 use rustc_session::EarlyDiagCtxt;
 use rustc_session::config::ErrorOutputType;
-mod analysis_commands;
 mod artifacts;
-mod callgraph_cache;
+mod callgraph;
 mod capability;
-mod caps_migration;
 mod capsmap;
-mod cargo_targets;
-mod fs_guard;
+mod environment;
 mod function_classification;
-mod infer_commands;
 mod inference;
 mod lints;
 mod offline_caps;
-mod rename;
-mod report_commands;
-mod setup;
 mod symbols;
 #[cfg(test)]
 mod test_support;
-mod workspace;
 
-const RIVUS_MD: &str = include_str!("../rivus.md");
+use environment::{
+    analysis_commands, infer_commands, lint_driver, rename, report_commands, setup, workspace,
+};
+
+#[cfg(test)]
+const RIVUS_CONTRIBUTOR_POLICY: &str = include_str!("../rivus.md");
+const RIVUS_PROJECT_TEMPLATE: &str = include_str!("rivus-project-template.md");
 const RIVUS_MANUAL: &str = include_str!("rivus-manual.md");
 
 // ─── Driver mode ─────────────────────────────────────────────────────────
 
 #[derive(Debug)]
-struct RivusCallbacks;
+struct RivusCallbacks {
+    driver_config: workspace::RivusDriverConfig,
+}
 
 impl Callbacks for RivusCallbacks {
     fn config(&mut self, config: &mut interface::Config) {
         let previous = config.register_lints.take();
+        let driver_config = self.driver_config.clone();
         config.register_lints = Some(Box::new(move |_sess, lint_store| {
             if let Some(previous) = &previous {
                 previous(_sess, lint_store);
             }
             lint_store.register_lints(lints::RIVUS_LINTS);
-            lint_store.register_late_pass(|_| Box::new(lints::RivusLintPass::rvs_new_BIS()));
+            let driver_config = driver_config.clone();
+            lint_store.register_late_pass(move |_| {
+                let lint_config = lint_driver::rvs_prepare_lint_config_BIS(driver_config.clone());
+                Box::new(lints::RivusLintPass::rvs_new(lint_config))
+            });
         }));
-        config.opts.unstable_opts.mir_opt_level = Some(0);
     }
 }
 
@@ -80,12 +100,25 @@ impl Callbacks for DefaultCallbacks {}
 /// # Panics
 ///
 /// Panics if the current executable path is invalid or cargo cannot be spawned.
-fn rvs_run_driver_BIMPS() -> ExitCode {
+fn rvs_run_driver_BIPST() -> ExitCode {
+    let raw_args: Vec<String> = env::args().collect();
+    let direct_rustc = raw_args.get(1).is_some_and(|arg| arg == "--rustc");
+    let driver_config = if direct_rustc {
+        None
+    } else {
+        match workspace::rvs_load_driver_protocol_BIST() {
+            Ok(config) => config,
+            Err(error) => {
+                eprintln!("invalid Rivus driver protocol: {error}");
+                return ExitCode::from(2u8);
+            }
+        }
+    };
     let early_dcx = EarlyDiagCtxt::new(ErrorOutputType::default());
     rustc_driver::init_rustc_env_logger(&early_dcx);
 
     rustc_driver::catch_with_exit_code(move || {
-        let mut args: Vec<String> = env::args().collect();
+        let mut args = raw_args;
 
         if args.get(1).is_some_and(|arg| arg == "--rustc") {
             args.remove(1);
@@ -95,8 +128,8 @@ fn rvs_run_driver_BIMPS() -> ExitCode {
             return rustc_driver::run_compiler(&args, &mut DefaultCallbacks);
         }
 
-        let wrapper_mode = args.get(1).is_some_and(|arg| rvs_is_rustc_arg(arg))
-            || rvs_env_flag_is_one_BS("RIVUS_WRAPPER");
+        let wrapper_mode =
+            args.get(1).is_some_and(|arg| rvs_is_rustc_arg(arg)) || driver_config.is_some();
         if wrapper_mode {
             args.remove(1);
         }
@@ -106,27 +139,31 @@ fn rvs_run_driver_BIMPS() -> ExitCode {
         // allow for them, which causes rustc to skip the lint pass entirely).
         // Using --cap-lints warn (not removing entirely) prevents compilation
         // failures from std's #[deny(...)] attributes.
-        let rivus_enabled = wrapper_mode && rvs_rivus_enabled_BS();
+        let rivus_enabled = wrapper_mode && driver_config.is_some();
         if rivus_enabled {
             rvs_rewrite_cap_lints_M(&mut args, CapLintsRewrite::AllowToWarn);
         }
         let callgraph_lint_mode = rvs_callgraph_lint_mode(
             wrapper_mode,
             rivus_enabled,
-            rvs_env_flag_is_one_BS("RIVUS_CALLGRAPH"),
+            driver_config.as_ref().is_some_and(|config| {
+                matches!(config.mode, workspace::RivusDriverMode::Callgraph(_))
+            }),
         );
         rvs_add_callgraph_lint_args_M(&mut args, callgraph_lint_mode);
 
         if rivus_enabled {
-            rustc_driver::run_compiler(&args, &mut RivusCallbacks)
+            rustc_driver::run_compiler(
+                &args,
+                &mut RivusCallbacks {
+                    driver_config: driver_config
+                        .expect("never: enabled Rivus driver has validated configuration"),
+                },
+            )
         } else {
             rustc_driver::run_compiler(&args, &mut DefaultCallbacks)
         }
     })
-}
-
-fn rvs_rivus_enabled_BS() -> bool {
-    rvs_env_flag_is_one_BS("RIVUS_ENABLED")
 }
 
 fn rvs_env_flag_is_one_BS(name: &str) -> bool {
@@ -227,7 +264,6 @@ fn rvs_is_cli_entry_arg(arg: &str) -> bool {
             | "report"
             | "setup"
             | "infer-capsmap"
-            | "migrate-caps"
             | "strip"
             | "annotate"
             | "infer-std"
@@ -508,14 +544,14 @@ mod tests {
     fn test_20260728_suspected_linter_bug_policy_is_documented() {
         let root_agents = include_str!("../AGENTS.md");
         let readme = include_str!("../readme.pod");
-        let setup_status = RIVUS_MD
+        let contributor_status = RIVUS_CONTRIBUTOR_POLICY
             .lines()
             .find(|line| line.contains("开发状态警告（给 LLM）"))
-            .expect("never: setup template documents the development warning");
-        let setup_issue = RIVUS_MD
+            .expect("never: contributor policy documents the development warning");
+        let contributor_issue = RIVUS_CONTRIBUTOR_POLICY
             .lines()
             .find(|line| line.contains("实际使用问题记录（给 LLM）"))
-            .expect("never: setup template documents issue recording");
+            .expect("never: contributor policy documents issue recording");
         let manual_policy = RIVUS_MANUAL
             .lines()
             .find(|line| line.contains("给 LLM 的强制规则"))
@@ -528,22 +564,22 @@ mod tests {
             .lines()
             .find(|line| line.contains("必须立即停止当前工作"))
             .expect("never: README documents suspected linter bug handling");
-        let agents_matches_template = root_agents == RIVUS_MD;
+        let agents_matches_rivus = root_agents == RIVUS_CONTRIBUTOR_POLICY;
         let output = format!(
-            "agents_matches_template={agents_matches_template}\nsetup_status={setup_status}\nsetup_issue={setup_issue}\nmanual_policy={manual_policy}\nreadme_status={readme_status}\nreadme_policy={readme_policy}\n"
+            "agents_matches_rivus={agents_matches_rivus}\ncontributor_status={contributor_status}\ncontributor_issue={contributor_issue}\nmanual_policy={manual_policy}\nreadme_status={readme_status}\nreadme_policy={readme_policy}\n"
         );
         rvs_snapshot_BIS(
             "test_20260728_suspected_linter_bug_policy_is_documented",
             &output,
         );
 
-        assert!(agents_matches_template);
-        assert!(setup_status.contains("立即停止当前工作并向人类汇报"));
-        assert!(setup_status.contains("workaround"));
-        assert!(setup_issue.contains("~/var/linter-issues/"));
+        assert!(agents_matches_rivus);
+        assert!(contributor_status.contains("立即停止当前工作并向人类汇报"));
+        assert!(contributor_status.contains("workaround"));
+        assert!(contributor_issue.contains("~/var/linter-issues/"));
         for required in ["环境与版本", "复现命令", "实际结果", "预期结果", "影响"]
         {
-            assert!(setup_issue.contains(required));
+            assert!(contributor_issue.contains(required));
         }
         assert!(manual_policy.contains("等待进一步决定"));
         assert!(manual_policy.contains("workaround"));
@@ -573,10 +609,10 @@ mod tests {
     fn test_20260728_persistent_caps_update_lock_is_documented() {
         let root_agents = include_str!("../AGENTS.md");
         let theory = include_str!("../docs/theory/capability-knowledge.md");
-        let setup_lock = RIVUS_MD
+        let contributor_lock = RIVUS_CONTRIBUTOR_POLICY
             .lines()
             .find(|line| line.contains(".rivus-caps.lock"))
-            .expect("never: setup template documents the persistent caps lock");
+            .expect("never: contributor policy documents the persistent caps lock");
         let manual_lock = RIVUS_MANUAL
             .lines()
             .find(|line| line.contains(".rivus-caps.lock"))
@@ -585,53 +621,103 @@ mod tests {
             .lines()
             .find(|line| line.contains(".rivus-caps.lock"))
             .expect("never: capability theory documents the persistent caps lock");
-        let agents_matches_template = root_agents == RIVUS_MD;
+        let agents_matches_rivus = root_agents == RIVUS_CONTRIBUTOR_POLICY;
         let output = format!(
-            "agents_matches_template={agents_matches_template}\nsetup_lock={setup_lock}\nmanual_lock={manual_lock}\ntheory_lock={theory_lock}\n"
+            "agents_matches_rivus={agents_matches_rivus}\ncontributor_lock={contributor_lock}\nmanual_lock={manual_lock}\ntheory_lock={theory_lock}\n"
         );
         rvs_snapshot_BIS(
             "test_20260728_persistent_caps_update_lock_is_documented",
             &output,
         );
 
-        assert!(agents_matches_template);
-        for documented_lock in [setup_lock, manual_lock, theory_lock] {
+        assert!(agents_matches_rivus);
+        for documented_lock in [contributor_lock, manual_lock, theory_lock] {
             assert!(documented_lock.contains("进程内 registry"));
             assert!(documented_lock.contains("POSIX record lock"));
             assert!(documented_lock.contains("fork"));
         }
-        assert!(setup_lock.contains("项目根目录下持久存在"));
-        assert!(manual_lock.contains("regular file 持久保留"));
-        assert!(theory_lock.contains("regular file 承载"));
+        assert!(contributor_lock.contains("项目根目录下持久存在的"));
+        assert!(manual_lock.contains("项目根目录下持久存在的"));
+        assert!(theory_lock.contains("项目根目录下持久存在的"));
     }
 
     #[test]
-    fn test_20260715_migrate_caps_cli_parses_default_and_explicit_paths() {
-        let default = Cli::try_parse_from(["cargo-rivus", "migrate-caps"]).unwrap();
-        let explicit =
-            Cli::try_parse_from(["cargo-rivus", "migrate-caps", "/workspace/project"]).unwrap();
-        let default_path = match default.command {
-            Some(Commands::MigrateCaps { path }) => path,
-            other => panic!("expected migrate-caps command, got {other:?}"),
-        };
-        let explicit_path = match explicit.command {
-            Some(Commands::MigrateCaps { path }) => path,
-            other => panic!("expected migrate-caps command, got {other:?}"),
-        };
+    fn test_20260729_setup_cli_describes_non_destructive_merge() {
+        let mut command = Cli::command();
+        let setup_help = command
+            .find_subcommand_mut("setup")
+            .expect("never: setup subcommand exists")
+            .render_long_help()
+            .to_string();
+        let normalized = setup_help.split_whitespace().collect::<Vec<_>>().join(" ");
+        let managed_agents = normalized.contains("managed public Rivus section into AGENTS.md");
+        let missing_clippy = normalized.contains("missing clippy lints to Cargo.toml");
+        let force_option = normalized.contains("--force");
         let output = format!(
-            "default={}\nexplicit={}\ncli_entry={}\n",
-            default_path.display(),
-            explicit_path.display(),
-            rvs_is_cli_entry_arg("migrate-caps"),
+            "managed_agents={managed_agents}\nmissing_clippy={missing_clippy}\nforce_option={force_option}\n"
         );
         rvs_snapshot_BIS(
-            "test_20260715_migrate_caps_cli_parses_default_and_explicit_paths",
+            "test_20260729_setup_cli_describes_non_destructive_merge",
             &output,
         );
 
-        assert_eq!(default_path, PathBuf::from("."));
-        assert_eq!(explicit_path, PathBuf::from("/workspace/project"));
-        assert!(rvs_is_cli_entry_arg("migrate-caps"));
+        assert!(managed_agents);
+        assert!(missing_clippy);
+        assert!(!force_option);
+    }
+
+    #[test]
+    fn test_20260729_public_docs_match_setup_capability_and_cache_semantics() {
+        let agents = include_str!("../AGENTS.md");
+        let rivus = include_str!("../rivus.md");
+        let manual = RIVUS_MANUAL;
+        let theory = include_str!("../docs/theory/function-graph.md");
+        let expected_schema = format!("schema v{}", artifacts::CALLGRAPH_SCHEMA_VERSION);
+        let policy_files_identical = agents == rivus;
+        let schema_current = theory.contains(&expected_schema);
+        let cache_current = manual.contains("target/rivus-callgraph-std.json");
+        let barriers_exact = agents.contains("`B/I/P/S/T` 五个可传播能力")
+            && theory.contains("`B/I/P/S/T` 从被调用方传播到调用方")
+            && RIVUS_PROJECT_TEMPLATE.contains("exactly `B/I/P/S/T`");
+        let setup_markers = manual.contains(setup::RIVUS_AGENTS_BEGIN_MARKER)
+            && manual.contains(setup::RIVUS_AGENTS_END_MARKER);
+        let no_overwrite_claim =
+            !manual.contains("AGENTS.md` 每次覆盖写入") && !manual.contains("覆盖写入 `AGENTS.md`");
+        let overlapping_counts = manual.contains("这些计数互相重叠，不能相加得到 Total");
+        let output = format!(
+            "policy_files_identical={policy_files_identical}\nschema_current={schema_current}\ncache_current={cache_current}\nbarriers_exact={barriers_exact}\nsetup_markers={setup_markers}\nno_overwrite_claim={no_overwrite_claim}\noverlapping_counts={overlapping_counts}\n"
+        );
+        rvs_snapshot_BIS(
+            "test_20260729_public_docs_match_setup_capability_and_cache_semantics",
+            &output,
+        );
+
+        assert!(policy_files_identical);
+        assert!(schema_current);
+        assert!(cache_current);
+        assert!(barriers_exact);
+        assert!(setup_markers);
+        assert!(no_overwrite_claim);
+        assert!(overlapping_counts);
+    }
+
+    #[test]
+    fn test_20260809_parse_function_query_table() {
+        let cases = [
+            ("std::fs::read_to_string", true),
+            ("  ", false),
+            ("", false),
+            ("\t\n", false),
+            ("core::clone::Clone::clone", true),
+        ];
+        let mut output = String::new();
+        for (input, should_pass) in cases {
+            let result = rvs_parse_function_query(input);
+            let passed = result.is_ok();
+            output.push_str(&format!("{input:?} => {passed}\n"));
+            assert_eq!(passed, should_pass, "{input:?}");
+        }
+        rvs_snapshot_BIS("test_20260809_parse_function_query_table", &output);
     }
 }
 
@@ -663,7 +749,7 @@ enum Commands {
         #[arg(default_value = ".")]
         path: PathBuf,
     },
-    /// Set up project: copy rivus.md to AGENTS.md and inject clippy lints into Cargo.toml
+    /// Set up project: merge a managed public Rivus section into AGENTS.md and add missing clippy lints to Cargo.toml
     Setup {
         /// Path to target project directory
         #[arg(default_value = ".")]
@@ -677,12 +763,6 @@ enum Commands {
         /// Output path for direct external deps capsmap
         #[arg(short = 'o', long = "output", required = true)]
         output: PathBuf,
-    },
-    /// Convert the project's caps directory from legacy v1 text to v2 JSON lines
-    MigrateCaps {
-        /// Path to project directory (must contain Cargo.toml)
-        #[arg(default_value = ".")]
-        path: PathBuf,
     },
     /// Strip rvs_ prefix and capability suffix from all functions
     Strip {
@@ -724,7 +804,7 @@ fn main() -> ExitCode {
         &raw_args,
         rvs_env_flag_is_one_BS("RIVUS_WRAPPER"),
     ) {
-        return rvs_run_driver_BIMPS();
+        return rvs_run_driver_BIPST();
     }
 
     // Cargo subcommands: `cargo rivus check` invokes `cargo-rivus rivus check`.
@@ -741,30 +821,31 @@ fn main() -> ExitCode {
     let result: Result<(), String> = match cli.command {
         None => {
             let empty_args: Vec<String> = Vec::new();
-            if let Err(code) = workspace::rvs_run_cargo_check_BIMS(&empty_args) {
+            if let Err(code) = workspace::rvs_run_cargo_check_BIST(&empty_args) {
                 process::exit(code);
             }
             Ok(())
         }
         Some(Commands::Check { args }) => {
-            if let Err(code) = workspace::rvs_run_cargo_check_BIMS(&args) {
+            if let Err(code) = workspace::rvs_run_cargo_check_BIST(&args) {
                 process::exit(code);
             }
             Ok(())
         }
-        Some(Commands::Report { path }) => report_commands::rvs_run_report_BIMPS(&path),
-        Some(Commands::Setup { path }) => setup::rvs_run_setup_BIMS(&path),
+        Some(Commands::Report { path }) => report_commands::rvs_run_report_BIPST(&path),
+        Some(Commands::Setup { path }) => {
+            setup::rvs_run_setup_BIST(&path).map_err(|error| error.to_string())
+        }
         Some(Commands::InferCapsmap { path, output }) => {
-            infer_commands::rvs_run_infer_capsmap_BIMPS(&path, &output)
+            infer_commands::rvs_run_infer_capsmap_BIPST(&path, &output)
         }
-        Some(Commands::MigrateCaps { path }) => caps_migration::rvs_run_migrate_caps_BIS(&path),
         Some(Commands::InferStd { path, output }) => {
-            infer_commands::rvs_run_infer_std_BIMPS(&path, &output)
+            infer_commands::rvs_run_infer_std_BIPST(&path, &output)
         }
-        Some(Commands::Strip { path }) => rename::rvs_strip_BIS(&path),
-        Some(Commands::Annotate { path }) => analysis_commands::rvs_run_annotate_BIMPS(&path),
+        Some(Commands::Strip { path }) => rename::rvs_strip_BIST(&path),
+        Some(Commands::Annotate { path }) => analysis_commands::rvs_run_annotate_BIPST(&path),
         Some(Commands::Why { function, path }) => {
-            analysis_commands::rvs_run_why_BIMPS(&function, &path)
+            analysis_commands::rvs_run_why_BIPST(&function, &path)
         }
         Some(Commands::Usage) => {
             print!("{RIVUS_MANUAL}");

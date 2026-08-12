@@ -3,7 +3,7 @@
 use std::any::{Any, type_name as reflected_name};
 use std::thread::spawn as launch;
 
-pub fn rvs_run_ABIMS() {
+pub fn rvs_run_ABIMST() {
     launch(|| {});
     let _ = reflected_name::<u8>();
     let value: &dyn Any = &1u8;

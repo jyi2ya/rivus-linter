@@ -1,0 +1,7 @@
+cache_hook_ran=true
+cache_rejected=true
+cache_symlink_preserved=true
+artifact_hook_ran=true
+artifact_rejected=true
+artifact_symlink_preserved=true
+outside_unchanged=true

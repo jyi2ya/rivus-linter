@@ -6,7 +6,7 @@
 #![allow(rivus::rvs_non_rvs_fn)]
 
 mod mem {
-    pub fn drop<T>(_value: T) {}
+    pub fn drop<T: Copy>(_value: T) {}
 }
 
 mod result {
@@ -16,7 +16,7 @@ mod result {
         Err(E),
     }
 
-    impl<T, E> Result<T, E> {
+    impl<T: Copy, E: Copy> Result<T, E> {
         pub fn ok(self) -> Option<T> {
             match self {
                 Self::Ok(value) => Some(value),

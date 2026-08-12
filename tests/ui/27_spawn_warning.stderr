@@ -7,10 +7,10 @@ LL |     std::thread::spawn(|| {});
    = note: `-D rivus::rvs-spawn-warning` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_spawn_warning)]`
 
-error: pub fn 'rvs_spawn_ABIMS' missing /// doc comment
+error: pub fn 'rvs_spawn_ABIMST' missing /// doc comment
   --> $DIR/tests/ui/27_spawn_warning.rs:3:1
    |
-LL | / pub fn rvs_spawn_ABIMS() {
+LL | / pub fn rvs_spawn_ABIMST() {
 LL | |     std::thread::spawn(|| {});
 LL | | }
    | |_^

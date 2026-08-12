@@ -1,0 +1,22 @@
+error: call through function pointer or generic callable — Rivus cannot resolve the target at HIR level
+  --> $DIR/tests/ui/429_runtime_const_static_callable_warns.rs:25:5
+   |
+LL |     CONST_HOOK();
+   |     ^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-unsupported-indirect-call` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_unsupported_indirect_call)]`
+
+error: call through function pointer or generic callable — Rivus cannot resolve the target at HIR level
+  --> $DIR/tests/ui/429_runtime_const_static_callable_warns.rs:26:5
+   |
+LL |     STATIC_HOOK();
+   |     ^^^^^^^^^^^^^
+
+error: call through function pointer or generic callable — Rivus cannot resolve the target at HIR level
+  --> $DIR/tests/ui/429_runtime_const_static_callable_warns.rs:27:5
+   |
+LL |     Hooks::ASSOCIATED_HOOK();
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: aborting due to 3 previous errors

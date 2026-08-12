@@ -1,4 +1,5 @@
 /target
+/.rivus-caps.lock
 rust_out
 rust_out.d
 *.rlib

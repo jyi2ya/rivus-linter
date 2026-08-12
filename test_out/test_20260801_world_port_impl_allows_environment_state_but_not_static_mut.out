@@ -1,0 +1,7 @@
+Offline Caps Check: 1 error(s), 0 warning(s)
+------------------------------------------------------------
+error[static_ref_requires_caps]: demo::Adapter::rvs_write_PS@demo::Transport
+  function touches static/thread-local state without declaring required caps
+  World Port operation contract: PS
+  required caps from body facts: SU
+  missing: U

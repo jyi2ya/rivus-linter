@@ -1,0 +1,4 @@
+call_site_count=2
+repeated_occurrence_error=true
+aggregate_complete=true
+deterministic=true

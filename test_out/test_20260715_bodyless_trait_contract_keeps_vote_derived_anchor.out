@@ -1,1 +1,1 @@
-anchors={OfflineCapsEmissionAnchor { identity: FunctionIdentity { crate_id: 1, def_path: DefPath("demo::Parser::parse") }, call_site: None, expectation_only: false }}
+anchors={OfflineCapsEmissionAnchor { identity: FunctionIdentity { crate_id: 1, def_path: DefPath("demo::Parser::parse") }, call_site: None }}

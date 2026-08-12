@@ -1,0 +1,6 @@
+cache_hook_ran=true
+cache_confined=true
+artifact_hook_ran=true
+artifact_confined=true
+ancestor_symlinks_preserved=true
+outside_unchanged=true

@@ -1,0 +1,6 @@
+selected_anchors=4
+all_production=true
+all_production_sources=true
+call_caps_s=true
+missing_side_effect=true
+missing_port=false

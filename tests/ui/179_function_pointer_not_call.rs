@@ -1,4 +1,6 @@
 // check-pass
+// A function pointer reference creates a weak call edge, so the caller
+// must declare the propagated capabilities.
 #![feature(register_tool)]
 #![register_tool(rivus)]
 #![allow(non_snake_case)]
@@ -8,6 +10,6 @@ fn rvs_io_BI() {
     let _ = 1;
 }
 
-fn rvs_take_pointer() {
+fn rvs_take_pointer_BI() {
     let _function: fn() = rvs_io_BI;
 }

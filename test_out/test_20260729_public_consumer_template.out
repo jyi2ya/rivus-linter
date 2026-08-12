@@ -1,0 +1,51 @@
+# Rivus Project Rules
+
+This section contains the public rules enforced or supported by `cargo rivus`.
+
+## Function contracts
+
+- Project functions and trait methods use the `rvs_` prefix. A final all-uppercase suffix records capabilities in `ABIMPSTU` order.
+- Primitive numeric parameters on `rvs_` functions require an appropriate `debug_assert!`, `debug_assert_eq!`, or `debug_assert_ne!` contract.
+- Public `rvs_` functions require `///` documentation. Unsafe functions also require a `# Safety` section.
+
+## Capabilities
+
+| Capability | Meaning |
+|------------|---------|
+| `A` | The function is `async fn` |
+| `B` | The function may block the current thread |
+| `I` | The function performs I/O |
+| `M` | The function accepts mutable state through `&mut` |
+| `P` | The function depends on a local Port trait |
+| `S` | The function observes or changes ambient/global state |
+| `T` | The function depends on thread-local state |
+| `U` | The function is `unsafe fn` or accesses `static mut` |
+
+- The propagated barriers are exactly `B/I/P/S/T`. Ordinary calls require every propagated callee capability; if the callee contains `P`, that call edge requires only `P`.
+- `A/M/U` are signature/body capabilities. They are inferred from the function itself and do not propagate through calls.
+- A local trait is a World Port when it declares one non-generic associated type named `World`, has at least one static operation, and every operation explicitly accepts `&Self::World` or `&mut Self::World`. Its name is irrelevant. Additional associated types represent long-lived resources; associated constants, receiver methods, generic World types, and operations without a World reference make it an ordinary trait.
+- Every World Port operation contains `P`. Its implementations vote on `B/I/S/T`; selected capabilities plus the operation's own `A/M/U` form the full suffix used to check implementation and default bodies. A call to any `P`-containing contract propagates only `P` upward. Use a type-level interpreter and caller-owned World instead of `Box<dyn>` service objects.
+- `Result/Option` handling is type-system error flow, not a capability. Returning or propagating either type adds no capability letter.
+
+## Errors and tests
+
+- Fallible code uses domain-specific `Result<T, E>` errors. Use Snafu; Rivus rejects `thiserror`, `anyhow`, `eyre`, and `color_eyre` imports.
+- Do not discard `Result` errors with `.ok()`, `.unwrap_or_default()`, or `drop`.
+- Tests use unique names in the form `test_YYYYMMDD_name`.
+- When the project has a `test_out/` directory, each test has a matching `test_out/{test_name}.out` snapshot.
+- Prefer structured concurrency such as `join!`, `JoinSet`, `FuturesUnordered`, or `thread::scope` over unscoped spawn calls.
+
+## Commands
+
+```bash
+cargo rivus check
+cargo rivus report .
+cargo rivus annotate .
+cargo rivus strip .
+cargo rivus why path::to::function .
+cargo rivus infer-std -o caps/std
+cargo rivus infer-capsmap -o caps/deps
+cargo rivus usage
+```
+
+Caps layers use capsmap v2 JSON Lines under the project-root `caps/` directory. `infer-std` and `infer-capsmap` only write their explicitly supplied `-o` paths.

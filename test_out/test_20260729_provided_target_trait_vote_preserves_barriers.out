@@ -1,0 +1,6 @@
+provided_caps=BS
+provided_incomplete=true
+exact_caps=I
+exact_incomplete=false
+port_caps=P
+port_incomplete=true

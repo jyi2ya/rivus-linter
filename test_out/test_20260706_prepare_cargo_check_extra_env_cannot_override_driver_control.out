@@ -1,4 +1,0 @@
-enabled=Some(Some("1"))
-rustc=Some(None)
-unselected_wrapper=Some(None)
-wrapper_is_bad=false

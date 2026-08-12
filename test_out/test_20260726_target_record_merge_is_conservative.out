@@ -1,0 +1,2 @@
+records_equal=false
+asymmetric_fields=facts, is_test_compilation, is_production

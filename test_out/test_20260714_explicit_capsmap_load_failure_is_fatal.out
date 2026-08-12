@@ -1,1 +1,1 @@
-error=CAPSMAP_PATH/seed: capsmap v2 header '# rivus-caps-v2' is required; run `cargo rivus migrate-caps` for legacy v1 files
+error=CAPSMAP_PATH/seed: capsmap v2 header '# rivus-caps-v2' is required; legacy v1 caps files are no longer supported

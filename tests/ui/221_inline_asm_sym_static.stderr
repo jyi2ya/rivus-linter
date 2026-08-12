@@ -1,5 +1,5 @@
 error: function touches static/thread-local state without declaring required caps; declared caps: pure; required caps from body facts: S; missing: S
-  --> $DIR/tests/ui/221_inline_asm_sym_static.rs:5:1
+  --> $DIR/tests/ui/221_inline_asm_sym_static.rs:8:1
    |
 LL | / fn rvs_inline_asm_sym_static() {
 LL | |     unsafe {
@@ -11,7 +11,7 @@ LL | | }
    = note: `#[deny(rivus::rvs_static_ref)]` on by default
 
 error: 'rvs_inline_asm_sym_static' is missing capability marker missing_side_effect; expected name: rvs_inline_asm_sym_static_S; declared caps: pure; inferred caps: S
-  --> $DIR/tests/ui/221_inline_asm_sym_static.rs:5:1
+  --> $DIR/tests/ui/221_inline_asm_sym_static.rs:8:1
    |
 LL | / fn rvs_inline_asm_sym_static() {
 LL | |     unsafe {
@@ -24,7 +24,7 @@ LL | | }
    = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_side_effect)]`
 
 error: good fn 'rvs_inline_asm_sym_static' not called by any test
-  --> $DIR/tests/ui/221_inline_asm_sym_static.rs:5:1
+  --> $DIR/tests/ui/221_inline_asm_sym_static.rs:8:1
    |
 LL | / fn rvs_inline_asm_sym_static() {
 LL | |     unsafe {

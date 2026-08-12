@@ -1,0 +1,24 @@
+error: function touches static/thread-local state without declaring required caps; declared caps: pure; required caps from body facts: S; missing: S
+  --> $DIR/tests/ui/400_live_assert_static_20260731.rs:8:1
+   |
+LL | / fn rvs_value() -> usize {
+LL | |     assert_eq!(VALUE, 7);
+LL | |     0
+LL | | }
+   | |_^
+   |
+   = note: `#[deny(rivus::rvs_static_ref)]` on by default
+
+error: 'rvs_value' is missing capability marker missing_side_effect; expected name: rvs_value_S; declared caps: pure; inferred caps: S
+  --> $DIR/tests/ui/400_live_assert_static_20260731.rs:8:1
+   |
+LL | / fn rvs_value() -> usize {
+LL | |     assert_eq!(VALUE, 7);
+LL | |     0
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-missing-side-effect` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_side_effect)]`
+
+error: aborting due to 2 previous errors

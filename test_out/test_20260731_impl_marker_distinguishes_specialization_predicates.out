@@ -1,0 +1,3 @@
+same_predicates_stable=true
+specialization_predicates_distinct=true
+generated_impls_distinct=true

@@ -1,0 +1,7 @@
+error: scoped Rivus lint levels are unsupported; configure Rivus lints only at crate root
+  --> $DIR/tests/ui/240_scoped_rivus_variant_attr_rejected.rs:6:5
+   |
+LL |     Other,
+   |     ^^^^^
+
+error: aborting due to 1 previous error

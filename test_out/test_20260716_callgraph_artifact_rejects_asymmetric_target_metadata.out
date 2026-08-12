@@ -1,3 +1,3 @@
-extra_facts=invalid callgraph artifact: sources_by_crate for demo::rvs_run is missing crate id 8
+parallel_metadata=invalid callgraph artifact: unknown field `facts_by_crate`, expected `targets`
 zero_id=invalid callgraph artifact: target metadata for demo::rvs_run contains zero crate id
 invalid_source=invalid callgraph JSON: source file for demo::rvs_run is empty

@@ -1,12 +1,128 @@
+#![feature(register_tool)]
+#![register_tool(rivus)]
 #![allow(
     non_snake_case,
     reason = "rvs_ functions use uppercase capability suffixes"
 )]
+#![allow(
+    rivus::rvs_unsupported_implicit_execution,
+    reason = "UI generation directories must be removed when a fixture panics"
+)]
 
 use std::ffi::OsStr;
 use std::fs;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+use serde::Serialize;
+
+const RVS_UI_GENERATION_MARKER_FILE: &str = ".rivus-generation.json";
+const RVS_RUN_GENERATION_SCHEMA_VERSION: u32 = 4;
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum UiGenerationTargetScope {
+    WithTestExampleBench,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "input", rename_all = "snake_case")]
+enum UiGenerationAnalysisMode {
+    ProjectCaps,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum UiGenerationMode {
+    Analysis {
+        target_scope: UiGenerationTargetScope,
+        analysis: UiGenerationAnalysisMode,
+    },
+}
+
+#[derive(Debug, Serialize)]
+struct UiGenerationMarker {
+    schema_version: u32,
+    generation_id: String,
+    project_root: PathBuf,
+    mode: UiGenerationMode,
+}
+
+#[derive(Debug)]
+struct UiDriverGeneration {
+    temp_dir: Option<tempfile::TempDir>,
+    root: PathBuf,
+    generation_id: String,
+}
+
+impl UiDriverGeneration {
+    fn rvs_new_BIST(project: &Path) -> Result<Self, String> {
+        let project = project
+            .canonicalize()
+            .map_err(|error| format!("cannot canonicalize UI project: {error}"))?;
+        let lexical_runs_dir = project.join("target/.rivus-runs");
+        fs::create_dir_all(&lexical_runs_dir)
+            .map_err(|error| format!("cannot create UI generation directory: {error}"))?;
+        let runs_dir = lexical_runs_dir
+            .canonicalize()
+            .map_err(|error| format!("cannot canonicalize UI generation directory: {error}"))?;
+        let temp_dir = tempfile::Builder::new()
+            .prefix("rivus-v4-analysis-all-targets-")
+            .tempdir_in(&runs_dir)
+            .map_err(|error| format!("cannot reserve UI generation: {error}"))?;
+        let root = temp_dir.path().to_path_buf();
+        let generation_id = root
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| "UI generation directory name is not UTF-8".to_string())?
+            .to_string();
+        let artifact_dir = root.join("artifacts");
+        fs::create_dir(&artifact_dir)
+            .map_err(|error| format!("cannot create UI generation artifacts: {error}"))?;
+        let marker = UiGenerationMarker {
+            schema_version: RVS_RUN_GENERATION_SCHEMA_VERSION,
+            generation_id: generation_id.clone(),
+            project_root: project,
+            mode: UiGenerationMode::Analysis {
+                target_scope: UiGenerationTargetScope::WithTestExampleBench,
+                analysis: UiGenerationAnalysisMode::ProjectCaps,
+            },
+        };
+        let marker_json = serde_json::to_vec(&marker)
+            .map_err(|error| format!("cannot serialize UI generation marker: {error}"))?;
+        let ready_path = root.join(RVS_UI_GENERATION_MARKER_FILE);
+        let mut ready = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&ready_path)
+            .map_err(|error| format!("cannot create UI generation marker: {error}"))?;
+        ready
+            .write_all(&marker_json)
+            .map_err(|error| format!("cannot write UI generation marker: {error}"))?;
+        ready
+            .sync_all()
+            .map_err(|error| format!("cannot sync UI generation marker: {error}"))?;
+        Ok(Self {
+            temp_dir: Some(temp_dir),
+            root,
+            generation_id,
+        })
+    }
+}
+
+impl Drop for UiDriverGeneration {
+    fn drop(&mut self) {
+        if let Some(temp_dir) = self.temp_dir.take() {
+            if let Err(error) = temp_dir.close() {
+                eprintln!(
+                    "warning: cannot remove UI generation {}: {error}",
+                    self.root.display()
+                );
+            }
+        }
+    }
+}
 
 fn rvs_driver_path_BIS() -> PathBuf {
     let exe = std::env::current_exe().unwrap();
@@ -109,21 +225,61 @@ fn test_20260716_ui_bless_requires_rustc_bless_one() {
     assert_eq!(output, snapshot);
 }
 
-fn rvs_run_one_test_BIS(fixture: &Path, stderr_path: &Path) -> Result<(), String> {
+#[cfg(unix)]
+#[test]
+fn test_20260731_ui_generation_canonicalizes_symlinked_target() {
+    use std::os::unix::fs::symlink;
+
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("never: UI test clock should follow the unix epoch")
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!(
+        "rivus-ui-canonical-target-{}-{unique}",
+        std::process::id()
+    ));
+    let project = dir.join("project");
+    let physical_target = dir.join("physical-target");
+    fs::create_dir_all(&project).expect("never: UI test project should be created");
+    fs::create_dir(&physical_target).expect("never: UI physical target should be created");
+    symlink(&physical_target, project.join("target"))
+        .expect("never: UI target symlink should be created");
+
+    let generation = UiDriverGeneration::rvs_new_BIST(&project)
+        .expect("never: UI generation under a symlinked target should be reserved");
+    let root_is_canonical = generation.root.canonicalize().is_ok_and(|canonical| {
+        canonical == generation.root && canonical.starts_with(&physical_target)
+    });
+    let output = format!("root_is_canonical={root_is_canonical}\n");
+    let snapshot = fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("test_out/test_20260731_ui_generation_canonicalizes_symlinked_target.out"),
+    )
+    .expect("never: UI canonical-target snapshot should be readable");
+    assert_eq!(output, snapshot);
+    assert!(root_is_canonical);
+
+    drop(generation);
+    fs::remove_dir_all(dir).expect("never: UI canonical-target fixture cleanup should succeed");
+}
+
+fn rvs_run_one_test_BIS(
+    fixture: &Path,
+    stderr_path: &Path,
+    generation: &UiDriverGeneration,
+) -> Result<(), String> {
     let bless = rvs_bless_enabled_BS();
     let driver = rvs_driver_path_BIS();
     if !driver.exists() {
         return Err(format!("cargo-rivus not found at {:?}", driver));
     }
 
-    // Locate caps/ directory (next to the driver binary's source tree)
     let caps_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("caps");
     let out_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("target")
         .join("rivus-ui-tests");
     fs::create_dir_all(&out_dir).map_err(|e| format!("create {:?}: {e}", out_dir))?;
 
-    // Parse // compile-flags: and // check-pass directives from the fixture
     let source = fs::read_to_string(fixture).map_err(|e| format!("read {:?}: {e}", fixture))?;
     let mut extra_args: Vec<String> = Vec::new();
     let mut use_test_crate = false;
@@ -166,7 +322,28 @@ fn rvs_run_one_test_BIS(fixture: &Path, stderr_path: &Path) -> Result<(), String
     }
 
     let mut cmd = Command::new(&driver);
+    for key in [
+        "RIVUS_CALLGRAPH",
+        "RIVUS_CALLGRAPH_DIR",
+        "RIVUS_CRATE_PROVENANCE",
+        "RIVUS_CAPSMAP",
+        "RIVUS_OFFLINE_EMISSIONS",
+        "RIVUS_OFFLINE_EMISSIONS_ACK_DIR",
+        "RIVUS_OFFLINE_CAPS",
+        "RIVUS_UI_TESTING",
+        "RIVUS_UNTESTED_PATHS",
+        "RIVUS_ENABLED",
+        "RIVUS_WRAPPER",
+        "RIVUS_GENERATION_ID",
+        "RIVUS_GENERATION_ROOT",
+        "CARGO_PRIMARY_PACKAGE",
+    ] {
+        cmd.env_remove(key);
+    }
     cmd.env("RIVUS_ENABLED", "1")
+        .env("RIVUS_WRAPPER", "1")
+        .env("RIVUS_GENERATION_ID", &generation.generation_id)
+        .env("RIVUS_GENERATION_ROOT", &generation.root)
         .env("RIVUS_CAPSMAP", &caps_dir)
         .env("RIVUS_UI_TESTING", "1")
         .arg("rustc")
@@ -257,7 +434,7 @@ fn rvs_run_one_test_BIS(fixture: &Path, stderr_path: &Path) -> Result<(), String
 }
 
 #[test]
-fn test_20260630_ui_tests_BIS() {
+fn test_20260630_ui_tests_BIS() -> Result<(), String> {
     assert!(rvs_snapshot_mode_error(true, false, true, false).is_some());
     assert!(rvs_snapshot_mode_error(false, false, false, false).is_some());
     assert!(rvs_snapshot_mode_error(false, false, true, false).is_some());
@@ -266,8 +443,10 @@ fn test_20260630_ui_tests_BIS() {
     assert!(rvs_non_check_pass_output_error(false, false).is_some());
     assert!(rvs_non_check_pass_output_error(false, true).is_none());
 
-    let filter = rvs_ui_filter_BS().unwrap_or_else(|error| panic!("{error}"));
-    let ui_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/ui");
+    let filter = rvs_ui_filter_BS()?;
+    let project = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let generation = UiDriverGeneration::rvs_new_BIST(&project)?;
+    let ui_dir = project.join("tests/ui");
     let fixtures = rvs_collect_rs_files_BIS(&ui_dir);
     assert!(!fixtures.is_empty(), "no .rs fixtures in tests/ui/");
     let mut orphan_snapshots = fs::read_dir(&ui_dir)
@@ -297,7 +476,7 @@ fn test_20260630_ui_tests_BIS() {
         }
         selected_count += 1;
         let stderr_path = fixture.with_extension("stderr");
-        if let Err(e) = rvs_run_one_test_BIS(fixture, &stderr_path) {
+        if let Err(e) = rvs_run_one_test_BIS(fixture, &stderr_path, &generation) {
             failures.push((name, e));
         }
     }
@@ -311,6 +490,7 @@ fn test_20260630_ui_tests_BIS() {
         for (name, err) in &failures {
             eprintln!("FAIL {name}: {err}");
         }
-        panic!("{} UI test(s) failed", failures.len());
+        return Err(format!("{} UI test(s) failed", failures.len()));
     }
+    Ok(())
 }

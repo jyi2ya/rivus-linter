@@ -1,0 +1,18 @@
+error: call through function pointer or generic callable — Rivus cannot resolve the target at HIR level
+  --> $DIR/tests/ui/342_nested_closure_body_propagates_caps_20260801.rs:13:9
+   |
+LL |         inner();
+   |         ^^^^^^^
+   |
+   = note: `-D rivus::rvs-unsupported-indirect-call` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_unsupported_indirect_call)]`
+
+error: caller lacks propagated capabilities required by callee; callee: 342_nested_closure_body_propagates_caps_20260801::rvs_inner_BI; caller declared caps: pure; callee caps: BI; missing propagated caps: B, I
+  --> $DIR/tests/ui/342_nested_closure_body_propagates_caps_20260801.rs:12:24
+   |
+LL |         let inner = || rvs_inner_BI();
+   |                        ^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(rivus::rvs_call_violation)]` on by default
+
+error: aborting due to 2 previous errors

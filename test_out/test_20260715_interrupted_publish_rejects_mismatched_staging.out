@@ -1,4 +1,0 @@
-error=interrupted v1 staging directory $STAGING does not match the active v2 caps layers
-active=S
-backup_exists=false
-staging_exists=true

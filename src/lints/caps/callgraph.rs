@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use rustc_hir::HirId;
@@ -9,10 +10,24 @@ use super::super::utils::{
     CallTarget, rvs_count_effective_lines_M, rvs_def_path, rvs_has_allow, rvs_has_mutable_params,
 };
 use crate::artifacts::{
-    CallSiteIdentity, CallSiteSource, FnGraph, FnNode, FnSource, FunctionIdentity,
+    CallEdgeType, CallSiteIdentity, CallSiteSource, CrateProvenance, FnGraph, FnNode, FnSource,
+    FnTargetData, FunctionIdentity,
 };
 use crate::capability::{CapabilityFacts, ParsedFunctionName};
 use crate::symbols::DefPath;
+
+#[derive(Debug)]
+pub(crate) struct CollectedCallSite {
+    pub(crate) identity: CallSiteIdentity,
+    pub(crate) hir_id: HirId,
+    pub(crate) span: Span,
+}
+
+#[derive(Debug)]
+pub(crate) struct CollectedCallgraphItem {
+    pub(crate) caller: FunctionIdentity,
+    pub(crate) call_sites: Vec<CollectedCallSite>,
+}
 
 fn rvs_fn_node_from_signature(
     cx: &LateContext<'_>,
@@ -43,11 +58,12 @@ fn rvs_fn_node_from_signature(
     }
 }
 
-pub(crate) fn rvs_collect_callgraph_for_item_M<'tcx>(
+pub(crate) fn rvs_collect_callgraph_for_item_MS<'tcx>(
     callgraph: &mut FnGraph,
     cx: &LateContext<'tcx>,
     subject: &FnSubject<'_, 'tcx>,
-) -> DefPath {
+    crate_provenance: CrateProvenance,
+) -> CollectedCallgraphItem {
     let local_def_id = subject.hir_id.owner.def_id;
     let def_id = local_def_id.to_def_id();
     let caller_path = DefPath::rvs_new(rvs_def_path(cx, def_id));
@@ -67,10 +83,20 @@ pub(crate) fn rvs_collect_callgraph_for_item_M<'tcx>(
         subject.span,
     );
 
-    let resolved_calls: Vec<(DefPath, FunctionIdentity, Option<CallSiteSource>)> = subject
+    let resolved_edges: Vec<(
+        DefPath,
+        FunctionIdentity,
+        Option<CallSiteSource>,
+        crate::lints::utils::ObservationKind,
+        HirId,
+        Span,
+    )> = subject
         .body_facts
-        .calls
+        .call_observations
         .iter()
+        .filter(|observation| {
+            observation.kind != crate::lints::utils::ObservationKind::UnsupportedIndirect
+        })
         .filter_map(|observation| {
             if let CallTarget::Resolved {
                 def_path,
@@ -85,6 +111,9 @@ pub(crate) fn rvs_collect_callgraph_for_item_M<'tcx>(
                         def_path: def_path.clone(),
                     },
                     rvs_call_site_source(cx, observation.span),
+                    observation.kind,
+                    observation.hir_id,
+                    observation.span,
                 ))
             } else {
                 None
@@ -107,42 +136,49 @@ pub(crate) fn rvs_collect_callgraph_for_item_M<'tcx>(
             None
         };
 
-    node.calls = resolved_calls
-        .iter()
-        .map(|(def_path, _, _)| def_path.clone())
-        .collect();
-    node.coverage_calls.insert(
-        crate_id,
-        resolved_calls
-            .iter()
-            .map(|(_, identity, _)| identity.clone())
-            .collect(),
-    );
-    node.coverage_call_sites.insert(
-        crate_id,
-        resolved_calls
-            .into_iter()
-            .enumerate()
-            .map(|(occurrence, (_, callee, source))| CallSiteIdentity {
-                callee,
-                occurrence: u32::try_from(occurrence)
-                    .expect("never: a function cannot contain more than u32::MAX resolved calls"),
-                source,
-            })
-            .collect(),
-    );
-    node.sources_by_crate.insert(crate_id, node.sources.clone());
-    node.facts_by_crate.insert(crate_id, node.facts);
-    node.has_body_by_crate.insert(crate_id, true);
-    if is_entrypoint {
-        node.entrypoint_crate_ids.insert(crate_id);
+    let mut target_calls: BTreeMap<FunctionIdentity, CallEdgeType> = BTreeMap::new();
+    let mut all_call_sites: Vec<CollectedCallSite> = Vec::new();
+    for (edge_index, edge) in resolved_edges.iter().enumerate() {
+        let (_, identity, source, kind, hir_id, span) = edge;
+        let edge_type = match kind {
+            crate::lints::utils::ObservationKind::Direct => CallEdgeType::Strong,
+            crate::lints::utils::ObservationKind::FunctionReference => CallEdgeType::Weak,
+            crate::lints::utils::ObservationKind::UnsupportedIndirect => {
+                debug_assert!(
+                    false,
+                    "unsupported indirect observations are filtered before edge projection"
+                );
+                continue;
+            }
+        };
+        match target_calls.get(identity) {
+            Some(CallEdgeType::Strong) => {}
+            _ => {
+                target_calls.insert(identity.clone(), edge_type);
+            }
+        }
+        let occurrence = u32::try_from(edge_index)
+            .expect("never: a function cannot contain more than u32::MAX resolved calls");
+        all_call_sites.push(CollectedCallSite {
+            identity: CallSiteIdentity {
+                callee: identity.clone(),
+                occurrence,
+                source: source.clone(),
+            },
+            hir_id: *hir_id,
+            span: *span,
+        });
     }
+    node.calls = target_calls
+        .iter()
+        .map(|(identity, edge_type)| (identity.def_path.clone(), *edge_type))
+        .collect();
     if subject.is_test {
-        node.test_crate_ids.insert(crate_id);
         node.unresolved_test_calls = subject
             .body_facts
-            .calls
+            .call_observations
             .iter()
+            .filter(|observation| observation.kind == crate::lints::utils::ObservationKind::Direct)
             .filter_map(|observation| match &observation.target {
                 CallTarget::UnresolvedPath { path } => path.rsplit("::").next().map(str::to_string),
                 CallTarget::UnresolvedMethod { name } => Some(name.clone()),
@@ -151,23 +187,56 @@ pub(crate) fn rvs_collect_callgraph_for_item_M<'tcx>(
             .filter(|name| name.starts_with("rvs_"))
             .collect();
     }
-    if !is_test_compilation {
-        node.production_crate_ids.insert(crate_id);
-        if !is_entrypoint && !subject.is_test && !subject.is_trait_impl && !allows_dead_code {
-            node.coverage_candidate_crate_ids.insert(crate_id);
-        }
-    }
+    let is_coverage_candidate = !is_test_compilation
+        && !is_entrypoint
+        && !subject.is_test
+        && !subject.is_trait_impl
+        && !allows_dead_code;
     node.has_body = true;
     node.report_line_count = report_line_count;
     node.report_function_count = usize::from(report_line_count.is_some());
     node.allows_dead_code = allows_dead_code;
-    callgraph.rvs_merge_node_M(caller_path.clone(), node);
-    caller_path
+    node.rvs_insert_target_M(
+        crate_id,
+        FnTargetData {
+            calls: target_calls,
+            call_sites: all_call_sites
+                .iter()
+                .map(|call_site| call_site.identity.clone())
+                .collect(),
+            unresolved_test_calls: node.unresolved_test_calls.clone(),
+            facts: node.facts,
+            has_body: true,
+            is_trait_impl: subject.is_trait_impl,
+            is_test: subject.is_test,
+            is_entrypoint,
+            is_test_compilation,
+            sources: node.sources.clone(),
+            report_line_count,
+            report_function_count: node.report_function_count,
+            allows_dead_code,
+            is_production: !is_test_compilation,
+            is_coverage_candidate,
+            crate_provenance,
+        },
+    );
+    if let Err(error) = callgraph.rvs_merge_node_M(&caller_path, &node) {
+        cx.tcx
+            .dcx()
+            .err(format!("cannot merge collected callgraph node: {error}"));
+    }
+    CollectedCallgraphItem {
+        caller: FunctionIdentity {
+            crate_id,
+            def_path: caller_path,
+        },
+        call_sites: all_call_sites,
+    }
 }
 
 /// Collect callgraph entry from a signature alone (no body — e.g. trait method
 /// declarations without default implementation).
-pub(crate) fn rvs_collect_callgraph_for_signature_M(
+pub(crate) fn rvs_collect_callgraph_for_signature_MS(
     callgraph: &mut FnGraph,
     cx: &LateContext<'_>,
     hir_id: HirId,
@@ -175,6 +244,7 @@ pub(crate) fn rvs_collect_callgraph_for_signature_M(
     sig: &rustc_hir::FnSig<'_>,
     is_trait_impl: bool,
     is_port_method: bool,
+    crate_provenance: CrateProvenance,
 ) -> DefPath {
     let local_def_id = hir_id.owner.def_id;
     let def_id = local_def_id.to_def_id();
@@ -192,16 +262,24 @@ pub(crate) fn rvs_collect_callgraph_for_signature_M(
         is_test_compilation,
         cx.tcx.hir_span(hir_id),
     );
-    node.sources_by_crate.insert(crate_id, node.sources.clone());
-    node.facts_by_crate.insert(crate_id, node.facts);
-    node.has_body_by_crate.insert(crate_id, false);
-    node.coverage_calls.insert(crate_id, Default::default());
-    node.coverage_call_sites
-        .insert(crate_id, Default::default());
-    if !is_test_compilation {
-        node.production_crate_ids.insert(crate_id);
+    node.rvs_insert_target_M(
+        crate_id,
+        FnTargetData {
+            facts: node.facts,
+            has_body: false,
+            is_trait_impl,
+            is_test_compilation,
+            sources: node.sources.clone(),
+            is_production: !is_test_compilation,
+            crate_provenance,
+            ..FnTargetData::default()
+        },
+    );
+    if let Err(error) = callgraph.rvs_merge_node_M(&caller_path, &node) {
+        cx.tcx
+            .dcx()
+            .err(format!("cannot merge collected callgraph node: {error}"));
     }
-    callgraph.rvs_merge_node_M(caller_path.clone(), node);
     caller_path
 }
 
@@ -276,28 +354,15 @@ fn rvs_real_file_name(name: &FileName) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::rvs_register_test_coverage;
 
     #[test]
-    #[expect(
-        unreachable_code,
-        reason = "coverage-only unreachable branch keeps helper names visible to rivus test-call collection"
-    )]
     fn test_20260630_callgraph_helper_coverage() {
-        if std::hint::black_box(false) {
-            let _callgraph: &mut FnGraph = unreachable!();
-            let _cx: &LateContext<'_> = unreachable!();
-            let _hir_id: HirId = unreachable!();
-            let _ident: Ident = unreachable!();
-            let _sig: &rustc_hir::FnSig<'_> = unreachable!();
-            let _subject: &FnSubject<'_, '_> = unreachable!();
-            rvs_collect_callgraph_for_item_M(_callgraph, _cx, _subject);
-            rvs_collect_callgraph_for_signature_M(
-                _callgraph, _cx, _hir_id, _ident, _sig, false, false,
-            );
-            let _span: Span = unreachable!();
-            let _ = rvs_fn_source(_cx, _ident, _span);
-            let _file_name: &FileName = unreachable!();
-            let _ = rvs_real_file_name(_file_name);
-        }
+        rvs_register_test_coverage((
+            rvs_collect_callgraph_for_item_MS,
+            rvs_collect_callgraph_for_signature_MS,
+            rvs_fn_source,
+            rvs_real_file_name,
+        ));
     }
 }

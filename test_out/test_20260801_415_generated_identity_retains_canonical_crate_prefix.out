@@ -1,0 +1,8 @@
+local_raw=demo::rvs_generated{def#657870616e73696f6e}
+local_user=demo::rvs_generated
+local_function=rvs_generated
+local_classified=true
+std_raw=std::rvs_generated{def#657870616e73696f6e}
+std_user=std::rvs_generated
+std_function=rvs_generated
+std_classified=true

@@ -93,7 +93,7 @@ test_out/
 
 每个可能失败的函数定义完整的错误类型枚举，调用者必须处理每种错误。采用 Rust 的 `Result<T, E>` 模式。用 snafu，禁止使用 `thiserror`、`anyhow`、`eyre`、`color_eyre`。
 
-**Result/Option 由类型系统强制处理**——编译器保证调用方必须 `match` 或 `?`，因此不需要额外的能力标记。
+**Result/Option 在类型系统中表达错误或缺失流程，不是能力**——返回、匹配或用 `?` 传播它们都不增加能力字母。
 
 ### 错误类型设计原则
 
@@ -140,7 +140,7 @@ enum UserRepoError {
 | `NonZero` / 精化类型 | 排除无效值 | `NonZeroU32` 保证除法安全 |
 | newtype 模式 | 防止混淆同类型 | `struct UserId(u64)` 与 `struct OrderId(u64)` 不可混用 |
 | 幽灵类型参数 | 编译期标记 | `PhantomData<Validated>` vs `PhantomData<Unvalidated>` |
-| `Result`/`Option` | 编译期错误处理 | 类型系统强制调用方处理失败，无需能力标记 |
+| `Result`/`Option` | 类型化错误/缺失流程 | 返回或传播它们不增加能力标记 |
 
 ### 示例：用类型保证"未验证的数据不会被当作已验证的"
 
@@ -149,10 +149,10 @@ struct Raw<T>(T);
 struct Validated<T>(T);
 
 fn rvs_parse_email(raw: Raw<String>) -> Result<Validated<Email>, ParseError>
-async fn rvs_send_email_ABIS(email: &Validated<Email>, body: &str) -> Result<(), SendError>
+async fn rvs_send_email_AIS(email: &Validated<Email>, body: &str) -> Result<(), SendError>
 ```
 
-`rvs_send_email_ABIS` 只接受 `Validated<Email>`，从类型层面杜绝了未验证邮箱被发送的可能性。返回 `Result` 由类型系统强制处理，无需额外能力标记。
+`rvs_send_email_AIS` 只接受 `Validated<Email>`，从类型层面杜绝了未验证邮箱被发送的可能性。返回的 `Result` 表达错误流程，不增加能力标记。
 
 ---
 
@@ -178,14 +178,14 @@ async fn rvs_send_email_ABIS(email: &Validated<Email>, body: &str) -> Result<(),
 
 | 字母 | 名称 | 含义 | 反面含义 |
 |------|------|------|---------|
-| `A` | **Async** | 异步函数，包含 `await` | 同步 |
+| `A` | **Async** | 声明为 `async fn` | 同步 |
 | `B` | **Blocking** | 可能阻塞当前线程（等待 I/O、锁、sleep、大量计算） | 非阻塞 |
 | `I` | **IO** | 执行 I/O 操作（网络、文件、数据库） | 纯计算 |
 | `M` | **Mutable** | 修改参数中的可变状态 | 只读 |
-| `P` | **Port** | 端口方法（接口/依赖注入），由 trait 名推断 | 直接实现 |
+| `P` | **Port** | World 端口操作，由本地 trait 结构推断 | 直接实现 |
 | `S` | **Side effect** | 有副作用（修改/读取全局变量、环境变量、随机数等） | 纯函数 |
 | `T` | **ThreadLocal** | 依赖线程局部状态，不可跨线程共享 | 线程安全 / 无状态 |
-| `U` | **Unsafe** | 包含不安全操作（裸指针、FFI、transmute） | 安全代码 |
+| `U` | **Unsafe** | `unsafe fn` 或访问 `static mut` | 安全代码 |
 
 其中，能力集合是 `{A,B,M}` 的子集的函数为好函数（good），即 `{A,B,M}` 的部分函数；
 能力集合是 `{A,B,M,P}` 的子集的函数为 `ok` 函数。
@@ -200,36 +200,38 @@ async fn rvs_send_email_ABIS(email: &Validated<Email>, body: &str) -> Result<(),
 | `rvs_sort_inplace_M` | M | 修改可变状态：原地排序 |
 | `rvs_read_file_BI` | B + I | 阻塞 + I/O：同步读文件（失败由 Result 表达） |
 | `rvs_fetch_user_AI` | A + I | 异步 + I/O：从 API 获取用户 |
-| `rvs_write_db_ABM` | A + B + M | 异步数据库写入（阻塞 + 修改状态） |
-| `rvs_atomic_inc_M` | M | 修改共享可变状态：原子递增（线程安全，无 T） |
+| `rvs_write_db_AIS` | A + I + S | 异步数据库写入（I/O + 外部副作用，不阻塞当前线程） |
+| `rvs_increment_M` | M | 通过 `&mut` 参数递增计数器 |
 | `rvs_cache_lookup` | （无标记） | 纯线程安全缓存读取，无副作用 |
 | `rvs_ffi_call_BU` | B + U | 阻塞 + 不安全：调用 C FFI |
-| `rvs_hash_password` | （无标记） | 纯函数：确定性哈希计算 |
-| `rvs_send_email_ABIS` | A + B + I + S | 异步网络请求，阻塞 + I/O + 有副作用（发信不可撤回） |
+| `rvs_hash_password_B` | B | 确定但计算密集的密码哈希，可能长时间占用当前线程 |
+| `rvs_send_email_AIS` | A + I + S | 异步网络 I/O + 不可撤回的发信副作用，不阻塞当前线程 |
 | `rvs_random_uuid_ST` | S + T | 副作用（非确定性）+ 线程局部：使用 thread-local RNG 生成 UUID |
 | `rvs_get_env_S` | S | 读取环境变量，有副作用 |
 
 #### P（Port）的自动推断
 
-Port 方法的 P 不从函数后缀中解析，而是由 trait 名推断。当当前 crate 中定义的 trait 名字以 `Repository` 或 `Client`（此列表可扩展）结尾时，该 trait 被视为 **Port**。Port trait 的所有方法**自动获得且仅获得 P 能力**——不会投票出 I/S/T/B 等。调用 Port 方法的普通函数若需要显式标注能力，仍通过 `_P` 后缀声明自己依赖端口。
+Port 操作的 P 不从函数后缀或 trait 名推断，而是由本地 trait 的结构推断。World Port 必须满足：
 
-这意味着：
-- Port trait 的方法**不携带实现的具体能力**（如 I/O），只有 P
-- 调用 Port 方法的函数通过传播获得 P
-- 没有获得 P 的函数不能调用 Port 方法
-- Port 方法可以通过 [mockall](https://docs.rs/mockall) 生成 mock 实现进行测试
+- 声明一个名为 `World` 的非泛型 associated type
+- 至少包含一个无 `self` receiver 的操作
+- 每个操作都显式接收 `&Self::World` 或 `&mut Self::World`
+- 可以声明额外 associated type 表示连接、流、事务等长期资源
+- 不得包含 associated constant；generic World、receiver 方法或缺少 World 参数的操作会使整个 trait 按普通 trait 处理
 
-推荐使用 `rvs_*_P` 命名约定显式标注 Port 方法的调用方。
+World Port 操作自动获得 P；各 impl 的 `B/I/S/T` 能力仍按至少半数规则逐项投票，入选能力与操作自身的 `A/M/U` 一起构成完整契约和函数后缀。具体 impl body 和默认 trait body 都按这个完整契约向下检查。调用边遇到任何包含 P 的完整契约时，只向调用方传播 P，不传播同一契约中的 `B/I/S/T`。
 
-#### 普通 Trait 投票与非典型实现
+调用方通过类型级解释器和显式 World 使用端口，不保存 `Box<dyn>` 服务对象。普通结果和领域错误使用具体类型；associated type 只用于调用方需要跨多次操作持有的长期资源。测试时替换解释器类型并提供内存 World。
 
-普通非 Port trait 方法对 `B/I/P/S/T` 逐项执行 at-least-half vote，阈值为 `ceil(实现数量 / 2)`。声明自身的后缀只在没有实现可聚合时回退使用。投票表示典型公开能力，不表示所有实现的最坏情况。
+#### Trait 投票与非典型实现
+
+Trait 方法对 `B/I/P/S/T` 逐项执行 at-least-half vote，阈值为 `ceil(实现数量 / 2)`。声明自身的后缀只在没有实现可聚合时回退使用。投票表示典型完整能力，不表示所有实现的最坏情况。World Port 固定加入 P，并仅在调用边把完整契约投影成 P。
 
 推断会保留参与实现数、阈值和逐能力票数。一个完整、可修改的本地实现若拥有投票未选中的传播能力，会产生 `RVS_TRAIT_IMPL_OUTLIER` warning。该 warning 不改变 trait 投票结果，也不改变 pure/good/ok 统计；它用于提示某个实现可能把隐藏环境、I/O、阻塞或其他副作用放进了一个通常不具备这些行为的抽象。Port、外部实现和推断不完整的实现组不产生此 warning。
 
 ### 调用规则
 
-**唯一规则：对 `B/I/P/S/T` 五个可传播能力逐字母检查；被调用方拥有的每个这类能力，调用方都必须拥有。`A/M/U` 只从函数自身签名推断，不参与调用规则。**
+**唯一规则：普通调用对 `B/I/P/S/T` 五个可传播能力逐字母检查；若被调用方包含 P，则该调用边只要求 P。`A/M/U` 只从函数自身的签名或函数体事实推断，不参与调用规则。**
 
 每个字母独立判定，只需逐字母检查：
 
@@ -239,18 +241,19 @@ Port 方法的 P 不从函数后缀中解析，而是由 trait 名推断。当�
 | `B` | 可阻塞可调用非阻塞 | 非阻塞不可调用阻塞 | 非阻塞函数（如异步）中阻塞会卡死事件循环 |
 | `I` | 有 I/O 可调用纯计算 | 无 I/O 不可调用有 I/O | 保持计算层的纯粹性 |
 | `M` | 调用规则不检查 | 调用规则不检查 | 仅由 `&mut` 参数自身推断，不传播 |
-| `P` | 有端口可调用纯函数 | 纯函数不可调用有端口 | 端口方法需要通过依赖注入使用 |
+| `P` | 有端口可调用纯函数 | 纯函数不可调用有端口 | 端口操作需要通过类型解释器和 World 使用 |
 | `S` | 有副作用可调用纯函数 | 纯函数不可调用有副作用 | 纯函数的承诺不允许被打破 |
 | `T` | 线程局部可调用线程安全 | 线程安全不可调用线程局部 | 线程安全函数引入线程局部状态会破坏安全性 |
-| `U` | 调用规则不检查 | 调用规则不检查 | 仅由 `unsafe fn` 自身推断，不传播 |
+| `U` | 调用规则不检查 | 调用规则不检查 | 由 `unsafe fn` 或 `static mut` 访问推断，不传播 |
 
 示例：
 
 ```
-rvs_write_db_ABM   可调用  rvs_parse_int        ✅ (B/I/P/S/T 均满足)
+rvs_write_db_AIS   可调用  rvs_parse_int        ✅ (被调用方没有传播屏障)
 rvs_parse_int      不可调用 rvs_read_file_BI     ❌ (无 B/I 不可调有 B/I)
 rvs_add            可调用  rvs_sort_inplace_M    ✅ (M 为签名能力，不参与调用规则)
 rvs_parse_int      可调用  rvs_fetch_user_A      ✅ (A 为签名能力，不参与调用规则)
+rvs_order_P        可调用  Port::rvs_store_BIPS ✅ (包含 P 的调用边只传播 P)
 ```
 
 ### 修改函数时的能力合规流程
@@ -269,15 +272,17 @@ rvs_parse_int      可调用  rvs_fetch_user_A      ✅ (A 为签名能力，不
 
 ```
 caps/
-├── seed      # 手动维护的底层基线（分配、I/O 内部、编译器内部、async 展开等）
+├── seed      # 可选项目覆盖；底层基线由 Rivus 分发 seed 提供
 ├── std       # std/core/alloc 的全量条目（通过 `cargo rivus infer-std -o caps/std` 生成）
 ├── deps      # 第三方依赖条目（通过 `cargo rivus infer-capsmap -o caps/deps` 生成）
 ├── suppress  # 修正条目（覆盖 std/deps 中过宽的能力标记）
-└── ext       # 手工修正或无法自动推导的精确条目（最高优先级）
+└── ext       # 手工修正或无法自动推导的精确条目（标准层中最高优先级）
 ```
 
 目录内的文件按固定层级顺序加载（后加载的覆盖先加载的）：
-`std` → `deps` → `seed` → `suppress` → `ext` → 其余文件按字母序。
+`std` → `deps` → 分发 seed → 项目 `seed` → `suppress` → `ext` → 其余文件按字母序。
+
+分发 seed 的获取方式不是稳定接口。当前版本将它编译进 `cargo-rivus`；调用方只能依赖“Rivus 提供与受支持工具链匹配的 seed”，不能依赖 seed 永远随二进制发布。未来可以让二进制保持不变，而 seed 随标准库和目标平台独立更新。
 
 更新 caps 时必须显式指定输出：
 
@@ -294,25 +299,14 @@ cargo rivus infer-capsmap -o caps/deps
 {"path":"std::collections::HashMap::new","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
 ```
 
-`caps` 使用按字母序排列的 `ABIMPSTU` 字符串，空字符串表示 pure。`basis` 记录能力知识来自显式声明、推断、trait 投票、Port 或 v1 迁移；`completeness` 为 `complete`、`incomplete` 或 `unknown`。Trait vote record 还会保存实现数量、阈值和逐能力票数。
-
-旧 v1 `path=BI` 文件不能被普通命令加载，必须显式迁移：
-
-```bash
-cargo rivus migrate-caps .
-```
-
-迁移先在同级 staging 目录写出并验证全部 v2 layer，确认迁移前后的有效能力映射一致后才原子交换目录。成功后原目录保存在 `caps.v1-backup`；该备份已存在时迁移拒绝覆盖，除非 active v2 的 transaction marker 验证它正是当前中断迁移已经发布的原 v1 目录。
-不支持原子目录交换或 no-replace rename 的平台/文件系统会拒绝迁移并保留原 `caps`。
-备份发布失败时迁移会尝试原子回滚；如果回滚交换本身也失败，错误会报告仍保存原 v1 数据的 staging 路径，不能声称 `caps` 原路径已经恢复。
-同一项目的迁移与 caps 推断写入通过项目根目录下持久存在的 `.rivus-caps.lock` 串行化；进程内 registry 排斥同进程线程，POSIX record lock 排斥其他进程且不被 fork 后尚未 exec 的子进程继承。交换后中断时，后续迁移根据 active v2 中的 transaction marker 验证原 v1 staging 或已发布 backup，只有逐层语义一致时才完成恢复。
-迁移要求 `caps/` 中每个 layer 都是 regular file；symlink、子目录和其他非文件条目会被拒绝，避免静默丢失内容。
+`caps` 使用按字母序排列的 `ABIMPSTU` 字符串，空字符串表示 pure。`basis` 记录能力知识来自显式声明、推断、trait 投票或 Port；`completeness` 为 `complete`、`incomplete` 或 `unknown`。Trait vote record 还会保存实现数量、阈值和逐能力票数。
 
 - linter 对 capsmap 中的键做 def_path 精确匹配，不支持后缀匹配。specialized impl 会先匹配带内部 identity marker 的精确路径，再回退到诊断中显示的无 marker 可读 def_path；因此一个可读路径条目默认作用于该方法的所有 specialization
 - 如果 linter 报告某函数"既非 rvs_-prefixed nor in capsmap"，你需要补全 capsmap。方法优先级：检查源码 > 编写测试验证行为 > 合理猜测
 - caps record 的 `path` 使用 rustc-driver 解析出的全限定路径（如 `core::result::impl::expect`），而非源码中的短名
 - 空行和版本头之后以 `#` 开头的完整注释行会被忽略；JSON record 不支持行尾注释
-- `cargo rivus check` / `report` / `annotate` / `why` 只从项目 `caps/` 加载能力数据；缺失时按空 capsmap 处理
+- `cargo rivus check` / `report` / `annotate` / `why` 合并 Rivus 分发 seed 与项目 `caps/`；项目目录缺失时仍使用分发 seed
+- 同一项目的 `infer-std` 和 `infer-capsmap` 通过项目根目录下持久存在的 `.rivus-caps.lock` 串行化；进程内 registry 排斥同进程线程，POSIX record lock 排斥其他进程且不被 fork 后尚未 exec 的子进程继承
 
 
 ### 日常开发流程
@@ -326,8 +320,8 @@ cargo rivus migrate-caps .
    cargo test           # 测试通过
    cargo rivus check    # 能力合规检查无违规
    ```
-3. **遇到 unknown callee warning 时**：linter 输出的 `Warning` 表示某个函数调用既非 `rvs_` 前缀也不在 capsmap 中。标准库路径运行 `cargo rivus infer-std -o caps/std`；若该推断命令自身报告未知前置函数，将精确 `def_path` 写入 `caps/seed`，因为 `infer-std` 只读取 `seed` 和 `suppress`。第三方依赖运行 `cargo rivus infer-capsmap -o caps/deps`。仅需修正当前项目普通检查结果时，将精确 `def_path` 写入 `caps/ext`
-4. **遇到 incomplete caps knowledge warning 时**：调用检查只使用已知能力下界，不能把记录当作 pure。`std` 层运行 `cargo rivus infer-std -o caps/std`，其他自动生成层重新运行对应推断命令；人工确认的修正写入 `caps/ext`
+3. **遇到 unknown callee warning 时**：linter 输出的 `Warning` 表示某个函数调用既非 `rvs_` 前缀也不在 capsmap 中。标准库路径运行 `cargo rivus infer-std -o caps/std`；若该命令报告分发 seed 缺少标准库前置函数，应更新 Rivus 维护的分发 seed，项目 `caps/seed` 只用于明确需要的临时覆盖。第三方依赖运行 `cargo rivus infer-capsmap -o caps/deps`。仅需修正当前项目普通检查结果时，将精确 `def_path` 写入 `caps/ext`
+4. **遇到 incomplete caps knowledge warning 时**：调用检查只使用已知能力下界，不能把记录当作 pure。`unknown` 知识应运行诊断给出的 `infer-std` 或 `infer-capsmap` 命令替换；刚生成的 `inferred` / `trait_vote` 记录仍可能因 opaque 函数体或不完整 trait 实现保持 incomplete，单纯重跑同一命令不会改变结果。标准库和本地路径使用诊断给出的 `cargo rivus why` 继续定位 incomplete callee；依赖函数体未被收集时审查依赖源码。没有逐项证明完整能力前，不得通过 `caps/ext` 把记录标为 complete
 5. **遇到其他 warning 时**：根据警告类型分别处理——缺少断言就加 `debug_assert!`，缺少文档就补 `///`，等等
 6. **遇到 violation 时**：调用链能力冲突。要么修改调用方的标记（可能级联影响），要么重构代码避免不合规的调用
 7. **遇到推断提示时**：推断性提示——函数的实际行为暗示应有某能力但名字里没写。审查后决定：补上能力标记（注意级联影响），或确认是误判则忽略
@@ -399,21 +393,27 @@ docs/theory/
 └─────────────────────────────────────┘
 ```
 
-端口是领域定义的 trait，描述**需要什么能力**；适配器是基础设施对端口的实现，领域不知道适配器的存在。组装在 `main.rs` 完成——依赖关系在程序入口才具体化。
+端口是领域定义的 World trait，描述**需要什么能力**；无状态解释器是基础设施对端口的实现，World 保存运行状态和长期资源。领域不知道具体解释器，程序入口只选择解释器类型并构造 World。
 
 ```rust
 // domain/ports.rs
-trait UserRepository {
-    async fn rvs_find_by_id_ABI(&self, id: UserId) -> Result<Option<User>, RepoError>;
+trait UserLookup {
+    type World;
+
+    async fn rvs_find_by_id_AIP(
+        world: &Self::World,
+        id: UserId,
+    ) -> Result<Option<User>, LookupError>;
 }
 
 // domain/services.rs — 调用端口时，标记覆盖端口方法即可
-impl OrderService {
-    pub async fn rvs_create_order_ABIS(&self, cmd: CreateOrderCmd) -> Result<Order, OrderError> {
-        let user = self.repo.rvs_find_by_id_ABI(cmd.user_id)?;
-        let order = Order::rvs_new(user, cmd.items); // 纯函数，无标记
-        Ok(order)
-    }
+async fn rvs_create_order_AP<E: UserLookup>(
+    world: &E::World,
+    cmd: CreateOrderCmd,
+) -> Result<Order, OrderError> {
+    let user = E::rvs_find_by_id_AIP(world, cmd.user_id).await?;
+    let order = Order::rvs_new(user, cmd.items); // 纯函数，无标记
+    Ok(order)
 }
 ```
 
@@ -439,17 +439,17 @@ fn rvs_handle_packet(state: &ConnectionState, packet: &[u8]) -> (ConnectionState
 }
 
 // 薄适配器：执行副作用
-async fn rvs_process_packet_ABM(conn: &mut Connection, packet: &[u8]) -> Result<(), ConnError> {
+async fn rvs_process_packet_AIMS(conn: &mut Connection, packet: &[u8]) -> Result<(), ConnError> {
     let (new_state, actions) = rvs_handle_packet(&conn.state, packet);
     for action in actions {
-        rvs_execute_action_ABI(action).await?; // I/O 在这里
+        rvs_execute_action_AIS(action).await?; // 异步 I/O 和副作用在这里
     }
     conn.state = new_state;
     Ok(())
 }
 ```
 
-好处：`rvs_handle_packet` 是纯函数，能力无标记，可以穷举测试；`rvs_process_packet_ABM` 是薄壳，几乎不含业务逻辑。
+好处：`rvs_handle_packet` 是纯函数，能力无标记，可以穷举测试；`rvs_process_packet_AIMS` 是薄壳，几乎不含业务逻辑。
 
 #### Decision / Effect 分离
 
@@ -467,7 +467,7 @@ fn rvs_plan_retry(policy: &RetryPolicy, attempt: u32, last_error: &str) -> Retry
 }
 
 // 执行层：拿到决策后才做 I/O
-async fn rvs_execute_with_retry_ABIS(...) -> Result<(), Error> {
+async fn rvs_execute_with_retry_A(...) -> Result<(), Error> {
     loop {
         match rvs_plan_retry(&policy, attempt, &last_error) {
             RetryDecision::RetryAfter(delay) => tokio::time::sleep(delay).await,
@@ -490,7 +490,7 @@ fn rvs_build_query(filter: &Filter) -> QueryPlan {
 }
 
 // 执行层：拿到查询计划后才做 I/O
-async fn rvs_execute_query_ABI(plan: &QueryPlan, pool: &PgPool) -> Result<ResultSet, DbError> {
+async fn rvs_execute_query_AI(plan: &QueryPlan, pool: &PgPool) -> Result<ResultSet, DbError> {
     let sql = rvs_plan_to_sql(plan); // 纯函数
     sqlx::query(&sql).fetch_all(pool).await
 }
@@ -498,7 +498,7 @@ async fn rvs_execute_query_ABI(plan: &QueryPlan, pool: &PgPool) -> Result<Result
 
 #### Serialize-first（先序列化再传输）
 
-在系统边界处立即将外部数据反序列化为纯 Rust 结构体（`FromStr` / `TryFrom`），之后所有处理都基于纯数据。绝不在业务逻辑中直接操作流、连接、句柄。
+在系统边界处立即将外部数据反序列化为纯 Rust 结构体（`FromStr` / `TryFrom`），之后的纯领域处理只基于纯数据。需要跨操作持有流、连接或事务时，由应用编排层通过 Port associated resource 显式管理其生命周期。
 
 ```rust
 // 入站边界：立即反序列化
@@ -510,25 +510,33 @@ fn rvs_calculate_total(items: &[OrderItem]) -> Money { ... }
 fn rvs_apply_discount(order: &mut ValidatedOrder, coupon: &Coupon) { ... } // M，好函数
 ```
 
-#### Fake 对象（用于测试 I/O 函数）
+#### Fake World 与解释器（用于测试 I/O 函数）
 
-为端口 trait 提供基于内存的纯实现，使得上层的好函数在测试中可以用 fake 而不碰真实 I/O。
+为端口提供基于内存的 World 和无状态解释器，使上层函数在测试中不碰真实 I/O，也不需要运行时 service object。
 
 ```rust
-struct InMemoryUserRepo { users: RefCell<HashMap<UserId, User>> }
+struct InMemoryWorld {
+    users: HashMap<UserId, User>,
+}
 
-impl UserRepository for InMemoryUserRepo {
-    async fn rvs_find_by_id_ABI(&self, id: UserId) -> Result<Option<User>, RepoError> {
-        Ok(self.users.borrow().get(&id).cloned())
+struct InMemoryUserLookup;
+
+impl UserLookup for InMemoryUserLookup {
+    type World = InMemoryWorld;
+
+    async fn rvs_find_by_id_AIP(
+        world: &Self::World,
+        id: UserId,
+    ) -> Result<Option<User>, LookupError> {
+        Ok(world.users.get(&id).cloned())
     }
 }
 
-// 测试中注入 fake，被测函数的真实能力标记不变
-#[test]
-fn test_20260422_create_order_ok() {
-    let repo = InMemoryUserRepo::rvs_new();
-    let service = OrderService::rvs_new(repo, FakePublisher);
-    let result = service.rvs_create_order_ABIS(cmd); // 测试中同步调用，Fake 内部不真正 await
+// 测试中选择 fake 解释器并提供 World，被测函数的真实能力标记不变
+#[tokio::test]
+async fn test_20260422_create_order_ok() {
+    let world = InMemoryWorld { users };
+    let result = rvs_create_order_AP::<InMemoryUserLookup>(&world, cmd).await;
 }
 ```
 

@@ -1,7 +1,6 @@
 explicit_incomplete: line 2: invalid capability knowledge for 'func': basis 'explicit' requires completeness 'complete', got 'incomplete'
-inferred_unknown: line 2: invalid capability knowledge for 'func': basis 'inferred' requires completeness 'complete' or 'incomplete', got 'unknown'
 port_wrong_caps: line 2: invalid capability knowledge for 'func': Port knowledge must contain exactly P, got 'BI'
-migrated_complete: line 2: invalid capability knowledge for 'func': basis 'migrated_v1' requires completeness 'unknown', got 'complete'
+unknown_basis_variant: line 2: invalid capsmap v2 record: unknown variant `migrated_v1`, expected one of `explicit`, `inferred`, `trait_vote`, `port` at line 1 column 55
 vote_without_implementations: line 2: invalid capability knowledge for 'func': trait vote must contain at least one implementation
 vote_wrong_threshold: line 2: invalid capability knowledge for 'func': trait vote threshold must be 2 for 3 implementations, got 1
 vote_non_propagated_cap: line 2: invalid capability knowledge for 'func': trait vote capability A is not propagated

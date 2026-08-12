@@ -1,0 +1,5 @@
+legacy: async=true port=false body=false entry=true production=false sources=0
+target10: async=false port=true body=true entry=false production=true sources=0
+target20: async=false port=false body=true entry=true production=false sources=0
+target_ids={10, 20, 40}
+diagnostic_ids={10, 20, 40}

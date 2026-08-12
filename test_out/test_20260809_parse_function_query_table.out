@@ -1,0 +1,5 @@
+"std::fs::read_to_string" => true
+"  " => false
+"" => false
+"\t\n" => false
+"core::clone::Clone::clone" => true

@@ -1,0 +1,6 @@
+direct_error=true
+direct_unchanged=true
+direct_rejected_node_absent=true
+optional_ignored=true
+optional_unchanged=true
+optional_rejected_node_absent=true

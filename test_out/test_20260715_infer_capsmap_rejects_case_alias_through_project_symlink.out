@@ -1,2 +1,2 @@
-result=Err("capsmap output parent '$LINK/CAPS' aliases canonical caps directory '$PROJECT/caps'; use the lowercase path")
+result=Err("deps capsmap output parent '$LINK/CAPS' must not contain symlinked or non-directory components")
 shadow_exists=false

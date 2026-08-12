@@ -1,1 +1,1 @@
-anchors=10:demo::rvs_call:false,20:demo::rvs_call:true
+anchors=10:demo::rvs_call

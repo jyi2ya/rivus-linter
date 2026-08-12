@@ -1,3 +1,3 @@
 success=false
-violation_count=1
-expect_unfulfilled=false
+violation_count=0
+expect_unfulfilled=true

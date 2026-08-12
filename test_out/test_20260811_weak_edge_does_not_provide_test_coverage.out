@@ -1,0 +1,5 @@
+strong_covered=true
+weak_covered=false
+strong_leaf_covered=true
+weak_leaf_covered=false
+hidden_behind_weak_root_covered=false

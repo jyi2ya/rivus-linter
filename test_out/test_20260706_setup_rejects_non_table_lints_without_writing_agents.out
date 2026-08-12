@@ -1,2 +1,2 @@
-result=Err("cannot inject clippy lints into '$TMP/Cargo.toml': [lints] must be a table")
+result=Err("cannot merge clippy lints into '$TMP/Cargo.toml': [lints] must be a table or inline table")
 exists=false

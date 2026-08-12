@@ -1,1 +1,0 @@
-diff=FnContractDiff { def_path: DefPath("demo::rvs_fetch_P"), actual_name: FnName("rvs_fetch_P"), expected_name: FnName("rvs_fetch_P"), declared_public_caps: Some(CapabilitySet({P})), expected_public_caps: CapabilitySet({P}) }

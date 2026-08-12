@@ -1,0 +1,3 @@
+read_caps=BI
+metadata_caps=BI
+read_incomplete=true

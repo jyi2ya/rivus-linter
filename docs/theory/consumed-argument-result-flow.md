@@ -1,20 +1,13 @@
-# Consumed Argument Result Flow
+# Consumed Argument Error Preservation
 
-An owned input is at risk only when an operation can finish by reporting failure. If every
-completion reports success, consuming the input does not require preserving it in an error.
+An operation returning `Result<(), E>` exposes a failure channel whenever `E` is inhabited.
+Rivus therefore requires every owned, non-copy input type to be represented by `E`. The rule is
+based on the signature and does not attempt to prove which branch the current implementation takes.
 
-A reported failure may be carried directly, stored inside another value, selected after a
-branch, or produced by another operation. Observing a success-or-failure value does not change
-which outcome it contains. Mutating data carried by a success outcome also does not change the
-outcome itself.
+This is deliberately conservative. A function that currently returns only `Ok(())` still has an
+inhabited error channel and may gain an error path without changing its signature. Preserving the
+input in the error type keeps that future change safe.
 
-Aliases distinguish the outcome they refer to from outcomes reachable inside its payload. An
-observer may be unable to replace the outer outcome while still retaining authority to replace
-a nested outcome. This distinction must survive calls and joins.
-
-Different fields normally describe different storage. Fields of a union describe the same
-storage and therefore invalidate one another when written.
-
-When an operation has no inspectable implementation, its effect is unknown. Missing knowledge
-must not be treated as success, and attempting to inspect a nonexistent implementation must not
-abort analysis.
+References and copyable inputs do not transfer ownership and are excluded. An uninhabited error
+type cannot represent failure and is also excluded. No control-flow, alias, callback, coroutine,
+drop, pointer, or projection analysis is part of this rule.

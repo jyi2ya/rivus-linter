@@ -1,0 +1,4 @@
+libc::unix::linux_like::fstat64=Some("BI")
+libc::unix::linux_like::fstatat64=Some("BI")
+libc::unix::linux_like::lstat64=Some("BI")
+libc::unix::linux_like::stat64=Some("BI")

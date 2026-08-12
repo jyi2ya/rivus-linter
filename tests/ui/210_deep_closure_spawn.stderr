@@ -7,4 +7,109 @@ LL | ...                   std::thread::spawn(|| {});
    = note: `-D rivus::rvs-spawn-warning` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_spawn_warning)]`
 
-error: aborting due to 1 previous error
+error: call through function pointer or generic callable — Rivus cannot resolve the target at HIR level
+  --> $DIR/tests/ui/210_deep_closure_spawn.rs:23:69
+   |
+LL | ...                   _c17();
+   |                       ^^^^^^
+   |
+   = note: `-D rivus::rvs-unsupported-indirect-call` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_unsupported_indirect_call)]`
+
+error: call through function pointer or generic callable — Rivus cannot resolve the target at HIR level
+  --> $DIR/tests/ui/210_deep_closure_spawn.rs:25:65
+   |
+LL | ...                   _c16();
+   |                       ^^^^^^
+
+error: call through function pointer or generic callable — Rivus cannot resolve the target at HIR level
+  --> $DIR/tests/ui/210_deep_closure_spawn.rs:27:61
+   |
+LL | ...                   _c15();
+   |                       ^^^^^^
+
+error: call through function pointer or generic callable — Rivus cannot resolve the target at HIR level
+  --> $DIR/tests/ui/210_deep_closure_spawn.rs:29:57
+   |
+LL | ...                   _c14();
+   |                       ^^^^^^
+
+error: call through function pointer or generic callable — Rivus cannot resolve the target at HIR level
+  --> $DIR/tests/ui/210_deep_closure_spawn.rs:31:53
+   |
+LL | ...                   _c13();
+   |                       ^^^^^^
+
+error: call through function pointer or generic callable — Rivus cannot resolve the target at HIR level
+  --> $DIR/tests/ui/210_deep_closure_spawn.rs:33:49
+   |
+LL | ...                   _c12();
+   |                       ^^^^^^
+
+error: call through function pointer or generic callable — Rivus cannot resolve the target at HIR level
+  --> $DIR/tests/ui/210_deep_closure_spawn.rs:35:45
+   |
+LL | ...                   _c11();
+   |                       ^^^^^^
+
+error: call through function pointer or generic callable — Rivus cannot resolve the target at HIR level
+  --> $DIR/tests/ui/210_deep_closure_spawn.rs:37:41
+   |
+LL | ...                   _c10();
+   |                       ^^^^^^
+
+error: call through function pointer or generic callable — Rivus cannot resolve the target at HIR level
+  --> $DIR/tests/ui/210_deep_closure_spawn.rs:39:37
+   |
+LL | ...                   _c09();
+   |                       ^^^^^^
+
+error: call through function pointer or generic callable — Rivus cannot resolve the target at HIR level
+  --> $DIR/tests/ui/210_deep_closure_spawn.rs:41:33
+   |
+LL | ...                   _c08();
+   |                       ^^^^^^
+
+error: call through function pointer or generic callable — Rivus cannot resolve the target at HIR level
+  --> $DIR/tests/ui/210_deep_closure_spawn.rs:43:29
+   |
+LL | ...                   _c07();
+   |                       ^^^^^^
+
+error: call through function pointer or generic callable — Rivus cannot resolve the target at HIR level
+  --> $DIR/tests/ui/210_deep_closure_spawn.rs:45:25
+   |
+LL |                         _c06();
+   |                         ^^^^^^
+
+error: call through function pointer or generic callable — Rivus cannot resolve the target at HIR level
+  --> $DIR/tests/ui/210_deep_closure_spawn.rs:47:21
+   |
+LL |                     _c05();
+   |                     ^^^^^^
+
+error: call through function pointer or generic callable — Rivus cannot resolve the target at HIR level
+  --> $DIR/tests/ui/210_deep_closure_spawn.rs:49:17
+   |
+LL |                 _c04();
+   |                 ^^^^^^
+
+error: call through function pointer or generic callable — Rivus cannot resolve the target at HIR level
+  --> $DIR/tests/ui/210_deep_closure_spawn.rs:51:13
+   |
+LL |             _c03();
+   |             ^^^^^^
+
+error: call through function pointer or generic callable — Rivus cannot resolve the target at HIR level
+  --> $DIR/tests/ui/210_deep_closure_spawn.rs:53:9
+   |
+LL |         _c02();
+   |         ^^^^^^
+
+error: call through function pointer or generic callable — Rivus cannot resolve the target at HIR level
+  --> $DIR/tests/ui/210_deep_closure_spawn.rs:55:5
+   |
+LL |     _c01();
+   |     ^^^^^^
+
+error: aborting due to 18 previous errors

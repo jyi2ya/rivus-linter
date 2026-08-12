@@ -2,6 +2,8 @@
 #![register_tool(rivus)]
 #![allow(non_snake_case)]
 
-trait ApiClient {
-    fn rvs_fetch_BI(&self) -> i32;
+trait FetchApi {
+    type World;
+
+    fn rvs_fetch_BI(world: &Self::World) -> i32;
 }

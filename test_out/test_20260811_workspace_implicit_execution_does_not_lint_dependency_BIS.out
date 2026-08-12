@@ -1,0 +1,4 @@
+dependency_only_success=true
+local_rejected=true
+local_diagnostic=true
+dependency_diagnostic=false

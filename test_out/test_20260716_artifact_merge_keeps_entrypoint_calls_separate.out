@@ -1,0 +1,3 @@
+calls={DefPath("dependency::ordinary"): Strong}
+entry_calls={DefPath("dependency::shutdown_S"): Strong}
+parse_ok=true

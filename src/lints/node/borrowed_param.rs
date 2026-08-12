@@ -76,19 +76,11 @@ pub(crate) fn rvs_check_borrowed_fields_S<'tcx>(cx: &LateContext<'tcx>, fields: 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::rvs_snapshot_BIS;
+    use crate::test_support::{rvs_register_test_coverage, rvs_snapshot_BIS};
 
     #[test]
-    #[expect(
-        unreachable_code,
-        reason = "coverage-only branch links rustc-context logic exercised by borrowed-parameter UI fixtures"
-    )]
     fn test_20260714_borrowed_type_ui_coverage() {
         rvs_snapshot_BIS("test_20260714_borrowed_type_ui_coverage", "covered\n");
-        if std::hint::black_box(false) {
-            let _cx: &LateContext<'_> = unreachable!();
-            let _ty: &rustc_hir::Ty<'_> = unreachable!();
-            let _ = rvs_borrowed_type(_cx, _ty);
-        }
+        rvs_register_test_coverage(rvs_borrowed_type);
     }
 }

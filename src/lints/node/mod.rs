@@ -5,6 +5,7 @@ pub(crate) mod consumed_arg;
 pub(crate) mod dead_code;
 pub(crate) mod deny_warnings;
 pub(crate) mod deref_polymorphism;
+pub(crate) mod implicit_execution;
 pub(crate) mod missing_allow;
 pub(crate) mod missing_debug_derive;
 pub(crate) mod missing_doc;

@@ -1,7 +1,7 @@
 error: 'fetch' is missing the rvs_ prefix; expected name: rvs_fetch_P; declared caps: unknown; inferred caps: P
-  --> $DIR/tests/ui/168_contract_mismatch_provided_port_missing_rvs.rs:5:5
+  --> $DIR/tests/ui/168_contract_mismatch_provided_port_missing_rvs.rs:7:5
    |
-LL | /     fn fetch(&self) -> i32 {
+LL | /     fn fetch(_world: &Self::World) -> i32 {
 LL | |         1
 LL | |     }
    | |_____^

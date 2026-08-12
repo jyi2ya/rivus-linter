@@ -10,8 +10,10 @@ fn rvs_read_BI() -> i32 {
     1
 }
 
-trait ApiClient {
-    fn fetch(&self) -> i32 {
+trait FetchApi {
+    type World;
+
+    fn fetch(_world: &Self::World) -> i32 {
         rvs_read_BI()
     }
 }

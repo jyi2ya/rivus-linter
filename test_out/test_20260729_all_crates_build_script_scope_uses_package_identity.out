@@ -1,0 +1,5 @@
+target_count=2
+local_provenance=Some(PrimaryPackage)
+dependency_provenance=Some(Dependency)
+local_offline=Some(true)
+dependency_offline=Some(false)

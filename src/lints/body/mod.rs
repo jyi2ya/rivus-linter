@@ -5,7 +5,6 @@ pub(crate) mod empty_fn;
 pub(crate) mod error_swallow;
 pub(crate) mod macro_expansion;
 pub(crate) mod reflection;
-pub(crate) mod result_flow;
 pub(crate) mod spawn;
 pub(crate) mod stub_macro;
 
@@ -13,7 +12,7 @@ use std::borrow::Cow;
 
 use super::utils::CallTarget;
 
-pub(crate) use collector::{BodyFacts, rvs_collect_body_facts_M};
+pub(crate) use collector::{BodyFacts, ImplicitExecutionKind, rvs_collect_body_facts_M};
 
 fn rvs_path_lint_callable<'a>(target: &'a CallTarget) -> Option<Cow<'a, str>> {
     match target {

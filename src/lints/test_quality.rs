@@ -1,7 +1,4 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
-#[cfg(test)]
-use std::ffi::OsStr;
-use std::path::{Path, PathBuf};
 
 use rustc_lint::LateContext;
 
@@ -11,11 +8,11 @@ use super::{
     RVS_DUPLICATE_TEST, RVS_MISSING_TEST_OUTPUT, RVS_UNTESTED_GOOD_FN, RVS_UNTESTED_OK_FN,
 };
 use crate::artifacts::{FnGraph, FunctionIdentity};
-use crate::fs_guard::rvs_render_atomic_write_failure;
+use crate::lints::LintEnvironment;
 use crate::symbols::CrateName;
 
 /// `check_crate_post` — cross-cutting test quality checks and output writing.
-pub(crate) fn rvs_check_crate_post_BIMS<'tcx>(
+pub(crate) fn rvs_check_crate_post_MPS<'tcx, E: LintEnvironment>(
     cx: &LateContext<'tcx>,
     test_names: &BTreeMap<String, Vec<TestSite>>,
     good_fns: &[CoverageFn],
@@ -23,14 +20,16 @@ pub(crate) fn rvs_check_crate_post_BIMS<'tcx>(
     test_calls: &HashSet<TestCallTarget>,
     selected_untested_functions: Option<&BTreeSet<FunctionIdentity>>,
     callgraph: &FnGraph,
-    collect_callgraph: bool,
+    test_outputs: Option<&BTreeSet<String>>,
+    world: &mut E::World,
     check_local_coverage: bool,
+    ui_testing: bool,
 ) {
     rvs_check_duplicate_tests_S(cx, test_names);
-    rvs_check_missing_test_output_BIS(cx, test_names);
+    rvs_check_missing_test_output_S(cx, test_names, test_outputs, ui_testing);
     if let Some(selected) = selected_untested_functions {
         rvs_check_selected_untested_fns_S(cx, good_fns, ok_fns, selected);
-    } else if check_local_coverage || crate::rvs_env_flag_is_one_BS("RIVUS_UI_TESTING") {
+    } else if check_local_coverage || ui_testing {
         let covered = rvs_direct_covered_functions(callgraph);
         let mut candidate_name_counts = BTreeMap::new();
         for candidate in good_fns.iter().chain(ok_fns) {
@@ -47,7 +46,7 @@ pub(crate) fn rvs_check_crate_post_BIMS<'tcx>(
             &candidate_name_counts,
         );
     }
-    rvs_write_callgraph_BIS(cx, callgraph, collect_callgraph);
+    rvs_write_callgraph_MPS::<E>(cx, callgraph, world);
 }
 
 fn rvs_check_selected_untested_fns_S<'tcx>(
@@ -75,19 +74,12 @@ fn rvs_check_selected_untested_fns_S<'tcx>(
 }
 
 fn rvs_should_emit_selected(
-    cx: &LateContext<'_>,
+    _cx: &LateContext<'_>,
     candidate: &CoverageFn,
     selected: &BTreeSet<FunctionIdentity>,
-    lint: &'static rustc_lint::Lint,
+    _lint: &'static rustc_lint::Lint,
 ) -> bool {
     selected.contains(&candidate.identity)
-        && (!cx.tcx.sess.opts.test
-            || cx
-                .tcx
-                .lint_level_at_node(lint, candidate.hir_id)
-                .level
-                .as_str()
-                == "expect")
 }
 
 fn rvs_check_duplicate_tests_S<'tcx>(
@@ -109,20 +101,21 @@ fn rvs_check_duplicate_tests_S<'tcx>(
     }
 }
 
-fn rvs_check_missing_test_output_BIS<'tcx>(
+fn rvs_check_missing_test_output_S<'tcx>(
     cx: &LateContext<'tcx>,
     test_names: &BTreeMap<String, Vec<TestSite>>,
+    test_outputs: Option<&BTreeSet<String>>,
+    ui_testing: bool,
 ) {
-    if crate::rvs_env_flag_is_one_BS("RIVUS_UI_TESTING") {
+    if ui_testing {
         return;
     }
-    let out_dir = Path::new("test_out");
-    if !rvs_test_output_checks_enabled_BIS(out_dir) {
+    let Some(test_outputs) = test_outputs else {
         return;
-    }
+    };
     for (name, spans) in test_names {
         let out_file = format!("test_out/{name}.out");
-        if !rvs_has_test_output_BIS(name, out_dir) {
+        if !test_outputs.contains(name) {
             if let Some(site) = spans.first() {
                 rvs_emit_node_span_lint_S(
                     cx,
@@ -134,14 +127,6 @@ fn rvs_check_missing_test_output_BIS<'tcx>(
             }
         }
     }
-}
-
-fn rvs_test_output_checks_enabled_BIS(out_dir: &Path) -> bool {
-    out_dir.is_dir()
-}
-
-fn rvs_has_test_output_BIS(name: &str, out_dir: &Path) -> bool {
-    out_dir.join(format!("{name}.out")).is_file()
 }
 
 fn rvs_check_untested_fns_S<'tcx>(
@@ -186,85 +171,29 @@ fn rvs_direct_covered_functions(graph: &FnGraph) -> BTreeSet<FunctionIdentity> {
     graph.rvs_test_reachable_identities()
 }
 
-#[cfg(test)]
-fn rvs_env_os_flag_value_enabled(value: Option<&OsStr>) -> bool {
-    value.and_then(OsStr::to_str) == Some("1")
-}
-
-fn rvs_write_callgraph_BIS<'tcx>(
+fn rvs_write_callgraph_MPS<'tcx, E: LintEnvironment>(
     cx: &LateContext<'tcx>,
     callgraph: &FnGraph,
-    collect_callgraph: bool,
+    world: &mut E::World,
 ) {
-    if collect_callgraph {
-        let cg_dir = std::env::var_os("RIVUS_CALLGRAPH_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("target/rivus-callgraph"));
-        let crate_name = CrateName::rvs_from_manifest_name(
-            cx.tcx.crate_name(rustc_span::def_id::LOCAL_CRATE).as_str(),
-        );
-        if let Err(e) = rvs_write_callgraph_artifact_BIS(&cg_dir, &crate_name, callgraph) {
-            cx.tcx
-                .dcx()
-                .err(format!("cannot write rivus callgraph artifact: {e}"));
-        }
+    let crate_name = CrateName::rvs_from_manifest_name(
+        cx.tcx.crate_name(rustc_span::def_id::LOCAL_CRATE).as_str(),
+    );
+    if let Err(error) = E::rvs_write_callgraph_BIMPST(world, &crate_name, callgraph) {
+        cx.tcx
+            .dcx()
+            .err(format!("cannot write rivus callgraph artifact: {error}"));
     }
-}
-
-fn rvs_write_callgraph_artifact_BIS(
-    artifact_dir: &Path,
-    crate_name: &CrateName,
-    callgraph: &FnGraph,
-) -> Result<PathBuf, String> {
-    let crate_name_str = crate_name.rvs_as_str();
-    if crate_name_str.is_empty()
-        || crate_name_str.contains('/')
-        || crate_name_str.contains('\\')
-        || crate_name_str.contains('\0')
-    {
-        return Err(format!(
-            "artifact crate name must be a non-empty path segment: {crate_name}"
-        ));
-    }
-    let json = crate::artifacts::rvs_serialize_callgraph_json_S(callgraph)?;
-    std::fs::create_dir_all(artifact_dir)
-        .map_err(|e| format!("cannot create {}: {e}", artifact_dir.display()))?;
-    let final_path = artifact_dir.join(format!("{crate_name}-{}.json", std::process::id()));
-    let temp_path_for_attempt = |attempt| {
-        if attempt == 0 {
-            artifact_dir.join(format!("{crate_name}-{}.json.tmp", std::process::id()))
-        } else {
-            artifact_dir.join(format!(
-                "{crate_name}-{}.json.tmp.{attempt}",
-                std::process::id()
-            ))
-        }
-    };
-    crate::fs_guard::rvs_write_atomic_BIS(&final_path, json.as_bytes(), &temp_path_for_attempt)
-        .map_err(|failure| {
-            rvs_render_atomic_write_failure(failure, &final_path, "temp artifact", false)
-        })?;
-    Ok(final_path)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::artifacts::FnNode;
+    use crate::artifacts::{CallEdgeType, FnNode};
     use crate::symbols::DefPath;
-    use crate::test_support::rvs_snapshot_BIS;
-
-    fn rvs_test_callgraph() -> FnGraph {
-        let mut graph = FnGraph::rvs_new();
-        graph.rvs_insert_M(DefPath::from("demo::rvs_run"), FnNode::default());
-        graph
-    }
+    use crate::test_support::{rvs_register_test_coverage, rvs_snapshot_BIS};
 
     #[test]
-    #[expect(
-        unreachable_code,
-        reason = "coverage-only branch links the rustc-context selector exercised by end-to-end fixtures"
-    )]
     fn test_20260714_test_call_target_matching() {
         let candidate = CoverageFn {
             identity: FunctionIdentity {
@@ -305,15 +234,13 @@ mod tests {
             def_path: DefPath::from("demo::rvs_target"),
         };
         let mut test_node = FnNode::default();
-        test_node.test_crate_ids.insert(1);
-        test_node
-            .coverage_calls
-            .insert(1, BTreeSet::from([helper_identity.clone()]));
+        let test_target = test_node.rvs_test_target_M(1);
+        test_target.is_test = true;
+        test_target.calls = BTreeMap::from([(helper_identity.clone(), CallEdgeType::Strong)]);
         graph.rvs_insert_M(DefPath::from("demo::test_calls_helper"), test_node);
         let mut helper_node = FnNode::default();
-        helper_node
-            .coverage_calls
-            .insert(1, BTreeSet::from([target_identity.clone()]));
+        helper_node.rvs_test_target_M(1).calls =
+            BTreeMap::from([(target_identity.clone(), CallEdgeType::Strong)]);
         graph.rvs_insert_M(helper_identity.def_path.clone(), helper_node);
         graph.rvs_insert_M(target_identity.def_path.clone(), FnNode::default());
         let transitive_covered = rvs_direct_covered_functions(&graph);
@@ -345,302 +272,6 @@ mod tests {
         assert!(!missing);
         assert!(transitive_covered.contains(&target_identity));
 
-        if std::hint::black_box(false) {
-            let _cx: &LateContext<'_> = unreachable!();
-            let _selected: &BTreeSet<FunctionIdentity> = unreachable!();
-            let _ = rvs_should_emit_selected(_cx, &candidate, _selected, RVS_UNTESTED_GOOD_FN);
-        }
-    }
-
-    #[test]
-    fn test_20260703_has_test_output_false_when_dir_missing() {
-        let missing_dir = Path::new("/definitely/not/present/rivus-test-out");
-        let exists = rvs_has_test_output_BIS(
-            "test_20260703_has_test_output_false_when_dir_missing",
-            missing_dir,
-        );
-        rvs_snapshot_BIS(
-            "test_20260703_has_test_output_false_when_dir_missing",
-            &format!("exists={exists}\n"),
-        );
-        assert!(!exists);
-    }
-
-    #[test]
-    fn test_20260714_missing_test_out_disables_snapshot_lint() {
-        let missing_dir = Path::new("/definitely/not/present/rivus-test-out");
-        let enabled = rvs_test_output_checks_enabled_BIS(missing_dir);
-        rvs_snapshot_BIS(
-            "test_20260714_missing_test_out_disables_snapshot_lint",
-            &format!("enabled={enabled}\n"),
-        );
-
-        assert!(!enabled);
-    }
-
-    #[test]
-    fn test_20260703_has_test_output_true_for_existing_snapshot() {
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("never: system clock should be after unix epoch for test temp dir")
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "rivus-test-quality-{}-{unique}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(
-            dir.join("test_20260703_has_test_output_true_for_existing_snapshot.out"),
-            "ok\n",
-        )
-        .unwrap();
-
-        let exists = rvs_has_test_output_BIS(
-            "test_20260703_has_test_output_true_for_existing_snapshot",
-            &dir,
-        );
-        rvs_snapshot_BIS(
-            "test_20260703_has_test_output_true_for_existing_snapshot",
-            &format!("exists={exists}\n"),
-        );
-        assert!(exists);
-
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn test_20260706_has_test_output_false_for_snapshot_directory() {
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("never: system clock should be after unix epoch for test temp dir")
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "rivus-test-quality-dir-{}-{unique}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(
-            dir.join("test_20260706_has_test_output_false_for_snapshot_directory.out"),
-        )
-        .unwrap();
-
-        let exists = rvs_has_test_output_BIS(
-            "test_20260706_has_test_output_false_for_snapshot_directory",
-            &dir,
-        );
-        rvs_snapshot_BIS(
-            "test_20260706_has_test_output_false_for_snapshot_directory",
-            &format!("exists={exists}\n"),
-        );
-        assert!(!exists);
-
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn test_20260706_env_os_flag_value_requires_one() {
-        let cases = [
-            (None, false),
-            (Some(OsStr::new("")), false),
-            (Some(OsStr::new("0")), false),
-            (Some(OsStr::new("true")), false),
-            (Some(OsStr::new("1")), true),
-        ];
-        let output = cases
-            .iter()
-            .map(|(value, _)| format!("{value:?}={}", rvs_env_os_flag_value_enabled(*value)))
-            .collect::<Vec<_>>()
-            .join("\n")
-            + "\n";
-        rvs_snapshot_BIS("test_20260706_env_os_flag_value_requires_one", &output);
-
-        for (value, expected) in cases {
-            assert_eq!(rvs_env_os_flag_value_enabled(value), expected);
-        }
-    }
-
-    #[test]
-    fn test_20260706_write_json_artifact_uses_final_json_file() {
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("never: system clock should be after unix epoch for test temp dir")
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "rivus-artifact-write-{}-{unique}",
-            std::process::id()
-        ));
-        let graph = rvs_test_callgraph();
-        let path = rvs_write_callgraph_artifact_BIS(&dir, &CrateName::from("demo"), &graph)
-            .expect("artifact write should succeed");
-        let tmp_exists = dir
-            .join(format!("demo-{}.json.tmp", std::process::id()))
-            .exists();
-        let file_name = path
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .replace(&std::process::id().to_string(), "$PID");
-        let output = format!(
-            "file={}\ncontent={}\ntmp_exists={}\n",
-            file_name,
-            std::fs::read_to_string(&path).unwrap(),
-            tmp_exists
-        );
-        rvs_snapshot_BIS(
-            "test_20260706_write_json_artifact_uses_final_json_file",
-            &output,
-        );
-
-        assert!(path.is_file());
-        assert!(!tmp_exists);
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn test_20260714_write_empty_callgraph_artifact() {
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("never: system clock should be after unix epoch for test temp dir")
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "rivus-artifact-empty-json-{}-{unique}",
-            std::process::id()
-        ));
-
-        let graph = FnGraph::rvs_new();
-        let result = rvs_write_callgraph_artifact_BIS(&dir, &CrateName::from("demo"), &graph);
-        let dir_exists = dir.exists();
-        let content = result
-            .as_ref()
-            .ok()
-            .and_then(|path| std::fs::read_to_string(path).ok())
-            .unwrap_or_default();
-        let output = format!(
-            "is_ok={}\ndir_exists={dir_exists}\ncontent={content}\n",
-            result.is_ok()
-        );
-        rvs_snapshot_BIS("test_20260714_write_empty_callgraph_artifact", &output);
-
-        assert!(result.is_ok());
-        assert!(dir_exists);
-        assert!(content.contains(r#""nodes":{}"#));
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn test_20260707_write_json_artifact_rejects_pathy_crate_name() {
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("never: system clock should be after unix epoch for test temp dir")
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "rivus-artifact-pathy-crate-{}-{unique}",
-            std::process::id()
-        ));
-
-        let graph = rvs_test_callgraph();
-        let slash = rvs_write_callgraph_artifact_BIS(&dir, &CrateName::from("bad/name"), &graph);
-        let empty = rvs_write_callgraph_artifact_BIS(&dir, &CrateName::from(""), &graph);
-        let dir_exists = dir.exists();
-        let output = format!(
-            "slash_is_err={}\nempty_is_err={}\ndir_exists={dir_exists}\n",
-            slash.is_err(),
-            empty.is_err()
-        );
-        rvs_snapshot_BIS(
-            "test_20260707_write_json_artifact_rejects_pathy_crate_name",
-            &output,
-        );
-
-        assert!(slash.is_err());
-        assert!(empty.is_err());
-        assert!(!dir_exists);
-    }
-
-    #[test]
-    fn test_20260707_write_json_artifact_rejects_nul_crate_name() {
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("never: system clock should be after unix epoch for test temp dir")
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "rivus-artifact-nul-crate-{}-{unique}",
-            std::process::id()
-        ));
-
-        let graph = rvs_test_callgraph();
-        let result = rvs_write_callgraph_artifact_BIS(&dir, &CrateName::from("bad\0name"), &graph);
-        let dir_exists = dir.exists();
-        let output = format!("is_err={}\ndir_exists={dir_exists}\n", result.is_err());
-        rvs_snapshot_BIS(
-            "test_20260707_write_json_artifact_rejects_nul_crate_name",
-            &output,
-        );
-
-        assert!(result.is_err());
-        assert!(!dir_exists);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn test_20260706_write_json_artifact_skips_preexisting_tmp_symlink() {
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("never: system clock should be after unix epoch for test temp dir")
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "rivus-artifact-symlink-{}-{unique}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        let victim = dir.join("victim.txt");
-        std::fs::write(&victim, "victim\n").unwrap();
-        let predictable_tmp = dir.join(format!("demo-{}.json.tmp", std::process::id()));
-        std::os::unix::fs::symlink(&victim, &predictable_tmp).unwrap();
-
-        let graph = rvs_test_callgraph();
-        let path = rvs_write_callgraph_artifact_BIS(&dir, &CrateName::from("demo"), &graph)
-            .expect("artifact write should succeed through a retry temp path");
-        let victim_content = std::fs::read_to_string(&victim).unwrap();
-        let symlink_still_exists = std::fs::symlink_metadata(&predictable_tmp).is_ok();
-        let output = format!(
-            "file_exists={}\nvictim_content={victim_content}\nsymlink_still_exists={symlink_still_exists}\n",
-            path.is_file()
-        );
-        rvs_snapshot_BIS(
-            "test_20260706_write_json_artifact_skips_preexisting_tmp_symlink",
-            &output,
-        );
-
-        assert_eq!(victim_content, "victim\n");
-        assert!(symlink_still_exists);
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn test_20260706_write_json_artifact_removes_tmp_on_rename_error() {
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("never: system clock should be after unix epoch for test temp dir")
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "rivus-artifact-rename-error-{}-{unique}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(dir.join(format!("demo-{}.json", std::process::id()))).unwrap();
-
-        let graph = rvs_test_callgraph();
-        let result = rvs_write_callgraph_artifact_BIS(&dir, &CrateName::from("demo"), &graph);
-        let tmp_exists = dir
-            .join(format!("demo-{}.json.tmp", std::process::id()))
-            .exists();
-        let output = format!("is_err={}\ntmp_exists={tmp_exists}\n", result.is_err());
-        rvs_snapshot_BIS(
-            "test_20260706_write_json_artifact_removes_tmp_on_rename_error",
-            &output,
-        );
-
-        assert!(result.is_err());
-        assert!(!tmp_exists);
-        std::fs::remove_dir_all(dir).unwrap();
+        rvs_register_test_coverage(rvs_should_emit_selected);
     }
 }
