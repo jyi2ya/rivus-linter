@@ -1,3 +1,3 @@
-unknown: Err(UnsupportedSchemaVersion { actual: 10, expected: 16 })
+unknown: Err(UnsupportedSchemaVersion { actual: 10, expected: 17 })
 missing: Err(InvalidSchemaVersion)
 string: Err(InvalidSchemaVersion)

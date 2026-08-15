@@ -281,11 +281,11 @@ fn rvs_prepare_output_path_BIS(
 ) -> Result<PathBuf, String> {
     let resolved = rvs_resolve_output_path(project_path, output_path);
     rvs_preflight_capsmap_file_BIS(&resolved, label)?;
-    rvs_validate_output_parent_BIS(&resolved, label)?;
+    rvs_assert_output_parent_BIS(&resolved, label)?;
     Ok(resolved)
 }
 
-fn rvs_validate_output_parent_BIS(path: &Path, label: &str) -> Result<(), String> {
+fn rvs_assert_output_parent_BIS(path: &Path, label: &str) -> Result<(), String> {
     let Some(output_parent) = path.parent() else {
         return Ok(());
     };
@@ -509,7 +509,7 @@ fn rvs_is_indirect_uncertainty(callee: &DefPath) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::artifacts::CallEdgeType;
+    use crate::artifacts::{CallEdgeType, FunctionIdentity};
     use crate::test_support::{
         rvs_caps_v2, rvs_make_cargo_project_BIS, rvs_make_temp_dir_BIS, rvs_snapshot_BIS,
     };
@@ -685,7 +685,10 @@ mod tests {
             impl_path,
             crate::artifacts::FnNode {
                 calls: BTreeMap::from([(
-                    DefPath::from("dependency::incomplete"),
+                    FunctionIdentity {
+                        crate_id: 1,
+                        def_path: DefPath::from("dependency::incomplete"),
+                    },
                     CallEdgeType::Strong,
                 )]),
                 is_trait_impl: true,
@@ -695,7 +698,13 @@ mod tests {
         graph.rvs_insert_M(
             caller_path.clone(),
             crate::artifacts::FnNode {
-                calls: BTreeMap::from([(trait_path.clone(), CallEdgeType::Strong)]),
+                calls: BTreeMap::from([(
+                    FunctionIdentity {
+                        crate_id: 1,
+                        def_path: trait_path.clone(),
+                    },
+                    CallEdgeType::Strong,
+                )]),
                 ..crate::artifacts::FnNode::default()
             },
         );
@@ -751,7 +760,13 @@ mod tests {
         graph.rvs_insert_M(
             caller_path.clone(),
             crate::artifacts::FnNode {
-                calls: BTreeMap::from([(trait_path.clone(), CallEdgeType::Strong)]),
+                calls: BTreeMap::from([(
+                    FunctionIdentity {
+                        crate_id: 1,
+                        def_path: trait_path.clone(),
+                    },
+                    CallEdgeType::Strong,
+                )]),
                 ..crate::artifacts::FnNode::default()
             },
         );
@@ -816,7 +831,13 @@ mod tests {
         graph.rvs_insert_M(
             caller_path.clone(),
             crate::artifacts::FnNode {
-                calls: BTreeMap::from([(trait_path.clone(), CallEdgeType::Strong)]),
+                calls: BTreeMap::from([(
+                    FunctionIdentity {
+                        crate_id: 1,
+                        def_path: trait_path.clone(),
+                    },
+                    CallEdgeType::Strong,
+                )]),
                 ..crate::artifacts::FnNode::default()
             },
         );
@@ -890,8 +911,20 @@ mod tests {
             read_path.clone(),
             crate::artifacts::FnNode {
                 calls: BTreeMap::from([
-                    (metadata_path.clone(), CallEdgeType::Strong),
-                    (opaque_path.clone(), CallEdgeType::Strong),
+                    (
+                        FunctionIdentity {
+                            crate_id: 1,
+                            def_path: metadata_path.clone(),
+                        },
+                        CallEdgeType::Strong,
+                    ),
+                    (
+                        FunctionIdentity {
+                            crate_id: 1,
+                            def_path: opaque_path.clone(),
+                        },
+                        CallEdgeType::Strong,
+                    ),
                 ]),
                 ..crate::artifacts::FnNode::default()
             },
@@ -899,7 +932,13 @@ mod tests {
         graph.rvs_insert_M(
             metadata_path.clone(),
             crate::artifacts::FnNode {
-                calls: BTreeMap::from([(stat_path, CallEdgeType::Strong)]),
+                calls: BTreeMap::from([(
+                    FunctionIdentity {
+                        crate_id: 1,
+                        def_path: stat_path,
+                    },
+                    CallEdgeType::Strong,
+                )]),
                 ..crate::artifacts::FnNode::default()
             },
         );
@@ -1746,13 +1785,20 @@ mod tests {
     fn test_20260717_collect_std_unknown_callees_accepts_inferred_support_crate() {
         let mut callgraph = crate::artifacts::FnGraph::rvs_new();
         let mut std_node = crate::artifacts::FnNode::default();
-        std_node
-            .calls
-            .insert(DefPath::from("support_crate::help"), CallEdgeType::Strong);
+        std_node.calls.insert(
+            FunctionIdentity {
+                crate_id: 1,
+                def_path: DefPath::from("support_crate::help"),
+            },
+            CallEdgeType::Strong,
+        );
         callgraph.rvs_insert_M(DefPath::from("std::fs::read_to_string"), std_node);
         let mut support_node = crate::artifacts::FnNode::default();
         support_node.calls.insert(
-            DefPath::from("ffi_support::rvs_read_BI"),
+            FunctionIdentity {
+                crate_id: 1,
+                def_path: DefPath::from("ffi_support::rvs_read_BI"),
+            },
             CallEdgeType::Strong,
         );
         callgraph.rvs_insert_M(DefPath::from("support_crate::help"), support_node);
@@ -1794,7 +1840,10 @@ mod tests {
         let mut callgraph = crate::artifacts::FnGraph::rvs_new();
         let mut std_node = crate::artifacts::FnNode::default();
         std_node.calls.insert(
-            DefPath::from("support_crate::opaque_boundary"),
+            FunctionIdentity {
+                crate_id: 1,
+                def_path: DefPath::from("support_crate::opaque_boundary"),
+            },
             CallEdgeType::Strong,
         );
         callgraph.rvs_insert_M(DefPath::from("std::fs::read_to_string"), std_node);
@@ -1833,8 +1882,20 @@ mod tests {
         let mut callgraph = crate::artifacts::FnGraph::rvs_new();
         let mut std_node = crate::artifacts::FnNode::default();
         std_node.calls = BTreeMap::from([
-            (synthetic.clone(), CallEdgeType::Strong),
-            (external.clone(), CallEdgeType::Strong),
+            (
+                crate::artifacts::FunctionIdentity {
+                    crate_id: 1,
+                    def_path: synthetic.clone(),
+                },
+                CallEdgeType::Strong,
+            ),
+            (
+                crate::artifacts::FunctionIdentity {
+                    crate_id: 2,
+                    def_path: external.clone(),
+                },
+                CallEdgeType::Strong,
+            ),
         ]);
         callgraph.rvs_insert_M(caller.clone(), std_node);
 
@@ -1979,9 +2040,13 @@ mod tests {
     fn test_20260706_collect_std_unknown_callees_skips_local_std_crate() {
         let mut callgraph = crate::artifacts::FnGraph::rvs_new();
         let mut local_std_node = crate::artifacts::FnNode::default();
-        local_std_node
-            .calls
-            .insert(DefPath::from("dep::rvs_external_BI"), CallEdgeType::Strong);
+        local_std_node.calls.insert(
+            FunctionIdentity {
+                crate_id: 1,
+                def_path: DefPath::from("dep::rvs_external_BI"),
+            },
+            CallEdgeType::Strong,
+        );
         callgraph.rvs_insert_M(DefPath::from("std::rvs_local"), local_std_node);
 
         let inferred = BTreeMap::from([(

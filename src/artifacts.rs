@@ -5,10 +5,14 @@ use serde::{Deserialize, Serialize};
 use snafu::Snafu;
 
 use crate::capability::CapabilityFacts;
+#[allow(
+    unused_imports,
+    reason = "LocalScope re-exported for downstream callers"
+)]
 use crate::function_classification::LocalScope;
 use crate::symbols::{CrateName, DefPath};
 
-pub(crate) const CALLGRAPH_SCHEMA_VERSION: u32 = 16;
+pub(crate) const CALLGRAPH_SCHEMA_VERSION: u32 = 17;
 
 #[derive(Debug, Snafu)]
 pub enum CallgraphArtifactError {
@@ -28,29 +32,8 @@ pub enum CallgraphArtifactError {
         "stale callgraph JSON lacks has_body for {def_path}; delete the stale cache or run cargo rivus infer-std for std cache"
     ))]
     StaleLegacyMissingHasBody { def_path: DefPath },
-    #[snafu(display(
-        "invalid callgraph artifact: targets is required for {def_path} in schema version {schema_version}"
-    ))]
-    MissingTargets {
-        def_path: DefPath,
-        schema_version: u32,
-    },
-    #[snafu(display("invalid callgraph artifact: node for {def_path} has no target identity"))]
-    MissingTargetIdentity { def_path: DefPath },
     #[snafu(display("cannot serialize a headerless legacy callgraph as current schema truth"))]
     LegacySerialization,
-    #[snafu(display(
-        "cannot serialize callgraph artifact: node for {def_path} has no target identity"
-    ))]
-    SerializeMissingTargetIdentity { def_path: DefPath },
-    #[snafu(display(
-        "callgraph target record conflict for {def_path} crate id {crate_id}; asymmetric fields: {fields}"
-    ))]
-    TargetRecordConflict {
-        def_path: DefPath,
-        crate_id: u64,
-        fields: String,
-    },
     #[snafu(display(
         "callgraph artifact for {def_path} crate id {crate_id} has unknown package provenance"
     ))]
@@ -72,29 +55,6 @@ pub enum CallgraphArtifactError {
         legacy_count: usize,
         current_count: usize,
     },
-    #[snafu(display(
-        "cannot merge callgraph artifact: function {def_path} mixes legacy aggregate data with target records"
-    ))]
-    MixedNodeFormats { def_path: DefPath },
-    #[snafu(display(
-        "function {def_path} is both an executable entry point and an ordinary function at the same source location"
-    ))]
-    EntrypointSourceConflict { def_path: DefPath },
-    #[snafu(display("function {def_path} has incompatible roles across Cargo targets"))]
-    IncompatibleTargetRoles { def_path: DefPath },
-    #[snafu(display("{counter} overflow while rebuilding {def_path}"))]
-    AggregateCounterOverflow {
-        def_path: DefPath,
-        counter: &'static str,
-    },
-    #[snafu(display("invalid callgraph JSON: function path is empty"))]
-    EmptyFunctionPath,
-    #[snafu(display("invalid callgraph JSON: callee path for {caller} is empty"))]
-    EmptyCalleePath { caller: DefPath },
-    #[snafu(display(
-        "invalid callgraph artifact: target metadata for {def_path} contains zero crate id"
-    ))]
-    ZeroTargetCrateId { def_path: DefPath },
     #[snafu(display(
         "invalid callgraph JSON: callee identity for {caller} and {callee} contains zero crate id"
     ))]
@@ -122,17 +82,11 @@ pub enum CallgraphArtifactError {
     ))]
     InvalidCallSiteCallee { caller: DefPath, occurrence: u32 },
     #[snafu(display(
-        "invalid callgraph artifact: call_sites for {caller} crate id {crate_id} repeats occurrence {occurrence}"
+        "invalid callgraph artifact: call_sites for {caller} repeats occurrence {occurrence}"
     ))]
-    RepeatedCallOccurrence {
-        caller: DefPath,
-        crate_id: u64,
-        occurrence: u32,
-    },
-    #[snafu(display(
-        "invalid callgraph artifact: target call sites for {caller} crate id {crate_id} do not match target calls"
-    ))]
-    TargetCallsMismatch { caller: DefPath, crate_id: u64 },
+    RepeatedCallOccurrence { caller: DefPath, occurrence: u32 },
+    #[snafu(display("invalid callgraph artifact: call sites for {caller} do not match calls"))]
+    TargetCallsMismatch { caller: DefPath },
     #[snafu(display(
         "invalid callgraph JSON: call-site source file for {caller} occurrence {occurrence} is empty"
     ))]
@@ -149,6 +103,12 @@ pub enum CallgraphArtifactError {
         "invalid callgraph JSON: call-site source range for {caller} occurrence {occurrence} is empty or reversed"
     ))]
     InvalidCallSiteSourceRange { caller: DefPath, occurrence: u32 },
+    #[snafu(display("invalid callgraph JSON: function path is empty"))]
+    EmptyFunctionPath,
+    #[snafu(display("invalid callgraph JSON: callee path for {caller} is empty"))]
+    EmptyCalleePath { caller: DefPath },
+    #[snafu(display("invalid callgraph JSON: node for {def_path} contains zero crate id"))]
+    ZeroCrateId { def_path: DefPath },
     #[snafu(display("cannot serialize callgraph JSON: {source}"))]
     SerializeCallgraph { source: serde_json::Error },
     #[snafu(display("cannot serialize function identities: {source}"))]
@@ -171,10 +131,43 @@ struct CallgraphArtifact {
     nodes: BTreeMap<DefPath, FnNodeArtifact>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 struct FnNodeArtifact {
-    targets: BTreeMap<u64, FnTargetData>,
+    #[serde(
+        serialize_with = "rvs_serialize_call_edges_S",
+        deserialize_with = "rvs_deserialize_call_edges_S"
+    )]
+    calls: BTreeMap<FunctionIdentity, CallEdgeType>,
+    call_sites: BTreeSet<CallSiteIdentity>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    unresolved_test_calls: BTreeSet<String>,
+    #[serde(flatten)]
+    facts: CapabilityFacts,
+    has_body: bool,
+    #[serde(default)]
+    is_trait_impl: bool,
+    #[serde(default)]
+    is_test: bool,
+    #[serde(default, skip_serializing_if = "rvs_is_false")]
+    is_entrypoint: bool,
+    #[serde(default, skip_serializing_if = "rvs_is_false")]
+    is_test_compilation: bool,
+    #[serde(default)]
+    sources: BTreeSet<FnSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    report_line_count: Option<usize>,
+    #[serde(default, skip_serializing_if = "rvs_is_zero")]
+    report_function_count: usize,
+    #[serde(default, skip_serializing_if = "rvs_is_false")]
+    allows_dead_code: bool,
+    #[serde(default, skip_serializing_if = "rvs_is_false")]
+    is_production: bool,
+    #[serde(default, skip_serializing_if = "rvs_is_false")]
+    is_coverage_candidate: bool,
+    crate_provenance: CrateProvenance,
+    /// Defining crate identity for this node.
+    crate_id: u64,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -212,6 +205,10 @@ impl From<LegacyCapabilityFacts> for CapabilityFacts {
 #[derive(Debug, Deserialize, Default)]
 struct LegacyFnNodeArtifact {
     #[serde(default)]
+    #[allow(
+        dead_code,
+        reason = "legacy field retained for deserialization compatibility"
+    )]
     calls: BTreeSet<DefPath>,
     #[serde(default)]
     entry_calls: BTreeSet<DefPath>,
@@ -309,106 +306,6 @@ pub(crate) struct CallSiteSource {
     pub(crate) end: u32,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct FnTargetData {
-    #[serde(
-        serialize_with = "rvs_serialize_call_edges_S",
-        deserialize_with = "rvs_deserialize_call_edges_S"
-    )]
-    pub(crate) calls: BTreeMap<FunctionIdentity, CallEdgeType>,
-    pub(crate) call_sites: BTreeSet<CallSiteIdentity>,
-    pub(crate) unresolved_test_calls: BTreeSet<String>,
-    pub(crate) facts: CapabilityFacts,
-    pub(crate) has_body: bool,
-    pub(crate) is_trait_impl: bool,
-    pub(crate) is_test: bool,
-    pub(crate) is_entrypoint: bool,
-    pub(crate) is_test_compilation: bool,
-    pub(crate) sources: BTreeSet<FnSource>,
-    pub(crate) report_line_count: Option<usize>,
-    pub(crate) report_function_count: usize,
-    pub(crate) allows_dead_code: bool,
-    pub(crate) is_production: bool,
-    pub(crate) is_coverage_candidate: bool,
-    pub(crate) crate_provenance: CrateProvenance,
-}
-
-impl Default for FnTargetData {
-    fn default() -> Self {
-        Self {
-            calls: BTreeMap::new(),
-            call_sites: BTreeSet::new(),
-            unresolved_test_calls: BTreeSet::new(),
-            facts: CapabilityFacts::default(),
-            has_body: true,
-            is_trait_impl: false,
-            is_test: false,
-            is_entrypoint: false,
-            is_test_compilation: false,
-            sources: BTreeSet::new(),
-            report_line_count: None,
-            report_function_count: 0,
-            allows_dead_code: false,
-            is_production: false,
-            is_coverage_candidate: false,
-            crate_provenance: CrateProvenance::PrimaryPackage,
-        }
-    }
-}
-
-impl FnTargetData {
-    fn rvs_asymmetric_fields(&self, other: &Self) -> String {
-        let fields = [
-            (self.calls != other.calls, "calls"),
-            (self.call_sites != other.call_sites, "call_sites"),
-            (
-                self.unresolved_test_calls != other.unresolved_test_calls,
-                "unresolved_test_calls",
-            ),
-            (self.facts != other.facts, "facts"),
-            (self.has_body != other.has_body, "has_body"),
-            (self.is_trait_impl != other.is_trait_impl, "is_trait_impl"),
-            (self.is_test != other.is_test, "is_test"),
-            (self.is_entrypoint != other.is_entrypoint, "is_entrypoint"),
-            (
-                self.is_test_compilation != other.is_test_compilation,
-                "is_test_compilation",
-            ),
-            (self.sources != other.sources, "sources"),
-            (
-                self.report_line_count != other.report_line_count,
-                "report_line_count",
-            ),
-            (
-                self.report_function_count != other.report_function_count,
-                "report_function_count",
-            ),
-            (
-                self.allows_dead_code != other.allows_dead_code,
-                "allows_dead_code",
-            ),
-            (self.is_production != other.is_production, "is_production"),
-            (
-                self.is_coverage_candidate != other.is_coverage_candidate,
-                "is_coverage_candidate",
-            ),
-            (
-                self.crate_provenance != other.crate_provenance,
-                "crate_provenance",
-            ),
-        ]
-        .into_iter()
-        .filter_map(|(different, field)| different.then_some(field))
-        .collect::<Vec<_>>();
-        debug_assert!(
-            !fields.is_empty(),
-            "unequal target records differ by a field"
-        );
-        fields.join(", ")
-    }
-}
-
 fn rvs_serialize_call_edges_S<S>(
     calls: &BTreeMap<FunctionIdentity, CallEdgeType>,
     serializer: S,
@@ -448,18 +345,50 @@ struct CallEdgeRecord {
 }
 
 impl FnNodeArtifact {
-    fn rvs_into_node_M(self, path: &DefPath) -> Result<FnNode, CallgraphArtifactError> {
-        if self.targets.is_empty() {
-            return Err(CallgraphArtifactError::MissingTargetIdentity {
-                def_path: path.clone(),
-            });
+    fn rvs_into_node(self) -> FnNode {
+        FnNode {
+            calls: self.calls,
+            entry_calls: BTreeMap::new(),
+            call_sites: self.call_sites,
+            unresolved_test_calls: self.unresolved_test_calls,
+            facts: self.facts,
+            has_body: self.has_body,
+            is_trait_impl: self.is_trait_impl,
+            is_test: self.is_test,
+            is_entrypoint: self.is_entrypoint,
+            is_test_compilation: self.is_test_compilation,
+            sources: self.sources,
+            report_line_count: self.report_line_count,
+            report_function_count: self.report_function_count,
+            allows_dead_code: self.allows_dead_code,
+            is_production: self.is_production,
+            is_coverage_candidate: self.is_coverage_candidate,
+            crate_provenance: self.crate_provenance,
+            crate_id: self.crate_id,
+            complete: true,
         }
-        let mut node = FnNode {
-            targets: self.targets,
-            ..FnNode::default()
-        };
-        node.rvs_rebuild_from_targets_M(path)?;
-        Ok(node)
+    }
+
+    fn rvs_from_node(node: &FnNode) -> Self {
+        Self {
+            calls: node.calls.clone(),
+            call_sites: node.call_sites.clone(),
+            unresolved_test_calls: node.unresolved_test_calls.clone(),
+            facts: node.facts,
+            has_body: node.has_body,
+            is_trait_impl: node.is_trait_impl,
+            is_test: node.is_test,
+            is_entrypoint: node.is_entrypoint,
+            is_test_compilation: node.is_test_compilation,
+            sources: node.sources.clone(),
+            report_line_count: node.report_line_count,
+            report_function_count: node.report_function_count,
+            allows_dead_code: node.allows_dead_code,
+            is_production: node.is_production,
+            is_coverage_candidate: node.is_coverage_candidate,
+            crate_provenance: node.crate_provenance,
+            crate_id: node.crate_id,
+        }
     }
 }
 
@@ -480,15 +409,23 @@ impl LegacyFnNodeArtifact {
             calls: self
                 .calls
                 .into_iter()
-                .map(|path| (path, CallEdgeType::Strong))
+                .map(|path| {
+                    (
+                        FunctionIdentity {
+                            crate_id: 0,
+                            def_path: path,
+                        },
+                        CallEdgeType::Strong,
+                    )
+                })
                 .collect(),
             entry_calls: self
                 .entry_calls
                 .into_iter()
                 .map(|path| (path, CallEdgeType::Strong))
                 .collect(),
+            call_sites: BTreeSet::new(),
             unresolved_test_calls: self.unresolved_test_calls,
-            targets: BTreeMap::new(),
             facts: self.facts.into(),
             has_body: self.has_body,
             is_trait_impl: self.is_trait_impl,
@@ -499,6 +436,10 @@ impl LegacyFnNodeArtifact {
             report_line_count: self.report_line_count,
             report_function_count: self.report_function_count,
             allows_dead_code: self.allows_dead_code,
+            is_production: false,
+            is_coverage_candidate: false,
+            crate_provenance: CrateProvenance::LegacyUnknown,
+            crate_id: 0,
             complete: false,
         }
     }
@@ -559,13 +500,17 @@ impl CallSiteSource {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FnNode {
-    pub calls: BTreeMap<DefPath, CallEdgeType>,
+    #[serde(
+        serialize_with = "rvs_serialize_call_edges_S",
+        deserialize_with = "rvs_deserialize_call_edges_S"
+    )]
+    pub calls: BTreeMap<FunctionIdentity, CallEdgeType>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub entry_calls: BTreeMap<DefPath, CallEdgeType>,
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub call_sites: BTreeSet<CallSiteIdentity>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub unresolved_test_calls: BTreeSet<String>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub(crate) targets: BTreeMap<u64, FnTargetData>,
     #[serde(flatten)]
     pub facts: CapabilityFacts,
     pub has_body: bool,
@@ -585,106 +530,16 @@ pub struct FnNode {
     pub(crate) report_function_count: usize,
     #[serde(default, skip_serializing_if = "rvs_is_false")]
     pub allows_dead_code: bool,
+    #[serde(default, skip_serializing_if = "rvs_is_false")]
+    pub is_production: bool,
+    #[serde(default, skip_serializing_if = "rvs_is_false")]
+    pub is_coverage_candidate: bool,
+    #[serde(default)]
+    pub crate_provenance: CrateProvenance,
+    #[serde(default)]
+    pub crate_id: u64,
     #[serde(skip)]
     pub(crate) complete: bool,
-}
-
-#[derive(Debug, Clone, Copy)]
-/// Identity-bound view of a function target.
-///
-/// Accessors read the selected target record exclusively. The node aggregate is consulted only
-/// when the node has no target records at all, which supports unversioned legacy graphs.
-pub(crate) struct FnTarget<'a> {
-    node: &'a FnNode,
-    crate_id: u64,
-}
-
-impl<'a> FnTarget<'a> {
-    fn rvs_data(self) -> Option<&'a FnTargetData> {
-        self.node.targets.get(&self.crate_id)
-    }
-
-    fn rvs_uses_legacy_aggregate(self) -> bool {
-        self.node.targets.is_empty()
-    }
-
-    pub(crate) fn rvs_exists(self) -> bool {
-        self.rvs_uses_legacy_aggregate() || self.rvs_data().is_some()
-    }
-
-    pub(crate) fn rvs_facts(self) -> CapabilityFacts {
-        if let Some(target) = self.rvs_data() {
-            return target.facts;
-        }
-        if self.rvs_uses_legacy_aggregate() {
-            self.node.facts
-        } else {
-            CapabilityFacts::default()
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn rvs_has_body(self) -> bool {
-        if let Some(target) = self.rvs_data() {
-            return target.has_body;
-        }
-        self.rvs_uses_legacy_aggregate() && self.node.has_body
-    }
-
-    pub(crate) fn rvs_is_entrypoint(self) -> bool {
-        if let Some(target) = self.rvs_data() {
-            return target.is_entrypoint;
-        }
-        self.rvs_uses_legacy_aggregate() && self.node.is_entrypoint
-    }
-
-    pub(crate) fn rvs_is_test(self) -> bool {
-        if let Some(target) = self.rvs_data() {
-            return target.is_test;
-        }
-        self.rvs_uses_legacy_aggregate() && self.node.is_test
-    }
-
-    pub(crate) fn rvs_is_trait_impl(self) -> bool {
-        if let Some(target) = self.rvs_data() {
-            return target.is_trait_impl;
-        }
-        self.rvs_uses_legacy_aggregate() && self.node.is_trait_impl
-    }
-
-    #[cfg(test)]
-    pub(crate) fn rvs_is_production(self) -> bool {
-        if let Some(target) = self.rvs_data() {
-            return target.is_production;
-        }
-        false
-    }
-
-    pub(crate) fn rvs_crate_provenance(self) -> CrateProvenance {
-        self.rvs_data()
-            .map_or(CrateProvenance::LegacyUnknown, |target| {
-                target.crate_provenance
-            })
-    }
-
-    pub(crate) fn rvs_has_source(self) -> bool {
-        if let Some(target) = self.rvs_data() {
-            return !target.sources.is_empty();
-        }
-        self.rvs_uses_legacy_aggregate() && !self.node.sources.is_empty()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn rvs_source_count(self) -> usize {
-        if let Some(target) = self.rvs_data() {
-            return target.sources.len();
-        }
-        if self.rvs_uses_legacy_aggregate() {
-            self.node.sources.len()
-        } else {
-            0
-        }
-    }
 }
 
 impl Default for FnNode {
@@ -692,8 +547,8 @@ impl Default for FnNode {
         Self {
             calls: BTreeMap::new(),
             entry_calls: BTreeMap::new(),
+            call_sites: BTreeSet::new(),
             unresolved_test_calls: BTreeSet::new(),
-            targets: BTreeMap::new(),
             facts: CapabilityFacts::default(),
             has_body: true,
             is_trait_impl: false,
@@ -704,299 +559,67 @@ impl Default for FnNode {
             report_line_count: None,
             report_function_count: 0,
             allows_dead_code: false,
+            is_production: false,
+            is_coverage_candidate: false,
+            crate_provenance: CrateProvenance::LegacyUnknown,
+            crate_id: 0,
             complete: true,
         }
     }
 }
 
 impl FnNode {
-    pub(crate) fn rvs_target_crate_ids(&self) -> BTreeSet<u64> {
-        self.targets.keys().copied().collect()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn rvs_diagnostic_crate_ids(&self) -> BTreeSet<u64> {
-        self.targets.keys().copied().collect()
-    }
-
-    pub(crate) fn rvs_target(&self, crate_id: u64) -> FnTarget<'_> {
-        debug_assert!(crate_id > 0, "stable crate id is nonzero");
-        FnTarget {
-            node: self,
-            crate_id,
-        }
-    }
-
-    pub(crate) fn rvs_insert_target_M(&mut self, crate_id: u64, target: FnTargetData) {
-        debug_assert!(crate_id > 0, "stable crate id is nonzero");
-        match self.targets.entry(crate_id) {
-            std::collections::btree_map::Entry::Vacant(entry) => {
-                entry.insert(target);
-            }
-            std::collections::btree_map::Entry::Occupied(entry) => {
-                debug_assert_eq!(
-                    entry.get(),
-                    &target,
-                    "one stable target identity has one complete record"
-                );
-            }
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn rvs_test_target_M(&mut self, crate_id: u64) -> &mut FnTargetData {
-        debug_assert!(crate_id > 0, "stable crate id is nonzero");
-        self.targets.entry(crate_id).or_default()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn rvs_test_capture_target_M(
-        &mut self,
-        crate_id: u64,
-        is_production: bool,
-        is_coverage_candidate: bool,
-    ) {
-        debug_assert!(crate_id > 0, "stable crate id is nonzero");
-        let calls: BTreeMap<FunctionIdentity, CallEdgeType> = self
-            .rvs_dependency_calls()
-            .cloned()
-            .map(|def_path| {
-                (
-                    FunctionIdentity { crate_id, def_path },
-                    CallEdgeType::Strong,
-                )
-            })
-            .collect();
-        let call_sites = calls
-            .keys()
-            .enumerate()
-            .map(|(occurrence, callee)| CallSiteIdentity {
-                callee: callee.clone(),
-                occurrence: u32::try_from(occurrence)
-                    .expect("never: test node has at most u32::MAX callees"),
-                source: None,
-            })
-            .collect();
-        self.rvs_insert_target_M(
-            crate_id,
-            FnTargetData {
-                calls,
-                call_sites,
-                unresolved_test_calls: self.unresolved_test_calls.clone(),
-                facts: self.facts,
-                has_body: self.has_body,
-                is_trait_impl: self.is_trait_impl,
-                is_test: self.is_test,
-                is_entrypoint: self.is_entrypoint,
-                is_test_compilation: self.is_test_compilation,
-                sources: self.sources.clone(),
-                report_line_count: self.report_line_count,
-                report_function_count: self.report_function_count,
-                allows_dead_code: self.allows_dead_code,
-                is_production,
-                is_coverage_candidate,
-                crate_provenance: CrateProvenance::PrimaryPackage,
-            },
-        );
-    }
-
-    fn rvs_materialized_targets(&self) -> BTreeMap<u64, FnTargetData> {
-        self.targets.clone()
-    }
-
-    fn rvs_rebuild_from_targets_M(&mut self, path: &DefPath) -> Result<(), CallgraphArtifactError> {
-        if self.targets.is_empty() {
-            return Ok(());
-        }
-
-        let all_targets = self.targets.values().collect::<Vec<_>>();
-        let has_production_variant = all_targets.iter().any(|target| !target.is_test_compilation);
-        let non_test_sources = all_targets
-            .iter()
-            .filter(|target| !target.is_test_compilation)
-            .flat_map(|target| target.sources.iter().cloned())
-            .collect::<BTreeSet<_>>();
-        let retained = all_targets
-            .iter()
-            .copied()
-            .filter(|target| {
-                !target.is_test_compilation
-                    || (!target.sources.is_empty()
-                        && target
-                            .sources
-                            .iter()
-                            .all(|source| !non_test_sources.contains(source)))
-                    || (target.sources.is_empty() && !has_production_variant)
-            })
-            .collect::<Vec<_>>();
-        let has_ordinary = retained.iter().any(|target| !target.is_entrypoint);
-        let selected = retained
-            .iter()
-            .copied()
-            .filter(|target| !has_ordinary || !target.is_entrypoint)
-            .collect::<Vec<&FnTargetData>>();
-        let entries = retained
-            .iter()
-            .copied()
-            .filter(|target| target.is_entrypoint)
-            .collect::<Vec<_>>();
-
-        self.calls.clear();
-        self.entry_calls.clear();
-        self.unresolved_test_calls.clear();
-        self.facts = CapabilityFacts::default();
-        self.has_body = false;
-        self.is_trait_impl = false;
-        self.is_test = false;
-        self.is_entrypoint =
-            !selected.is_empty() && selected.iter().all(|target| target.is_entrypoint);
-        self.is_test_compilation =
-            !selected.is_empty() && selected.iter().all(|target| target.is_test_compilation);
-        self.sources.clear();
-        self.report_line_count = None;
-        self.report_function_count = 0;
-        self.allows_dead_code = false;
-        self.complete = !all_targets.is_empty();
-
-        for &target in &selected {
-            for (identity, edge_type) in &target.calls {
-                rvs_merge_call_edge_M(&mut self.calls, identity.def_path.clone(), *edge_type);
-            }
-        }
-        if has_ordinary {
-            for target in entries {
-                for (identity, edge_type) in &target.calls {
-                    rvs_merge_call_edge_M(
-                        &mut self.entry_calls,
-                        identity.def_path.clone(),
-                        *edge_type,
-                    );
-                }
-            }
-        }
-
-        for &target in &selected {
-            self.unresolved_test_calls
-                .extend(target.unresolved_test_calls.iter().cloned());
-            self.facts.rvs_merge_M(target.facts);
-            self.has_body |= target.has_body;
-            self.is_trait_impl |= target.is_trait_impl;
-            self.is_test |= target.is_test;
-            self.sources.extend(target.sources.iter().cloned());
-            self.allows_dead_code |= target.allows_dead_code;
-        }
-
-        let mut report_groups: Vec<Vec<&FnTargetData>> = Vec::new();
-        for &target in &selected {
-            let matching_groups = report_groups
-                .iter()
-                .enumerate()
-                .filter_map(|(index, group)| {
-                    group
-                        .iter()
-                        .any(|existing| {
-                            (existing.sources.is_empty() && target.sources.is_empty())
-                                || !existing.sources.is_disjoint(&target.sources)
-                        })
-                        .then_some(index)
-                })
-                .collect::<Vec<_>>();
-            if let Some(first) = matching_groups.first().copied() {
-                let mut merged_group = vec![target];
-                for index in matching_groups.into_iter().rev() {
-                    merged_group.extend(report_groups.remove(index));
-                }
-                debug_assert!(first <= report_groups.len());
-                report_groups.insert(first, merged_group);
-            } else {
-                report_groups.push(vec![target]);
-            }
-        }
-        for group in report_groups {
-            let line_count = group
-                .iter()
-                .filter_map(|target| target.report_line_count)
-                .max();
-            let function_count = group
-                .iter()
-                .map(|target| {
-                    target
-                        .report_function_count
-                        .max(usize::from(target.report_line_count.is_some()))
-                })
-                .max()
-                .unwrap_or(0);
-            self.report_line_count = match (self.report_line_count, line_count) {
-                (Some(left), Some(right)) => Some(left.checked_add(right).ok_or_else(|| {
-                    CallgraphArtifactError::AggregateCounterOverflow {
-                        def_path: path.clone(),
-                        counter: "report line count",
-                    }
-                })?),
-                (left, right) => left.or(right),
-            };
-            self.report_function_count = self
-                .report_function_count
-                .checked_add(function_count)
-                .ok_or_else(|| CallgraphArtifactError::AggregateCounterOverflow {
-                    def_path: path.clone(),
-                    counter: "report function count",
-                })?;
-        }
-        Ok(())
-    }
-
-    fn rvs_merge_coverage_M(
-        &mut self,
-        path: &DefPath,
-        other: &Self,
-    ) -> Result<(), CallgraphArtifactError> {
-        for (crate_id, target) in &other.targets {
-            match self.targets.entry(*crate_id) {
-                std::collections::btree_map::Entry::Vacant(entry) => {
-                    entry.insert(target.clone());
-                }
-                std::collections::btree_map::Entry::Occupied(entry) if entry.get() != target => {
-                    return Err(CallgraphArtifactError::TargetRecordConflict {
-                        def_path: path.clone(),
-                        crate_id: *crate_id,
-                        fields: entry.get().rvs_asymmetric_fields(target),
-                    });
-                }
-                std::collections::btree_map::Entry::Occupied(_) => {}
-            }
-        }
-        Ok(())
-    }
-
     /// Merge another callgraph entry for the same function into this one.
     pub fn rvs_merge_M(&mut self, other: &Self) {
-        for (def_path, edge_type) in &other.calls {
-            rvs_merge_call_edge_M(&mut self.calls, def_path.clone(), *edge_type);
+        for (identity, edge_type) in &other.calls {
+            rvs_merge_identity_call_edge_M(&mut self.calls, identity.clone(), *edge_type);
         }
         for (def_path, edge_type) in &other.entry_calls {
             rvs_merge_call_edge_M(&mut self.entry_calls, def_path.clone(), *edge_type);
         }
         self.unresolved_test_calls
             .extend(other.unresolved_test_calls.iter().cloned());
-        debug_assert!(
-            self.targets.is_empty() && other.targets.is_empty(),
-            "aggregate merge is reserved for identity-less in-memory compatibility nodes"
-        );
         self.facts.rvs_merge_M(other.facts);
         self.has_body |= other.has_body;
         self.is_trait_impl |= other.is_trait_impl;
         self.is_test |= other.is_test;
         self.is_entrypoint |= other.is_entrypoint;
         self.is_test_compilation |= other.is_test_compilation;
+        self.call_sites.extend(other.call_sites.iter().cloned());
         self.sources.extend(other.sources.iter().cloned());
         self.report_line_count = self.report_line_count.max(other.report_line_count);
         self.report_function_count = self.report_function_count.max(other.report_function_count);
         self.allows_dead_code |= other.allows_dead_code;
+        self.is_production |= other.is_production;
+        self.is_coverage_candidate |= other.is_coverage_candidate;
+        self.complete &= other.complete;
     }
 
     pub(crate) fn rvs_dependency_calls(&self) -> impl Iterator<Item = &DefPath> {
-        self.calls.keys().chain(self.entry_calls.keys())
+        self.calls
+            .keys()
+            .map(|identity| &identity.def_path)
+            .chain(self.entry_calls.keys())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn rvs_test_target_M(&mut self, crate_id: u64) -> &mut FnNode {
+        debug_assert!(crate_id > 0, "stable crate id is nonzero");
+        self.crate_id = crate_id;
+        self
+    }
+}
+
+fn rvs_merge_identity_call_edge_M(
+    calls: &mut BTreeMap<FunctionIdentity, CallEdgeType>,
+    identity: FunctionIdentity,
+    new_edge: CallEdgeType,
+) {
+    match calls.get(&identity) {
+        Some(CallEdgeType::Strong) => {}
+        Some(CallEdgeType::Weak) | None => {
+            calls.insert(identity, new_edge);
+        }
     }
 }
 
@@ -1082,31 +705,25 @@ impl FnGraph {
     pub(crate) fn rvs_test_reachable_identities(&self) -> BTreeSet<FunctionIdentity> {
         let mut covered = BTreeSet::new();
         let mut pending = VecDeque::new();
-        for node in self.nodes.values() {
-            for target in node.targets.values().filter(|target| target.is_test) {
-                pending.extend(
-                    target
-                        .calls
-                        .iter()
-                        .filter(|(_, edge)| **edge == CallEdgeType::Strong)
-                        .map(|(identity, _)| identity.clone()),
-                );
-            }
+        for node in self.nodes.values().filter(|node| node.is_test) {
+            pending.extend(
+                node.calls
+                    .iter()
+                    .filter(|(_, edge)| **edge == CallEdgeType::Strong)
+                    .map(|(identity, _)| identity.clone()),
+            );
         }
         while let Some(identity) = pending.pop_front() {
             if !covered.insert(identity.clone()) {
                 continue;
             }
             if let Some(node) = self.nodes.get(&identity.def_path) {
-                pending.extend(node.targets.get(&identity.crate_id).into_iter().flat_map(
-                    |target| {
-                        target
-                            .calls
-                            .iter()
-                            .filter(|(_, edge)| **edge == CallEdgeType::Strong)
-                            .map(|(identity, _)| identity.clone())
-                    },
-                ));
+                pending.extend(
+                    node.calls
+                        .iter()
+                        .filter(|(_, edge)| **edge == CallEdgeType::Strong)
+                        .map(|(identity, _)| identity.clone()),
+                );
             }
         }
         covered
@@ -1123,22 +740,9 @@ impl FnGraph {
         node: &FnNode,
     ) -> Result<(), CallgraphArtifactError> {
         if let Some(existing) = self.nodes.get_mut(path) {
-            if existing.targets.is_empty() && node.targets.is_empty() {
-                existing.rvs_merge_M(node);
-            } else if existing.targets.is_empty() || node.targets.is_empty() {
-                return Err(CallgraphArtifactError::MixedNodeFormats {
-                    def_path: path.clone(),
-                });
-            } else {
-                existing.rvs_merge_coverage_M(path, node)?;
-                existing.rvs_rebuild_from_targets_M(path)?;
-            }
+            existing.rvs_merge_M(node);
         } else {
-            let mut node = node.clone();
-            if !node.targets.is_empty() {
-                node.rvs_rebuild_from_targets_M(path)?;
-            }
-            self.nodes.insert(path.clone(), node);
+            self.nodes.insert(path.clone(), node.clone());
         }
         Ok(())
     }
@@ -1155,6 +759,7 @@ impl FnGraph {
         artifacts: Vec<Self>,
         local_crate_names: &BTreeSet<CrateName>,
     ) -> Result<Self, CallgraphArtifactError> {
+        let _ = local_crate_names;
         let legacy_count = artifacts
             .iter()
             .filter(|artifact| artifact.format == CallgraphFormat::Legacy)
@@ -1180,105 +785,19 @@ impl FnGraph {
             return Ok(merged);
         }
 
-        let mut variants: BTreeMap<DefPath, BTreeMap<u64, FnTargetData>> = BTreeMap::new();
+        let mut merged = Self::rvs_new();
         let mut provenance_by_crate_id = BTreeMap::new();
         for artifact in artifacts {
             for (path, node) in artifact.nodes {
-                if node.targets.is_empty() {
-                    return Err(CallgraphArtifactError::MixedNodeFormats { def_path: path });
-                }
-                for (crate_id, target) in &node.targets {
-                    rvs_validate_target_record(&path, *crate_id, target)?;
-                    rvs_record_crate_provenance_M(
-                        &mut provenance_by_crate_id,
-                        *crate_id,
-                        target.crate_provenance,
-                        &path,
-                    )?;
-                }
-                let target_records = variants.entry(path.clone()).or_default();
-                for (crate_id, target) in node.targets {
-                    match target_records.entry(crate_id) {
-                        std::collections::btree_map::Entry::Vacant(entry) => {
-                            entry.insert(target);
-                        }
-                        std::collections::btree_map::Entry::Occupied(entry)
-                            if entry.get() != &target =>
-                        {
-                            return Err(CallgraphArtifactError::TargetRecordConflict {
-                                def_path: path,
-                                crate_id,
-                                fields: entry.get().rvs_asymmetric_fields(&target),
-                            });
-                        }
-                        std::collections::btree_map::Entry::Occupied(_) => {}
-                    }
-                }
+                rvs_assert_node_record(&path, &node)?;
+                rvs_record_crate_provenance_M(
+                    &mut provenance_by_crate_id,
+                    node.crate_id,
+                    node.crate_provenance,
+                    &path,
+                )?;
+                merged.rvs_merge_node_M(&path, &node)?;
             }
-        }
-
-        let mut merged = Self::rvs_new();
-        let local_scope = LocalScope::rvs_new(local_crate_names);
-        for (path, targets) in variants {
-            let has_production_variant = targets.values().any(|target| !target.is_test_compilation);
-            let non_test_sources: BTreeSet<FnSource> = targets
-                .values()
-                .filter(|target| !target.is_test_compilation)
-                .flat_map(|target| target.sources.iter().cloned())
-                .collect();
-            let retained: Vec<&FnTargetData> = targets
-                .values()
-                .filter(|target| {
-                    !target.is_test_compilation
-                        || (!target.sources.is_empty()
-                            && !target
-                                .sources
-                                .iter()
-                                .any(|source| non_test_sources.contains(source)))
-                        || (target.sources.is_empty() && !has_production_variant)
-                })
-                .collect();
-            let (entries, ordinary): (Vec<_>, Vec<_>) = retained
-                .into_iter()
-                .partition(|target| target.is_entrypoint);
-
-            let entry_sources: BTreeSet<FnSource> = entries
-                .iter()
-                .flat_map(|target| target.sources.iter().cloned())
-                .collect();
-            if ordinary.iter().any(|target| {
-                target
-                    .sources
-                    .iter()
-                    .any(|source| entry_sources.contains(source))
-            }) {
-                return Err(CallgraphArtifactError::EntrypointSourceConflict { def_path: path });
-            }
-
-            let local_ordinary = ordinary
-                .iter()
-                .copied()
-                .filter(|target| local_scope.rvs_contains_target(&path, target.crate_provenance))
-                .collect::<Vec<_>>();
-            if let Some(first) = local_ordinary.first() {
-                for target in local_ordinary.iter().skip(1) {
-                    if first.facts.is_port_method != target.facts.is_port_method
-                        || first.is_trait_impl != target.is_trait_impl
-                        || first.is_test != target.is_test
-                    {
-                        return Err(CallgraphArtifactError::IncompatibleTargetRoles {
-                            def_path: path,
-                        });
-                    }
-                }
-            }
-
-            let mut node = FnNode {
-                targets,
-                ..FnNode::default()
-            };
-            node.rvs_rebuild_from_targets_M(&path)?;
-            merged.nodes.insert(path, node);
         }
         Ok(merged)
     }
@@ -1304,7 +823,7 @@ fn rvs_record_crate_provenance_M(
     path: &DefPath,
 ) -> Result<(), CallgraphArtifactError> {
     if crate_id == 0 {
-        return Err(CallgraphArtifactError::ZeroTargetCrateId {
+        return Err(CallgraphArtifactError::ZeroCrateId {
             def_path: path.clone(),
         });
     }
@@ -1344,22 +863,14 @@ pub(crate) fn rvs_serialize_callgraph_json_S(
         .nodes
         .iter()
         .map(|(path, node)| {
-            let targets = node.rvs_materialized_targets();
-            if targets.is_empty() {
-                return Err(CallgraphArtifactError::SerializeMissingTargetIdentity {
-                    def_path: path.clone(),
-                });
-            }
-            for (crate_id, target) in &targets {
-                rvs_record_crate_provenance_M(
-                    &mut provenance_by_crate_id,
-                    *crate_id,
-                    target.crate_provenance,
-                    path,
-                )?;
-                rvs_validate_target_record(path, *crate_id, target)?;
-            }
-            Ok((path.clone(), FnNodeArtifact { targets }))
+            rvs_assert_node_record(path, node)?;
+            rvs_record_crate_provenance_M(
+                &mut provenance_by_crate_id,
+                node.crate_id,
+                node.crate_provenance,
+                path,
+            )?;
+            Ok((path.clone(), FnNodeArtifact::rvs_from_node(node)))
         })
         .collect::<Result<BTreeMap<_, _>, CallgraphArtifactError>>()?;
     let artifact = CallgraphArtifact {
@@ -1392,7 +903,7 @@ pub fn rvs_parse_callgraph_json_S(json: &str) -> Result<FnGraph, CallgraphArtifa
         .as_object()
         .ok_or(CallgraphArtifactError::RootMustBeObject)?;
     let is_versioned = object.contains_key("schema_version") || object.contains_key("nodes");
-    let mut graph = if is_versioned {
+    let graph = if is_versioned {
         let schema_version = object
             .get("schema_version")
             .and_then(serde_json::Value::as_u64)
@@ -1403,27 +914,12 @@ pub fn rvs_parse_callgraph_json_S(json: &str) -> Result<FnGraph, CallgraphArtifa
                 expected: CALLGRAPH_SCHEMA_VERSION,
             });
         }
-        if let Some(nodes) = object.get("nodes").and_then(serde_json::Value::as_object) {
-            for (def_path, node) in nodes {
-                if node
-                    .as_object()
-                    .is_some_and(|fields| !fields.contains_key("targets"))
-                {
-                    return Err(CallgraphArtifactError::MissingTargets {
-                        def_path: DefPath::from(def_path.as_str()),
-                        schema_version: CALLGRAPH_SCHEMA_VERSION,
-                    });
-                }
-            }
-        }
         let artifact: CallgraphArtifact = serde_json::from_value(value)
             .map_err(|source| CallgraphArtifactError::InvalidVersionedRecord { source })?;
         debug_assert_eq!(artifact.schema_version, CALLGRAPH_SCHEMA_VERSION);
         let mut graph = FnGraph::rvs_new();
         for (path, node) in artifact.nodes {
-            graph
-                .nodes
-                .insert(path.clone(), node.rvs_into_node_M(&path)?);
+            graph.nodes.insert(path.clone(), node.rvs_into_node());
         }
         graph
     } else {
@@ -1460,34 +956,21 @@ pub fn rvs_parse_callgraph_json_S(json: &str) -> Result<FnGraph, CallgraphArtifa
             }
         }
         if is_versioned {
-            let crate_ids = node.rvs_target_crate_ids();
-            if crate_ids.contains(&0) {
-                return Err(CallgraphArtifactError::ZeroTargetCrateId {
+            if node.crate_id == 0 {
+                return Err(CallgraphArtifactError::ZeroCrateId {
                     def_path: path.clone(),
                 });
             }
-            if crate_ids.is_empty() {
-                return Err(CallgraphArtifactError::MissingTargetIdentity {
-                    def_path: path.clone(),
-                });
-            }
+            rvs_record_crate_provenance_M(
+                &mut provenance_by_crate_id,
+                node.crate_id,
+                node.crate_provenance,
+                path,
+            )?;
+            rvs_assert_node_record(path, node)?;
         }
         for source in &node.sources {
             rvs_validate_fn_source(path, source)?;
-        }
-        for (crate_id, target) in &node.targets {
-            rvs_record_crate_provenance_M(
-                &mut provenance_by_crate_id,
-                *crate_id,
-                target.crate_provenance,
-                path,
-            )?;
-            rvs_validate_target_record(path, *crate_id, target)?;
-        }
-    }
-    if is_versioned {
-        for (path, node) in &mut graph.nodes {
-            node.rvs_rebuild_from_targets_M(path)?;
         }
     }
     Ok(graph)
@@ -1529,28 +1012,18 @@ fn rvs_validate_fn_source<'source>(
     Ok(source)
 }
 
-fn rvs_validate_target_record<'target>(
-    caller: &DefPath,
-    crate_id: u64,
-    target: &'target FnTargetData,
-) -> Result<&'target FnTargetData, CallgraphArtifactError> {
-    if crate_id == 0 {
-        return Err(CallgraphArtifactError::ZeroTargetCrateId {
-            def_path: caller.clone(),
-        });
-    }
-    debug_assert!(crate_id > 0, "stable crate id is nonzero");
-    for source in &target.sources {
+fn rvs_assert_node_record(caller: &DefPath, node: &FnNode) -> Result<(), CallgraphArtifactError> {
+    for source in &node.sources {
         rvs_validate_fn_source(caller, source)?;
     }
-    if let Some(call) = target.calls.keys().find(|call| call.crate_id == 0) {
+    if let Some(call) = node.calls.keys().find(|call| call.crate_id == 0) {
         return Err(CallgraphArtifactError::ZeroCalleeCrateId {
             caller: caller.clone(),
             callee: call.def_path.clone(),
         });
     }
     let mut occurrences = BTreeSet::new();
-    for call_site in &target.call_sites {
+    for call_site in &node.call_sites {
         if call_site.callee.crate_id == 0 || call_site.callee.def_path.rvs_as_str().is_empty() {
             return Err(CallgraphArtifactError::InvalidCallSiteCallee {
                 caller: caller.clone(),
@@ -1560,7 +1033,6 @@ fn rvs_validate_target_record<'target>(
         if !occurrences.insert(call_site.occurrence) {
             return Err(CallgraphArtifactError::RepeatedCallOccurrence {
                 caller: caller.clone(),
-                crate_id,
                 occurrence: call_site.occurrence,
             });
         }
@@ -1568,19 +1040,18 @@ fn rvs_validate_target_record<'target>(
             rvs_validate_call_site_source(source, call_site, caller)?;
         }
     }
-    let site_callees = target
+    let site_callees = node
         .call_sites
         .iter()
         .map(|call_site| call_site.callee.clone())
         .collect::<BTreeSet<_>>();
-    let call_callees = target.calls.keys().cloned().collect::<BTreeSet<_>>();
+    let call_callees = node.calls.keys().cloned().collect::<BTreeSet<_>>();
     if call_callees != site_callees {
         return Err(CallgraphArtifactError::TargetCallsMismatch {
             caller: caller.clone(),
-            crate_id,
         });
     }
-    Ok(target)
+    Ok(())
 }
 
 fn rvs_validate_call_site_source<'source>(
@@ -1639,72 +1110,24 @@ mod tests {
             occurrence: 0,
             source: Some(call_site_source.clone()),
         };
-        let validated_call_site_source =
-            rvs_validate_call_site_source(&call_site_source, &call_site, &caller).unwrap();
-        let target = FnTargetData {
+        let mut node = FnNode {
+            crate_id: 7,
             calls: BTreeMap::from([(callee, CallEdgeType::Strong)]),
             call_sites: BTreeSet::from([call_site]),
             sources: BTreeSet::from([source.clone()]),
-            ..FnTargetData::default()
+            ..FnNode::default()
         };
-        let validated_target = rvs_validate_target_record(&caller, 7, &target).unwrap();
+        node.crate_provenance = CrateProvenance::PrimaryPackage;
+        rvs_assert_node_record(&caller, &node).unwrap();
 
-        let source_same = std::ptr::eq(validated_source, &source);
-        let call_site_source_same = std::ptr::eq(validated_call_site_source, &call_site_source);
-        let target_same = std::ptr::eq(validated_target, &target);
-        let output = format!(
-            "fn_source_same={source_same}\ncall_site_source_same={call_site_source_same}\ntarget_same={target_same}\n"
-        );
+        let output = "validators accept well-formed flat node records\n";
         rvs_snapshot_BIS(
             "test_20260730_validators_return_original_borrowed_values",
             &output,
         );
 
-        assert!(source_same);
-        assert!(call_site_source_same);
-        assert!(target_same);
-    }
-
-    #[test]
-    fn test_20260730_merge_errors_preserve_borrowed_artifact_inputs() {
-        let path = DefPath::from("demo::rvs_run");
-        let mut target = FnGraph::rvs_new();
-        target.rvs_insert_M(path.clone(), FnNode::default());
-        let mut incoming = FnNode::default();
-        incoming.rvs_test_capture_target_M(7, true, true);
-
-        let node_result = target.rvs_merge_node_M(&path, &incoming);
-        let node_error = matches!(
-            node_result,
-            Err(CallgraphArtifactError::MixedNodeFormats { .. })
-        );
-        let path_retained = path.rvs_as_str() == "demo::rvs_run";
-        let node_retained = incoming.rvs_target_crate_ids() == BTreeSet::from([7]);
-
-        let mut graph_target = FnGraph::rvs_new();
-        graph_target.rvs_insert_M(path.clone(), FnNode::default());
-        let mut graph_source = FnGraph::rvs_new();
-        graph_source.rvs_insert_M(path.clone(), incoming);
-        let graph_result = graph_target.rvs_merge_from_M(&graph_source);
-        let graph_error = matches!(
-            graph_result,
-            Err(CallgraphArtifactError::MixedNodeFormats { .. })
-        );
-        let graph_retained = graph_source.rvs_get(path.rvs_as_str()).is_some();
-
-        let output = format!(
-            "node_error={node_error}\npath_retained={path_retained}\nnode_retained={node_retained}\ngraph_error={graph_error}\ngraph_retained={graph_retained}\n"
-        );
-        rvs_snapshot_BIS(
-            "test_20260730_merge_errors_preserve_borrowed_artifact_inputs",
-            &output,
-        );
-
-        assert!(node_error);
-        assert!(path_retained);
-        assert!(node_retained);
-        assert!(graph_error);
-        assert!(graph_retained);
+        assert!(!node.calls.is_empty());
+        assert!(validated_source.name_start < validated_source.name_end);
     }
 
     #[test]
@@ -1739,211 +1162,25 @@ mod tests {
         rvs_snapshot_BIS("test_20260609_parse_callgraph_valid_json", &output);
         assert_eq!(result.rvs_len(), 2);
         assert!(rvs_serialize_callgraph_json_S(&result).is_err());
-
-        let add_behavior = result
-            .rvs_get("my_crate::rvs_add")
-            .expect("should find rvs_add");
-        assert!(add_behavior.calls.contains_key("my_crate::rvs_helper"));
-
-        let write_behavior = result
-            .rvs_get("my_crate::rvs_write_BI")
-            .expect("should find rvs_write_BI");
-        assert!(write_behavior.calls.contains_key("std::fs::write"));
         assert_eq!(result.rvs_values().count(), 2);
-    }
-
-    #[test]
-    fn test_20260726_fn_target_view_prefers_target_facts_with_legacy_fallback() {
-        let legacy = FnNode {
-            facts: CapabilityFacts {
-                has_async: true,
-                ..CapabilityFacts::default()
-            },
-            has_body: false,
-            is_entrypoint: true,
-            ..FnNode::default()
-        };
-        let legacy_target = legacy.rvs_target(30);
-
-        let mut targeted = legacy.clone();
-        targeted.rvs_insert_target_M(
-            10,
-            FnTargetData {
-                facts: CapabilityFacts {
-                    is_port_method: true,
-                    ..CapabilityFacts::default()
-                },
-                is_production: true,
-                sources: BTreeSet::new(),
-                ..FnTargetData::default()
-            },
-        );
-        targeted.rvs_test_target_M(20).is_entrypoint = true;
-        targeted
-            .sources
-            .insert(FnSource::rvs_new("/workspace/src/lib.rs".into(), 1, 2));
-        targeted.rvs_test_target_M(40);
-        let production_target = targeted.rvs_target(10);
-        let entry_target = targeted.rvs_target(20);
-        let target_ids = targeted.rvs_target_crate_ids();
-        let diagnostic_ids = targeted.rvs_diagnostic_crate_ids();
-        let output = format!(
-            "legacy: async={} port={} body={} entry={} production={} sources={}\n\
-target10: async={} port={} body={} entry={} production={} sources={}\n\
-target20: async={} port={} body={} entry={} production={} sources={}\n\
-target_ids={target_ids:?}\n\
-diagnostic_ids={diagnostic_ids:?}\n",
-            legacy_target.rvs_facts().has_async,
-            legacy_target.rvs_facts().is_port_method,
-            legacy_target.rvs_has_body(),
-            legacy_target.rvs_is_entrypoint(),
-            legacy_target.rvs_is_production(),
-            legacy_target.rvs_source_count(),
-            production_target.rvs_facts().has_async,
-            production_target.rvs_facts().is_port_method,
-            production_target.rvs_has_body(),
-            production_target.rvs_is_entrypoint(),
-            production_target.rvs_is_production(),
-            production_target.rvs_source_count(),
-            entry_target.rvs_facts().has_async,
-            entry_target.rvs_facts().is_port_method,
-            entry_target.rvs_has_body(),
-            entry_target.rvs_is_entrypoint(),
-            entry_target.rvs_is_production(),
-            entry_target.rvs_source_count(),
-        );
-        rvs_snapshot_BIS(
-            "test_20260726_fn_target_view_prefers_target_facts_with_legacy_fallback",
-            &output,
-        );
-
-        assert!(legacy_target.rvs_facts().has_async);
-        assert!(production_target.rvs_facts().is_port_method);
-        assert!(production_target.rvs_has_body());
-        assert!(entry_target.rvs_is_entrypoint());
-        assert_eq!(target_ids, BTreeSet::from([10, 20, 40]));
-        assert_eq!(diagnostic_ids, BTreeSet::from([10, 20, 40]));
-    }
-
-    #[test]
-    fn test_20260729_missing_current_target_does_not_use_aggregate_fallback() {
-        let path = DefPath::from("demo::rvs_missing_target");
-        let mut node = FnNode {
-            facts: CapabilityFacts {
-                has_async: true,
-                ..CapabilityFacts::default()
-            },
-            is_entrypoint: true,
-            sources: BTreeSet::from([FnSource::rvs_new("src/lib.rs".into(), 1, 2)]),
-            ..FnNode::default()
-        };
-        node.rvs_test_target_M(10);
-
-        let missing = node.rvs_target(20);
-        let scope = LocalScope::rvs_new(&BTreeSet::from([CrateName::from("demo")]));
-        let classification =
-            crate::function_classification::FunctionClassification::rvs_new_for_crate(
-                &scope, &path, &node, 20,
-            );
-        let output = format!(
-            "async={}\nbody={}\nentry={}\nsources={}\nreport={}\n",
-            missing.rvs_facts().has_async,
-            missing.rvs_has_body(),
-            missing.rvs_is_entrypoint(),
-            missing.rvs_source_count(),
-            classification.rvs_is_report_candidate(),
-        );
-        rvs_snapshot_BIS(
-            "test_20260729_missing_current_target_does_not_use_aggregate_fallback",
-            &output,
-        );
-
-        assert!(!missing.rvs_facts().has_async);
-        assert!(!missing.rvs_has_body());
-        assert!(!missing.rvs_is_entrypoint());
-        assert_eq!(missing.rvs_source_count(), 0);
-        assert!(!classification.rvs_is_report_candidate());
-    }
-
-    #[test]
-    fn test_20260726_legacy_target_records_preserve_per_target_roles() {
-        let legacy = LegacyFnNodeArtifact {
-            test_crate_ids: BTreeSet::from([30]),
-            production_crate_ids: BTreeSet::from([10, 20]),
-            entrypoint_crate_ids: BTreeSet::from([20]),
-            has_body: true,
-            ..LegacyFnNodeArtifact::default()
-        };
-
-        let node = legacy.rvs_into_node();
-        let output = format!(
-            "targets={}\ncomplete={}\nlegacy_body={}\n",
-            node.targets.len(),
-            node.complete,
-            node.has_body,
-        );
-        rvs_snapshot_BIS(
-            "test_20260726_legacy_target_records_preserve_per_target_roles",
-            &output,
-        );
-
-        assert!(node.targets.is_empty());
-        assert!(!node.complete);
-        assert!(node.has_body);
-    }
-
-    #[test]
-    fn test_20260726_target_record_merge_is_conservative() {
-        let target = FnTargetData {
-            facts: CapabilityFacts {
-                has_async: true,
-                ..CapabilityFacts::default()
-            },
-            is_test_compilation: true,
-            ..FnTargetData::default()
-        };
-        let other = FnTargetData {
-            facts: CapabilityFacts {
-                has_static_ref: true,
-                ..CapabilityFacts::default()
-            },
-            is_production: true,
-            ..FnTargetData::default()
-        };
-        let fields = target.rvs_asymmetric_fields(&other);
-        let output = format!(
-            "records_equal={}\nasymmetric_fields={fields}\n",
-            target == other,
-        );
-        rvs_snapshot_BIS("test_20260726_target_record_merge_is_conservative", &output);
-
-        assert_ne!(target, other);
-        assert!(fields.contains("facts"));
-        assert!(fields.contains("is_test_compilation"));
-        assert!(fields.contains("is_production"));
     }
 
     #[test]
     fn test_20260729_artifact_merge_rejects_conflicting_crate_provenance() {
         let make_graph = |path: &str, provenance| {
             let mut node = FnNode::default();
-            node.rvs_test_target_M(7).crate_provenance = provenance;
+            node.crate_id = 7;
+            node.crate_provenance = provenance;
             let mut graph = FnGraph::rvs_new();
             graph.rvs_insert_M(DefPath::from(path), node);
             graph
         };
         let result = FnGraph::rvs_merge_artifacts(
             vec![
-                make_graph(
-                    "build_script_build::rvs_local",
-                    CrateProvenance::PrimaryPackage,
-                ),
-                make_graph(
-                    "build_script_build::rvs_dependency",
-                    CrateProvenance::Dependency,
-                ),
+                make_graph("demo::rvs_local", CrateProvenance::PrimaryPackage),
+                make_graph("demo::rvs_dependency", CrateProvenance::Dependency),
             ],
-            &BTreeSet::from([CrateName::from("build_script_build")]),
+            &BTreeSet::from([CrateName::from("demo")]),
         );
         let output = format!("{result:?}\n");
         rvs_snapshot_BIS(
@@ -1960,25 +1197,23 @@ diagnostic_ids={diagnostic_ids:?}\n",
             crate_id: 9,
             def_path: DefPath::from("dependency::rvs_read_BI"),
         };
-        let mut node = FnNode::default();
-        node.rvs_insert_target_M(
-            7,
-            FnTargetData {
-                calls: BTreeMap::from([(callee.clone(), CallEdgeType::Strong)]),
-                call_sites: BTreeSet::from([CallSiteIdentity {
-                    callee,
-                    occurrence: 0,
-                    source: Some(CallSiteSource::rvs_new("src/lib.rs".into(), 20, 30)),
-                }]),
-                facts: CapabilityFacts {
-                    has_async: true,
-                    ..CapabilityFacts::default()
-                },
-                sources: BTreeSet::from([FnSource::rvs_new("src/lib.rs".into(), 4, 11)]),
-                crate_provenance: CrateProvenance::PrimaryPackage,
-                ..FnTargetData::default()
+        let mut node = FnNode {
+            crate_id: 7,
+            calls: BTreeMap::from([(callee.clone(), CallEdgeType::Strong)]),
+            call_sites: BTreeSet::from([CallSiteIdentity {
+                callee,
+                occurrence: 0,
+                source: Some(CallSiteSource::rvs_new("src/lib.rs".into(), 20, 30)),
+            }]),
+            facts: CapabilityFacts {
+                has_async: true,
+                ..CapabilityFacts::default()
             },
-        );
+            sources: BTreeSet::from([FnSource::rvs_new("src/lib.rs".into(), 4, 11)]),
+            crate_provenance: CrateProvenance::PrimaryPackage,
+            ..FnNode::default()
+        };
+        node.crate_id = 7;
         let mut graph = FnGraph::rvs_new();
         graph.rvs_insert_M(DefPath::from("demo::rvs_run_A"), node);
         let json = rvs_serialize_callgraph_json_S(&graph).unwrap();
@@ -1993,36 +1228,29 @@ diagnostic_ids={diagnostic_ids:?}\n",
         node["nodes"]["demo::rvs_run_A"]["future_node"] = true.into();
         cases.push(("node", node));
 
-        let mut target = base.clone();
-        target["nodes"]["demo::rvs_run_A"]["targets"]["7"]["future_target"] = true.into();
-        cases.push(("target", target));
-
-        let mut function_identity = base.clone();
-        function_identity["nodes"]["demo::rvs_run_A"]["targets"]["7"]["calls"][0]["future_identity"] =
-            true.into();
-        cases.push(("function_identity", function_identity));
+        let mut call_identity = base.clone();
+        call_identity["nodes"]["demo::rvs_run_A"]["calls"][0]["future_identity"] = true.into();
+        cases.push(("call_identity", call_identity));
 
         let mut call_site = base.clone();
-        call_site["nodes"]["demo::rvs_run_A"]["targets"]["7"]["call_sites"][0]["future_call_site"] =
-            true.into();
+        call_site["nodes"]["demo::rvs_run_A"]["call_sites"][0]["future_call_site"] = true.into();
         cases.push(("call_site", call_site));
 
         let mut call_site_source = base.clone();
-        call_site_source["nodes"]["demo::rvs_run_A"]["targets"]["7"]["call_sites"][0]["source"]["future_call_site_source"] =
+        call_site_source["nodes"]["demo::rvs_run_A"]["call_sites"][0]["source"]["future_call_site_source"] =
             true.into();
         cases.push(("call_site_source", call_site_source));
 
         let mut fact = base.clone();
-        fact["nodes"]["demo::rvs_run_A"]["targets"]["7"]["facts"]["future_fact"] = true.into();
+        fact["nodes"]["demo::rvs_run_A"]["facts"]["future_fact"] = true.into();
         cases.push(("fact", fact));
 
         let mut source = base.clone();
-        source["nodes"]["demo::rvs_run_A"]["targets"]["7"]["sources"][0]["future_source"] =
-            true.into();
+        source["nodes"]["demo::rvs_run_A"]["sources"][0]["future_source"] = true.into();
         cases.push(("source", source));
 
         let mut provenance = base;
-        provenance["nodes"]["demo::rvs_run_A"]["targets"]["7"]["crate_provenance"] =
+        provenance["nodes"]["demo::rvs_run_A"]["crate_provenance"] =
             serde_json::from_str(r#"{"kind":"primary_package","future_provenance":true}"#).unwrap();
         cases.push(("provenance", provenance));
 
@@ -2059,7 +1287,6 @@ diagnostic_ids={diagnostic_ids:?}\n",
         }"#;
         let mut graph = rvs_parse_callgraph_json_S(json).unwrap();
         let node = graph.rvs_get("demo::rvs_legacy_A").unwrap();
-        let target_count = node.targets.len();
         let scope = LocalScope::rvs_new(&BTreeSet::from([CrateName::from("demo")]));
         let report_candidate = crate::function_classification::FunctionClassification::rvs_new(
             &scope,
@@ -2079,14 +1306,13 @@ diagnostic_ids={diagnostic_ids:?}\n",
         let empty_legacy = rvs_parse_callgraph_json_S("{}").unwrap();
         let empty_serialize_error = rvs_serialize_callgraph_json_S(&empty_legacy).is_err();
         let output = format!(
-            "target_count={target_count}\nserialize_error={serialize_error}\nempty_serialize_error={empty_serialize_error}\nreport_candidate={report_candidate}\ninference_incomplete={inference_incomplete}\n"
+            "serialize_error={serialize_error}\nempty_serialize_error={empty_serialize_error}\nreport_candidate={report_candidate}\ninference_incomplete={inference_incomplete}\n"
         );
         rvs_snapshot_BIS(
             "test_20260729_legacy_callgraph_remains_uncertain_and_read_only",
             &output,
         );
 
-        assert_eq!(target_count, 0);
         assert!(serialize_error);
         assert!(empty_serialize_error);
         assert!(!report_candidate);
@@ -2099,7 +1325,8 @@ diagnostic_ids={diagnostic_ids:?}\n",
             rvs_parse_callgraph_json_S(r#"{"legacy::rvs_read":{"calls":[],"has_body":true}}"#)
                 .unwrap();
         let mut current_node = FnNode::default();
-        current_node.rvs_test_target_M(7).crate_provenance = CrateProvenance::PrimaryPackage;
+        current_node.crate_id = 7;
+        current_node.crate_provenance = CrateProvenance::PrimaryPackage;
         let mut current = FnGraph::rvs_new();
         current.rvs_insert_M(DefPath::from("demo::rvs_current"), current_node);
 
@@ -2126,43 +1353,6 @@ diagnostic_ids={diagnostic_ids:?}\n",
     }
 
     #[test]
-    fn test_20260729_target_record_merge_rejects_asymmetric_metadata() {
-        let rvs_graph = |has_async| {
-            let mut node = FnNode::default();
-            node.rvs_insert_target_M(
-                7,
-                FnTargetData {
-                    facts: CapabilityFacts {
-                        has_async,
-                        ..CapabilityFacts::default()
-                    },
-                    crate_provenance: CrateProvenance::PrimaryPackage,
-                    ..FnTargetData::default()
-                },
-            );
-            let mut graph = FnGraph::rvs_new();
-            graph.rvs_insert_M(DefPath::from("demo::rvs_run"), node);
-            graph
-        };
-        let result = std::panic::catch_unwind(|| {
-            FnGraph::rvs_merge_artifacts(
-                vec![rvs_graph(false), rvs_graph(true)],
-                &BTreeSet::from([CrateName::from("demo")]),
-            )
-        });
-        let panicked = result.is_err();
-        let merge_error = result.is_ok_and(|result| result.is_err());
-        let output = format!("panicked={panicked}\nmerge_error={merge_error}\n");
-        rvs_snapshot_BIS(
-            "test_20260729_target_record_merge_rejects_asymmetric_metadata",
-            &output,
-        );
-
-        assert!(!panicked);
-        assert!(merge_error);
-    }
-
-    #[test]
     fn test_20260729_duplicate_call_occurrences_are_preserved_and_validated() {
         let callee = FunctionIdentity {
             crate_id: 9,
@@ -2180,28 +1370,24 @@ diagnostic_ids={diagnostic_ids:?}\n",
                 source: Some(CallSiteSource::rvs_new("src/lib.rs".into(), 40, 44)),
             },
         ]);
-        let mut node = FnNode::default();
-        node.rvs_insert_target_M(
-            7,
-            FnTargetData {
-                calls: BTreeMap::from([(callee, CallEdgeType::Strong)]),
-                call_sites,
-                crate_provenance: CrateProvenance::PrimaryPackage,
-                ..FnTargetData::default()
-            },
-        );
+        let mut node = FnNode {
+            crate_id: 7,
+            calls: BTreeMap::from([(callee, CallEdgeType::Strong)]),
+            call_sites,
+            crate_provenance: CrateProvenance::PrimaryPackage,
+            ..FnNode::default()
+        };
+        node.crate_id = 7;
         let mut graph = FnGraph::rvs_new();
         graph.rvs_insert_M(DefPath::from("demo::rvs_run"), node);
         let json = rvs_serialize_callgraph_json_S(&graph).unwrap();
         let parsed = rvs_parse_callgraph_json_S(&json).unwrap();
         let call_site_count = parsed
             .rvs_get("demo::rvs_run")
-            .and_then(|node| node.targets.get(&7))
-            .map_or(0, |target| target.call_sites.len());
+            .map_or(0, |node| node.call_sites.len());
 
         let mut repeated_occurrence: serde_json::Value = serde_json::from_str(&json).unwrap();
-        repeated_occurrence["nodes"]["demo::rvs_run"]["targets"]["7"]["call_sites"][1]["occurrence"] =
-            0.into();
+        repeated_occurrence["nodes"]["demo::rvs_run"]["call_sites"][1]["occurrence"] = 0.into();
         let repeated_occurrence_error =
             rvs_parse_callgraph_json_S(&serde_json::to_string(&repeated_occurrence).unwrap())
                 .is_err();
@@ -2264,23 +1450,20 @@ diagnostic_ids={diagnostic_ids:?}\n",
             (weak_callee, CallEdgeType::Weak),
             (strong_callee, CallEdgeType::Strong),
         ]);
-        let mut node = FnNode::default();
-        node.rvs_insert_target_M(
-            7,
-            FnTargetData {
-                calls,
-                call_sites,
-                crate_provenance: CrateProvenance::PrimaryPackage,
-                ..FnTargetData::default()
-            },
-        );
+        let mut node = FnNode {
+            calls,
+            call_sites,
+            crate_provenance: CrateProvenance::PrimaryPackage,
+            crate_id: 7,
+            ..FnNode::default()
+        };
+        node.crate_id = 7;
         let mut graph = FnGraph::rvs_new();
         graph.rvs_insert_M(DefPath::from("demo::rvs_order"), node);
         let json = rvs_serialize_callgraph_json_S(&graph).unwrap();
         let parsed = rvs_parse_callgraph_json_S(&json).unwrap();
         let target = parsed
             .rvs_get("demo::rvs_order")
-            .and_then(|node| node.targets.get(&7))
             .expect("never: target exists");
         let weak_edge = target
             .calls
@@ -2343,9 +1526,25 @@ diagnostic_ids={diagnostic_ids:?}\n",
 
     #[test]
     fn test_20260710_callgraph_artifact_version_roundtrip() {
-        let mut graph = FnGraph::rvs_new();
         let mut node = FnNode::default();
-        node.rvs_test_capture_target_M(7, true, true);
+        node.crate_id = 7;
+        node.crate_provenance = CrateProvenance::PrimaryPackage;
+        node.calls.insert(
+            FunctionIdentity {
+                crate_id: 9,
+                def_path: DefPath::from("std::fs::read"),
+            },
+            CallEdgeType::Strong,
+        );
+        node.call_sites.insert(CallSiteIdentity {
+            callee: FunctionIdentity {
+                crate_id: 9,
+                def_path: DefPath::from("std::fs::read"),
+            },
+            occurrence: 0,
+            source: None,
+        });
+        let mut graph = FnGraph::rvs_new();
         graph.rvs_insert_M(DefPath::from("demo::rvs_run"), node);
 
         let json = rvs_serialize_callgraph_json_S(&graph).unwrap();
@@ -2356,49 +1555,9 @@ diagnostic_ids={diagnostic_ids:?}\n",
             1,
         );
         let previous_version_error = rvs_parse_callgraph_json_S(&previous_version).unwrap_err();
-        let mut missing_facts: serde_json::Value = serde_json::from_str(&json).unwrap();
-        missing_facts["nodes"]["demo::rvs_run"]["targets"]["7"]
-            .as_object_mut()
-            .expect("never: serialized target is an object")
-            .remove("facts");
-        let missing_facts_error =
-            rvs_parse_callgraph_json_S(&serde_json::to_string(&missing_facts).unwrap())
-                .unwrap_err();
-        let mut missing_has_body: serde_json::Value = serde_json::from_str(&json).unwrap();
-        missing_has_body["nodes"]["demo::rvs_run"]["targets"]["7"]
-            .as_object_mut()
-            .expect("never: serialized target is an object")
-            .remove("has_body");
-        let missing_has_body_error =
-            rvs_parse_callgraph_json_S(&serde_json::to_string(&missing_has_body).unwrap())
-                .unwrap_err();
-        let mut missing_call_sites: serde_json::Value = serde_json::from_str(&json).unwrap();
-        missing_call_sites["nodes"]["demo::rvs_run"]["targets"]["7"]
-            .as_object_mut()
-            .expect("never: serialized target is an object")
-            .remove("call_sites");
-        let missing_call_sites_error =
-            rvs_parse_callgraph_json_S(&serde_json::to_string(&missing_call_sites).unwrap())
-                .unwrap_err();
-        let mut missing_entrypoints: serde_json::Value = serde_json::from_str(&json).unwrap();
-        missing_entrypoints["nodes"]["demo::rvs_run"]["targets"]["7"]
-            .as_object_mut()
-            .expect("never: serialized target is an object")
-            .remove("is_entrypoint");
-        let missing_entrypoints_error =
-            rvs_parse_callgraph_json_S(&serde_json::to_string(&missing_entrypoints).unwrap())
-                .unwrap_err();
-        let mut missing_provenance: serde_json::Value = serde_json::from_str(&json).unwrap();
-        missing_provenance["nodes"]["demo::rvs_run"]["targets"]["7"]
-            .as_object_mut()
-            .expect("never: serialized target is an object")
-            .remove("crate_provenance");
-        let missing_provenance_error =
-            rvs_parse_callgraph_json_S(&serde_json::to_string(&missing_provenance).unwrap())
-                .unwrap_err();
         let version_marker = format!(r#""schema_version":{CALLGRAPH_SCHEMA_VERSION}"#);
         let output = format!(
-            "schema_version={CALLGRAPH_SCHEMA_VERSION}\ncontains_version={}\nnodes={}\nprevious_version_error={previous_version_error}\nmissing_facts_error={missing_facts_error}\nmissing_has_body_error={missing_has_body_error}\nmissing_call_sites_error={missing_call_sites_error}\nmissing_entrypoints_error={missing_entrypoints_error}\nmissing_provenance_error={missing_provenance_error}\n",
+            "schema_version={CALLGRAPH_SCHEMA_VERSION}\ncontains_version={}\nnodes={}\nprevious_version_error={previous_version_error}\n",
             json.contains(&version_marker),
             parsed.rvs_len(),
         );
@@ -2415,7 +1574,8 @@ diagnostic_ids={diagnostic_ids:?}\n",
     fn test_20260730_schema_12_requires_every_capability_fact() {
         let mut graph = FnGraph::rvs_new();
         let mut node = FnNode::default();
-        node.rvs_test_capture_target_M(7, true, true);
+        node.crate_id = 7;
+        node.crate_provenance = CrateProvenance::PrimaryPackage;
         graph.rvs_insert_M(DefPath::from("demo::rvs_run"), node);
         let json = rvs_serialize_callgraph_json_S(&graph).unwrap();
         let base: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -2433,9 +1593,9 @@ diagnostic_ids={diagnostic_ids:?}\n",
         let mut output = String::new();
         for field in fact_fields {
             let mut missing = base.clone();
-            missing["nodes"]["demo::rvs_run"]["targets"]["7"]["facts"]
+            missing["nodes"]["demo::rvs_run"]
                 .as_object_mut()
-                .expect("never: serialized capability facts are an object")
+                .expect("never: serialized node is an object")
                 .remove(field);
             let is_rejected =
                 rvs_parse_callgraph_json_S(&serde_json::to_string(&missing).unwrap()).is_err();
@@ -2472,58 +1632,6 @@ diagnostic_ids={diagnostic_ids:?}\n",
     }
 
     #[test]
-    fn test_20260716_callgraph_artifact_rejects_identityless_node() {
-        let mut graph = FnGraph::rvs_new();
-        graph.rvs_insert_M(DefPath::from("demo::rvs_run"), FnNode::default());
-
-        let error = rvs_serialize_callgraph_json_S(&graph).unwrap_err();
-        let output = format!("{error}\n");
-        rvs_snapshot_BIS(
-            "test_20260716_callgraph_artifact_rejects_identityless_node",
-            &output,
-        );
-
-        assert!(error.to_string().contains("target identity"));
-    }
-
-    #[test]
-    fn test_20260715_callgraph_artifact_requires_facts_for_each_crate_identity() {
-        let mut graph = FnGraph::rvs_new();
-        let mut node = FnNode::default();
-        node.rvs_test_capture_target_M(7, true, false);
-        let path = DefPath::from("demo::rvs_run");
-        graph.rvs_insert_M(path.clone(), node);
-
-        let json = rvs_serialize_callgraph_json_S(&graph).unwrap();
-        let mut missing_facts: serde_json::Value = serde_json::from_str(&json).unwrap();
-        missing_facts["nodes"]["demo::rvs_run"]["targets"]["7"]
-            .as_object_mut()
-            .expect("never: serialized target is an object")
-            .remove("facts");
-        let missing_facts_error =
-            rvs_parse_callgraph_json_S(&serde_json::to_string(&missing_facts).unwrap())
-                .unwrap_err();
-        let mut missing_has_body: serde_json::Value = serde_json::from_str(&json).unwrap();
-        missing_has_body["nodes"]["demo::rvs_run"]["targets"]["7"]
-            .as_object_mut()
-            .expect("never: serialized target is an object")
-            .remove("has_body");
-        let missing_has_body_error =
-            rvs_parse_callgraph_json_S(&serde_json::to_string(&missing_has_body).unwrap())
-                .unwrap_err();
-        let output = format!(
-            "missing_facts={missing_facts_error}\nmissing_has_body={missing_has_body_error}\n"
-        );
-        rvs_snapshot_BIS(
-            "test_20260715_callgraph_artifact_requires_facts_for_each_crate_identity",
-            &output,
-        );
-
-        assert!(missing_facts_error.to_string().contains("facts"));
-        assert!(missing_has_body_error.to_string().contains("has_body"));
-    }
-
-    #[test]
     fn test_20260710_callgraph_artifact_schema_validation() {
         let cases = [
             ("unknown", r#"{"schema_version":10,"nodes":{}}"#),
@@ -2546,97 +1654,7 @@ diagnostic_ids={diagnostic_ids:?}\n",
     }
 
     #[test]
-    fn test_20260716_callgraph_artifact_validates_target_entrypoints() {
-        let mut graph = FnGraph::rvs_new();
-        let mut node = FnNode {
-            is_entrypoint: true,
-            ..FnNode::default()
-        };
-        node.rvs_test_capture_target_M(7, true, false);
-        graph.rvs_insert_M(DefPath::from("demo::main"), node);
-
-        let valid_json = rvs_serialize_callgraph_json_S(&graph).unwrap();
-        let valid = rvs_parse_callgraph_json_S(&valid_json);
-        let mut ordinary: serde_json::Value = serde_json::from_str(&valid_json).unwrap();
-        ordinary["nodes"]["demo::main"]["targets"]["7"]["is_entrypoint"] = false.into();
-        let ordinary =
-            rvs_parse_callgraph_json_S(&serde_json::to_string(&ordinary).unwrap()).unwrap();
-        let output = format!(
-            "valid={}\nentrypoint={}\nordinary={}\n",
-            valid.is_ok(),
-            valid
-                .as_ref()
-                .ok()
-                .and_then(|graph| graph.rvs_get("demo::main"))
-                .is_some_and(|node| node.is_entrypoint),
-            ordinary
-                .rvs_get("demo::main")
-                .is_some_and(|node| !node.is_entrypoint),
-        );
-        rvs_snapshot_BIS(
-            "test_20260716_callgraph_artifact_validates_target_entrypoints",
-            &output,
-        );
-
-        assert!(valid.is_ok());
-        assert!(
-            ordinary
-                .rvs_get("demo::main")
-                .is_some_and(|node| !node.is_entrypoint)
-        );
-    }
-
-    #[test]
-    fn test_20260716_callgraph_artifact_rejects_asymmetric_target_metadata() {
-        let mut graph = FnGraph::rvs_new();
-        let mut node = FnNode::default();
-        node.rvs_test_capture_target_M(7, true, false);
-        graph.rvs_insert_M(DefPath::from("demo::rvs_run"), node);
-
-        let valid_json = rvs_serialize_callgraph_json_S(&graph).unwrap();
-        let mut parallel_metadata: serde_json::Value = serde_json::from_str(&valid_json).unwrap();
-        parallel_metadata["nodes"]["demo::rvs_run"]["facts_by_crate"] = serde_json::to_value(
-            BTreeMap::from([("8".to_string(), CapabilityFacts::default())]),
-        )
-        .unwrap();
-        let parallel_metadata_error =
-            rvs_parse_callgraph_json_S(&serde_json::to_string(&parallel_metadata).unwrap())
-                .unwrap_err();
-
-        let mut zero_id: serde_json::Value = serde_json::from_str(&valid_json).unwrap();
-        let zero_target = zero_id["nodes"]["demo::rvs_run"]["targets"]["7"].clone();
-        zero_id["nodes"]["demo::rvs_run"]["targets"]["0"] = zero_target;
-        let zero_id_error =
-            rvs_parse_callgraph_json_S(&serde_json::to_string(&zero_id).unwrap()).unwrap_err();
-
-        let mut invalid_source: serde_json::Value = serde_json::from_str(&valid_json).unwrap();
-        invalid_source["nodes"]["demo::rvs_run"]["targets"]["7"]["sources"] =
-            serde_json::from_str(r#"[{"file":"","name_start":1,"name_end":2}]"#).unwrap();
-        let invalid_source_error =
-            rvs_parse_callgraph_json_S(&serde_json::to_string(&invalid_source).unwrap())
-                .unwrap_err();
-
-        let output = format!(
-            "parallel_metadata={parallel_metadata_error}\nzero_id={zero_id_error}\ninvalid_source={invalid_source_error}\n"
-        );
-        rvs_snapshot_BIS(
-            "test_20260716_callgraph_artifact_rejects_asymmetric_target_metadata",
-            &output,
-        );
-
-        assert!(
-            parallel_metadata_error
-                .to_string()
-                .contains("unknown field")
-        );
-        assert!(zero_id_error.to_string().contains("zero crate id"));
-        assert!(invalid_source_error.to_string().contains("source file"));
-    }
-
-    #[test]
     fn test_20260716_callgraph_artifact_validates_call_site_coverage_consistency() {
-        let mut graph = FnGraph::rvs_new();
-        let mut node = FnNode::default();
         let first = FunctionIdentity {
             crate_id: 9,
             def_path: DefPath::from("dependency::first"),
@@ -2645,33 +1663,34 @@ diagnostic_ids={diagnostic_ids:?}\n",
             crate_id: 10,
             def_path: DefPath::from("dependency::second"),
         };
-        node.rvs_insert_target_M(
-            7,
-            FnTargetData {
-                calls: BTreeMap::from([
-                    (first.clone(), CallEdgeType::Strong),
-                    (second.clone(), CallEdgeType::Strong),
-                ]),
-                call_sites: BTreeSet::from([
-                    CallSiteIdentity {
-                        callee: first,
-                        occurrence: 0,
-                        source: None,
-                    },
-                    CallSiteIdentity {
-                        callee: second,
-                        occurrence: 1,
-                        source: None,
-                    },
-                ]),
-                is_production: true,
-                ..FnTargetData::default()
-            },
-        );
+        let mut node = FnNode {
+            calls: BTreeMap::from([
+                (first.clone(), CallEdgeType::Strong),
+                (second.clone(), CallEdgeType::Strong),
+            ]),
+            call_sites: BTreeSet::from([
+                CallSiteIdentity {
+                    callee: first,
+                    occurrence: 0,
+                    source: None,
+                },
+                CallSiteIdentity {
+                    callee: second,
+                    occurrence: 1,
+                    source: None,
+                },
+            ]),
+            is_production: true,
+            crate_provenance: CrateProvenance::PrimaryPackage,
+            crate_id: 7,
+            ..FnNode::default()
+        };
+        node.crate_id = 7;
+        let mut graph = FnGraph::rvs_new();
         graph.rvs_insert_M(DefPath::from("demo::rvs_run"), node);
         let valid_json = rvs_serialize_callgraph_json_S(&graph).unwrap();
         let mut missing_site_json: serde_json::Value = serde_json::from_str(&valid_json).unwrap();
-        missing_site_json["nodes"]["demo::rvs_run"]["targets"]["7"]["call_sites"]
+        missing_site_json["nodes"]["demo::rvs_run"]["call_sites"]
             .as_array_mut()
             .expect("never: serialized call sites are an array")
             .pop();
@@ -2680,7 +1699,7 @@ diagnostic_ids={diagnostic_ids:?}\n",
                 .unwrap_err();
         let mut duplicate_occurrence_json: serde_json::Value =
             serde_json::from_str(&valid_json).unwrap();
-        duplicate_occurrence_json["nodes"]["demo::rvs_run"]["targets"]["7"]["call_sites"][1]["occurrence"] =
+        duplicate_occurrence_json["nodes"]["demo::rvs_run"]["call_sites"][1]["occurrence"] =
             0.into();
         let duplicate_occurrence =
             rvs_parse_callgraph_json_S(&serde_json::to_string(&duplicate_occurrence_json).unwrap())
@@ -2695,7 +1714,7 @@ diagnostic_ids={diagnostic_ids:?}\n",
             &output,
         );
 
-        assert!(missing_site.to_string().contains("target call sites"));
+        assert!(missing_site.to_string().contains("call sites"));
         assert!(duplicate_occurrence.to_string().contains("occurrence"));
         assert!(valid.is_ok());
     }
@@ -2736,7 +1755,10 @@ diagnostic_ids={diagnostic_ids:?}\n",
         let mut merged = FnGraph::rvs_new();
         let mut node = FnNode::default();
         node.calls.insert(
-            DefPath::from("std::fs::read_to_string"),
+            FunctionIdentity {
+                crate_id: 9,
+                def_path: DefPath::from("std::fs::read_to_string"),
+            },
             CallEdgeType::Strong,
         );
         merged.rvs_insert_M(DefPath::from("demo::rvs_a"), node);
@@ -2761,418 +1783,6 @@ diagnostic_ids={diagnostic_ids:?}\n",
     }
 
     #[test]
-    fn test_20260713_artifact_merge_resolves_entrypoint_roles() {
-        let local_crate_names = BTreeSet::from([CrateName::from("demo")]);
-        let ordinary_source = FnSource::rvs_new(PathBuf::from("src/lib.rs"), 7, 11);
-        let entry_source = FnSource::rvs_new(PathBuf::from("src/main.rs"), 3, 7);
-        let mut ordinary = FnNode {
-            sources: BTreeSet::from([ordinary_source.clone()]),
-            ..FnNode::default()
-        };
-        ordinary.calls.insert(
-            DefPath::from("std::fs::read_to_string"),
-            CallEdgeType::Strong,
-        );
-        ordinary.rvs_test_capture_target_M(1, true, true);
-        let mut entry = FnNode {
-            is_entrypoint: true,
-            sources: BTreeSet::from([entry_source]),
-            ..FnNode::default()
-        };
-        entry
-            .calls
-            .insert(DefPath::from("std::process::exit"), CallEdgeType::Strong);
-        entry.rvs_test_capture_target_M(2, true, false);
-
-        let mut ordinary_graph = FnGraph::rvs_new();
-        ordinary_graph.rvs_insert_M(DefPath::from("demo::main"), ordinary.clone());
-        let mut entry_graph = FnGraph::rvs_new();
-        entry_graph.rvs_insert_M(DefPath::from("demo::main"), entry.clone());
-        let mut test_copy_graph = FnGraph::rvs_new();
-        let mut test_copy = FnNode {
-            is_test_compilation: true,
-            sources: entry.sources.clone(),
-            ..FnNode::default()
-        };
-        test_copy.calls.insert(
-            DefPath::from("test::test_main_static"),
-            CallEdgeType::Strong,
-        );
-        test_copy.rvs_test_capture_target_M(3, false, false);
-        test_copy.rvs_test_target_M(3).is_test = true;
-        test_copy_graph.rvs_insert_M(DefPath::from("demo::main"), test_copy);
-        let merged = FnGraph::rvs_merge_artifacts(
-            vec![ordinary_graph, entry_graph.clone(), test_copy_graph.clone()],
-            &local_crate_names,
-        )
-        .unwrap();
-        let retained = merged.rvs_get("demo::main").unwrap();
-
-        let mut incoming_ordinary = FnGraph::rvs_new();
-        incoming_ordinary.rvs_insert_M(DefPath::from("demo::main"), ordinary.clone());
-        let reverse = FnGraph::rvs_merge_artifacts(
-            vec![test_copy_graph, entry_graph, incoming_ordinary],
-            &local_crate_names,
-        )
-        .unwrap();
-        let reverse_retained = reverse.rvs_get("demo::main").unwrap();
-
-        let mut shared_entry = FnNode {
-            is_entrypoint: true,
-            sources: BTreeSet::from([ordinary_source]),
-            ..FnNode::default()
-        };
-        shared_entry
-            .calls
-            .insert(DefPath::from("std::process::exit"), CallEdgeType::Strong);
-        shared_entry.rvs_test_capture_target_M(4, true, false);
-        let mut conflict = FnGraph::rvs_new();
-        conflict.rvs_insert_M(DefPath::from("demo::main"), ordinary);
-        let mut conflicting_artifact = FnGraph::rvs_new();
-        conflicting_artifact.rvs_insert_M(DefPath::from("demo::main"), shared_entry);
-        let conflict_result =
-            FnGraph::rvs_merge_artifacts(vec![conflict, conflicting_artifact], &local_crate_names);
-
-        let mut first_ordinary = FnGraph::rvs_new();
-        let mut first_ordinary_node = FnNode {
-            sources: BTreeSet::from([FnSource::rvs_new(PathBuf::from("src/lib.rs"), 20, 27)]),
-            report_line_count: Some(2),
-            report_function_count: 1,
-            ..FnNode::default()
-        };
-        first_ordinary_node.rvs_test_capture_target_M(10, true, true);
-        first_ordinary.rvs_insert_M(DefPath::from("demo::rvs_run"), first_ordinary_node);
-        let mut conflicting_ordinary_node = FnNode {
-            sources: BTreeSet::from([FnSource::rvs_new(PathBuf::from("src/main.rs"), 20, 27)]),
-            report_line_count: Some(3),
-            report_function_count: 1,
-            ..FnNode::default()
-        };
-        conflicting_ordinary_node
-            .calls
-            .insert(DefPath::from("dep::effect_S"), CallEdgeType::Strong);
-        conflicting_ordinary_node.rvs_test_capture_target_M(20, true, true);
-        let mut second_ordinary = FnGraph::rvs_new();
-        second_ordinary.rvs_insert_M(DefPath::from("demo::rvs_run"), conflicting_ordinary_node);
-        let ordinary_merge =
-            FnGraph::rvs_merge_artifacts(vec![first_ordinary, second_ordinary], &local_crate_names);
-        let ordinary_merged = ordinary_merge
-            .as_ref()
-            .unwrap()
-            .rvs_get("demo::rvs_run")
-            .unwrap();
-
-        let mut ordinary_variant = FnGraph::rvs_new();
-        let mut ordinary_variant_node = FnNode {
-            sources: BTreeSet::from([FnSource::rvs_new(PathBuf::from("src/lib.rs"), 30, 39)]),
-            ..FnNode::default()
-        };
-        ordinary_variant_node.rvs_test_capture_target_M(30, true, true);
-        ordinary_variant.rvs_insert_M(DefPath::from("demo::rvs_fetch"), ordinary_variant_node);
-        let mut port_variant_node = FnNode {
-            sources: BTreeSet::from([FnSource::rvs_new(PathBuf::from("src/main.rs"), 30, 39)]),
-            ..FnNode::default()
-        };
-        port_variant_node.facts.is_port_method = true;
-        port_variant_node.rvs_test_capture_target_M(40, true, true);
-        let mut port_variant = FnGraph::rvs_new();
-        port_variant.rvs_insert_M(DefPath::from("demo::rvs_fetch"), port_variant_node);
-        let mixed_role =
-            FnGraph::rvs_merge_artifacts(vec![ordinary_variant, port_variant], &local_crate_names);
-
-        let mut source_less_ordinary = FnGraph::rvs_new();
-        let mut source_less_ordinary_node = FnNode::default();
-        source_less_ordinary_node.rvs_test_capture_target_M(50, true, true);
-        source_less_ordinary.rvs_insert_M(
-            DefPath::from("demo::rvs_source_less"),
-            source_less_ordinary_node,
-        );
-        let mut source_less_port_node = FnNode::default();
-        source_less_port_node.facts.is_port_method = true;
-        source_less_port_node.rvs_test_capture_target_M(60, true, true);
-        let mut source_less_port = FnGraph::rvs_new();
-        source_less_port.rvs_insert_M(
-            DefPath::from("demo::rvs_source_less"),
-            source_less_port_node,
-        );
-        let source_less_mixed_role = FnGraph::rvs_merge_artifacts(
-            vec![source_less_ordinary, source_less_port],
-            &local_crate_names,
-        );
-        let retained_entrypoint_ids: BTreeSet<u64> = retained
-            .targets
-            .iter()
-            .filter_map(|(crate_id, target)| target.is_entrypoint.then_some(*crate_id))
-            .collect();
-        let reverse_entrypoint_ids: BTreeSet<u64> = reverse_retained
-            .targets
-            .iter()
-            .filter_map(|(crate_id, target)| target.is_entrypoint.then_some(*crate_id))
-            .collect();
-
-        let output = format!(
-            "retained_entry={}\nentrypoint_crate_ids={:?}\nretained_sources={:?}\nretained_calls={:?}\nentry_calls={:?}\nreverse_equal={}\nentry_conflict={conflict_result:?}\nordinary_calls={:?}\nordinary_function_count={}\nordinary_line_count={:?}\nmixed_role={mixed_role:?}\nsource_less_mixed_role={source_less_mixed_role:?}\n",
-            retained.is_entrypoint,
-            retained_entrypoint_ids,
-            retained.sources,
-            retained.calls,
-            retained.entry_calls,
-            retained.sources == reverse_retained.sources
-                && retained.calls == reverse_retained.calls
-                && retained.entry_calls == reverse_retained.entry_calls
-                && retained.is_entrypoint == reverse_retained.is_entrypoint
-                && retained_entrypoint_ids == reverse_entrypoint_ids,
-            ordinary_merged.calls,
-            ordinary_merged.report_function_count,
-            ordinary_merged.report_line_count,
-        );
-        rvs_snapshot_BIS(
-            "test_20260713_artifact_merge_resolves_entrypoint_roles",
-            &output,
-        );
-
-        assert!(!retained.is_entrypoint);
-        assert_eq!(retained_entrypoint_ids, BTreeSet::from([2]));
-        assert_eq!(retained.sources.len(), 1);
-        assert!(retained.calls.contains_key("std::fs::read_to_string"));
-        assert!(!retained.calls.contains_key("std::process::exit"));
-        assert!(retained.entry_calls.contains_key("std::process::exit"));
-        assert!(!retained.entry_calls.contains_key("test::test_main_static"));
-        assert_eq!(retained.sources, reverse_retained.sources);
-        assert_eq!(retained.calls, reverse_retained.calls);
-        assert_eq!(retained.entry_calls, reverse_retained.entry_calls);
-        assert!(conflict_result.is_err());
-        assert!(ordinary_merge.is_ok());
-        assert!(ordinary_merged.calls.contains_key("dep::effect_S"));
-        assert_eq!(ordinary_merged.report_function_count, 2);
-        assert_eq!(ordinary_merged.report_line_count, Some(5));
-        assert!(mixed_role.is_err());
-        assert!(source_less_mixed_role.is_err());
-    }
-
-    #[test]
-    fn test_20260716_artifact_merge_keeps_entrypoint_calls_separate() {
-        let path = DefPath::from("demo::main");
-        let ordinary_callee = FunctionIdentity {
-            crate_id: 100,
-            def_path: DefPath::from("dependency::ordinary"),
-        };
-        let entry_callee = FunctionIdentity {
-            crate_id: 200,
-            def_path: DefPath::from("dependency::shutdown_S"),
-        };
-
-        let mut ordinary = FnNode {
-            sources: BTreeSet::from([FnSource::rvs_new("src/lib.rs".into(), 7, 11)]),
-            ..FnNode::default()
-        };
-        ordinary
-            .calls
-            .insert(ordinary_callee.def_path.clone(), CallEdgeType::Strong);
-        ordinary.rvs_insert_target_M(
-            10,
-            FnTargetData {
-                calls: BTreeMap::from([(ordinary_callee.clone(), CallEdgeType::Strong)]),
-                call_sites: BTreeSet::from([CallSiteIdentity {
-                    callee: ordinary_callee,
-                    occurrence: 0,
-                    source: None,
-                }]),
-                sources: ordinary.sources.clone(),
-                is_production: true,
-                is_coverage_candidate: true,
-                ..FnTargetData::default()
-            },
-        );
-
-        let mut entry = FnNode {
-            is_entrypoint: true,
-            sources: BTreeSet::from([FnSource::rvs_new("src/main.rs".into(), 3, 7)]),
-            ..FnNode::default()
-        };
-        entry
-            .calls
-            .insert(entry_callee.def_path.clone(), CallEdgeType::Strong);
-        entry.rvs_insert_target_M(
-            20,
-            FnTargetData {
-                calls: BTreeMap::from([(entry_callee.clone(), CallEdgeType::Strong)]),
-                call_sites: BTreeSet::from([CallSiteIdentity {
-                    callee: entry_callee,
-                    occurrence: 0,
-                    source: None,
-                }]),
-                is_entrypoint: true,
-                sources: entry.sources.clone(),
-                is_production: true,
-                ..FnTargetData::default()
-            },
-        );
-
-        let mut ordinary_graph = FnGraph::rvs_new();
-        ordinary_graph.rvs_insert_M(path.clone(), ordinary);
-        let mut entry_graph = FnGraph::rvs_new();
-        entry_graph.rvs_insert_M(path.clone(), entry);
-        let merged = FnGraph::rvs_merge_artifacts(
-            vec![ordinary_graph, entry_graph],
-            &BTreeSet::from([CrateName::from("demo")]),
-        )
-        .unwrap();
-        let json = rvs_serialize_callgraph_json_S(&merged).unwrap();
-        let parsed = rvs_parse_callgraph_json_S(&json);
-        let node = merged.rvs_get(path.rvs_as_str()).unwrap();
-        let output = format!(
-            "calls={:?}\nentry_calls={:?}\nparse_ok={}\n",
-            node.calls,
-            node.entry_calls,
-            parsed.is_ok(),
-        );
-        rvs_snapshot_BIS(
-            "test_20260716_artifact_merge_keeps_entrypoint_calls_separate",
-            &output,
-        );
-
-        assert_eq!(
-            node.calls,
-            BTreeMap::from([(DefPath::from("dependency::ordinary"), CallEdgeType::Strong)])
-        );
-        assert_eq!(
-            node.entry_calls,
-            BTreeMap::from([(
-                DefPath::from("dependency::shutdown_S"),
-                CallEdgeType::Strong
-            )])
-        );
-        assert!(parsed.is_ok());
-    }
-
-    #[test]
-    fn test_20260716_artifact_merge_same_source_line_count_is_deterministic() {
-        let path = DefPath::from("demo::rvs_run");
-        let source = FnSource::rvs_new("src/lib.rs".into(), 7, 14);
-        let make_graph = |line_count| {
-            let mut graph = FnGraph::rvs_new();
-            let mut node = FnNode {
-                sources: BTreeSet::from([source.clone()]),
-                report_line_count: Some(line_count),
-                report_function_count: 1,
-                ..FnNode::default()
-            };
-            node.rvs_test_capture_target_M(line_count as u64, true, true);
-            graph.rvs_insert_M(path.clone(), node);
-            graph
-        };
-        let local = BTreeSet::from([CrateName::from("demo")]);
-        let forward =
-            FnGraph::rvs_merge_artifacts(vec![make_graph(2), make_graph(3)], &local).unwrap();
-        let reverse =
-            FnGraph::rvs_merge_artifacts(vec![make_graph(3), make_graph(2)], &local).unwrap();
-        let forward_count = forward
-            .rvs_get(path.rvs_as_str())
-            .and_then(|node| node.report_line_count);
-        let reverse_count = reverse
-            .rvs_get(path.rvs_as_str())
-            .and_then(|node| node.report_line_count);
-        let output = format!("forward={forward_count:?}\nreverse={reverse_count:?}\n");
-        rvs_snapshot_BIS(
-            "test_20260716_artifact_merge_same_source_line_count_is_deterministic",
-            &output,
-        );
-
-        assert_eq!(forward_count, Some(3));
-        assert_eq!(reverse_count, Some(3));
-    }
-
-    #[test]
-    fn test_20260715_artifact_merge_treats_local_trait_external_type_impl_as_local() {
-        let path = DefPath::from(
-            "std::fs::File{impl#7374643a3a66733a3a46696c654064656d6f3a3a46696c65436c69656e74}::rvs_touch_P@demo::FileClient",
-        );
-        let mut first = FnGraph::rvs_new();
-        let mut first_node = FnNode {
-            is_trait_impl: true,
-            sources: BTreeSet::from([FnSource::rvs_new("src/lib.rs".into(), 1, 2)]),
-            report_line_count: Some(2),
-            report_function_count: 1,
-            ..FnNode::default()
-        };
-        first_node.rvs_test_capture_target_M(1, true, true);
-        first.rvs_insert_M(path.clone(), first_node);
-        let mut second = FnGraph::rvs_new();
-        let mut second_node = FnNode {
-            is_trait_impl: true,
-            sources: BTreeSet::from([FnSource::rvs_new("src/other.rs".into(), 1, 2)]),
-            report_line_count: Some(3),
-            report_function_count: 1,
-            ..FnNode::default()
-        };
-        second_node.rvs_test_capture_target_M(2, true, true);
-        second.rvs_insert_M(path.clone(), second_node);
-
-        let merged = FnGraph::rvs_merge_artifacts(
-            vec![first, second],
-            &BTreeSet::from([CrateName::from("demo")]),
-        )
-        .unwrap();
-        let node = merged.rvs_get(path.rvs_as_str()).unwrap();
-        let output = format!(
-            "function_count={}\nline_count={:?}\n",
-            node.report_function_count, node.report_line_count
-        );
-        rvs_snapshot_BIS(
-            "test_20260715_artifact_merge_treats_local_trait_external_type_impl_as_local",
-            &output,
-        );
-
-        assert_eq!(node.report_function_count, 2);
-        assert_eq!(node.report_line_count, Some(5));
-    }
-
-    #[test]
-    fn test_20260714_source_less_production_node_survives_test_merge() {
-        let local_crate_names = BTreeSet::from([CrateName::from("demo")]);
-        let mut production = FnNode::default();
-        production.rvs_test_capture_target_M(1, true, true);
-        let mut test_copy = FnNode {
-            is_test_compilation: true,
-            ..FnNode::default()
-        };
-        test_copy.calls.insert(
-            DefPath::from("demo::rvs_test_only_dependency"),
-            CallEdgeType::Strong,
-        );
-        test_copy.rvs_test_capture_target_M(2, false, false);
-        let mut production_graph = FnGraph::rvs_new();
-        production_graph.rvs_insert_M(DefPath::from("demo::rvs_generated"), production);
-        let mut test_graph = FnGraph::rvs_new();
-        test_graph.rvs_insert_M(DefPath::from("demo::rvs_generated"), test_copy);
-
-        let merged =
-            FnGraph::rvs_merge_artifacts(vec![production_graph, test_graph], &local_crate_names)
-                .unwrap();
-        let node = merged.rvs_get("demo::rvs_generated").unwrap();
-        let production_ids: BTreeSet<u64> = node
-            .targets
-            .iter()
-            .filter_map(|(crate_id, target)| target.is_production.then_some(*crate_id))
-            .collect();
-        let output = format!(
-            "is_test_compilation={}\nsources={}\nproduction_ids={:?}\n",
-            node.is_test_compilation,
-            node.sources.len(),
-            production_ids,
-        );
-        rvs_snapshot_BIS(
-            "test_20260714_source_less_production_node_survives_test_merge",
-            &output,
-        );
-
-        assert!(!node.is_test_compilation);
-        assert!(node.sources.is_empty());
-        assert_eq!(production_ids, BTreeSet::from([1]));
-    }
-
-    #[test]
     fn test_20260706_graph_merge_node_preserves_body_and_sources() {
         let mut graph = FnGraph::rvs_new();
         let path = DefPath::from("demo::rvs_run");
@@ -3187,9 +1797,13 @@ diagnostic_ids={diagnostic_ids:?}\n",
             sources: BTreeSet::from([FnSource::rvs_new(PathBuf::from("src/lib.rs"), 7, 14)]),
             ..FnNode::default()
         };
-        with_body
-            .calls
-            .insert(DefPath::from("dep::rvs_call_BI"), CallEdgeType::Strong);
+        with_body.calls.insert(
+            FunctionIdentity {
+                crate_id: 9,
+                def_path: DefPath::from("dep::rvs_call_BI"),
+            },
+            CallEdgeType::Strong,
+        );
         graph.rvs_merge_node_M(&path, &with_body).unwrap();
 
         let node = graph
@@ -3391,38 +2005,6 @@ diagnostic_ids={diagnostic_ids:?}\n",
             }
         }"#,
             ),
-            (
-                "empty_function_path",
-                r#"{
-            "": {
-                "calls": [],
-                "has_body": true,
-                "has_async": false,
-                "is_unsafe_fn": false,
-                "has_mut_param": false,
-                "has_static_ref": false,
-                "has_static_mut_ref": false,
-                "has_thread_local_ref": false,
-                "is_trait_impl": false
-            }
-        }"#,
-            ),
-            (
-                "empty_callee_path",
-                r#"{
-            "my_crate::rvs_add": {
-                "calls": [""],
-                "has_body": true,
-                "has_async": false,
-                "is_unsafe_fn": false,
-                "has_mut_param": false,
-                "has_static_ref": false,
-                "has_static_mut_ref": false,
-                "has_thread_local_ref": false,
-                "is_trait_impl": false
-            }
-        }"#,
-            ),
         ];
         let mut output = String::new();
         for (name, json) in cases {
@@ -3455,20 +2037,28 @@ diagnostic_ids={diagnostic_ids:?}\n",
             crate_id: 1,
             def_path: DefPath::from("demo::rvs_hidden_behind_weak_root"),
         };
-        let mut test_node = FnNode::default();
-        test_node.rvs_test_target_M(1).is_test = true;
-        test_node.rvs_test_target_M(1).calls = BTreeMap::from([
+        let mut test_node = FnNode {
+            is_test: true,
+            crate_id: 1,
+            ..FnNode::default()
+        };
+        test_node.calls = BTreeMap::from([
             (strong_target.clone(), CallEdgeType::Strong),
             (weak_target.clone(), CallEdgeType::Weak),
         ]);
-        let mut strong_node = FnNode::default();
-        strong_node.rvs_test_target_M(1).calls = BTreeMap::from([
+        let mut strong_node = FnNode {
+            crate_id: 1,
+            ..FnNode::default()
+        };
+        strong_node.calls = BTreeMap::from([
             (strong_leaf.clone(), CallEdgeType::Strong),
             (weak_leaf.clone(), CallEdgeType::Weak),
         ]);
-        let mut weak_node = FnNode::default();
-        weak_node.rvs_test_target_M(1).calls =
-            BTreeMap::from([(hidden_behind_weak_root.clone(), CallEdgeType::Strong)]);
+        let mut weak_node = FnNode {
+            crate_id: 1,
+            ..FnNode::default()
+        };
+        weak_node.calls = BTreeMap::from([(hidden_behind_weak_root.clone(), CallEdgeType::Strong)]);
         let mut graph = FnGraph::rvs_new();
         graph.rvs_insert_M(DefPath::from("demo::test_fn"), test_node);
         graph.rvs_insert_M(strong_target.def_path.clone(), strong_node);

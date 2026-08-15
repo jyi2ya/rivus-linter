@@ -5,7 +5,7 @@ use rustc_lint::LateContext;
 use rustc_span::Span;
 
 use super::super::msg::rvs_emit_span_lint_S;
-use super::super::{RVS_BANNED_IMPORT, RVS_WILDCARD_IMPORT};
+use super::super::{RVS_BANNED_IMPORT, RVS_TESTS_IMPORT, RVS_WILDCARD_IMPORT};
 
 fn rvs_emit_banned_crate_S(cx: &LateContext<'_>, span: Span, crate_name: &str) {
     rvs_emit_span_lint_S(
@@ -36,8 +36,9 @@ pub(crate) fn rvs_check_extern_crate_S(cx: &LateContext<'_>, item: &Item<'_>) {
     }
 }
 
-/// Check `use` items for banned crates (anyhow/eyre/color_eyre/thiserror) and
-/// wildcard imports (`use xxx::*`).
+/// Check `use` items for banned crates (anyhow/eyre/color_eyre/thiserror),
+/// wildcard imports (`use xxx::*`), and imports of `tests`-module symbols
+/// from outside the `tests` module.
 pub(crate) fn rvs_check_item_MS<'tcx>(
     cx: &LateContext<'tcx>,
     item: &'tcx Item<'tcx>,
@@ -45,8 +46,22 @@ pub(crate) fn rvs_check_item_MS<'tcx>(
     use_kind: UseKind,
     seen_statements: &mut HashSet<(rustc_span::StableSourceFileId, u32, String)>,
 ) {
+    let owner_def_id = item.owner_id.def_id.to_def_id();
+    let current_path = cx.tcx.def_path_str(owner_def_id);
+    let importer_in_tests = rvs_path_has_tests_segment(&current_path);
     for resolution in path.res.present_items() {
         if let Res::Def(_, def_id) = resolution {
+            if !importer_in_tests && def_id.is_local() {
+                let def_path = cx.tcx.def_path_str(def_id);
+                if rvs_path_has_tests_segment(&def_path) {
+                    rvs_emit_span_lint_S(
+                        cx,
+                        RVS_TESTS_IMPORT,
+                        item.span,
+                        format!("import of tests-module symbol '{def_path}' from non-test code"),
+                    );
+                }
+            }
             if def_id.is_local() {
                 continue;
             }
@@ -100,6 +115,10 @@ pub(crate) fn rvs_check_item_MS<'tcx>(
             );
         }
     }
+}
+
+fn rvs_path_has_tests_segment(path: &str) -> bool {
+    path.split("::").any(|segment| segment == "tests")
 }
 
 #[cfg(test)]

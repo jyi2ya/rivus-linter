@@ -1,2 +1,2 @@
 caps=S
-production_fallback=true
+has_effectful_impl=true

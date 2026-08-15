@@ -1,9 +1,4 @@
-schema_version=16
+schema_version=17
 contains_version=true
 nodes=1
-previous_version_error=unsupported callgraph schema version 3; expected 16
-missing_facts_error=invalid callgraph artifact: missing field `facts`
-missing_has_body_error=invalid callgraph artifact: missing field `has_body`
-missing_call_sites_error=invalid callgraph artifact: missing field `call_sites`
-missing_entrypoints_error=invalid callgraph artifact: missing field `is_entrypoint`
-missing_provenance_error=invalid callgraph artifact: missing field `crate_provenance`
+previous_version_error=unsupported callgraph schema version 3; expected 17

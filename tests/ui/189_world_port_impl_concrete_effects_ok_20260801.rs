@@ -19,7 +19,7 @@ fn rvs_block_B() -> i32 {
     1
 }
 
-fn rvs_io_BI() -> i32 {
+fn rvs_io_BIS() -> i32 {
     match std::fs::metadata(".") {
         Ok(_) => 1,
         Err(_) => 0,
@@ -50,7 +50,7 @@ impl FetchApi for Api {
     type World = ApiWorld;
 
     fn rvs_fetch_BIMPST(_world: &mut Self::World) -> i32 {
-        rvs_block_B() + rvs_io_BI() + rvs_effect_S() + rvs_thread_local_ST()
+        rvs_block_B() + rvs_io_BIS() + rvs_effect_S() + rvs_thread_local_ST()
     }
 }
 

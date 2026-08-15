@@ -261,7 +261,10 @@ mod tests {
     fn rvs_test_callgraph() -> FnGraph {
         let mut graph = FnGraph::rvs_new();
         let mut node = FnNode::default();
-        node.rvs_test_capture_target_M(1, true, true);
+        node.crate_id = 1;
+        node.crate_provenance = CrateProvenance::PrimaryPackage;
+        node.is_production = true;
+        node.is_coverage_candidate = true;
         graph.rvs_insert_M(DefPath::from("demo::rvs_run"), node);
         graph
     }

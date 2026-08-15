@@ -3,8 +3,6 @@ use std::path::Path;
 
 use crate::symbols::CrateName;
 
-const BUILD_SCRIPT_CRATE_NAME: &str = "build_script_build";
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CargoTargetScope {
     Production,
@@ -141,12 +139,12 @@ pub(crate) fn rvs_collect_local_crate_prefixes_from_model_BIS(
     scope: CargoTargetScope,
 ) -> Result<BTreeSet<CrateName>, String> {
     let cargo_toml = path.join("Cargo.toml");
-    let mut prefixes = rvs_collect_manifest_crate_prefixes(&model.document, scope)
+    // Build scripts are compile-time machinery: their crates are excluded from
+    // the callgraph, so `build_script_build` is deliberately not a local prefix.
+    let prefixes = rvs_collect_manifest_crate_prefixes(&model.document, scope)
         .map_err(|e| format!("{}: {e}", cargo_toml.display()))?;
-    if rvs_has_build_script_BIS(path, &model.document)? {
-        prefixes.insert(CrateName::from(BUILD_SCRIPT_CRATE_NAME));
-    }
     let auto_target_flags = rvs_parse_auto_target_flags(&model.document);
+    let mut prefixes = prefixes;
     rvs_collect_auto_target_prefixes_for_targets_BIMS(
         path,
         &mut prefixes,
@@ -154,34 +152,6 @@ pub(crate) fn rvs_collect_local_crate_prefixes_from_model_BIS(
         &auto_target_flags,
     )?;
     Ok(prefixes)
-}
-
-fn rvs_has_build_script_BIS(
-    path: &Path,
-    document: &toml_edit::DocumentMut,
-) -> Result<bool, String> {
-    let Some(package) = document.get("package") else {
-        return Ok(false);
-    };
-    let Some(build) = package.get("build") else {
-        return Ok(path.join("build.rs").is_file());
-    };
-    if let Some(enabled) = build.as_bool() {
-        if enabled {
-            return Err(format!(
-                "{}: [package].build must be a path string or false",
-                path.join("Cargo.toml").display()
-            ));
-        }
-        return Ok(false);
-    }
-    if build.as_str().is_some() {
-        return Ok(true);
-    }
-    Err(format!(
-        "{}: [package].build must be a path string or false",
-        path.join("Cargo.toml").display()
-    ))
 }
 
 pub(crate) fn rvs_detect_local_crate_prefixes_for_function_query_BIS(

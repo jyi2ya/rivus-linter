@@ -275,6 +275,70 @@ impl DefPath {
     pub fn rvs_contains(&self, needle: &str) -> bool {
         self.rvs_user_path().contains(needle)
     }
+
+    /// Return whether this function lives inside a `tests` module segment.
+    ///
+    /// A test module is any module whose name is exactly `tests`. Functions
+    /// inside `mod tests { ... }` (including `#[test]` functions and test
+    /// helpers) are detected by checking whether any path segment equals
+    /// `tests` before the final function-name segment.
+    pub fn rvs_is_in_test_module(&self) -> bool {
+        let path = self.rvs_user_path();
+        let mut parts = path.rsplit("::");
+        let _ = parts.next();
+        parts.any(|segment| segment == "tests")
+    }
+
+    /// Return whether this def-path belongs to a `build_script_build` crate
+    /// compilation unit.
+    ///
+    /// Cargo compiles every package's `build.rs` under the same readable crate
+    /// name `build_script_build`, so def-paths from different packages collide
+    /// in the flat graph. However, a normal package may also be *named*
+    /// `build-script-build` (normalized to the same readable crate name), and
+    /// its sources must not be mistaken for compile-time machinery. The
+    /// caller must therefore combine this name check with the Cargo package
+    /// name: a compilation unit is a build script only when its crate name is
+    /// `build_script_build` and its Cargo package name normalizes to something
+    /// else.
+    pub fn rvs_is_build_script_crate(&self) -> bool {
+        self.rvs_user_path()
+            .split("::")
+            .next()
+            .is_some_and(|segment| segment == BUILD_SCRIPT_CRATE_NAME)
+    }
+
+    /// Return whether this def-path's crate is a build script for the given
+    /// Cargo package name.
+    ///
+    /// See [`DefPath::rvs_is_build_script_crate`] for why the package name is
+    /// required: a package legitimately named `build-script-build` compiles to
+    /// the same readable crate name as real build scripts, so only the
+    /// package-name mismatch distinguishes them.
+    pub fn rvs_is_build_script_for_package(&self, cargo_package_name: Option<&str>) -> bool {
+        self.rvs_is_build_script_crate()
+            && cargo_package_name.is_some_and(|name| {
+                CrateName::rvs_from_manifest_name(name).rvs_as_str() != BUILD_SCRIPT_CRATE_NAME
+            })
+    }
+}
+
+/// The readable crate name Cargo assigns to every package's build script.
+pub(crate) const BUILD_SCRIPT_CRATE_NAME: &str = "build_script_build";
+
+/// Read the Cargo package name of the current compilation unit.
+///
+/// Cargo sets `CARGO_PKG_NAME` for every rustc invocation it drives, including
+/// build-script compilations (where the value is the owning package's name,
+/// e.g. `demo`, not `build_script_build`). A missing variable means rustc was
+/// invoked outside Cargo, in which case no build-script conclusion can be
+/// drawn from the environment.
+pub(crate) fn rvs_cargo_package_name_BS() -> Option<String> {
+    match std::env::var("CARGO_PKG_NAME") {
+        Ok(name) => Some(name),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(std::env::VarError::NotUnicode(value)) => value.to_string_lossy().into_owned().into(),
+    }
 }
 
 pub(crate) fn rvs_strip_identity_markers(path: &str) -> Cow<'_, str> {
@@ -493,5 +557,53 @@ mod tests {
         assert_eq!(path.rvs_user_path(), "demo::rvs_parent::rvs_generated_S");
         assert_eq!(path.rvs_fn_name_str(), "rvs_generated_S");
         assert!(path.rvs_contains("rvs_parent::rvs_generated_S"));
+    }
+
+    #[test]
+    fn test_20260814_build_script_detection_requires_package_mismatch() {
+        let build_script_path = DefPath::rvs_new("build_script_build::main");
+        let ordinary_package_path = DefPath::rvs_new("demo::rvs_run");
+        let cases = [
+            (
+                "real build script of package demo",
+                build_script_path.clone(),
+                Some("demo"),
+                true,
+            ),
+            (
+                "ordinary crate named build-script-build",
+                build_script_path.clone(),
+                Some("build-script-build"),
+                false,
+            ),
+            (
+                "package name uses the normalized form",
+                build_script_path.clone(),
+                Some("build_script_build"),
+                false,
+            ),
+            (
+                "rustc invoked outside Cargo",
+                build_script_path.clone(),
+                None,
+                false,
+            ),
+            (
+                "ordinary crate path with foreign package",
+                ordinary_package_path.clone(),
+                Some("demo"),
+                false,
+            ),
+        ];
+        let mut output = String::new();
+        for (label, path, package_name, expected) in &cases {
+            let actual = path.rvs_is_build_script_for_package(package_name.as_deref());
+            output.push_str(&format!("{label}={actual}\n"));
+            assert_eq!(actual, *expected, "{label}");
+        }
+        rvs_snapshot_BIS(
+            "test_20260814_build_script_detection_requires_package_mismatch",
+            &output,
+        );
     }
 }

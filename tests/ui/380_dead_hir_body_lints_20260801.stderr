@@ -70,13 +70,25 @@ error: drop(Result) discards a Result without handling it
 LL |         drop(Result::<String, u8>::Err(4));
    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+error: caller lacks propagated capabilities required by callee; callee: std::panic::catch_unwind; caller declared caps: pure; callee caps: ST; missing propagated caps: S, T
+  --> $DIR/tests/ui/380_dead_hir_body_lints_20260801.rs:10:17
+   |
+LL |         let _ = std::panic::catch_unwind(|| {});
+   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(rivus::rvs_call_violation)]` on by default
+
 error: caller lacks propagated capabilities required by callee; callee: std::thread::functions::spawn; caller declared caps: pure; callee caps: BST; missing propagated caps: B, S, T
   --> $DIR/tests/ui/380_dead_hir_body_lints_20260801.rs:8:17
    |
 LL |         let _ = std::thread::spawn(|| {});
    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: caller lacks propagated capabilities required by callee; callee: std::panic::catch_unwind; caller declared caps: pure; callee caps: ST; missing propagated caps: S, T
+  --> $DIR/tests/ui/380_dead_hir_body_lints_20260801.rs:20:17
    |
-   = note: `#[deny(rivus::rvs_call_violation)]` on by default
+LL |         let _ = std::panic::catch_unwind(|| {});
+   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 error: caller lacks propagated capabilities required by callee; callee: std::thread::functions::spawn; caller declared caps: pure; callee caps: BST; missing propagated caps: B, S, T
   --> $DIR/tests/ui/380_dead_hir_body_lints_20260801.rs:18:17
@@ -162,4 +174,4 @@ LL | |     };
 LL | | }
    | |_^
 
-error: aborting due to 18 previous errors
+error: aborting due to 20 previous errors

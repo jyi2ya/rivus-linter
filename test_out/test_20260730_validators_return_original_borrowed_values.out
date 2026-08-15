@@ -1,3 +1,1 @@
-fn_source_same=true
-call_site_source_same=true
-target_same=true
+validators accept well-formed flat node records

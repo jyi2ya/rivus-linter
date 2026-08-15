@@ -1,4 +1,4 @@
-caps=pure
-incomplete=true
-call_violation=false
-unknown=true
+caps=S
+incomplete=false
+call_violation=true
+unknown=false

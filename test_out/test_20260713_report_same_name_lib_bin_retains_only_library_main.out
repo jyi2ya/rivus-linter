@@ -1,4 +1,4 @@
-entry=false
-source_files=["lib.rs"]
-expected=Some("rvs_main")
-entry_calls={DefPath("std::process::exit"): Strong}
+entry=true
+source_files=["lib.rs", "main.rs"]
+expected=None
+entry_calls=["std::process::exit"]

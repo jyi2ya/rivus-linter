@@ -66,7 +66,7 @@ cargo rivus check -- --features foo  # 传递额外 cargo check 参数
 注意：Rivus 从分发 seed 和项目 `caps/` 目录合并能力数据；项目中的每个 layer 必须使用带 `# rivus-caps-v2` 版本头的 v2 JSON Lines。当前版本把分发 seed 编译进 `cargo-rivus`，但调用方只依赖抽象的分发来源，未来可以让 seed 随标准库独立更新而不更换二进制。CLI 不再支持 `-m/--capsmap`，也不再读取或生成 `target/rivus-std-capsmap.txt`、`target/rivus-inferred-capsmap.txt`、`target/rivus-deps-capsmap.txt`、`target/rivus-effective-capsmap/`。项目 `caps/` 不存在时仍加载分发 seed。有效层级顺序为 `std → deps → 分发 seed → 项目 seed → suppress → ext → 其余字母序`；原子写入遗留的 `.层名.PID.序号.tmp` 临时文件会被忽略。
 
 
-注意：`check` 默认编译 `--all-targets`，因此测试、示例和 benchmark 中的函数也会被分析。未测试 good/ok 函数在所有 target 的 callgraph 合并后统一判断；从 unit test 或 integration test 沿测试编译实际产生的调用边可达即视为覆盖，不要求测试直接调用每个 helper，`cfg(test)` 改写函数体时也不会误用 production 调用边。覆盖身份同时包含稳定 crate ID 和 `DefPath`，因此同名 library/binary target 不会互相借用覆盖；可执行入口身份也按稳定 crate ID 保存，因此 library 中与 binary `main` 共享 `DefPath` 的普通函数仍接受一般契约检查，而 binary 入口继续获得入口豁免。无法解析的同名调用只有在候选唯一时才作为回退，局部 closure 或函数指针 binding 不参与该回退。不同本地 target 若产生相同 `DefPath`，能力分析从完整 target records 重建兼容角色的事实和调用边保守并集，报告仍按不同源码定义分别统计函数数和有效行数；同一稳定 crate identity 的重复 record 必须完全一致，Port/普通函数、test/production、trait impl/普通函数或 provenance 不一致都会报错，不做 OR/first-wins 合并。测试覆盖候选和 report 排除项按每个 target 定义记录，不会因另一个同路径定义带有 `allow(dead_code)` 而整体消失。结果在最终 rustc lint 阶段发出，因此函数、参数、statement、expression、field、模块和 crate 上的 `allow`/`expect`/`deny` 等级仍然生效；中间 artifact 收集不会因任一 HIR 作用域中的 Rivus expectation 或 `forbid(unfulfilled_lint_expectations)` 提前失败。任一 target 编译失败时不会根据部分图输出覆盖结论。直接 rustc/UI 模式使用当前 crate 内存图做传递可达性判断，并采用相同的稳定 crate ID 和唯一名称回退规则。`infer-capsmap` 和 `infer-std` 只编译 production targets。
+注意：`check` 默认编译 `--all-targets`，因此测试、示例和 benchmark 中的函数也会被分析。未测试 good/ok 函数在所有 target 的 callgraph 合并后统一判断；从 unit test 或 integration test 沿测试编译实际产生的调用边可达即视为覆盖，不要求测试直接调用每个 helper。同名 `DefPath` 出现在多个 Cargo target 中时，合并图对各节点做行为、调用边、事实、角色和源码的保守并集；可执行入口由 `tcx.entry_fn` 或两段路径 `main` 启发式判定。结果在最终 rustc lint 阶段发出，Rivus lint 属性只在 crate root 生效。任一 target 编译失败时不会根据部分图输出覆盖结论。直接 rustc/UI 模式使用当前 crate 内存图做传递可达性判断。`infer-capsmap` 和 `infer-std` 只编译 production targets。
 
 退出码：`check` 成功时返回 `0`；失败时透传底层 `cargo check` 的退出码。其他子命令成功时返回 `0`，工具自身运行失败时返回 `2`。warning 不影响退出码。
 
@@ -114,7 +114,7 @@ Total: 42 functions, 890 lines
 
 ## `cargo rivus infer-capsmap [OPTIONS] [PATH]`
 
-收集调用图并从种子标注自底向上推断 capsmap。对每个 `rvs_` 函数，聚合其所有被调用方的能力，得到推断结果。该命令会包装依赖 crate，但本地归属按 Cargo primary package provenance 和稳定 crate ID 判定，不按 crate 名猜测；因此本地与依赖的 build script 即使都使用 Cargo 固定的 `build_script_build` 名称，也只有本地 target 会贡献 direct external deps。`PATH` 必须是一个可成功执行 `cargo check` 的本地 crate 项目；仅含 `[workspace]` 的虚拟根目录不受支持。
+收集调用图并从种子标注自底向上推断 capsmap。对每个 `rvs_` 函数，聚合其所有被调用方的能力，得到推断结果。该命令会包装依赖 crate，但本地归属按 Cargo primary package provenance 和稳定 crate ID 判定，不按 crate 名猜测；build script 是编译期机器代码（按 crate 名 `build_script_build` 加 Cargo 包名不一致识别），其函数不进入函数图（artifact 仍写空图），因此不参与推断、报告或 direct external deps；名为 `build-script-build` 的普通包不受影响。`PATH` 必须是一个可成功执行 `cargo check` 的本地 crate 项目；仅含 `[workspace]` 的虚拟根目录不受支持。
 
 推断分两步：首先对不在 capsmap 精确边界中的函数，直接从行为特征推断能力（`async fn` → A、`unsafe fn` → U、`&mut` 参数 → M、`static` 引用 → S、`static mut` 引用 → S+U、`thread_local!` 引用 → S+T）；然后通过固定点迭代，将普通被调用方的 `B/I/P/S/T` 沿调用图向上传播，包含 P 的被调用方则只传播 P。`A/M/U` 不传播。若同一函数同时被识别为普通 `static` 引用和 `thread_local!` 引用，结果会合并为 `S+T`（幂等）。capsmap 精确条目是冻结的权威边界，不继续吸收其内部调用的能力。
 
@@ -219,7 +219,7 @@ cargo rivus annotate /path/to  # 指定目录
 注意：
 - 需要项目能成功 `cargo check`
 - annotate 只基于普通 `cargo check` 范围收集 callgraph 和候选；`tests/`、`examples/`、`benches/` 下的独立 Cargo target 暂不参与能力推断和直接重命名。`src/` 中的单元测试源码不按路径排除，但是否进入候选取决于普通 `cargo check` 是否编译到对应代码
-- rustc 选中的可执行入口、测试函数、trait impl 方法、synthetic 节点、宏展开或其他没有真实源码位置的函数不会作为直接 annotate 候选；库 crate 中普通的根级 `main` 仍按一般函数处理，trait impl 方法可能会随 trait 声明或调用点的语义重命名被间接更新
+- rustc 选中的可执行入口、测试函数、trait impl 方法、synthetic 节点、宏展开或其他没有真实源码位置的函数不会作为直接 annotate 候选；可执行入口由 `tcx.entry_fn` 或两段路径 `main` 启发式判定，trait impl 方法可能会随 trait 声明或调用点的语义重命名被间接更新
 - 本地 trait 方法的能力由各 impl 按 at-least-half vote（`ceil(n/2)`）聚合；声明后缀只在没有 impl 可聚合时作为回退。结构合法的 World Port 操作在完整投票契约中固定加入 P，调用边只传播 P
 - annotate 后 `#[serde(default = "...")]` 等字符串字面量中的函数引用不会自动更新，需要手动修复
 - annotate 会删除 `target/rivus-callgraph-std.json` 及旧版 `target/rivus-callgraph`、`target/rivus-callgraph-std` 缓存（函数名已变，旧缓存失效），不会删除其他正在运行命令的 `target/.rivus-runs/` generation

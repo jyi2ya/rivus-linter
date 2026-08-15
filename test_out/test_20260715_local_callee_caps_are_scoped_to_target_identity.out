@@ -1,1 +1,1 @@
-anchors={OfflineCapsEmissionAnchor { identity: FunctionIdentity { crate_id: 10, def_path: DefPath("demo::rvs_call") }, call_site: None }}
+anchors={OfflineCapsEmissionAnchor { identity: FunctionIdentity { crate_id: 10, def_path: DefPath("demo::rvs_call") }, call_site: Some(CallSiteIdentity { callee: FunctionIdentity { crate_id: 10, def_path: DefPath("demo::effect") }, occurrence: 0, source: None }) }}

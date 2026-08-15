@@ -1,5 +1,3 @@
 nodes=256
 edges=512
-operations=2426
 first_caps=S
-within_budget=true

@@ -7,6 +7,36 @@ LL |     let _ = std::panic::catch_unwind(|| {});
    = note: `-D rivus::rvs-catch-unwind` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_catch_unwind)]`
 
+error: caller lacks propagated capabilities required by callee; callee: std::panic::catch_unwind; caller declared caps: pure; callee caps: ST; missing propagated caps: S, T
+  --> $DIR/tests/ui/34_catch_unwind.rs:4:13
+   |
+LL |     let _ = std::panic::catch_unwind(|| {});
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(rivus::rvs_call_violation)]` on by default
+
+error: 'rvs_catch_it' is missing capability marker missing_side_effect; expected name: rvs_catch_it_ST; declared caps: pure; inferred caps: ST
+  --> $DIR/tests/ui/34_catch_unwind.rs:3:1
+   |
+LL | / fn rvs_catch_it() {
+LL | |     let _ = std::panic::catch_unwind(|| {});
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-missing-side-effect` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_side_effect)]`
+
+error: 'rvs_catch_it' is missing capability marker missing_thread_local; expected name: rvs_catch_it_ST; declared caps: pure; inferred caps: ST
+  --> $DIR/tests/ui/34_catch_unwind.rs:3:1
+   |
+LL | / fn rvs_catch_it() {
+LL | |     let _ = std::panic::catch_unwind(|| {});
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-missing-thread-local` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_thread_local)]`
+
 error: good fn 'rvs_catch_it' not called by any test
   --> $DIR/tests/ui/34_catch_unwind.rs:3:1
    |
@@ -18,4 +48,4 @@ LL | | }
    = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
 
-error: aborting due to 2 previous errors
+error: aborting due to 5 previous errors

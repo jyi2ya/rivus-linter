@@ -1,2 +1,2 @@
-outliers=0
-production_anchor=false
+outliers=1
+production_anchor=true

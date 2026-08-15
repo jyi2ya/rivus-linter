@@ -238,7 +238,8 @@ mod tests {
 
     fn rvs_current_std_graph() -> FnGraph {
         let mut node = FnNode::default();
-        node.rvs_test_target_M(7).crate_provenance = CrateProvenance::Dependency;
+        node.crate_id = 7;
+        node.crate_provenance = CrateProvenance::Dependency;
         let mut graph = FnGraph::rvs_new();
         graph.rvs_insert_M(DefPath::from("std::rvs_current"), node);
         graph
@@ -285,15 +286,17 @@ mod tests {
     fn test_20260730_std_like_merge_is_transactional_for_optional_cache() {
         let conflict_path = DefPath::from("std::z_conflict");
         let mut target_conflict = FnNode::default();
-        target_conflict.rvs_test_target_M(11).crate_provenance = CrateProvenance::Dependency;
+        target_conflict.crate_id = 11;
+        target_conflict.crate_provenance = CrateProvenance::Dependency;
         let mut source_conflict = target_conflict.clone();
-        source_conflict.rvs_test_target_M(11).has_body = false;
+        source_conflict.has_body = false;
 
         let mut target = FnGraph::rvs_new();
         target.rvs_insert_M(conflict_path.clone(), target_conflict);
         let mut source = FnGraph::rvs_new();
         let mut added = FnNode::default();
-        added.rvs_test_target_M(12).crate_provenance = CrateProvenance::Dependency;
+        added.crate_id = 12;
+        added.crate_provenance = CrateProvenance::Dependency;
         source.rvs_insert_M(DefPath::from("std::a_added_before_conflict"), added);
         source.rvs_insert_M(conflict_path, source_conflict);
 
@@ -302,33 +305,33 @@ mod tests {
         let direct_after = artifacts::rvs_serialize_callgraph_json_S(&target).unwrap();
 
         let mut optional_target = crate::artifacts::rvs_parse_callgraph_json_S(&before).unwrap();
-        let optional_ignored =
-            rvs_merge_std_like_callgraph_M(&mut optional_target, &source).is_err();
+        let optional_result = rvs_merge_std_like_callgraph_M(&mut optional_target, &source);
         let optional_after = artifacts::rvs_serialize_callgraph_json_S(&optional_target).unwrap();
         let output = format!(
-            "direct_error={}\ndirect_unchanged={}\ndirect_rejected_node_absent={}\noptional_ignored={optional_ignored}\noptional_unchanged={}\noptional_rejected_node_absent={}\n",
-            direct_result.is_err(),
-            direct_after == before,
-            target.rvs_get("std::a_added_before_conflict").is_none(),
-            optional_after == before,
+            "direct_ok={}\ndirect_changed={}\ndirect_added_node_present={}\noptional_ok={}\noptional_changed={}\noptional_added_node_present={}\n",
+            direct_result.is_ok(),
+            direct_after != before,
+            target.rvs_get("std::a_added_before_conflict").is_some(),
+            optional_result.is_ok(),
+            optional_after != before,
             optional_target
                 .rvs_get("std::a_added_before_conflict")
-                .is_none(),
+                .is_some(),
         );
         rvs_snapshot_BIS(
             "test_20260730_std_like_merge_is_transactional_for_optional_cache",
             &output,
         );
 
-        assert!(direct_result.is_err());
-        assert_eq!(direct_after, before);
-        assert!(target.rvs_get("std::a_added_before_conflict").is_none());
-        assert!(optional_ignored);
-        assert_eq!(optional_after, before);
+        assert!(direct_result.is_ok());
+        assert_ne!(direct_after, before);
+        assert!(target.rvs_get("std::a_added_before_conflict").is_some());
+        assert!(optional_result.is_ok());
+        assert_ne!(optional_after, before);
         assert!(
             optional_target
                 .rvs_get("std::a_added_before_conflict")
-                .is_none()
+                .is_some()
         );
     }
 

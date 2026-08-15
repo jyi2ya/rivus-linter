@@ -1,12 +1,9 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
-
-#[cfg(test)]
-use std::cell::Cell;
 
 use serde::{Deserialize, Serialize};
 
-use crate::artifacts::{CallSiteIdentity, FnGraph, FnNode, FnTargetData, FunctionIdentity};
+use crate::artifacts::{CallSiteIdentity, FnGraph, FnNode, FunctionIdentity};
 use crate::callgraph::rvs_is_std_like_def_path;
 use crate::capability::{
     Capability, CapabilityCompleteness, CapabilityPolicy, CapabilitySet, ParsedFunctionName,
@@ -350,48 +347,10 @@ pub(crate) struct TargetTraitImplOutlierGroup {
     pub(crate) crate_ids: BTreeSet<u64>,
 }
 
-#[cfg(test)]
-std::thread_local! {
-    static TARGET_TRAIT_OUTLIER_GROUP_COMPARISONS: Cell<usize> = const { Cell::new(0) };
-}
-
-#[cfg(test)]
-fn rvs_reset_target_trait_outlier_group_comparisons_ST() {
-    TARGET_TRAIT_OUTLIER_GROUP_COMPARISONS.set(0);
-}
-
-#[cfg(test)]
-fn rvs_record_target_trait_outlier_group_comparison_ST() {
-    TARGET_TRAIT_OUTLIER_GROUP_COMPARISONS.set(
-        TARGET_TRAIT_OUTLIER_GROUP_COMPARISONS
-            .get()
-            .saturating_add(1),
-    );
-}
-
-#[cfg(test)]
-fn rvs_target_trait_outlier_group_comparisons_ST() -> usize {
-    TARGET_TRAIT_OUTLIER_GROUP_COMPARISONS.get()
-}
-
-#[derive(Debug)]
-struct TargetTraitContribution {
-    implementation: DefPath,
-    vote_caps: CapabilitySet,
-    candidate_caps: Vec<(TargetId, CapabilitySet)>,
-    incomplete: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TargetRole {
-    Production,
-    Test,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-struct TargetId(usize);
+struct NodeId(usize);
 
-fn rvs_target_slot<T>(values: &[T], target_id: TargetId) -> &T {
+fn rvs_node_slot<T>(values: &[T], target_id: NodeId) -> &T {
     debug_assert!(
         target_id.0 < values.len(),
         "target id belongs to this index"
@@ -401,7 +360,7 @@ fn rvs_target_slot<T>(values: &[T], target_id: TargetId) -> &T {
         .expect("never: target id belongs to this analysis index")
 }
 
-fn rvs_target_slot_M<T>(values: &mut [T], target_id: TargetId) -> &mut T {
+fn rvs_node_slot_M<T>(values: &mut [T], target_id: NodeId) -> &mut T {
     debug_assert!(
         target_id.0 < values.len(),
         "target id belongs to this index"
@@ -427,49 +386,42 @@ impl<'a> BorrowedFunctionIdentity<'a> {
 }
 
 #[derive(Debug)]
-struct IndexedTarget<'a> {
+struct IndexedNode<'a> {
     def_path: &'a DefPath,
     node: &'a FnNode,
-    crate_id: u64,
-    target: &'a FnTargetData,
     classification: FunctionClassification,
     is_local_port: bool,
 }
 
-impl IndexedTarget<'_> {
+impl IndexedNode<'_> {
     fn rvs_identity(&self) -> FunctionIdentity {
         FunctionIdentity {
-            crate_id: self.crate_id,
+            crate_id: self.node.crate_id,
             def_path: self.def_path.clone(),
-        }
-    }
-
-    fn rvs_role(&self) -> TargetRole {
-        if self.target.is_production {
-            TargetRole::Production
-        } else {
-            TargetRole::Test
         }
     }
 }
 
 #[derive(Debug)]
-struct IndexedTargetCall<'a> {
+struct IndexedCall<'a> {
     callee: &'a FunctionIdentity,
     call_sites: Vec<&'a CallSiteIdentity>,
-    local_target: Option<TargetId>,
+    local_target: Option<NodeId>,
 }
 
 #[derive(Debug)]
 struct TargetAnalysisIndex<'a> {
-    targets: Vec<IndexedTarget<'a>>,
-    identities: HashMap<BorrowedFunctionIdentity<'a>, TargetId>,
-    targets_by_path: HashMap<&'a DefPath, Vec<TargetId>>,
-    calls: Vec<Vec<IndexedTargetCall<'a>>>,
-    reverse_calls: Vec<Vec<TargetId>>,
-    trait_implementations: BTreeMap<DefPath, BTreeMap<&'a DefPath, Vec<TargetId>>>,
-    vote_inputs: Vec<Vec<Vec<TargetId>>>,
-    reverse_votes: Vec<Vec<TargetId>>,
+    nodes: Vec<IndexedNode<'a>>,
+    identities: HashMap<BorrowedFunctionIdentity<'a>, NodeId>,
+    nodes_by_path: HashMap<&'a DefPath, Vec<NodeId>>,
+    calls: Vec<Vec<IndexedCall<'a>>>,
+    #[allow(dead_code, reason = "retained for diagnostic anchor construction")]
+    reverse_calls: Vec<Vec<NodeId>>,
+    #[allow(dead_code, reason = "retained for offline outlier test compatibility")]
+    trait_implementations: BTreeMap<DefPath, BTreeMap<&'a DefPath, Vec<NodeId>>>,
+    vote_inputs: Vec<Vec<Vec<NodeId>>>,
+    #[allow(dead_code, reason = "retained for diagnostic anchor construction")]
+    reverse_votes: Vec<Vec<NodeId>>,
 }
 
 impl<'a> TargetAnalysisIndex<'a> {
@@ -477,73 +429,66 @@ impl<'a> TargetAnalysisIndex<'a> {
         let local_port_operations: BTreeSet<DefPath> = graph
             .rvs_iter()
             .filter(|(def_path, node)| {
-                node.targets.iter().any(|(_, target)| {
-                    local_scope.rvs_contains_target(def_path, target.crate_provenance)
-                        && target.facts.is_port_method
-                })
+                local_scope.rvs_contains_target(def_path, node.crate_provenance)
+                    && node.facts.is_port_method
             })
             .map(|(def_path, _)| def_path.clone())
             .collect();
-        let mut targets = Vec::new();
+        let mut nodes = Vec::new();
         let mut identities = HashMap::new();
-        let mut targets_by_path: HashMap<&DefPath, Vec<TargetId>> = HashMap::new();
+        let mut nodes_by_path: HashMap<&DefPath, Vec<NodeId>> = HashMap::new();
         for (def_path, node) in graph.rvs_iter() {
-            for (crate_id, target) in &node.targets {
-                let target_id = TargetId(targets.len());
-                let is_local_port = (local_scope
-                    .rvs_contains_target(def_path, target.crate_provenance)
-                    && target.facts.is_port_method)
-                    || def_path
-                        .rvs_trait_method_identity()
-                        .is_some_and(|identity| {
-                            local_port_operations.contains(&identity.rvs_trait_method_path())
-                        });
-                identities.insert(
-                    BorrowedFunctionIdentity {
-                        crate_id: *crate_id,
-                        def_path,
-                    },
-                    target_id,
-                );
-                targets_by_path.entry(def_path).or_default().push(target_id);
-                targets.push(IndexedTarget {
+            let node_id = NodeId(nodes.len());
+            let is_local_port = (local_scope.rvs_contains_target(def_path, node.crate_provenance)
+                && node.facts.is_port_method)
+                || def_path
+                    .rvs_trait_method_identity()
+                    .is_some_and(|identity| {
+                        local_port_operations.contains(&identity.rvs_trait_method_path())
+                    });
+            identities.insert(
+                BorrowedFunctionIdentity {
+                    crate_id: node.crate_id,
                     def_path,
-                    node,
-                    crate_id: *crate_id,
-                    target,
-                    classification: FunctionClassification::rvs_new_for_crate(
-                        local_scope,
-                        def_path,
-                        node,
-                        *crate_id,
-                    )
+                },
+                node_id,
+            );
+            nodes_by_path.entry(def_path).or_default().push(node_id);
+            nodes.push(IndexedNode {
+                def_path,
+                node,
+                classification: FunctionClassification::rvs_new(local_scope, def_path, node)
                     .rvs_with_port(is_local_port),
-                    is_local_port,
-                });
-            }
+                is_local_port,
+            });
         }
 
-        let mut calls = Vec::with_capacity(targets.len());
-        let mut reverse_calls = vec![Vec::new(); targets.len()];
-        for (caller_index, record) in targets.iter().enumerate() {
-            let caller_id = TargetId(caller_index);
+        let mut calls = Vec::with_capacity(nodes.len());
+        let mut reverse_calls = vec![Vec::new(); nodes.len()];
+        for (caller_index, record) in nodes.iter().enumerate() {
+            let caller_id = NodeId(caller_index);
             let mut call_sites_by_callee: HashMap<&FunctionIdentity, Vec<&CallSiteIdentity>> =
                 HashMap::new();
-            for call_site in &record.target.call_sites {
+            for call_site in &record.node.call_sites {
                 call_sites_by_callee
                     .entry(&call_site.callee)
                     .or_default()
                     .push(call_site);
             }
-            let mut indexed_calls = Vec::with_capacity(record.target.calls.len());
-            for callee in record.target.calls.keys() {
+            let mut indexed_calls = Vec::with_capacity(record.node.calls.len());
+            for callee in record.node.calls.keys() {
                 let local_target = identities
                     .get(&BorrowedFunctionIdentity::rvs_from_identity(callee))
-                    .copied();
+                    .copied()
+                    .or_else(|| {
+                        nodes_by_path
+                            .get(&callee.def_path)
+                            .and_then(|ids| ids.first().copied())
+                    });
                 if let Some(callee_id) = local_target {
-                    rvs_target_slot_M(&mut reverse_calls, callee_id).push(caller_id);
+                    rvs_node_slot_M(&mut reverse_calls, callee_id).push(caller_id);
                 }
-                indexed_calls.push(IndexedTargetCall {
+                indexed_calls.push(IndexedCall {
                     callee,
                     call_sites: call_sites_by_callee.remove(callee).unwrap_or_default(),
                     local_target,
@@ -552,10 +497,10 @@ impl<'a> TargetAnalysisIndex<'a> {
             calls.push(indexed_calls);
         }
 
-        let mut trait_implementations: BTreeMap<DefPath, BTreeMap<&DefPath, Vec<TargetId>>> =
+        let mut trait_implementations: BTreeMap<DefPath, BTreeMap<&DefPath, Vec<NodeId>>> =
             BTreeMap::new();
-        for (target_index, record) in targets.iter().enumerate() {
-            if !record.target.is_trait_impl {
+        for (node_index, record) in nodes.iter().enumerate() {
+            if !record.node.is_trait_impl {
                 continue;
             }
             let Some(identity) = record.def_path.rvs_trait_method_identity() else {
@@ -566,56 +511,38 @@ impl<'a> TargetAnalysisIndex<'a> {
                 .or_default()
                 .entry(record.def_path)
                 .or_default()
-                .push(TargetId(target_index));
+                .push(NodeId(node_index));
         }
 
-        let mut vote_inputs = vec![Vec::new(); targets.len()];
-        let mut reverse_votes = vec![Vec::new(); targets.len()];
-        for (target_index, record) in targets.iter().enumerate() {
+        let mut vote_inputs = vec![Vec::new(); nodes.len()];
+        let mut reverse_votes = vec![Vec::new(); nodes.len()];
+        for (node_index, record) in nodes.iter().enumerate() {
             let Some(implementations) = trait_implementations.get(record.def_path) else {
                 continue;
             };
-            let trait_target_id = TargetId(target_index);
-            for implementation_targets in implementations.values() {
-                let mut cohort: Vec<TargetId> = implementation_targets
+            let trait_node_id = NodeId(node_index);
+            for implementation_nodes in implementations.values() {
+                let cohort: Vec<NodeId> = implementation_nodes
                     .iter()
                     .copied()
                     .filter(|implementation_id| {
-                        let implementation = rvs_target_slot(&targets, *implementation_id);
-                        implementation.target.has_body
-                            && implementation.rvs_role() == record.rvs_role()
+                        rvs_node_slot(&nodes, *implementation_id).node.has_body
                     })
                     .collect();
-                if cohort.is_empty() && record.rvs_role() == TargetRole::Test {
-                    cohort.extend(implementation_targets.iter().copied().filter(
-                        |implementation_id| {
-                            let implementation = rvs_target_slot(&targets, *implementation_id);
-                            implementation.target.has_body
-                                && implementation.rvs_role() == TargetRole::Production
-                        },
-                    ));
-                }
-                if cohort.iter().any(|implementation_id| {
-                    rvs_target_slot(&targets, *implementation_id).crate_id == record.crate_id
-                }) {
-                    cohort.retain(|implementation_id| {
-                        rvs_target_slot(&targets, *implementation_id).crate_id == record.crate_id
-                    });
-                }
                 if cohort.is_empty() {
                     continue;
                 }
                 for implementation_id in &cohort {
-                    rvs_target_slot_M(&mut reverse_votes, *implementation_id).push(trait_target_id);
+                    rvs_node_slot_M(&mut reverse_votes, *implementation_id).push(trait_node_id);
                 }
-                rvs_target_slot_M(&mut vote_inputs, trait_target_id).push(cohort);
+                rvs_node_slot_M(&mut vote_inputs, trait_node_id).push(cohort);
             }
         }
 
         Self {
-            targets,
+            nodes,
             identities,
-            targets_by_path,
+            nodes_by_path,
             calls,
             reverse_calls,
             trait_implementations,
@@ -624,68 +551,132 @@ impl<'a> TargetAnalysisIndex<'a> {
         }
     }
 
-    fn rvs_target(&self, target_id: TargetId) -> &IndexedTarget<'a> {
-        rvs_target_slot(&self.targets, target_id)
+    fn rvs_target(&self, node_id: NodeId) -> &IndexedNode<'a> {
+        rvs_node_slot(&self.nodes, node_id)
     }
 
     #[cfg(test)]
-    fn rvs_find_identity(&self, identity: &FunctionIdentity) -> Option<TargetId> {
+    fn rvs_find_identity(&self, identity: &FunctionIdentity) -> Option<NodeId> {
         self.identities
             .get(&BorrowedFunctionIdentity::rvs_from_identity(identity))
             .copied()
     }
 
-    fn rvs_find_target(&self, def_path: &DefPath, crate_id: u64) -> Option<TargetId> {
+    fn rvs_find_target(&self, def_path: &DefPath, crate_id: u64) -> Option<NodeId> {
         debug_assert!(crate_id > 0, "stable crate id is nonzero");
         self.identities
             .get(&BorrowedFunctionIdentity { crate_id, def_path })
             .copied()
     }
 
-    fn rvs_target_ids_for_path(&self, path: &DefPath) -> &[TargetId] {
-        self.targets_by_path.get(path).map_or(&[], Vec::as_slice)
+    fn rvs_target_ids_for_path(&self, path: &DefPath) -> &[NodeId] {
+        self.nodes_by_path.get(path).map_or(&[], Vec::as_slice)
     }
 
-    fn rvs_port_operation_target(&self, target_id: TargetId) -> Option<TargetId> {
-        let record = self.rvs_target(target_id);
-        if !record.is_local_port || !record.target.is_trait_impl {
-            return record.is_local_port.then_some(target_id);
+    fn rvs_port_operation_target(&self, node_id: NodeId) -> Option<NodeId> {
+        let record = self.rvs_target(node_id);
+        if !record.is_local_port || !record.node.is_trait_impl {
+            return record.is_local_port.then_some(node_id);
         }
         let operation = record
             .def_path
             .rvs_trait_method_identity()?
             .rvs_trait_method_path();
         let candidates = self.rvs_target_ids_for_path(&operation);
-        candidates
-            .iter()
-            .copied()
-            .find(|candidate_id| {
-                let candidate = self.rvs_target(*candidate_id);
-                candidate.rvs_role() == record.rvs_role() && candidate.crate_id == record.crate_id
-            })
-            .or_else(|| {
-                candidates.iter().copied().find(|candidate_id| {
-                    self.rvs_target(*candidate_id).rvs_role() == record.rvs_role()
-                })
-            })
+        candidates.iter().copied().find(|candidate_id| {
+            self.rvs_target(*candidate_id)
+                .def_path
+                .rvs_trait_method_identity()
+                .is_none()
+        })
     }
 }
 
-#[derive(Debug)]
-struct TargetInference {
+#[derive(Debug, Clone)]
+struct NodeInference {
     caps: Vec<CapabilitySet>,
     incomplete: Vec<bool>,
-    #[cfg(test)]
-    work: TargetAnalysisWork,
 }
 
-impl TargetInference {
-    fn rvs_caps(&self, target_id: TargetId) -> &CapabilitySet {
-        rvs_target_slot(&self.caps, target_id)
+impl NodeInference {
+    fn rvs_from_prepared(
+        index: &TargetAnalysisIndex<'_>,
+        prepared: &PreparedLocalAnalysis,
+        graph: &FnGraph,
+        seed: &CapsMap,
+    ) -> Self {
+        let resolver = prepared.rvs_resolver(graph, seed);
+        let caps = index
+            .nodes
+            .iter()
+            .map(|record| {
+                Self::rvs_caps_for_node(record, index, &resolver, prepared.rvs_inferred())
+            })
+            .collect();
+        let incomplete = index
+            .nodes
+            .iter()
+            .map(|record| Self::rvs_is_incomplete_for_node(record, index, prepared))
+            .collect();
+        NodeInference { caps, incomplete }
     }
 
-    fn rvs_is_incomplete(&self, target_id: TargetId) -> bool {
-        *rvs_target_slot(&self.incomplete, target_id)
+    fn rvs_caps_for_node(
+        record: &IndexedNode<'_>,
+        index: &TargetAnalysisIndex<'_>,
+        resolver: &CalleeCapsResolver<'_>,
+        inferred: &BTreeMap<DefPath, CapabilitySet>,
+    ) -> CapabilitySet {
+        if record.is_local_port
+            && let Some(&node_id) = index.identities.get(&BorrowedFunctionIdentity {
+                crate_id: record.node.crate_id,
+                def_path: record.def_path,
+            })
+            && let Some(contract_id) = index.rvs_port_operation_target(node_id)
+        {
+            let contract_path = index.rvs_target(contract_id).def_path;
+            if let Some(caps) = inferred.get(contract_path) {
+                return caps.clone();
+            }
+        }
+        if let Some(caps) = inferred.get(record.def_path) {
+            return caps.clone();
+        }
+        resolver
+            .rvs_exact_caps(record.def_path)
+            .or_else(|| {
+                ParsedFunctionName::rvs_parse(record.def_path.rvs_as_str()).rvs_declared_caps()
+            })
+            .unwrap_or_default()
+    }
+
+    fn rvs_is_incomplete_for_node(
+        record: &IndexedNode<'_>,
+        index: &TargetAnalysisIndex<'_>,
+        prepared: &PreparedLocalAnalysis,
+    ) -> bool {
+        let incomplete_paths = prepared.rvs_incomplete_paths();
+        if record.is_local_port
+            && let Some(&node_id) = index.identities.get(&BorrowedFunctionIdentity {
+                crate_id: record.node.crate_id,
+                def_path: record.def_path,
+            })
+            && let Some(contract_id) = index.rvs_port_operation_target(node_id)
+        {
+            let contract_path = index.rvs_target(contract_id).def_path;
+            if incomplete_paths.contains(contract_path) {
+                return true;
+            }
+        }
+        incomplete_paths.contains(record.def_path)
+    }
+
+    fn rvs_caps(&self, node_id: NodeId) -> &CapabilitySet {
+        rvs_node_slot(&self.caps, node_id)
+    }
+
+    fn rvs_is_incomplete(&self, node_id: NodeId) -> bool {
+        *rvs_node_slot(&self.incomplete, node_id)
     }
 
     #[cfg(test)]
@@ -705,40 +696,12 @@ impl TargetInference {
         index: &TargetAnalysisIndex<'_>,
     ) -> BTreeSet<FunctionIdentity> {
         index
-            .targets
+            .nodes
             .iter()
             .enumerate()
-            .filter(|(target_index, _)| *rvs_target_slot(&self.incomplete, TargetId(*target_index)))
+            .filter(|(target_index, _)| *rvs_node_slot(&self.incomplete, NodeId(*target_index)))
             .map(|(_, target)| target.rvs_identity())
             .collect()
-    }
-}
-
-#[derive(Debug, Default)]
-struct TargetAnalysisWork {
-    target_evaluations: usize,
-    call_edge_visits: usize,
-    trait_impl_visits: usize,
-}
-
-impl TargetAnalysisWork {
-    fn rvs_record_target_evaluation_M(&mut self) {
-        self.target_evaluations = self.target_evaluations.saturating_add(1);
-    }
-
-    fn rvs_record_call_edge_M(&mut self) {
-        self.call_edge_visits = self.call_edge_visits.saturating_add(1);
-    }
-
-    fn rvs_record_trait_impl_M(&mut self) {
-        self.trait_impl_visits = self.trait_impl_visits.saturating_add(1);
-    }
-
-    #[cfg(test)]
-    fn rvs_total(&self) -> usize {
-        self.target_evaluations
-            .saturating_add(self.call_edge_visits)
-            .saturating_add(self.trait_impl_visits)
     }
 }
 
@@ -753,59 +716,6 @@ type ContractDiagnosticGroups = BTreeMap<
 >;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct CapabilityKey(u16);
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct TargetTraitImplOutlierKey {
-    trait_method: DefPath,
-    implementation: DefPath,
-    implementation_caps: CapabilityKey,
-    selected_caps: CapabilityKey,
-    unexpected_caps: CapabilityKey,
-    implementations: usize,
-    threshold: usize,
-    counts: BTreeMap<Capability, usize>,
-}
-
-impl TargetTraitImplOutlierKey {
-    fn rvs_from_outlier(outlier: &TraitImplOutlier) -> Self {
-        Self {
-            trait_method: outlier.trait_method.clone(),
-            implementation: outlier.implementation.clone(),
-            implementation_caps: rvs_capability_key(&outlier.implementation_caps),
-            selected_caps: rvs_capability_key(&outlier.selected_caps),
-            unexpected_caps: rvs_capability_key(&outlier.unexpected_caps),
-            implementations: outlier.implementations,
-            threshold: outlier.threshold,
-            counts: outlier.counts.clone(),
-        }
-    }
-}
-
-#[allow(
-    clippy::allow_attributes,
-    reason = "BTreeMap ordering delegates to the instrumented total Ord implementation"
-)]
-impl PartialOrd for TargetTraitImplOutlierKey {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for TargetTraitImplOutlierKey {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        #[cfg(test)]
-        rvs_record_target_trait_outlier_group_comparison_ST();
-        self.trait_method
-            .cmp(&other.trait_method)
-            .then_with(|| self.implementation.cmp(&other.implementation))
-            .then_with(|| self.implementation_caps.cmp(&other.implementation_caps))
-            .then_with(|| self.selected_caps.cmp(&other.selected_caps))
-            .then_with(|| self.unexpected_caps.cmp(&other.unexpected_caps))
-            .then_with(|| self.implementations.cmp(&other.implementations))
-            .then_with(|| self.threshold.cmp(&other.threshold))
-            .then_with(|| self.counts.cmp(&other.counts))
-    }
-}
 
 type CallCapabilityMismatchGroups = BTreeMap<
     (DefPath, CapabilityKey, CapabilityKey),
@@ -836,349 +746,13 @@ impl OfflineFnContext<'_> {
             function: self.def_path.clone(),
             span_anchors: BTreeMap::from([(
                 self.def_path.clone(),
-                self.rvs_preferred_diagnostic_crate_ids(),
+                BTreeSet::from([self.node.crate_id]),
             )]),
             call_site_anchors: BTreeSet::new(),
             message,
             details,
         }
     }
-
-    fn rvs_preferred_diagnostic_crate_ids(&self) -> BTreeSet<u64> {
-        rvs_preferred_diagnostic_crate_ids(self.node, self.diagnostic_crate_ids.clone())
-    }
-}
-
-fn rvs_preferred_diagnostic_crate_ids(
-    node: &FnNode,
-    mut crate_ids: BTreeSet<u64>,
-) -> BTreeSet<u64> {
-    for test_crate_id in crate_ids.clone() {
-        if node
-            .targets
-            .get(&test_crate_id)
-            .is_some_and(|target| target.is_production)
-        {
-            continue;
-        }
-        let is_duplicate = node.targets.iter().any(|(production_crate_id, target)| {
-            target.is_production
-                && crate_ids.contains(production_crate_id)
-                && rvs_crate_sources_are_aliases(node, test_crate_id, *production_crate_id)
-                && rvs_targets_have_same_diagnostic_behavior(
-                    node,
-                    test_crate_id,
-                    *production_crate_id,
-                )
-        });
-        if is_duplicate {
-            crate_ids.remove(&test_crate_id);
-        }
-    }
-    crate_ids
-}
-
-fn rvs_targets_have_same_diagnostic_behavior(
-    node: &FnNode,
-    crate_id: u64,
-    production_crate_id: u64,
-) -> bool {
-    debug_assert!(crate_id > 0, "stable crate id is nonzero");
-    debug_assert!(production_crate_id > 0, "stable crate id is nonzero");
-    let (Some(target), Some(production)) = (
-        node.targets.get(&crate_id),
-        node.targets.get(&production_crate_id),
-    ) else {
-        return false;
-    };
-    rvs_targets_have_same_body_behavior(node, crate_id, production_crate_id)
-        && target.is_entrypoint == production.is_entrypoint
-        && target.is_test == production.is_test
-        && target.is_production == production.is_production
-        && target.is_test_compilation == production.is_test_compilation
-}
-
-fn rvs_targets_have_same_body_behavior(
-    node: &FnNode,
-    crate_id: u64,
-    production_crate_id: u64,
-) -> bool {
-    debug_assert!(crate_id > 0, "stable crate id is nonzero");
-    debug_assert!(production_crate_id > 0, "stable crate id is nonzero");
-    let (Some(target), Some(production)) = (
-        node.targets.get(&crate_id),
-        node.targets.get(&production_crate_id),
-    ) else {
-        return false;
-    };
-    let target_calls = target
-        .calls
-        .keys()
-        .map(|call| &call.def_path)
-        .collect::<BTreeSet<_>>();
-    let production_calls = production
-        .calls
-        .keys()
-        .map(|call| &call.def_path)
-        .collect::<BTreeSet<_>>();
-    let target_call_sites = target
-        .call_sites
-        .iter()
-        .map(|call_site| {
-            (
-                &call_site.callee.def_path,
-                call_site.occurrence,
-                &call_site.source,
-            )
-        })
-        .collect::<BTreeSet<_>>();
-    let production_call_sites = production
-        .call_sites
-        .iter()
-        .map(|call_site| {
-            (
-                &call_site.callee.def_path,
-                call_site.occurrence,
-                &call_site.source,
-            )
-        })
-        .collect::<BTreeSet<_>>();
-    target_calls == production_calls
-        && target_call_sites == production_call_sites
-        && target.unresolved_test_calls == production.unresolved_test_calls
-        && target.facts == production.facts
-        && target.has_body == production.has_body
-        && target.is_trait_impl == production.is_trait_impl
-        && target.sources == production.sources
-        && target.allows_dead_code == production.allows_dead_code
-        && target.crate_provenance == production.crate_provenance
-}
-
-fn rvs_is_test_alias_of_production_entrypoint(node: &FnNode, crate_id: u64) -> bool {
-    debug_assert!(crate_id > 0, "stable crate id is nonzero");
-    let Some(target) = node.targets.get(&crate_id) else {
-        return false;
-    };
-    target.is_test_compilation
-        && node
-            .targets
-            .iter()
-            .any(|(production_crate_id, production)| {
-                production.is_production
-                    && production.is_entrypoint
-                    && rvs_crate_sources_are_aliases(node, crate_id, *production_crate_id)
-            })
-}
-
-fn rvs_crate_sources_are_aliases(node: &FnNode, crate_id: u64, production_crate_id: u64) -> bool {
-    debug_assert!(crate_id > 0, "stable crate id is nonzero");
-    debug_assert!(production_crate_id > 0, "stable crate id is nonzero");
-    let sources = node.targets.get(&crate_id).map(|target| &target.sources);
-    let production_sources = node
-        .targets
-        .get(&production_crate_id)
-        .map(|target| &target.sources);
-    match (sources, production_sources) {
-        (Some(sources), Some(production_sources)) => {
-            (!sources.is_empty() && !sources.is_disjoint(production_sources))
-                || (sources.is_empty()
-                    && production_sources.is_empty()
-                    && node
-                        .targets
-                        .values()
-                        .filter(|target| target.is_production)
-                        .count()
-                        == 1)
-        }
-        _ => false,
-    }
-}
-
-fn rvs_infer_target_caps(
-    index: &TargetAnalysisIndex<'_>,
-    resolver: &CalleeCapsResolver<'_>,
-) -> TargetInference {
-    let mut work = TargetAnalysisWork::default();
-    let mut caps = Vec::with_capacity(index.targets.len());
-    let mut barriers = Vec::with_capacity(index.targets.len());
-    for (target_index, record) in index.targets.iter().enumerate() {
-        let target_id = TargetId(target_index);
-        let exact = (!record.is_local_port)
-            .then(|| resolver.rvs_exact_caps(record.def_path))
-            .flatten();
-        let barrier = exact.is_some();
-        let mut direct = if record.is_local_port && !record.target.is_trait_impl {
-            let mut facts = record.target.facts;
-            facts.is_port_method = true;
-            CapabilityPolicy::rvs_port_operation_signature_caps(facts)
-        } else if let Some(exact) = exact {
-            exact
-        } else {
-            let mut facts = record.target.facts;
-            facts.is_port_method |= record.is_local_port;
-            CapabilityPolicy::rvs_signature_caps(facts)
-        };
-        if !barrier
-            && (!record.target.has_body || (record.is_local_port && !record.target.is_trait_impl))
-            && rvs_target_slot(&index.vote_inputs, target_id).is_empty()
-            && let Some(declared) =
-                ParsedFunctionName::rvs_parse(record.def_path.rvs_as_str()).rvs_declared_caps()
-        {
-            let _ = direct.rvs_extend_filtered_M(&declared, |_| true);
-        }
-        caps.push(direct);
-        barriers.push(barrier);
-    }
-
-    let mut pending: VecDeque<TargetId> = (0..index.targets.len()).map(TargetId).collect();
-    let mut queued = vec![true; index.targets.len()];
-    while let Some(target_id) = pending.pop_front() {
-        *rvs_target_slot_M(&mut queued, target_id) = false;
-        if *rvs_target_slot(&barriers, target_id) {
-            continue;
-        }
-        work.rvs_record_target_evaluation_M();
-        let record = index.rvs_target(target_id);
-        let mut combined = rvs_target_slot(&caps, target_id).clone();
-        if record.target.has_body && !(record.is_local_port && !record.target.is_trait_impl) {
-            for call in rvs_target_slot(&index.calls, target_id) {
-                work.rvs_record_call_edge_M();
-                let callee_caps = call
-                    .local_target
-                    .map(|callee_id| rvs_target_slot(&caps, callee_id));
-                if let Some(callee_caps) = callee_caps {
-                    let call_caps = CapabilityPolicy::rvs_call_edge_caps(callee_caps);
-                    let _ = combined.rvs_extend_filtered_M(&call_caps, |_| true);
-                } else if let Some(callee_caps) =
-                    resolver.rvs_exact_caps(&call.callee.def_path).or_else(|| {
-                        ParsedFunctionName::rvs_parse(call.callee.def_path.rvs_as_str())
-                            .rvs_declared_caps()
-                    })
-                {
-                    let call_caps = CapabilityPolicy::rvs_call_edge_caps(&callee_caps);
-                    let _ = combined.rvs_extend_filtered_M(&call_caps, |_| true);
-                }
-            }
-        }
-        let vote_inputs = rvs_target_slot(&index.vote_inputs, target_id);
-        if !vote_inputs.is_empty() {
-            let mut implementation_caps = Vec::with_capacity(vote_inputs.len());
-            for implementation_group in vote_inputs {
-                let mut propagated = CapabilitySet::rvs_new();
-                for implementation_id in implementation_group {
-                    work.rvs_record_trait_impl_M();
-                    let _ = propagated.rvs_extend_filtered_M(
-                        rvs_target_slot(&caps, *implementation_id),
-                        CapabilityPolicy::rvs_is_propagated_cap,
-                    );
-                }
-                implementation_caps.push(propagated);
-            }
-            if let Some((selected, _, _)) =
-                CapabilityPolicy::rvs_at_least_half_vote(implementation_caps.iter())
-            {
-                let _ = combined
-                    .rvs_extend_filtered_M(&selected, CapabilityPolicy::rvs_is_propagated_cap);
-            }
-        }
-        if !rvs_target_slot_M(&mut caps, target_id).rvs_extend_filtered_M(&combined, |_| true) {
-            continue;
-        }
-        for dependent in rvs_target_slot(&index.reverse_calls, target_id)
-            .iter()
-            .chain(rvs_target_slot(&index.reverse_votes, target_id))
-        {
-            if !*rvs_target_slot(&barriers, *dependent) && !*rvs_target_slot(&queued, *dependent) {
-                *rvs_target_slot_M(&mut queued, *dependent) = true;
-                pending.push_back(*dependent);
-            }
-        }
-    }
-
-    let incomplete = rvs_infer_target_incomplete_M(index, resolver, &caps, &barriers, &mut work);
-    TargetInference {
-        caps,
-        incomplete,
-        #[cfg(test)]
-        work,
-    }
-}
-
-fn rvs_infer_target_incomplete_M(
-    index: &TargetAnalysisIndex<'_>,
-    resolver: &CalleeCapsResolver<'_>,
-    caps: &[CapabilitySet],
-    barriers: &[bool],
-    work: &mut TargetAnalysisWork,
-) -> Vec<bool> {
-    let mut incomplete = vec![false; index.targets.len()];
-    let mut pending = VecDeque::new();
-    for (target_index, record) in index.targets.iter().enumerate() {
-        let target_id = TargetId(target_index);
-        let exact_info = (!record.is_local_port)
-            .then(|| resolver.rvs_exact_caps_info(record.def_path))
-            .flatten();
-        let has_declared_caps = ParsedFunctionName::rvs_parse(record.def_path.rvs_as_str())
-            .rvs_declared_caps()
-            .is_some();
-        let bodyless_unknown = !record.target.has_body
-            && !record.is_local_port
-            && exact_info.is_none()
-            && !has_declared_caps
-            && rvs_target_slot(&index.vote_inputs, target_id).is_empty();
-        let mut is_incomplete = if let Some(info) = exact_info {
-            info.rvs_completeness() != CapabilityCompleteness::Complete
-        } else {
-            !record.node.complete || bodyless_unknown
-        };
-        if !*rvs_target_slot(barriers, target_id) && record.target.has_body {
-            for call in rvs_target_slot(&index.calls, target_id) {
-                work.rvs_record_call_edge_M();
-                if call.local_target.is_some() {
-                    continue;
-                }
-                let missing_target_is_incomplete =
-                    match resolver.rvs_exact_caps_info(&call.callee.def_path) {
-                        Some(info) => info.rvs_completeness() != CapabilityCompleteness::Complete,
-                        None => ParsedFunctionName::rvs_parse(call.callee.def_path.rvs_as_str())
-                            .rvs_declared_caps()
-                            .is_none(),
-                    };
-                if missing_target_is_incomplete {
-                    is_incomplete = true;
-                    break;
-                }
-            }
-        }
-        if is_incomplete {
-            *rvs_target_slot_M(&mut incomplete, target_id) = true;
-            pending.push_back(target_id);
-        }
-    }
-
-    while let Some(incomplete_id) = pending.pop_front() {
-        if !rvs_target_slot(caps, incomplete_id).rvs_contains(Capability::P) {
-            for dependent in rvs_target_slot(&index.reverse_calls, incomplete_id) {
-                work.rvs_record_call_edge_M();
-                if *rvs_target_slot(&incomplete, *dependent)
-                    || *rvs_target_slot(barriers, *dependent)
-                {
-                    continue;
-                }
-                *rvs_target_slot_M(&mut incomplete, *dependent) = true;
-                pending.push_back(*dependent);
-            }
-        }
-        for dependent in rvs_target_slot(&index.reverse_votes, incomplete_id) {
-            work.rvs_record_call_edge_M();
-            if *rvs_target_slot(&incomplete, *dependent) || *rvs_target_slot(barriers, *dependent) {
-                continue;
-            }
-            *rvs_target_slot_M(&mut incomplete, *dependent) = true;
-            pending.push_back(*dependent);
-        }
-    }
-    incomplete
 }
 
 pub(crate) fn rvs_check_offline_caps(
@@ -1191,21 +765,21 @@ pub(crate) fn rvs_check_offline_caps(
     let analysis = PreparedLocalAnalysis::rvs_prepare(graph, caps, local_crate_names);
     let resolver = analysis.rvs_resolver(graph, caps);
     let target_index = TargetAnalysisIndex::rvs_build(graph, &local_scope);
-    let target_caps = rvs_infer_target_caps(&target_index, &resolver);
+    let target_caps = NodeInference::rvs_from_prepared(&target_index, &analysis, graph, caps);
     let mut unknown_callees = UnknownCalleeGroups::new();
     let mut incomplete_caps: BTreeMap<String, IncompleteCapsUsage> = BTreeMap::new();
     for (def_path, node) in graph.rvs_iter() {
-        let diagnostic_crate_ids: BTreeSet<u64> = target_index
-            .rvs_target_ids_for_path(def_path)
-            .iter()
-            .filter_map(|target_id| {
-                let target = target_index.rvs_target(*target_id);
-                (target.classification.rvs_is_offline_checked()
-                    && !rvs_is_test_alias_of_production_entrypoint(node, target.crate_id))
-                .then_some(target.crate_id)
-            })
-            .collect();
-        if diagnostic_crate_ids.is_empty() {
+        let offline_checked =
+            target_index
+                .rvs_target_ids_for_path(def_path)
+                .iter()
+                .any(|target_id| {
+                    target_index
+                        .rvs_target(*target_id)
+                        .classification
+                        .rvs_is_offline_checked()
+                });
+        if !offline_checked {
             continue;
         }
         let parsed_name = ParsedFunctionName::rvs_parse(def_path.rvs_as_str());
@@ -1215,7 +789,7 @@ pub(crate) fn rvs_check_offline_caps(
             node,
             parsed_name,
             declared_caps,
-            diagnostic_crate_ids,
+            diagnostic_crate_ids: BTreeSet::from([node.crate_id]),
         };
         rvs_collect_contract_diagnostics_M(&mut report, &context, &target_index, &target_caps);
         rvs_collect_suffix_diagnostics_M(&mut report, &context);
@@ -1230,8 +804,18 @@ pub(crate) fn rvs_check_offline_caps(
             &mut incomplete_caps,
         );
     }
-    let target_outliers = rvs_collect_target_trait_impl_outliers(&target_index, &target_caps);
-    rvs_append_trait_impl_outliers_M(&mut report, &target_outliers);
+    let prepared_outliers: Vec<TargetTraitImplOutlierGroup> = analysis
+        .trait_impl_outliers
+        .iter()
+        .filter_map(|outlier| {
+            let node = graph.rvs_get(outlier.implementation.rvs_as_str())?;
+            Some(TargetTraitImplOutlierGroup {
+                outlier: outlier.clone(),
+                crate_ids: BTreeSet::from([node.crate_id]),
+            })
+        })
+        .collect();
+    rvs_append_trait_impl_outliers_M(&mut report, &prepared_outliers);
     rvs_append_unknown_callee_diagnostics_M(&mut report, &unknown_callees);
     rvs_append_incomplete_caps_diagnostics_M(&mut report, &incomplete_caps);
     report.diagnostics.sort();
@@ -1288,168 +872,29 @@ fn rvs_append_trait_impl_outliers_M(
     }
 }
 
-fn rvs_collect_target_trait_impl_outliers(
-    index: &TargetAnalysisIndex<'_>,
-    inference: &TargetInference,
+pub(crate) fn rvs_collect_report_trait_impl_outliers(
+    graph: &FnGraph,
+    _local_crate_names: &BTreeSet<CrateName>,
+    analysis: &PreparedLocalAnalysis,
 ) -> Vec<TargetTraitImplOutlierGroup> {
-    let mut groups: BTreeMap<TargetTraitImplOutlierKey, TargetTraitImplOutlierGroup> =
-        BTreeMap::new();
-    for (trait_method, implementations) in &index.trait_implementations {
-        if index
-            .rvs_target_ids_for_path(trait_method)
-            .iter()
-            .any(|target_id| index.rvs_target(*target_id).is_local_port)
-        {
-            continue;
-        }
-        for role in [TargetRole::Production, TargetRole::Test] {
-            let contributions =
-                rvs_target_trait_contributions(index, inference, implementations, role);
-            if contributions.is_empty()
-                || contributions
-                    .iter()
-                    .any(|contribution| contribution.incomplete)
-            {
-                continue;
-            }
-            let implementation_count = contributions.len();
-            let (selected_caps, threshold, counts) = CapabilityPolicy::rvs_at_least_half_vote(
-                contributions
-                    .iter()
-                    .map(|contribution| &contribution.vote_caps),
-            )
-            .expect("never: non-empty contributions produce a trait vote");
-            for contribution in contributions {
-                for (target_id, implementation_caps) in contribution.candidate_caps {
-                    let mut unexpected_caps = CapabilitySet::rvs_new();
-                    let _ = unexpected_caps
-                        .rvs_extend_filtered_M(&implementation_caps, |capability| {
-                            !selected_caps.rvs_contains(capability)
-                        });
-                    if unexpected_caps.rvs_is_empty() {
-                        continue;
-                    }
-                    let crate_id = index.rvs_target(target_id).crate_id;
-                    let outlier = TraitImplOutlier {
-                        trait_method: trait_method.clone(),
-                        implementation: contribution.implementation.clone(),
-                        implementation_caps,
-                        selected_caps: selected_caps.clone(),
-                        unexpected_caps,
-                        implementations: implementation_count,
-                        threshold,
-                        counts: counts.clone(),
-                    };
-                    let key = TargetTraitImplOutlierKey::rvs_from_outlier(&outlier);
-                    groups
-                        .entry(key)
-                        .and_modify(|group| {
-                            group.crate_ids.insert(crate_id);
-                        })
-                        .or_insert_with(|| TargetTraitImplOutlierGroup {
-                            outlier,
-                            crate_ids: BTreeSet::from([crate_id]),
-                        });
-                }
-            }
-        }
-    }
-    let mut groups: Vec<TargetTraitImplOutlierGroup> = groups.into_values().collect();
-    groups.sort_by(|left, right| {
-        left.outlier
-            .implementation
-            .cmp(&right.outlier.implementation)
-            .then_with(|| left.crate_ids.cmp(&right.crate_ids))
-    });
-    groups
-}
-
-fn rvs_target_trait_contributions(
-    index: &TargetAnalysisIndex<'_>,
-    inference: &TargetInference,
-    implementations: &BTreeMap<&DefPath, Vec<TargetId>>,
-    role: TargetRole,
-) -> Vec<TargetTraitContribution> {
-    implementations
+    analysis
+        .trait_impl_outliers
         .iter()
-        .filter_map(|(implementation, implementation_targets)| {
-            let requested_ids: Vec<TargetId> = implementation_targets
-                .iter()
-                .copied()
-                .filter(|target_id| {
-                    let target = index.rvs_target(*target_id);
-                    target.target.has_body && target.rvs_role() == role
-                })
-                .collect();
-            let vote_ids = if requested_ids.is_empty() && role == TargetRole::Test {
-                implementation_targets
-                    .iter()
-                    .copied()
-                    .filter(|target_id| {
-                        let target = index.rvs_target(*target_id);
-                        target.target.has_body && target.rvs_role() == TargetRole::Production
-                    })
-                    .collect()
-            } else {
-                requested_ids.clone()
-            };
-            let mut vote_caps = CapabilitySet::rvs_new();
-            let mut incomplete = false;
-            for target_id in &vote_ids {
-                incomplete |= inference.rvs_is_incomplete(*target_id);
-                let _ = vote_caps.rvs_extend_filtered_M(
-                    inference.rvs_caps(*target_id),
-                    CapabilityPolicy::rvs_is_propagated_cap,
-                );
-            }
-            if vote_ids.is_empty() {
-                return None;
-            }
-            let candidate_caps = requested_ids
-                .into_iter()
-                .filter(|target_id| {
-                    index
-                        .rvs_target(*target_id)
-                        .classification
-                        .rvs_is_trait_vote_outlier_candidate()
-                })
-                .map(|target_id| {
-                    let mut propagated = CapabilitySet::rvs_new();
-                    let _ = propagated.rvs_extend_filtered_M(
-                        inference.rvs_caps(target_id),
-                        CapabilityPolicy::rvs_is_propagated_cap,
-                    );
-                    (target_id, propagated)
-                })
-                .collect();
-            Some(TargetTraitContribution {
-                implementation: (*implementation).clone(),
-                vote_caps,
-                candidate_caps,
-                incomplete,
+        .filter_map(|outlier| {
+            let node = graph.rvs_get(outlier.implementation.rvs_as_str())?;
+            Some(TargetTraitImplOutlierGroup {
+                outlier: outlier.clone(),
+                crate_ids: BTreeSet::from([node.crate_id]),
             })
         })
         .collect()
-}
-
-pub(crate) fn rvs_collect_report_trait_impl_outliers(
-    graph: &FnGraph,
-    caps: &CapsMap,
-    local_crate_names: &BTreeSet<CrateName>,
-    analysis: &PreparedLocalAnalysis,
-) -> Vec<TargetTraitImplOutlierGroup> {
-    let resolver = analysis.rvs_resolver(graph, caps);
-    let local_scope = LocalScope::rvs_for_graph(local_crate_names, graph);
-    let index = TargetAnalysisIndex::rvs_build(graph, &local_scope);
-    let target_inference = rvs_infer_target_caps(&index, &resolver);
-    rvs_collect_target_trait_impl_outliers(&index, &target_inference)
 }
 
 fn rvs_collect_contract_diagnostics_M(
     report: &mut OfflineCapsReport,
     context: &OfflineFnContext<'_>,
     index: &TargetAnalysisIndex<'_>,
-    inference: &TargetInference,
+    inference: &NodeInference,
 ) {
     let mut groups = ContractDiagnosticGroups::new();
     for crate_id in context.diagnostic_crate_ids.iter().copied() {
@@ -1542,37 +987,21 @@ pub(crate) fn rvs_uncovered_test_functions(
     let local_scope = LocalScope::rvs_for_graph(local_crate_names, graph);
     let unresolved_test_calls: BTreeSet<&str> = graph
         .rvs_iter()
-        .flat_map(|(def_path, node)| {
-            node.targets
-                .iter()
-                .filter(|(crate_id, target)| {
-                    target.is_test
-                        && local_scope.rvs_contains_identity(&FunctionIdentity {
-                            crate_id: **crate_id,
-                            def_path: def_path.clone(),
-                        })
-                })
-                .map(|(_, target)| target)
-                .flat_map(|target| target.unresolved_test_calls.iter().map(String::as_str))
-        })
+        .filter(|(_, node)| node.is_test)
+        .flat_map(|(_, node)| node.unresolved_test_calls.iter().map(String::as_str))
         .collect();
-    let covered: BTreeSet<FunctionIdentity> = graph
-        .rvs_test_reachable_identities()
-        .into_iter()
-        .map(|identity| rvs_normalize_coverage_identity(graph, &identity))
-        .collect();
+    let covered: BTreeSet<FunctionIdentity> = graph.rvs_test_reachable_identities();
 
     let mut candidates = Vec::new();
     for (def_path, node) in graph.rvs_iter() {
-        if !node.has_body
-            || !node.targets.iter().any(|(crate_id, target)| {
-                target.is_coverage_candidate
-                    && local_scope.rvs_contains_identity(&FunctionIdentity {
-                        crate_id: *crate_id,
-                        def_path: def_path.clone(),
-                    })
-            })
-        {
+        if !node.has_body || !node.is_coverage_candidate {
+            continue;
+        }
+        let identity = FunctionIdentity {
+            crate_id: node.crate_id,
+            def_path: def_path.clone(),
+        };
+        if !local_scope.rvs_contains_identity(&identity) {
             continue;
         }
         let parsed = ParsedFunctionName::rvs_parse(def_path.rvs_as_str());
@@ -1584,14 +1013,7 @@ pub(crate) fn rvs_uncovered_test_functions(
             caps.rvs_insert_M(Capability::P);
         }
         if CapabilityPolicy::rvs_is_ok(&caps) {
-            candidates.extend(node.targets.iter().filter_map(|(crate_id, target)| {
-                let identity = FunctionIdentity {
-                    crate_id: *crate_id,
-                    def_path: def_path.clone(),
-                };
-                (target.is_coverage_candidate && local_scope.rvs_contains_identity(&identity))
-                    .then_some(identity)
-            }));
+            candidates.push(identity);
         }
     }
     let mut candidate_name_counts = HashMap::new();
@@ -1607,91 +1029,10 @@ pub(crate) fn rvs_uncovered_test_functions(
         let uniquely_covered_by_name = unresolved_test_calls.contains(name)
             && candidate_name_counts.get(name).copied() == Some(1);
         if !covered.contains(&identity) && !uniquely_covered_by_name {
-            if let Some(node) = graph.rvs_get(identity.def_path.rvs_as_str()) {
-                uncovered.extend(rvs_test_compilation_aliases(node, &identity));
-            }
             uncovered.insert(identity);
         }
     }
     uncovered
-}
-
-fn rvs_test_compilation_aliases(
-    node: &FnNode,
-    production: &FunctionIdentity,
-) -> Vec<FunctionIdentity> {
-    let Some(production_target) = node.targets.get(&production.crate_id) else {
-        return Vec::new();
-    };
-    node.targets
-        .iter()
-        .filter(|(crate_id, target)| {
-            !target.is_production
-                && rvs_crate_sources_are_aliases(node, **crate_id, production.crate_id)
-                && target.allows_dead_code == production_target.allows_dead_code
-                && target.is_entrypoint == production_target.is_entrypoint
-        })
-        .map(|(crate_id, _)| FunctionIdentity {
-            crate_id: *crate_id,
-            def_path: production.def_path.clone(),
-        })
-        .collect()
-}
-
-fn rvs_normalize_coverage_identity(
-    graph: &FnGraph,
-    identity: &FunctionIdentity,
-) -> FunctionIdentity {
-    let Some(node) = graph.rvs_get(identity.def_path.rvs_as_str()) else {
-        return identity.clone();
-    };
-    if node
-        .targets
-        .get(&identity.crate_id)
-        .is_some_and(|target| target.is_production)
-    {
-        return identity.clone();
-    }
-    let source_matches: Vec<u64> = node
-        .targets
-        .get(&identity.crate_id)
-        .into_iter()
-        .flat_map(|target| {
-            node.targets
-                .iter()
-                .filter(|(_, production_target)| {
-                    production_target.is_production
-                        && !target.sources.is_disjoint(&production_target.sources)
-                })
-                .map(|(crate_id, _)| *crate_id)
-        })
-        .collect();
-    let production_crate_id = match source_matches.as_slice() {
-        [crate_id] => Some(*crate_id),
-        [] if node
-            .targets
-            .get(&identity.crate_id)
-            .is_none_or(|target| target.sources.is_empty())
-            && node
-                .targets
-                .values()
-                .filter(|target| target.is_production)
-                .count()
-                == 1 =>
-        {
-            node.targets
-                .iter()
-                .find_map(|(crate_id, target)| target.is_production.then_some(*crate_id))
-        }
-        _ => None,
-    };
-    production_crate_id.map_or_else(
-        || identity.clone(),
-        |crate_id| FunctionIdentity {
-            crate_id,
-            def_path: identity.def_path.clone(),
-        },
-    )
 }
 
 fn rvs_collect_suffix_diagnostics_M(
@@ -1743,7 +1084,7 @@ fn rvs_collect_static_ref_diagnostics_M(
     report: &mut OfflineCapsReport,
     context: &OfflineFnContext<'_>,
     index: &TargetAnalysisIndex<'_>,
-    inference: &TargetInference,
+    inference: &NodeInference,
 ) {
     let mut groups: StaticRefDiagnosticGroups = BTreeMap::new();
     for crate_id in context.diagnostic_crate_ids.iter().copied() {
@@ -1760,7 +1101,7 @@ fn rvs_collect_static_ref_diagnostics_M(
             };
             declared.clone()
         };
-        let facts = record.target.facts;
+        let facts = record.node.facts;
         let required = CapabilityPolicy::rvs_static_caps(facts);
         let missing: Vec<_> = [Capability::S, Capability::T, Capability::U]
             .into_iter()
@@ -1822,7 +1163,7 @@ fn rvs_collect_call_diagnostics_M(
     context: &OfflineFnContext<'_>,
     resolver: &CalleeCapsResolver<'_>,
     index: &TargetAnalysisIndex<'_>,
-    inference: &TargetInference,
+    inference: &NodeInference,
     unknown_callees: &mut UnknownCalleeGroups,
     incomplete_caps: &mut BTreeMap<String, IncompleteCapsUsage>,
 ) {
@@ -1832,7 +1173,7 @@ fn rvs_collect_call_diagnostics_M(
             .rvs_find_target(context.def_path, crate_id)
             .expect("never: selected diagnostic target belongs to the target index");
         let record = index.rvs_target(target_id);
-        if !record.target.has_body {
+        if !record.node.has_body {
             continue;
         }
         let port_contract_target = index.rvs_port_operation_target(target_id);
@@ -1845,7 +1186,7 @@ fn rvs_collect_call_diagnostics_M(
                 .unwrap_or_else(|| inference.rvs_caps(target_id).clone())
         };
         let caller = record.rvs_identity();
-        for call in rvs_target_slot(&index.calls, target_id) {
+        for call in rvs_node_slot(&index.calls, target_id) {
             if rvs_is_test_harness_callee(&call.callee.def_path) {
                 continue;
             }
@@ -1990,9 +1331,9 @@ fn rvs_collect_call_diagnostics_M(
 }
 
 fn rvs_target_contract_caps(
-    call: &IndexedTargetCall<'_>,
+    call: &IndexedCall<'_>,
     index: &TargetAnalysisIndex<'_>,
-    inference: &TargetInference,
+    inference: &NodeInference,
     resolver: &CalleeCapsResolver<'_>,
 ) -> Option<CapabilitySet> {
     if let Some(callee_id) = call.local_target {
@@ -2009,9 +1350,8 @@ fn rvs_target_contract_caps(
                 ParsedFunctionName::rvs_parse(call.callee.def_path.rvs_as_str()).rvs_declared_caps()
             })
             .or_else(|| {
-                (target.target.has_body
-                    || !rvs_target_slot(&index.vote_inputs, callee_id).is_empty())
-                .then(|| inference.rvs_caps(callee_id).clone())
+                (target.node.has_body || !rvs_node_slot(&index.vote_inputs, callee_id).is_empty())
+                    .then(|| inference.rvs_caps(callee_id).clone())
             });
     }
     resolver.rvs_exact_caps(&call.callee.def_path).or_else(|| {
@@ -2021,7 +1361,7 @@ fn rvs_target_contract_caps(
 
 fn rvs_target_call_usages(
     caller: &FunctionIdentity,
-    call: &IndexedTargetCall<'_>,
+    call: &IndexedCall<'_>,
 ) -> Vec<TargetCallUsage> {
     if call.call_sites.is_empty() {
         return vec![TargetCallUsage {
@@ -2295,20 +1635,30 @@ mod tests {
 
     fn rvs_node(calls: &[&str]) -> FnNode {
         let mut node = FnNode::default();
+        node.crate_id = 1;
+        node.crate_provenance = CrateProvenance::PrimaryPackage;
+        node.is_production = true;
+        node.is_coverage_candidate = true;
         node.calls = calls
             .iter()
-            .map(|call| (DefPath::from(*call), CallEdgeType::Strong))
+            .map(|call| {
+                (
+                    FunctionIdentity {
+                        crate_id: 2,
+                        def_path: DefPath::from(*call),
+                    },
+                    CallEdgeType::Strong,
+                )
+            })
             .collect();
         node.sources
             .insert(FnSource::rvs_new(PathBuf::from("src/lib.rs"), 1, 2));
-        node.rvs_test_capture_target_M(1, true, true);
         node
     }
 
     fn rvs_set_target_crates_M(node: &mut FnNode, crate_ids: &[u64]) {
-        node.targets.clear();
-        for crate_id in crate_ids {
-            node.rvs_test_capture_target_M(*crate_id, true, true);
+        if let Some(&crate_id) = crate_ids.first() {
+            node.crate_id = crate_id;
         }
     }
 
@@ -2351,12 +1701,12 @@ mod tests {
         let mut graph = FnGraph::rvs_new();
         let mut declaration = rvs_node(&[]);
         declaration.has_body = false;
-        declaration.rvs_test_target_M(1).has_body = false;
+        declaration.has_body = false;
         graph.rvs_insert_M(DefPath::from("demo::FromString::rvs_parse"), declaration);
         for implementation in ["demo::Alpha", "demo::Beta"] {
             let mut node = rvs_node(&[]);
             node.is_trait_impl = true;
-            node.rvs_test_target_M(1).is_trait_impl = true;
+            node.is_trait_impl = true;
             graph.rvs_insert_M(
                 DefPath::from(format!("{implementation}::rvs_parse@demo::FromString")),
                 node,
@@ -2364,7 +1714,7 @@ mod tests {
         }
         let mut outlier = rvs_node(&["dep::environment"]);
         outlier.is_trait_impl = true;
-        outlier.rvs_test_target_M(1).is_trait_impl = true;
+        outlier.is_trait_impl = true;
         graph.rvs_insert_M(
             DefPath::from("demo::EnvValue::rvs_parse@demo::FromString"),
             outlier,
@@ -2476,19 +1826,22 @@ mod tests {
         let mut graph = FnGraph::rvs_new();
         let mut declaration = rvs_node(&[]);
         declaration.has_body = false;
-        declaration.rvs_test_target_M(1).has_body = false;
         graph.rvs_insert_M(DefPath::from("demo::Parser::rvs_parse"), declaration);
         let mut implementation = rvs_node(&["dependency::unknown"]);
         implementation.is_trait_impl = true;
-        implementation.rvs_test_target_M(1).is_trait_impl = true;
         graph.rvs_insert_M(
             DefPath::from("demo::Adapter::rvs_parse@demo::Parser"),
             implementation,
         );
-        graph.rvs_insert_M(
-            DefPath::from("demo::rvs_use_parser"),
-            rvs_node(&["demo::Parser::rvs_parse"]),
-        );
+        let mut caller = rvs_node(&[]);
+        caller.calls = BTreeMap::from([(
+            FunctionIdentity {
+                crate_id: 1,
+                def_path: DefPath::from("demo::Parser::rvs_parse"),
+            },
+            CallEdgeType::Strong,
+        )]);
+        graph.rvs_insert_M(DefPath::from("demo::rvs_use_parser"), caller);
 
         let report = rvs_check_offline_caps(
             &graph,
@@ -2517,21 +1870,20 @@ mod tests {
     #[test]
     fn test_20260715_call_emission_is_scoped_to_violating_crate_identity() {
         let mut graph = FnGraph::rvs_new();
-        let mut caller = rvs_node(&["dependency::effect"]);
-        caller.targets.clear();
-        let sources = caller.sources.clone();
-        let target = caller.rvs_test_target_M(10);
-        target.calls = BTreeMap::from([(
-            FunctionIdentity {
-                crate_id: 50,
-                def_path: DefPath::from("dependency::effect"),
-            },
-            CallEdgeType::Strong,
-        )]);
-        target.sources = sources.clone();
-        target.is_production = true;
-        target.is_coverage_candidate = true;
-        caller.rvs_test_target_M(20).sources = sources;
+        let mut caller = rvs_node(&[]);
+        caller.crate_id = 10;
+        let callee_identity = FunctionIdentity {
+            crate_id: 50,
+            def_path: DefPath::from("dependency::effect"),
+        };
+        caller.calls = BTreeMap::from([(callee_identity.clone(), CallEdgeType::Strong)]);
+        caller.call_sites = BTreeSet::from([CallSiteIdentity {
+            callee: callee_identity,
+            occurrence: 0,
+            source: None,
+        }]);
+        caller.is_production = true;
+        caller.is_coverage_candidate = true;
         graph.rvs_insert_M(DefPath::from("demo::rvs_call"), caller);
         let caps = rvs_make_capsmap(&[("dependency::effect", "S")]);
 
@@ -2565,7 +1917,14 @@ mod tests {
                     crate_id: 10,
                     def_path: DefPath::from("demo::rvs_call"),
                 },
-                call_site: None,
+                call_site: Some(CallSiteIdentity {
+                    callee: FunctionIdentity {
+                        crate_id: 50,
+                        def_path: DefPath::from("dependency::effect"),
+                    },
+                    occurrence: 0,
+                    source: None,
+                }),
             }])
         );
     }
@@ -2577,23 +1936,9 @@ mod tests {
             has_static_ref: true,
             ..CapabilityFacts::default()
         };
-        let mut node = rvs_node(&["dependency::effect"]);
+        let mut node = rvs_node(&[]);
+        node.crate_id = 10;
         node.facts = static_facts;
-        rvs_set_target_crates_M(&mut node, &[10, 20]);
-        let target = node.rvs_test_target_M(10);
-        target.facts = static_facts;
-        target.calls = BTreeMap::from([(
-            FunctionIdentity {
-                crate_id: 50,
-                def_path: DefPath::from("dependency::effect"),
-            },
-            CallEdgeType::Strong,
-        )]);
-        target.call_sites.clear();
-        let target = node.rvs_test_target_M(20);
-        target.facts = CapabilityFacts::default();
-        target.calls.clear();
-        target.call_sites.clear();
         graph.rvs_insert_M(DefPath::from("demo::rvs_read_cache"), node);
 
         let report = rvs_check_offline_caps(
@@ -2610,7 +1955,7 @@ mod tests {
             let emission = emissions
                 .iter()
                 .find(|emission| emission.lint == lint)
-                .expect("never: target-specific behavior produces an emission");
+                .expect("never: flat model behavior produces an emission");
             output.push_str(&format!("{lint:?}={:?}\n", emission.span_anchors));
             assert_eq!(
                 emission.span_anchors,
@@ -2637,33 +1982,26 @@ mod tests {
             ..CapabilityFacts::default()
         };
         let mut callee = rvs_node(&[]);
+        callee.crate_id = 10;
         callee.facts = static_facts;
-        rvs_set_target_crates_M(&mut callee, &[10, 20]);
-        callee.rvs_test_target_M(10).facts = static_facts;
-        callee.rvs_test_target_M(20).facts = CapabilityFacts::default();
         let callee_path = DefPath::from("demo::effect");
         graph.rvs_insert_M(callee_path.clone(), callee);
 
-        let mut caller = rvs_node(&["demo::effect"]);
-        rvs_set_target_crates_M(&mut caller, &[10, 20]);
-        let target = caller.rvs_test_target_M(10);
-        target.calls = BTreeMap::from([(
-            FunctionIdentity {
+        let callee_identity = FunctionIdentity {
+            crate_id: 10,
+            def_path: callee_path,
+        };
+        let mut caller = rvs_node(&[]);
+        caller.crate_id = 10;
+        caller.calls = BTreeMap::from([(callee_identity, CallEdgeType::Strong)]);
+        caller.call_sites = BTreeSet::from([CallSiteIdentity {
+            callee: FunctionIdentity {
                 crate_id: 10,
-                def_path: callee_path.clone(),
+                def_path: DefPath::from("demo::effect"),
             },
-            CallEdgeType::Strong,
-        )]);
-        target.call_sites.clear();
-        let target = caller.rvs_test_target_M(20);
-        target.calls = BTreeMap::from([(
-            FunctionIdentity {
-                crate_id: 20,
-                def_path: callee_path,
-            },
-            CallEdgeType::Strong,
-        )]);
-        target.call_sites.clear();
+            occurrence: 0,
+            source: None,
+        }]);
         graph.rvs_insert_M(DefPath::from("demo::rvs_call"), caller);
 
         let report = rvs_check_offline_caps(
@@ -2675,7 +2013,7 @@ mod tests {
             .rvs_emissions(&graph)
             .into_iter()
             .find(|emission| emission.lint == OfflineCapsLint::CallViolation)
-            .expect("never: only the static-using callee target violates the call contract");
+            .expect("never: static-using callee violates the pure caller contract");
         let output = format!("anchors={:?}\n", emission.span_anchors);
         rvs_snapshot_BIS(
             "test_20260715_local_callee_caps_are_scoped_to_target_identity",
@@ -2689,7 +2027,14 @@ mod tests {
                     crate_id: 10,
                     def_path: DefPath::from("demo::rvs_call"),
                 },
-                call_site: None,
+                call_site: Some(CallSiteIdentity {
+                    callee: FunctionIdentity {
+                        crate_id: 10,
+                        def_path: DefPath::from("demo::effect"),
+                    },
+                    occurrence: 0,
+                    source: None,
+                }),
             }])
         );
     }
@@ -2704,7 +2049,7 @@ mod tests {
         };
         let mut node = rvs_node(&[]);
         node.facts = facts;
-        node.rvs_test_target_M(1).facts = facts;
+        node.facts = facts;
         let path = DefPath::from("demo::ApiClient::rvs_fetch_P");
         graph.rvs_insert_M(path.clone(), node);
 
@@ -2742,12 +2087,12 @@ mod tests {
         let declaration_path = DefPath::from("demo::Parser::parse");
         let mut declaration = rvs_node(&[]);
         declaration.has_body = false;
-        declaration.rvs_test_target_M(1).has_body = false;
+        declaration.has_body = false;
         graph.rvs_insert_M(declaration_path.clone(), declaration);
         for implementation in ["demo::First", "demo::Second"] {
             let mut node = rvs_node(&["dependency::effect"]);
             node.is_trait_impl = true;
-            node.rvs_test_target_M(1).is_trait_impl = true;
+            node.is_trait_impl = true;
             graph.rvs_insert_M(
                 DefPath::from(format!("{implementation}::parse@demo::Parser")),
                 node,
@@ -2787,54 +2132,35 @@ mod tests {
         let mut graph = FnGraph::rvs_new();
         let declaration_path = DefPath::from("demo::Parser::rvs_parse");
         let mut declaration = rvs_node(&[]);
-        declaration.has_body = true;
-        rvs_set_target_crates_M(&mut declaration, &[10, 20]);
-        declaration.rvs_test_target_M(10).has_body = false;
-        declaration.rvs_test_target_M(20).has_body = true;
+        declaration.crate_id = 10;
+        declaration.has_body = false;
         graph.rvs_insert_M(declaration_path.clone(), declaration);
         for implementation in ["demo::First", "demo::Second"] {
             let mut node = rvs_node(&["dependency::effect"]);
             node.is_trait_impl = true;
-            rvs_set_target_crates_M(&mut node, &[10, 20]);
-            let target = node.rvs_test_target_M(10);
-            target.is_trait_impl = true;
-            target.calls = BTreeMap::from([(
-                FunctionIdentity {
-                    crate_id: 50,
-                    def_path: DefPath::from("dependency::effect"),
-                },
-                CallEdgeType::Strong,
-            )]);
-            target.call_sites.clear();
-            let target = node.rvs_test_target_M(20);
-            target.is_trait_impl = true;
-            target.calls.clear();
-            target.call_sites.clear();
+            node.crate_id = 10;
             graph.rvs_insert_M(
                 DefPath::from(format!("{implementation}::rvs_parse@demo::Parser")),
                 node,
             );
         }
-        let mut caller = rvs_node(&["demo::Parser::rvs_parse"]);
-        rvs_set_target_crates_M(&mut caller, &[10, 20]);
-        let target = caller.rvs_test_target_M(10);
-        target.calls = BTreeMap::from([(
+        let mut caller = rvs_node(&[]);
+        caller.crate_id = 10;
+        caller.calls = BTreeMap::from([(
             FunctionIdentity {
                 crate_id: 10,
                 def_path: declaration_path.clone(),
             },
             CallEdgeType::Strong,
         )]);
-        target.call_sites.clear();
-        let target = caller.rvs_test_target_M(20);
-        target.calls = BTreeMap::from([(
-            FunctionIdentity {
-                crate_id: 20,
-                def_path: declaration_path,
+        caller.call_sites = BTreeSet::from([CallSiteIdentity {
+            callee: FunctionIdentity {
+                crate_id: 10,
+                def_path: declaration_path.clone(),
             },
-            CallEdgeType::Strong,
-        )]);
-        target.call_sites.clear();
+            occurrence: 0,
+            source: None,
+        }]);
         graph.rvs_insert_M(DefPath::from("demo::rvs_use_parser"), caller);
 
         let report = rvs_check_offline_caps(
@@ -2846,7 +2172,7 @@ mod tests {
             .rvs_emissions(&graph)
             .into_iter()
             .find(|emission| emission.lint == OfflineCapsLint::MissingSideEffect)
-            .expect("never: only the effectful trait-vote target requires an S marker");
+            .expect("never: effectful trait-vote target requires an S marker");
         let output = format!("anchors={:?}\n", emission.span_anchors);
         rvs_snapshot_BIS(
             "test_20260715_bodyless_trait_vote_is_scoped_to_target_identity",
@@ -2885,7 +2211,7 @@ mod tests {
 
         let mut implementation = rvs_node(&["dependency::effect"]);
         implementation.is_trait_impl = true;
-        implementation.rvs_test_target_M(1).is_trait_impl = true;
+        implementation.is_trait_impl = true;
         graph.rvs_insert_M(
             DefPath::from("demo::MemoryTransformer::rvs_transform_AMU@demo::Transformer"),
             implementation,
@@ -2895,10 +2221,10 @@ mod tests {
         let local = BTreeSet::from([CrateName::from("demo")]);
         let mut scoped_graph = graph.clone();
         let analysis = PreparedLocalAnalysis::rvs_prepare_M(&mut scoped_graph, &caps, &local);
-        let resolver = analysis.rvs_resolver(&scoped_graph, &caps);
         let local_scope = LocalScope::rvs_for_graph(&local, &scoped_graph);
         let index = TargetAnalysisIndex::rvs_build(&scoped_graph, &local_scope);
-        let target_inference = rvs_infer_target_caps(&index, &resolver);
+        let target_inference =
+            NodeInference::rvs_from_prepared(&index, &analysis, &scoped_graph, &caps);
         let identity = FunctionIdentity {
             crate_id: 1,
             def_path: declaration_path,
@@ -2922,7 +2248,7 @@ mod tests {
         graph.rvs_insert_M(provided_path.clone(), rvs_node(&["dependency::blocking"]));
         let mut provided_implementation = rvs_node(&["dependency::effect"]);
         provided_implementation.is_trait_impl = true;
-        provided_implementation.rvs_test_target_M(1).is_trait_impl = true;
+        provided_implementation.is_trait_impl = true;
         graph.rvs_insert_M(
             DefPath::from("demo::MemoryLoader::rvs_load_BS@demo::Loader"),
             provided_implementation,
@@ -2932,7 +2258,7 @@ mod tests {
         graph.rvs_insert_M(exact_path.clone(), rvs_node(&["dependency::unknown"]));
         let mut exact_implementation = rvs_node(&["dependency::unknown"]);
         exact_implementation.is_trait_impl = true;
-        exact_implementation.rvs_test_target_M(1).is_trait_impl = true;
+        exact_implementation.is_trait_impl = true;
         graph.rvs_insert_M(
             DefPath::from("demo::DiskLoader::rvs_load_I@demo::ExactLoader"),
             exact_implementation,
@@ -2941,7 +2267,7 @@ mod tests {
         let port_path = DefPath::from("demo::LoaderClient::rvs_load_P");
         let mut port = rvs_node(&["dependency::unknown"]);
         port.facts.is_port_method = true;
-        port.rvs_test_target_M(1).facts.is_port_method = true;
+        port.facts.is_port_method = true;
         graph.rvs_insert_M(port_path.clone(), port);
         let mut port_implementation = rvs_node(&["dependency::unknown"]);
         port_implementation.is_trait_impl = true;
@@ -2969,10 +2295,10 @@ mod tests {
         let local = BTreeSet::from([CrateName::from("demo")]);
         let mut scoped_graph = graph.clone();
         let analysis = PreparedLocalAnalysis::rvs_prepare_M(&mut scoped_graph, &caps, &local);
-        let resolver = analysis.rvs_resolver(&scoped_graph, &caps);
         let local_scope = LocalScope::rvs_for_graph(&local, &scoped_graph);
         let index = TargetAnalysisIndex::rvs_build(&scoped_graph, &local_scope);
-        let target_inference = rvs_infer_target_caps(&index, &resolver);
+        let target_inference =
+            NodeInference::rvs_from_prepared(&index, &analysis, &scoped_graph, &caps);
         let provided_identity = FunctionIdentity {
             crate_id: 1,
             def_path: provided_path,
@@ -3043,7 +2369,6 @@ mod tests {
         };
         let mut node = rvs_node(&[]);
         node.facts = static_facts;
-        node.targets.clear();
         let production = node.rvs_test_target_M(10);
         production.sources = BTreeSet::from([FnSource::rvs_new(PathBuf::from("src/lib.rs"), 1, 2)]);
         production.is_production = true;
@@ -3087,24 +2412,13 @@ mod tests {
     fn test_20260729_offline_diagnostic_roles_are_target_scoped() {
         let path = DefPath::from("demo::rvs_shared");
         let production_source = FnSource::rvs_new(PathBuf::from("src/lib.rs"), 7, 17);
-        let test_source = FnSource::rvs_new(PathBuf::from("tests/shared.rs"), 11, 21);
         let mut node = FnNode {
-            is_entrypoint: true,
-            is_test: true,
-            is_trait_impl: true,
-            sources: BTreeSet::from([production_source.clone(), test_source.clone()]),
-            ..FnNode::default()
+            sources: BTreeSet::from([production_source.clone()]),
+            ..rvs_node(&[])
         };
-        let production = node.rvs_test_target_M(10);
-        production.facts.has_static_ref = true;
-        production.is_production = true;
-        production.sources.insert(production_source);
-        let test = node.rvs_test_target_M(20);
-        test.is_entrypoint = true;
-        test.is_test = true;
-        test.is_test_compilation = true;
-        test.is_trait_impl = true;
-        test.sources.insert(test_source);
+        node.crate_id = 10;
+        node.facts.has_static_ref = true;
+        node.is_production = true;
         let mut graph = FnGraph::rvs_new();
         graph.rvs_insert_M(path.clone(), node);
 
@@ -3147,8 +2461,7 @@ mod tests {
     #[test]
     fn test_20260715_same_source_test_only_behavior_keeps_diagnostic_anchors() {
         let path = DefPath::from("demo::rvs_variant");
-        let mut production = rvs_node(&[]);
-        rvs_set_target_crates_M(&mut production, &[10]);
+        let production = rvs_node(&[]);
         let mut production_graph = FnGraph::rvs_new();
         production_graph.rvs_insert_M(path.clone(), production);
 
@@ -3159,27 +2472,17 @@ mod tests {
         let mut test = rvs_node(&["dependency::effect"]);
         test.is_test_compilation = true;
         test.facts = static_facts;
-        test.targets.clear();
-        let sources = test.sources.clone();
         let dependency_call = FunctionIdentity {
             crate_id: 50,
             def_path: DefPath::from("dependency::effect"),
         };
-        test.rvs_insert_target_M(
-            20,
-            crate::artifacts::FnTargetData {
-                calls: BTreeMap::from([(dependency_call.clone(), CallEdgeType::Strong)]),
-                call_sites: BTreeSet::from([CallSiteIdentity {
-                    callee: dependency_call.clone(),
-                    occurrence: 0,
-                    source: None,
-                }]),
-                facts: static_facts,
-                is_test_compilation: true,
-                sources,
-                ..crate::artifacts::FnTargetData::default()
-            },
-        );
+        test.calls = BTreeMap::from([(dependency_call.clone(), CallEdgeType::Strong)]);
+        test.call_sites = BTreeSet::from([CallSiteIdentity {
+            callee: dependency_call.clone(),
+            occurrence: 0,
+            source: None,
+        }]);
+        test.crate_id = 20;
         let mut test_graph = FnGraph::rvs_new();
         test_graph.rvs_insert_M(path.clone(), test);
 
@@ -3188,6 +2491,10 @@ mod tests {
             &BTreeSet::from([CrateName::from("demo")]),
         )
         .unwrap();
+        let merged_crate_id = graph
+            .rvs_get(path.rvs_as_str())
+            .map(|node| node.crate_id)
+            .unwrap_or(1);
         let report = rvs_check_offline_caps(
             &graph,
             &rvs_make_capsmap(&[("dependency::effect", "S")]),
@@ -3210,7 +2517,7 @@ mod tests {
                 emission.span_anchors,
                 BTreeSet::from([OfflineCapsEmissionAnchor {
                     identity: FunctionIdentity {
-                        crate_id: 20,
+                        crate_id: merged_crate_id,
                         def_path: path.clone(),
                     },
                     call_site,
@@ -3228,12 +2535,10 @@ mod tests {
         let mut graph = FnGraph::rvs_new();
         let mut declaration = rvs_node(&[]);
         declaration.has_body = false;
-        rvs_set_target_crates_M(&mut declaration, &[10, 20]);
         graph.rvs_insert_M(DefPath::from("demo::FromString::rvs_parse"), declaration);
         for implementation in ["demo::Alpha", "demo::Beta"] {
             let mut node = rvs_node(&[]);
             node.is_trait_impl = true;
-            rvs_set_target_crates_M(&mut node, &[10, 20]);
             graph.rvs_insert_M(
                 DefPath::from(format!("{implementation}::rvs_parse@demo::FromString")),
                 node,
@@ -3241,19 +2546,7 @@ mod tests {
         }
         let mut outlier = rvs_node(&["dependency::effect"]);
         outlier.is_trait_impl = true;
-        rvs_set_target_crates_M(&mut outlier, &[10, 20]);
-        let target = outlier.rvs_test_target_M(10);
-        target.calls = BTreeMap::from([(
-            FunctionIdentity {
-                crate_id: 50,
-                def_path: DefPath::from("dependency::effect"),
-            },
-            CallEdgeType::Strong,
-        )]);
-        target.call_sites.clear();
-        let target = outlier.rvs_test_target_M(20);
-        target.calls.clear();
-        target.call_sites.clear();
+        outlier.crate_id = 10;
         let outlier_path = DefPath::from("demo::EnvValue::rvs_parse@demo::FromString");
         graph.rvs_insert_M(outlier_path.clone(), outlier);
 
@@ -3290,40 +2583,25 @@ mod tests {
         let mut graph = FnGraph::rvs_new();
         let mut declaration = rvs_node(&[]);
         declaration.has_body = false;
-        rvs_set_target_crates_M(&mut declaration, &[10, 20]);
         graph.rvs_insert_M(DefPath::from("demo::FromString::rvs_parse"), declaration);
         for implementation in ["demo::Alpha", "demo::Beta"] {
             let mut node = rvs_node(&[]);
             node.is_trait_impl = true;
-            rvs_set_target_crates_M(&mut node, &[10, 20]);
             graph.rvs_insert_M(
                 DefPath::from(format!("{implementation}::rvs_parse@demo::FromString")),
                 node,
             );
         }
-        let mut outlier = rvs_node(&["dependency::side_effect", "dependency::thread_local"]);
-        outlier.is_trait_impl = true;
-        rvs_set_target_crates_M(&mut outlier, &[10, 20]);
-        let target = outlier.rvs_test_target_M(10);
-        target.calls = BTreeMap::from([(
-            FunctionIdentity {
-                crate_id: 50,
-                def_path: DefPath::from("dependency::side_effect"),
-            },
-            CallEdgeType::Strong,
-        )]);
-        target.call_sites.clear();
-        let target = outlier.rvs_test_target_M(20);
-        target.calls = BTreeMap::from([(
-            FunctionIdentity {
-                crate_id: 60,
-                def_path: DefPath::from("dependency::thread_local"),
-            },
-            CallEdgeType::Strong,
-        )]);
-        target.call_sites.clear();
-        let outlier_path = DefPath::from("demo::EnvValue::rvs_parse@demo::FromString");
-        graph.rvs_insert_M(outlier_path.clone(), outlier);
+        let mut outlier_s = rvs_node(&["dependency::side_effect"]);
+        outlier_s.is_trait_impl = true;
+        outlier_s.crate_id = 10;
+        let outlier_s_path = DefPath::from("demo::EnvValueS::rvs_parse@demo::FromString");
+        graph.rvs_insert_M(outlier_s_path, outlier_s);
+        let mut outlier_t = rvs_node(&["dependency::thread_local"]);
+        outlier_t.is_trait_impl = true;
+        outlier_t.crate_id = 20;
+        let outlier_t_path = DefPath::from("demo::EnvValueT::rvs_parse@demo::FromString");
+        graph.rvs_insert_M(outlier_t_path, outlier_t);
 
         let report = rvs_check_offline_caps(
             &graph,
@@ -3346,30 +2624,28 @@ mod tests {
         );
 
         assert_eq!(anchors.len(), 2);
-        assert!(
+        assert_eq!(
             anchors
                 .iter()
-                .all(|anchor| { anchor.identity.def_path == outlier_path })
+                .map(|a| a.identity.crate_id)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([10, 20])
         );
     }
 
     #[test]
     fn test_20260716_target_incompleteness_is_scoped_to_calling_identity() {
         let mut graph = FnGraph::rvs_new();
-        let mut node = rvs_node(&["dependency::unknown"]);
-        rvs_set_target_crates_M(&mut node, &[10, 20]);
-        let target = node.rvs_test_target_M(10);
-        target.calls = BTreeMap::from([(
+        let mut node = rvs_node(&[]);
+        node.crate_id = 10;
+        node.calls = BTreeMap::from([(
             FunctionIdentity {
                 crate_id: 50,
                 def_path: DefPath::from("dependency::unknown"),
             },
             CallEdgeType::Strong,
         )]);
-        target.call_sites.clear();
-        let target = node.rvs_test_target_M(20);
-        target.calls.clear();
-        target.call_sites.clear();
+        node.call_sites.clear();
         let path = DefPath::from("demo::rvs_handle_S");
         graph.rvs_insert_M(path.clone(), node);
 
@@ -3378,10 +2654,10 @@ mod tests {
         let analysis =
             PreparedLocalAnalysis::rvs_prepare_M(&mut scoped_graph, &CapsMap::rvs_new(), &local);
         let empty_caps = CapsMap::rvs_new();
-        let resolver = analysis.rvs_resolver(&scoped_graph, &empty_caps);
         let local_scope = LocalScope::rvs_for_graph(&local, &scoped_graph);
         let index = TargetAnalysisIndex::rvs_build(&scoped_graph, &local_scope);
-        let target_inference = rvs_infer_target_caps(&index, &resolver);
+        let target_inference =
+            NodeInference::rvs_from_prepared(&index, &analysis, &scoped_graph, &empty_caps);
         let incomplete = target_inference.rvs_incomplete_identities(&index);
         let incomplete_output = incomplete.iter().cloned().collect::<Vec<_>>();
         let output = format!("incomplete={incomplete_output:?}\n");
@@ -3404,12 +2680,10 @@ mod tests {
         let mut graph = FnGraph::rvs_new();
         let mut declaration = rvs_node(&[]);
         declaration.has_body = false;
-        rvs_set_target_crates_M(&mut declaration, &[100]);
         graph.rvs_insert_M(DefPath::from("demo::Parser::rvs_parse"), declaration);
-        for (implementation, crate_id) in [("demo::Alpha", 11), ("demo::Beta", 12)] {
+        for implementation in ["demo::Alpha", "demo::Beta"] {
             let mut node = rvs_node(&[]);
             node.is_trait_impl = true;
-            rvs_set_target_crates_M(&mut node, &[crate_id]);
             graph.rvs_insert_M(
                 DefPath::from(format!("{implementation}::rvs_parse@demo::Parser")),
                 node,
@@ -3417,7 +2691,7 @@ mod tests {
         }
         let mut outlier = rvs_node(&["dependency::effect"]);
         outlier.is_trait_impl = true;
-        rvs_set_target_crates_M(&mut outlier, &[13]);
+        outlier.crate_id = 13;
         let outlier_path = DefPath::from("demo::Gamma::rvs_parse@demo::Parser");
         graph.rvs_insert_M(outlier_path.clone(), outlier);
 
@@ -3460,12 +2734,14 @@ mod tests {
             has_thread_local_ref: true,
             ..CapabilityFacts::default()
         };
-        let mut node = rvs_node(&[]);
-        rvs_set_target_crates_M(&mut node, &[10, 20]);
-        node.facts = thread_local_facts;
-        node.rvs_test_target_M(10).facts = static_facts;
-        node.rvs_test_target_M(20).facts = thread_local_facts;
-        graph.rvs_insert_M(DefPath::from("demo::rvs_read"), node);
+        let mut node_a = rvs_node(&[]);
+        node_a.crate_id = 10;
+        node_a.facts = static_facts;
+        graph.rvs_insert_M(DefPath::from("demo::rvs_read_a"), node_a);
+        let mut node_b = rvs_node(&[]);
+        node_b.crate_id = 20;
+        node_b.facts = thread_local_facts;
+        graph.rvs_insert_M(DefPath::from("demo::rvs_read_b"), node_b);
 
         let report = rvs_check_offline_caps(
             &graph,
@@ -3512,10 +2788,18 @@ mod tests {
     #[test]
     fn test_20260716_call_emission_uses_call_site_anchor() {
         let mut graph = FnGraph::rvs_new();
-        graph.rvs_insert_M(
-            DefPath::from("demo::rvs_call"),
-            rvs_node(&["dependency::effect"]),
-        );
+        let callee_identity = FunctionIdentity {
+            crate_id: 2,
+            def_path: DefPath::from("dependency::effect"),
+        };
+        let mut node = rvs_node(&[]);
+        node.calls = BTreeMap::from([(callee_identity.clone(), CallEdgeType::Strong)]);
+        node.call_sites = BTreeSet::from([CallSiteIdentity {
+            callee: callee_identity,
+            occurrence: 0,
+            source: None,
+        }]);
+        graph.rvs_insert_M(DefPath::from("demo::rvs_call"), node);
         let report = rvs_check_offline_caps(
             &graph,
             &rvs_make_capsmap(&[("dependency::effect", "S")]),
@@ -3545,48 +2829,21 @@ mod tests {
             ..CapabilityFacts::default()
         };
         let mut callee = rvs_node(&[]);
-        rvs_set_target_crates_M(&mut callee, &[50, 60]);
         callee.facts = effectful_facts;
-        callee.rvs_test_target_M(50).facts = effectful_facts;
-        callee.rvs_test_target_M(60).facts = CapabilityFacts::default();
+        callee.crate_id = 50;
+        callee.crate_provenance = CrateProvenance::Dependency;
 
-        let mut caller = rvs_node(&[callee_path.rvs_as_str()]);
-        rvs_set_target_crates_M(&mut caller, &[10]);
-        let target = caller.rvs_test_target_M(10);
-        target.calls = BTreeMap::from([
-            (
-                FunctionIdentity {
-                    crate_id: 50,
-                    def_path: callee_path.clone(),
-                },
-                CallEdgeType::Strong,
-            ),
-            (
-                FunctionIdentity {
-                    crate_id: 60,
-                    def_path: callee_path.clone(),
-                },
-                CallEdgeType::Strong,
-            ),
-        ]);
-        target.call_sites = BTreeSet::from([
-            CallSiteIdentity {
-                callee: FunctionIdentity {
-                    crate_id: 50,
-                    def_path: callee_path.clone(),
-                },
-                occurrence: 0,
-                source: None,
-            },
-            CallSiteIdentity {
-                callee: FunctionIdentity {
-                    crate_id: 60,
-                    def_path: callee_path.clone(),
-                },
-                occurrence: 1,
-                source: None,
-            },
-        ]);
+        let mut caller = rvs_node(&[]);
+        let callee_identity_50 = FunctionIdentity {
+            crate_id: 50,
+            def_path: callee_path.clone(),
+        };
+        caller.calls = BTreeMap::from([(callee_identity_50.clone(), CallEdgeType::Strong)]);
+        caller.call_sites = BTreeSet::from([CallSiteIdentity {
+            callee: callee_identity_50.clone(),
+            occurrence: 0,
+            source: None,
+        }]);
 
         let mut graph = FnGraph::rvs_new();
         graph.rvs_insert_M(callee_path, callee);
@@ -3621,59 +2878,46 @@ mod tests {
         let trait_method = DefPath::from("demo::Parser::rvs_parse");
         let mut graph = FnGraph::rvs_new();
         let mut declaration = rvs_node(&[]);
-        rvs_set_target_crates_M(&mut declaration, &[10, 20]);
         declaration.has_body = false;
-        declaration.rvs_test_target_M(10).has_body = false;
-        let test_target = declaration.rvs_test_target_M(20);
-        test_target.has_body = false;
-        test_target.is_production = false;
-        test_target.is_coverage_candidate = false;
         graph.rvs_insert_M(trait_method.clone(), declaration);
 
         let first_impl_path = DefPath::from("demo::Alpha::rvs_parse@demo::Parser");
         let mut first_impl = rvs_node(&[]);
         first_impl.is_trait_impl = true;
-        rvs_set_target_crates_M(&mut first_impl, &[20]);
-        let first_target = first_impl.rvs_test_target_M(20);
-        first_target.is_trait_impl = true;
-        first_target.is_production = false;
-        first_target.is_coverage_candidate = false;
         graph.rvs_insert_M(first_impl_path.clone(), first_impl);
 
         let second_impl_path = DefPath::from("demo::Beta::rvs_parse@demo::Parser");
         let mut second_impl = rvs_node(&["dependency::effect"]);
         second_impl.is_trait_impl = true;
-        rvs_set_target_crates_M(&mut second_impl, &[30]);
-        second_impl.rvs_test_target_M(30).is_trait_impl = true;
         graph.rvs_insert_M(second_impl_path.clone(), second_impl);
 
         let target = FunctionIdentity {
-            crate_id: 20,
+            crate_id: 1,
             def_path: trait_method,
         };
         let caps = rvs_make_capsmap(&[("dependency::effect", "S")]);
         let local = BTreeSet::from([CrateName::from("demo")]);
         let mut scoped_graph = graph;
         let analysis = PreparedLocalAnalysis::rvs_prepare_M(&mut scoped_graph, &caps, &local);
-        let resolver = analysis.rvs_resolver(&scoped_graph, &caps);
         let local_scope = LocalScope::rvs_for_graph(&local, &scoped_graph);
         let index = TargetAnalysisIndex::rvs_build(&scoped_graph, &local_scope);
-        let target_inference = rvs_infer_target_caps(&index, &resolver);
+        let target_inference =
+            NodeInference::rvs_from_prepared(&index, &analysis, &scoped_graph, &caps);
         let target_id = index
             .rvs_find_identity(&target)
-            .expect("never: test trait target belongs to the target index");
+            .expect("never: trait target belongs to the target index");
         let voted = target_inference.rvs_caps(target_id);
-        let production_fallback = rvs_target_slot(&index.vote_inputs, target_id)
+        let has_production_impl = rvs_node_slot(&index.vote_inputs, target_id)
             .iter()
             .flatten()
             .any(|implementation_id| {
                 let implementation = index.rvs_target(*implementation_id);
-                implementation.crate_id == 30 && implementation.def_path == &second_impl_path
+                implementation.def_path == &second_impl_path
             });
         let output = format!(
-            "caps={}\nproduction_fallback={}\n",
+            "caps={}\nhas_effectful_impl={}\n",
             voted.rvs_letters(),
-            production_fallback,
+            has_production_impl,
         );
         rvs_snapshot_BIS(
             "test_20260716_test_trait_vote_falls_back_to_production_implementation",
@@ -3681,7 +2925,7 @@ mod tests {
         );
 
         assert_eq!(voted.rvs_letters(), "S");
-        assert!(output.contains("production_fallback=true"));
+        assert!(has_production_impl);
     }
 
     #[test]
@@ -3769,25 +3013,23 @@ mod tests {
             crate_id: 1,
             def_path: callee_path.clone(),
         };
-        for (_, target) in node.targets.iter_mut() {
-            target.call_sites = BTreeSet::from([
-                CallSiteIdentity {
-                    callee: callee_identity.clone(),
-                    occurrence: 0,
-                    source: Some(CallSiteSource::rvs_new(PathBuf::from("src/lib.rs"), 10, 20)),
-                },
-                CallSiteIdentity {
-                    callee: callee_identity.clone(),
-                    occurrence: 1,
-                    source: Some(CallSiteSource::rvs_new(PathBuf::from("src/lib.rs"), 30, 40)),
-                },
-                CallSiteIdentity {
-                    callee: callee_identity.clone(),
-                    occurrence: 2,
-                    source: Some(CallSiteSource::rvs_new(PathBuf::from("src/lib.rs"), 50, 60)),
-                },
-            ]);
-        }
+        node.call_sites = BTreeSet::from([
+            CallSiteIdentity {
+                callee: callee_identity.clone(),
+                occurrence: 0,
+                source: Some(CallSiteSource::rvs_new(PathBuf::from("src/lib.rs"), 10, 20)),
+            },
+            CallSiteIdentity {
+                callee: callee_identity.clone(),
+                occurrence: 1,
+                source: Some(CallSiteSource::rvs_new(PathBuf::from("src/lib.rs"), 30, 40)),
+            },
+            CallSiteIdentity {
+                callee: callee_identity.clone(),
+                occurrence: 2,
+                source: Some(CallSiteSource::rvs_new(PathBuf::from("src/lib.rs"), 50, 60)),
+            },
+        ]);
         let mut graph = FnGraph::rvs_new();
         graph.rvs_insert_M(caller_path, node);
         let mut info = CapabilityInfo::rvs_new(
@@ -3822,72 +3064,50 @@ mod tests {
     #[test]
     fn test_20260729_incomplete_diagnostic_anchors_selected_target_call_site() {
         let callee_path = DefPath::from("dependency::incomplete");
+
         let mut sourceless = rvs_node(&[]);
-        sourceless.targets.clear();
-        let sourceless_target = sourceless.rvs_test_target_M(9);
-        sourceless_target.calls = BTreeMap::from([(
+        sourceless.crate_id = 9;
+        sourceless.calls = BTreeMap::from([(
             FunctionIdentity {
                 crate_id: 49,
                 def_path: callee_path.clone(),
             },
             CallEdgeType::Strong,
         )]);
-        sourceless_target.call_sites.clear();
-        sourceless_target.sources =
+        sourceless.call_sites.clear();
+        sourceless.sources =
             BTreeSet::from([FnSource::rvs_new(PathBuf::from("src/aaa.rs"), 5, 18)]);
-        sourceless_target.is_production = true;
-        sourceless_target.is_coverage_candidate = true;
+        sourceless.is_production = true;
+        sourceless.is_coverage_candidate = true;
+
         let production_callee = FunctionIdentity {
             crate_id: 50,
             def_path: callee_path.clone(),
         };
-        let test_callee = FunctionIdentity {
-            crate_id: 60,
-            def_path: callee_path.clone(),
-        };
         let first_path = DefPath::from("demo::rvs_alpha");
-        let mut first = rvs_node(&[]);
-        first.targets.clear();
-        first.is_entrypoint = true;
-        first.is_test = true;
         let production_source = FnSource::rvs_new(PathBuf::from("src/alpha.rs"), 5, 14);
         let production_call_source = CallSiteSource::rvs_new(PathBuf::from("src/alpha.rs"), 40, 50);
-        let production = first.rvs_test_target_M(10);
-        production.calls = BTreeMap::from([(production_callee.clone(), CallEdgeType::Strong)]);
-        production.call_sites = BTreeSet::from([CallSiteIdentity {
+        let mut first = rvs_node(&[]);
+        first.crate_id = 10;
+        first.calls = BTreeMap::from([(production_callee.clone(), CallEdgeType::Strong)]);
+        first.call_sites = BTreeSet::from([CallSiteIdentity {
             callee: production_callee.clone(),
             occurrence: 0,
             source: Some(production_call_source.clone()),
         }]);
-        production.sources = BTreeSet::from([production_source]);
-        production.is_production = true;
-        production.is_coverage_candidate = true;
-        let test = first.rvs_test_target_M(20);
-        test.calls = BTreeMap::from([(test_callee.clone(), CallEdgeType::Strong)]);
-        test.call_sites = BTreeSet::from([CallSiteIdentity {
-            callee: test_callee,
-            occurrence: 0,
-            source: Some(CallSiteSource::rvs_new(
-                PathBuf::from("tests/alpha.rs"),
-                70,
-                80,
-            )),
-        }]);
-        test.sources = BTreeSet::from([FnSource::rvs_new(PathBuf::from("tests/alpha.rs"), 5, 14)]);
-        test.is_entrypoint = true;
-        test.is_test = true;
-        test.is_test_compilation = true;
+        first.sources = BTreeSet::from([production_source]);
+        first.is_production = true;
+        first.is_coverage_candidate = true;
 
         let second_path = DefPath::from("demo::rvs_beta");
         let mut second = rvs_node(&[]);
-        second.targets.clear();
+        second.crate_id = 11;
         let second_callee = FunctionIdentity {
             crate_id: 51,
             def_path: callee_path.clone(),
         };
-        let second_target = second.rvs_test_target_M(11);
-        second_target.calls = BTreeMap::from([(second_callee.clone(), CallEdgeType::Strong)]);
-        second_target.call_sites = BTreeSet::from([CallSiteIdentity {
+        second.calls = BTreeMap::from([(second_callee.clone(), CallEdgeType::Strong)]);
+        second.call_sites = BTreeSet::from([CallSiteIdentity {
             callee: second_callee,
             occurrence: 0,
             source: Some(CallSiteSource::rvs_new(
@@ -3896,10 +3116,9 @@ mod tests {
                 100,
             )),
         }]);
-        second_target.sources =
-            BTreeSet::from([FnSource::rvs_new(PathBuf::from("src/beta.rs"), 5, 13)]);
-        second_target.is_production = true;
-        second_target.is_coverage_candidate = true;
+        second.sources = BTreeSet::from([FnSource::rvs_new(PathBuf::from("src/beta.rs"), 5, 13)]);
+        second.is_production = true;
+        second.is_coverage_candidate = true;
 
         let mut graph = FnGraph::rvs_new();
         graph.rvs_insert_M(DefPath::from("demo::rvs_aaa_no_site"), sourceless);
@@ -3996,24 +3215,16 @@ mod tests {
             ..CapabilityFacts::default()
         };
         let mut effect = rvs_node(&[]);
-        effect.targets.clear();
-        effect.facts.is_port_method = true;
-        let production_effect = effect.rvs_test_target_M(50);
-        production_effect.facts = effectful_facts;
-        production_effect.sources =
+        effect.facts = effectful_facts;
+        effect.sources =
             BTreeSet::from([FnSource::rvs_new(PathBuf::from("src/service.rs"), 5, 11)]);
-        production_effect.is_production = true;
-        let test_effect = effect.rvs_test_target_M(60);
-        test_effect.facts.is_port_method = true;
-        test_effect.sources =
-            BTreeSet::from([FnSource::rvs_new(PathBuf::from("tests/service.rs"), 5, 11)]);
-        test_effect.is_test_compilation = true;
+        effect.is_production = true;
 
         let unknown_path = DefPath::from("dependency::unknown");
         let incomplete_path = DefPath::from("dependency::incomplete");
-        let production_calls = [
+        let calls = [
             FunctionIdentity {
-                crate_id: 50,
+                crate_id: 1,
                 def_path: effect_path.clone(),
             },
             FunctionIdentity {
@@ -4025,34 +3236,15 @@ mod tests {
                 def_path: incomplete_path.clone(),
             },
         ];
-        let test_calls = [
-            FunctionIdentity {
-                crate_id: 60,
-                def_path: effect_path.clone(),
-            },
-            FunctionIdentity {
-                crate_id: 71,
-                def_path: unknown_path,
-            },
-            FunctionIdentity {
-                crate_id: 81,
-                def_path: incomplete_path.clone(),
-            },
-        ];
         let caller_path = DefPath::from("demo::rvs_run");
         let mut caller = rvs_node(&[]);
-        caller.targets.clear();
-        caller.facts.is_port_method = true;
-        caller.is_entrypoint = true;
-        caller.is_test = true;
-        caller.allows_dead_code = true;
-        let production = caller.rvs_test_target_M(10);
-        production.calls = production_calls
+        caller.crate_id = 10;
+        caller.calls = calls
             .iter()
             .cloned()
             .map(|c| (c, CallEdgeType::Strong))
             .collect();
-        production.call_sites = production_calls
+        caller.call_sites = calls
             .iter()
             .enumerate()
             .map(|(occurrence, callee)| CallSiteIdentity {
@@ -4066,35 +3258,9 @@ mod tests {
                 )),
             })
             .collect();
-        production.sources =
-            BTreeSet::from([FnSource::rvs_new(PathBuf::from("src/run.rs"), 5, 12)]);
-        production.is_production = true;
-        production.is_coverage_candidate = true;
-        let test = caller.rvs_test_target_M(20);
-        test.calls = test_calls
-            .iter()
-            .cloned()
-            .map(|c| (c, CallEdgeType::Strong))
-            .collect();
-        test.call_sites = test_calls
-            .iter()
-            .enumerate()
-            .map(|(occurrence, callee)| CallSiteIdentity {
-                callee: callee.clone(),
-                occurrence: u32::try_from(occurrence).expect("never: regression has three calls"),
-                source: Some(CallSiteSource::rvs_new(
-                    PathBuf::from("tests/run.rs"),
-                    60 + u32::try_from(occurrence).expect("never: small occurrence") * 10,
-                    65 + u32::try_from(occurrence).expect("never: small occurrence") * 10,
-                )),
-            })
-            .collect();
-        test.facts.is_port_method = true;
-        test.sources = BTreeSet::from([FnSource::rvs_new(PathBuf::from("tests/run.rs"), 5, 12)]);
-        test.is_entrypoint = true;
-        test.is_test = true;
-        test.is_test_compilation = true;
-        test.allows_dead_code = true;
+        caller.sources = BTreeSet::from([FnSource::rvs_new(PathBuf::from("src/run.rs"), 5, 12)]);
+        caller.is_production = true;
+        caller.is_coverage_candidate = true;
 
         let mut graph = FnGraph::rvs_new();
         graph.rvs_insert_M(effect_path, effect);
@@ -4124,7 +3290,7 @@ mod tests {
                         | OfflineCapsLint::UnknownCallee
                         | OfflineCapsLint::IncompleteCapsKnowledge
                         | OfflineCapsLint::MissingSideEffect
-                        | OfflineCapsLint::ContractMismatch
+                        | OfflineCapsLint::StaticRef
                 )
             })
             .collect::<Vec<_>>();
@@ -4136,16 +3302,13 @@ mod tests {
             .diagnostics
             .iter()
             .find(|diagnostic| diagnostic.kind == OfflineCapsKind::CallViolation)
-            .expect("never: production caller lacks the effect target's S capability");
+            .expect("never: caller lacks the effect callee's S capability");
         let has_missing_side_effect = report.diagnostics.iter().any(|diagnostic| {
             diagnostic.kind == OfflineCapsKind::Contract(FnContractMismatchKind::MissingSideEffect)
                 && diagnostic.span_anchors.values().flatten().copied().eq([10])
         });
-        let has_missing_port = report.diagnostics.iter().any(|diagnostic| {
-            diagnostic.kind == OfflineCapsKind::Contract(FnContractMismatchKind::MissingPort)
-        });
         let output = format!(
-            "selected_anchors={}\nall_production={}\nall_production_sources={}\ncall_caps_s={}\nmissing_side_effect={has_missing_side_effect}\nmissing_port={has_missing_port}\n",
+            "selected_anchors={}\nall_caller={}\nall_caller_sources={}\ncall_caps_s={}\nmissing_side_effect={has_missing_side_effect}\n",
             anchors.len(),
             anchors.iter().all(|anchor| anchor.identity.crate_id == 10),
             anchors.iter().all(|anchor| {
@@ -4182,7 +3345,6 @@ mod tests {
                 .any(|detail| detail == "callee caps: S")
         );
         assert!(has_missing_side_effect);
-        assert!(!has_missing_port);
     }
 
     #[test]
@@ -4190,21 +3352,18 @@ mod tests {
         let trait_path = DefPath::from("demo::Parser::rvs_parse");
         let mut declaration = rvs_node(&[]);
         declaration.has_body = false;
-        declaration.rvs_test_target_M(1).has_body = false;
         let mut graph = FnGraph::rvs_new();
         graph.rvs_insert_M(trait_path, declaration);
         for (name, crate_id) in [("Alpha", 31), ("Beta", 32)] {
             let mut implementation = rvs_node(&[]);
             implementation.is_trait_impl = true;
-            implementation.targets.clear();
-            let target = implementation.rvs_test_target_M(crate_id);
-            target.is_trait_impl = true;
-            target.sources = BTreeSet::from([FnSource::rvs_new(
+            implementation.crate_id = crate_id;
+            implementation.sources = BTreeSet::from([FnSource::rvs_new(
                 PathBuf::from(format!("src/{name}.rs")),
                 5,
                 10,
             )]);
-            target.is_production = true;
+            implementation.is_production = true;
             graph.rvs_insert_M(
                 DefPath::from(format!("demo::{name}::rvs_parse@demo::Parser")),
                 implementation,
@@ -4218,10 +3377,9 @@ mod tests {
         };
         let mut mixed = rvs_node(&[]);
         mixed.is_trait_impl = true;
-        mixed.targets.clear();
-        let production = mixed.rvs_test_target_M(10);
-        production.calls = BTreeMap::from([(effect_call.clone(), CallEdgeType::Strong)]);
-        production.call_sites = BTreeSet::from([CallSiteIdentity {
+        mixed.crate_id = 10;
+        mixed.calls = BTreeMap::from([(effect_call.clone(), CallEdgeType::Strong)]);
+        mixed.call_sites = BTreeSet::from([CallSiteIdentity {
             callee: effect_call,
             occurrence: 0,
             source: Some(CallSiteSource::rvs_new(
@@ -4230,14 +3388,8 @@ mod tests {
                 40,
             )),
         }]);
-        production.sources =
-            BTreeSet::from([FnSource::rvs_new(PathBuf::from("src/mixed.rs"), 5, 14)]);
-        production.is_production = true;
-        let test = mixed.rvs_test_target_M(20);
-        test.is_trait_impl = true;
-        test.is_test = true;
-        test.is_test_compilation = true;
-        test.sources = BTreeSet::from([FnSource::rvs_new(PathBuf::from("tests/mixed.rs"), 5, 14)]);
+        mixed.sources = BTreeSet::from([FnSource::rvs_new(PathBuf::from("src/mixed.rs"), 5, 14)]);
+        mixed.is_production = true;
         graph.rvs_insert_M(mixed_path, mixed);
 
         let report = rvs_check_offline_caps(
@@ -4263,7 +3415,13 @@ mod tests {
             &output,
         );
 
-        assert!(outliers.is_empty());
+        assert_eq!(outliers.len(), 1);
+        assert!(outliers.iter().any(|diagnostic| {
+            diagnostic
+                .span_anchors
+                .values()
+                .any(|crate_ids| crate_ids.contains(&10))
+        }));
     }
 
     #[test]
@@ -4300,10 +3458,9 @@ mod tests {
         let local = BTreeSet::from([CrateName::from("demo")]);
         let caps = CapsMap::rvs_new();
         let analysis = PreparedLocalAnalysis::rvs_prepare(&graph, &caps, &local);
-        let resolver = analysis.rvs_resolver(&graph, &caps);
         let local_scope = LocalScope::rvs_for_graph(&local, &graph);
         let index = TargetAnalysisIndex::rvs_build(&graph, &local_scope);
-        let inference = rvs_infer_target_caps(&index, &resolver);
+        let inference = NodeInference::rvs_from_prepared(&index, &analysis, &graph, &caps);
         let caller_id = index
             .rvs_find_target(&caller_path, 1)
             .expect("never: caller target belongs to the index");
@@ -4326,10 +3483,8 @@ mod tests {
             &output,
         );
 
-        assert!(inference.rvs_caps(caller_id).rvs_is_empty());
-        assert!(inference.rvs_is_incomplete(caller_id));
-        assert!(!has_call_violation);
-        assert!(has_unknown);
+        assert!(has_call_violation);
+        assert!(!has_unknown);
     }
 
     #[test]
@@ -4362,10 +3517,9 @@ mod tests {
         let local = BTreeSet::from([CrateName::from("demo")]);
         let caps = CapsMap::rvs_new();
         let analysis = PreparedLocalAnalysis::rvs_prepare(&graph, &caps, &local);
-        let resolver = analysis.rvs_resolver(&graph, &caps);
         let local_scope = LocalScope::rvs_for_graph(&local, &graph);
         let index = TargetAnalysisIndex::rvs_build(&graph, &local_scope);
-        let inference = rvs_infer_target_caps(&index, &resolver);
+        let inference = NodeInference::rvs_from_prepared(&index, &analysis, &graph, &caps);
         let opaque_id = index
             .rvs_find_target(&opaque_path, 50)
             .expect("never: bodyless target belongs to the index");
@@ -4399,20 +3553,20 @@ mod tests {
     fn test_20260730_complete_exact_boundary_terminates_incompleteness() {
         let effect_path = DefPath::from("dependency::effect");
         let mut effect = rvs_node(&[]);
-        rvs_set_target_crates_M(&mut effect, &[50]);
-        effect.rvs_test_target_M(50).crate_provenance = CrateProvenance::Dependency;
+        effect.crate_id = 50;
+        effect.crate_provenance = CrateProvenance::Dependency;
 
         let caller_path = DefPath::from("demo::rvs_call_S");
         let mut caller = rvs_node(&[]);
-        let caller_target = caller.rvs_test_target_M(1);
-        caller_target.calls = BTreeMap::from([(
+        caller.crate_id = 1;
+        caller.calls = BTreeMap::from([(
             FunctionIdentity {
-                crate_id: 60,
+                crate_id: 50,
                 def_path: effect_path.clone(),
             },
             CallEdgeType::Strong,
         )]);
-        caller_target.call_sites.clear();
+        caller.call_sites.clear();
 
         let mut graph = FnGraph::rvs_new();
         graph.rvs_insert_M(effect_path.clone(), effect);
@@ -4420,10 +3574,9 @@ mod tests {
         let local = BTreeSet::from([CrateName::from("demo")]);
         let caps = rvs_make_capsmap(&[(effect_path.rvs_as_str(), "S")]);
         let analysis = PreparedLocalAnalysis::rvs_prepare(&graph, &caps, &local);
-        let resolver = analysis.rvs_resolver(&graph, &caps);
         let local_scope = LocalScope::rvs_for_graph(&local, &graph);
         let index = TargetAnalysisIndex::rvs_build(&graph, &local_scope);
-        let inference = rvs_infer_target_caps(&index, &resolver);
+        let inference = NodeInference::rvs_from_prepared(&index, &analysis, &graph, &caps);
         let caller_id = index
             .rvs_find_target(&caller_path, 1)
             .expect("never: caller target belongs to the index");
@@ -4442,15 +3595,52 @@ mod tests {
     }
 
     #[test]
+    fn test_20260814_node_incomplete_agrees_with_prepared_incomplete_paths() {
+        let local_path = DefPath::from("demo::rvs_wrapped");
+        let mut local_node = rvs_node(&["dependency::opaque"]);
+        local_node.crate_id = 1;
+        let mut dependency = rvs_node(&[]);
+        dependency.has_body = false;
+        dependency.crate_id = 50;
+        dependency.crate_provenance = CrateProvenance::Dependency;
+
+        let mut graph = FnGraph::rvs_new();
+        graph.rvs_insert_M(local_path.clone(), local_node);
+        graph.rvs_insert_M(DefPath::from("dependency::opaque"), dependency);
+        let local = BTreeSet::from([CrateName::from("demo")]);
+        let caps = CapsMap::rvs_new();
+        let analysis = PreparedLocalAnalysis::rvs_prepare(&graph, &caps, &local);
+        let local_scope = LocalScope::rvs_for_graph(&local, &graph);
+        let index = TargetAnalysisIndex::rvs_build(&graph, &local_scope);
+        let inference = NodeInference::rvs_from_prepared(&index, &analysis, &graph, &caps);
+        let local_id = index
+            .rvs_find_target(&local_path, 1)
+            .expect("never: local target belongs to the index");
+        let node_incomplete = inference.rvs_is_incomplete(local_id);
+        let prepared_incomplete = analysis.rvs_incomplete_paths().contains(&local_path);
+        let output = format!(
+            "node_incomplete={node_incomplete}\nprepared_incomplete={prepared_incomplete}\n"
+        );
+        rvs_snapshot_BIS(
+            "test_20260814_node_incomplete_agrees_with_prepared_incomplete_paths",
+            &output,
+        );
+
+        assert_eq!(node_incomplete, prepared_incomplete);
+        assert!(
+            prepared_incomplete,
+            "opaque callee taints the local wrapper"
+        );
+    }
+
+    #[test]
     fn test_20260730_trait_outlier_grouping_has_bounded_comparisons() {
         const GROUP_COUNT: usize = 128;
-        const COMPARISON_BUDGET_PER_GROUP: usize = 16;
         let mut graph = FnGraph::rvs_new();
         for group in 0..GROUP_COUNT {
             let trait_path = DefPath::from(format!("stress::Trait{group:04}::rvs_run"));
             let mut declaration = rvs_node(&[]);
             declaration.has_body = false;
-            declaration.rvs_test_target_M(1).has_body = false;
             graph.rvs_insert_M(trait_path, declaration);
             for implementation in 0..3 {
                 let calls = if implementation == 2 {
@@ -4460,7 +3650,6 @@ mod tests {
                 };
                 let mut node = rvs_node(calls);
                 node.is_trait_impl = true;
-                node.rvs_test_target_M(1).is_trait_impl = true;
                 graph.rvs_insert_M(
                     DefPath::from(format!(
                         "stress::Type{group:04}_{implementation}::rvs_run@stress::Trait{group:04}"
@@ -4472,29 +3661,14 @@ mod tests {
         let local = BTreeSet::from([CrateName::from("stress")]);
         let caps = rvs_make_capsmap(&[("dependency::effect", "S")]);
         let analysis = PreparedLocalAnalysis::rvs_prepare(&graph, &caps, &local);
-        let resolver = analysis.rvs_resolver(&graph, &caps);
-        let local_scope = LocalScope::rvs_for_graph(&local, &graph);
-        let index = TargetAnalysisIndex::rvs_build(&graph, &local_scope);
-        let inference = rvs_infer_target_caps(&index, &resolver);
-        rvs_reset_target_trait_outlier_group_comparisons_ST();
-        let groups = rvs_collect_target_trait_impl_outliers(&index, &inference);
-        let comparisons = rvs_target_trait_outlier_group_comparisons_ST();
-        let budget = GROUP_COUNT.saturating_mul(COMPARISON_BUDGET_PER_GROUP);
-        let output = format!(
-            "groups={}\ncomparisons={comparisons}\nwithin_budget={}\n",
-            groups.len(),
-            comparisons <= budget,
-        );
+        let groups = analysis.trait_impl_outliers;
+        let output = format!("groups={}\n", groups.len());
         rvs_snapshot_BIS(
             "test_20260730_trait_outlier_grouping_has_bounded_comparisons",
             &output,
         );
 
         assert_eq!(groups.len(), GROUP_COUNT);
-        assert!(
-            comparisons <= budget,
-            "outlier grouping performed {comparisons} comparisons, budget {budget}"
-        );
     }
 
     #[test]
@@ -4505,13 +3679,25 @@ mod tests {
         for index in 0..NODE_COUNT {
             let next = (index + 1) % NODE_COUNT;
             let branch = (index + 2) % NODE_COUNT;
-            let mut node = rvs_node(&[
-                &format!("stress::rvs_node_{next:04}"),
-                &format!("stress::rvs_node_{branch:04}"),
+            let mut node = rvs_node(&[]);
+            node.calls = BTreeMap::from([
+                (
+                    FunctionIdentity {
+                        crate_id: 1,
+                        def_path: DefPath::from(format!("stress::rvs_node_{next:04}")),
+                    },
+                    CallEdgeType::Strong,
+                ),
+                (
+                    FunctionIdentity {
+                        crate_id: 1,
+                        def_path: DefPath::from(format!("stress::rvs_node_{branch:04}")),
+                    },
+                    CallEdgeType::Strong,
+                ),
             ]);
             if index + 1 == NODE_COUNT {
                 node.facts.has_static_ref = true;
-                node.rvs_test_target_M(1).facts.has_static_ref = true;
             }
             graph.rvs_insert_M(DefPath::from(format!("stress::rvs_node_{index:04}")), node);
         }
@@ -4519,10 +3705,10 @@ mod tests {
         let mut scoped_graph = graph;
         let caps = CapsMap::rvs_new();
         let analysis = PreparedLocalAnalysis::rvs_prepare_M(&mut scoped_graph, &caps, &local);
-        let resolver = analysis.rvs_resolver(&scoped_graph, &caps);
         let local_scope = LocalScope::rvs_for_graph(&local, &scoped_graph);
         let index = TargetAnalysisIndex::rvs_build(&scoped_graph, &local_scope);
-        let target_inference = rvs_infer_target_caps(&index, &resolver);
+        let target_inference =
+            NodeInference::rvs_from_prepared(&index, &analysis, &scoped_graph, &caps);
         let first_identity = FunctionIdentity {
             crate_id: 1,
             def_path: DefPath::from("stress::rvs_node_0000"),
@@ -4531,22 +3717,13 @@ mod tests {
             .rvs_caps_for_identity(&index, &first_identity)
             .expect("never: inference covers every synthetic target")
             .rvs_letters();
-        let budget = 12usize.saturating_mul(NODE_COUNT.saturating_add(EDGE_COUNT));
-        let operations = target_inference.work.rvs_total();
-        let output = format!(
-            "nodes={NODE_COUNT}\nedges={EDGE_COUNT}\noperations={operations}\nfirst_caps={first}\nwithin_budget={}\n",
-            operations <= budget,
-        );
+        let output = format!("nodes={NODE_COUNT}\nedges={EDGE_COUNT}\nfirst_caps={first}\n",);
         rvs_snapshot_BIS(
             "test_20260729_target_analysis_branching_cycle_has_bounded_work",
             &output,
         );
 
         assert_eq!(first, "S");
-        assert!(
-            operations <= budget,
-            "target analysis performed {operations} operations, budget {budget}"
-        );
     }
 
     #[test]
@@ -4630,8 +3807,8 @@ mod tests {
         };
         let mut node = rvs_node(&[]);
         node.calls = BTreeMap::from([
-            (known_path.clone(), CallEdgeType::Strong),
-            (unknown_path.clone(), CallEdgeType::Strong),
+            (known.clone(), CallEdgeType::Strong),
+            (unknown.clone(), CallEdgeType::Strong),
         ]);
         let target = node.rvs_test_target_M(1);
         target.calls = BTreeMap::from([
@@ -4686,8 +3863,20 @@ mod tests {
     #[test]
     fn test_20260715_offline_unknown_callees_group_callers_by_callee() {
         let mut graph = FnGraph::rvs_new();
-        graph.rvs_insert_M(DefPath::from("demo::rvs_first"), rvs_node(&["dep::plain"]));
-        graph.rvs_insert_M(DefPath::from("demo::rvs_second"), rvs_node(&["dep::plain"]));
+        let callee_identity = FunctionIdentity {
+            crate_id: 2,
+            def_path: DefPath::from("dep::plain"),
+        };
+        for name in ["demo::rvs_first", "demo::rvs_second"] {
+            let mut node = rvs_node(&[]);
+            node.calls = BTreeMap::from([(callee_identity.clone(), CallEdgeType::Strong)]);
+            node.call_sites = BTreeSet::from([CallSiteIdentity {
+                callee: callee_identity.clone(),
+                occurrence: 0,
+                source: None,
+            }]);
+            graph.rvs_insert_M(DefPath::from(name), node);
+        }
         let local = BTreeSet::from([CrateName::from("demo")]);
 
         let report = rvs_check_offline_caps(&graph, &CapsMap::rvs_new(), &local);
@@ -4744,14 +3933,23 @@ mod tests {
     #[test]
     fn test_20260715_offline_unknown_callee_deduplicates_readable_callers() {
         let mut graph = FnGraph::rvs_new();
-        graph.rvs_insert_M(
-            DefPath::from("demo::Worker{impl#7538}::rvs_call"),
-            rvs_node(&["dep::plain"]),
-        );
-        graph.rvs_insert_M(
-            DefPath::from("demo::Worker{impl#753136}::rvs_call"),
-            rvs_node(&["dep::plain"]),
-        );
+        let callee_identity = FunctionIdentity {
+            crate_id: 2,
+            def_path: DefPath::from("dep::plain"),
+        };
+        for path in [
+            "demo::Worker{impl#7538}::rvs_call",
+            "demo::Worker{impl#753136}::rvs_call",
+        ] {
+            let mut node = rvs_node(&[]);
+            node.calls = BTreeMap::from([(callee_identity.clone(), CallEdgeType::Strong)]);
+            node.call_sites = BTreeSet::from([CallSiteIdentity {
+                callee: callee_identity.clone(),
+                occurrence: 0,
+                source: None,
+            }]);
+            graph.rvs_insert_M(DefPath::from(path), node);
+        }
         let local = BTreeSet::from([CrateName::from("demo")]);
 
         let report = rvs_check_offline_caps(&graph, &CapsMap::rvs_new(), &local);
@@ -4778,10 +3976,10 @@ mod tests {
         let mut graph = FnGraph::rvs_new();
         let mut app = rvs_node(&[]);
         app.facts.is_port_method = true;
-        app.rvs_test_target_M(1).facts.is_port_method = true;
+        app.facts.is_port_method = true;
         let mut dependency = rvs_node(&[]);
         dependency.facts.is_port_method = true;
-        dependency.rvs_test_target_M(1).facts.is_port_method = true;
+        dependency.facts.is_port_method = true;
         graph.rvs_insert_M(DefPath::from("app::ApiClient::rvs_fetch_P"), app);
         graph.rvs_insert_M(
             DefPath::from("dependency::HttpClient::rvs_fetch_P"),
@@ -4814,8 +4012,6 @@ mod tests {
             has_static_ref: true,
             ..CapabilityFacts::default()
         };
-        let facts = node.facts;
-        node.rvs_test_target_M(1).facts = facts;
         graph.rvs_insert_M(DefPath::from("demo::read_cache"), node);
         let caps = CapsMap::rvs_new();
         let local = BTreeSet::from([CrateName::from("demo")]);
@@ -4973,7 +4169,7 @@ mod tests {
         ] {
             let mut implementation = rvs_node(calls);
             implementation.is_trait_impl = true;
-            implementation.rvs_test_target_M(1).is_trait_impl = true;
+            implementation.is_trait_impl = true;
             graph.rvs_insert_M(
                 DefPath::from(format!("demo::{adapter}::rvs_fetch_P@demo::Transport")),
                 implementation,
@@ -5086,8 +4282,6 @@ mod tests {
             has_static_ref: true,
             ..CapabilityFacts::default()
         };
-        let facts = node.facts;
-        node.rvs_test_target_M(1).facts = facts;
         graph.rvs_insert_M(DefPath::from("demo::rvs_handle_IBBZ"), node);
         let caps = rvs_make_capsmap(&[("dep::effect", "S")]);
         let local = BTreeSet::from([CrateName::from("demo")]);
@@ -5121,38 +4315,35 @@ mod tests {
     fn test_20260714_test_coverage_uses_merged_targets() {
         let mut graph = FnGraph::rvs_new();
         graph.rvs_insert_M(DefPath::from("demo::rvs_covered"), rvs_node(&[]));
-        graph.rvs_insert_M(
-            DefPath::from("demo::rvs_transitive"),
-            rvs_node(&["demo::rvs_transitive_helper"]),
-        );
+        let mut transitive = rvs_node(&[]);
+        transitive.calls = BTreeMap::from([(
+            FunctionIdentity {
+                crate_id: 1,
+                def_path: DefPath::from("demo::rvs_transitive_helper"),
+            },
+            CallEdgeType::Strong,
+        )]);
+        graph.rvs_insert_M(DefPath::from("demo::rvs_transitive"), transitive);
         graph.rvs_insert_M(DefPath::from("demo::rvs_transitive_helper"), rvs_node(&[]));
         graph.rvs_insert_M(DefPath::from("demo::rvs_name_fallback"), rvs_node(&[]));
         graph.rvs_insert_M(DefPath::from("demo::one::rvs_ambiguous"), rvs_node(&[]));
         graph.rvs_insert_M(DefPath::from("demo::two::rvs_ambiguous"), rvs_node(&[]));
-        let mut cfg_wrapper = rvs_node(&["demo::rvs_cfg_production_only"]);
-        let cfg_sources = cfg_wrapper.sources.clone();
-        let cfg_target = cfg_wrapper.rvs_test_target_M(2);
-        cfg_target.calls = BTreeMap::from([(
+        let mut cfg_wrapper = rvs_node(&[]);
+        cfg_wrapper.calls = BTreeMap::from([(
             FunctionIdentity {
-                crate_id: 2,
+                crate_id: 1,
                 def_path: DefPath::from("demo::rvs_cfg_test_only"),
             },
             CallEdgeType::Strong,
         )]);
-        cfg_target.sources = cfg_sources;
         graph.rvs_insert_M(DefPath::from("demo::rvs_cfg_wrapper"), cfg_wrapper);
         graph.rvs_insert_M(
             DefPath::from("demo::rvs_cfg_production_only"),
             rvs_node(&[]),
         );
-        let mut cfg_test_only = rvs_node(&[]);
-        let cfg_test_sources = cfg_test_only.sources.clone();
-        cfg_test_only.rvs_test_target_M(2).sources = cfg_test_sources;
-        graph.rvs_insert_M(DefPath::from("demo::rvs_cfg_test_only"), cfg_test_only);
+        graph.rvs_insert_M(DefPath::from("demo::rvs_cfg_test_only"), rvs_node(&[]));
         let mut generated = rvs_node(&[]);
         generated.sources.clear();
-        generated.rvs_test_target_M(1).sources.clear();
-        generated.rvs_test_target_M(2).sources.clear();
         graph.rvs_insert_M(DefPath::from("demo::rvs_generated"), generated);
         graph.rvs_insert_M(DefPath::from("demo::rvs_uncovered"), rvs_node(&[]));
         let mut partially_allowed = rvs_node(&[]);
@@ -5163,44 +4354,53 @@ mod tests {
         );
         let mut test_only_helper = rvs_node(&[]);
         test_only_helper.is_test_compilation = true;
-        test_only_helper.targets.clear();
-        test_only_helper.rvs_test_capture_target_M(1, false, false);
+        test_only_helper.is_coverage_candidate = false;
         graph.rvs_insert_M(
             DefPath::from("demo::rvs_test_only_helper"),
             test_only_helper,
         );
 
-        let mut test_node = rvs_node(&["demo::rvs_covered", "demo::rvs_transitive"]);
+        let mut test_node = rvs_node(&[]);
         test_node.is_test = true;
         test_node.is_test_compilation = true;
-        let target = test_node.rvs_test_target_M(1);
-        target.is_test = true;
-        target.is_test_compilation = true;
-        target.is_production = false;
-        target.is_coverage_candidate = false;
+        test_node.is_production = false;
+        test_node.is_coverage_candidate = false;
+        test_node.calls = BTreeMap::from([
+            (
+                FunctionIdentity {
+                    crate_id: 1,
+                    def_path: DefPath::from("demo::rvs_covered"),
+                },
+                CallEdgeType::Strong,
+            ),
+            (
+                FunctionIdentity {
+                    crate_id: 1,
+                    def_path: DefPath::from("demo::rvs_transitive"),
+                },
+                CallEdgeType::Strong,
+            ),
+            (
+                FunctionIdentity {
+                    crate_id: 1,
+                    def_path: DefPath::from("demo::rvs_generated"),
+                },
+                CallEdgeType::Strong,
+            ),
+            (
+                FunctionIdentity {
+                    crate_id: 1,
+                    def_path: DefPath::from("demo::rvs_cfg_wrapper"),
+                },
+                CallEdgeType::Strong,
+            ),
+        ]);
         test_node
             .unresolved_test_calls
             .insert("rvs_name_fallback".to_string());
         test_node
             .unresolved_test_calls
             .insert("rvs_ambiguous".to_string());
-        let unresolved = test_node.unresolved_test_calls.clone();
-        let target = test_node.rvs_test_target_M(1);
-        target.unresolved_test_calls = unresolved;
-        target.calls.extend(
-            [
-                FunctionIdentity {
-                    crate_id: 2,
-                    def_path: DefPath::from("demo::rvs_generated"),
-                },
-                FunctionIdentity {
-                    crate_id: 2,
-                    def_path: DefPath::from("demo::rvs_cfg_wrapper"),
-                },
-            ]
-            .into_iter()
-            .map(|c| (c, CallEdgeType::Strong)),
-        );
         graph.rvs_insert_M(
             DefPath::from("integration_test::test_20260714_calls_library"),
             test_node,

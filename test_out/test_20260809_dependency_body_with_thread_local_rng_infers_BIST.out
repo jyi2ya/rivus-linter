@@ -1,2 +1,4 @@
+fastrand::Rng::new = ST (incomplete=false)
 tempfile::Builder::tempdir_in = BIST (incomplete=false)
+tempfile::util::create_helper = BIST (incomplete=false)
 unknown_count=0

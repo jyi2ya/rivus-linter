@@ -1222,6 +1222,21 @@ fn rvs_prepare_cargo_check_command_BIMST(
     }
 
     cmd.arg("check");
+    let needs_test_profile = match &config.mode {
+        CargoCheckMode::Lint(_) => true,
+        CargoCheckMode::Callgraph {
+            collection: CallgraphCollectionMode::Workspace,
+            ..
+        } => true,
+        CargoCheckMode::Callgraph {
+            collection:
+                CallgraphCollectionMode::AllCrates | CallgraphCollectionMode::StandardLibrary,
+            ..
+        } => false,
+    };
+    if needs_test_profile {
+        cmd.arg("--profile").arg("test");
+    }
     if let Some(arg) = config.target_scope.rvs_cargo_check_arg() {
         cmd.arg(arg);
     }
@@ -2175,7 +2190,7 @@ pub(crate) fn rvs_clean_dir_BIS(path: &Path) -> Result<(), String> {
 }
 
 /// Validate that `path` is a directory, returning an error message if not.
-pub(crate) fn rvs_ensure_project_dir_BS(path: &Path) -> Result<(), String> {
+pub(crate) fn rvs_ensure_project_dir_BIS(path: &Path) -> Result<(), String> {
     if !path.is_dir() {
         return Err(format!("'{}' is not a directory", path.display()));
     }
@@ -2183,7 +2198,7 @@ pub(crate) fn rvs_ensure_project_dir_BS(path: &Path) -> Result<(), String> {
 }
 
 pub(crate) fn rvs_ensure_cargo_project_BIS(path: &Path) -> Result<(), String> {
-    rvs_ensure_project_dir_BS(path)?;
+    rvs_ensure_project_dir_BIS(path)?;
     let cargo_toml = path.join("Cargo.toml");
     if !cargo_toml.is_file() {
         return Err(format!("'{}' is not a Cargo project", path.display()));
@@ -2199,7 +2214,7 @@ pub(crate) fn rvs_canonical_cargo_project_BIS(path: &Path) -> Result<PathBuf, St
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::artifacts::CallEdgeType;
+    use crate::artifacts::{CallEdgeType, FunctionIdentity};
     use crate::test_support::{
         rvs_caps_v2, rvs_make_cargo_project_BIS, rvs_make_temp_dir_BIS, rvs_snapshot_BIS,
     };
@@ -2237,10 +2252,10 @@ mod tests {
     fn rvs_targeted_test_node(crate_id: u64) -> crate::artifacts::FnNode {
         debug_assert!(crate_id > 0, "test target crate id is nonzero");
         let mut node = crate::artifacts::FnNode::default();
-        let target = node.rvs_test_target_M(crate_id);
-        target.is_production = true;
-        target.is_coverage_candidate = true;
-        target.crate_provenance = crate::artifacts::CrateProvenance::Dependency;
+        node.crate_id = crate_id;
+        node.is_production = true;
+        node.is_coverage_candidate = true;
+        node.crate_provenance = crate::artifacts::CrateProvenance::Dependency;
         node
     }
 
@@ -2253,13 +2268,8 @@ mod tests {
         };
         std_node
             .calls
-            .insert(support_path.clone(), CallEdgeType::Strong);
-        std_node
-            .rvs_test_target_M(1)
-            .calls
             .insert(support_identity.clone(), CallEdgeType::Strong);
         std_node
-            .rvs_test_target_M(1)
             .call_sites
             .insert(crate::artifacts::CallSiteIdentity {
                 callee: support_identity,
@@ -2274,13 +2284,11 @@ mod tests {
         };
         support_node
             .calls
-            .insert(boundary_path, CallEdgeType::Strong);
+            .insert(boundary_identity.clone(), CallEdgeType::Strong);
         support_node
-            .rvs_test_target_M(2)
             .calls
             .insert(boundary_identity.clone(), CallEdgeType::Strong);
         support_node
-            .rvs_test_target_M(2)
             .call_sites
             .insert(crate::artifacts::CallSiteIdentity {
                 callee: boundary_identity,
@@ -2486,11 +2494,11 @@ mod tests {
 
         assert!(paths.iter().any(|path| path == "local_app::rvs_local"));
         assert!(!paths.iter().any(|path| path.starts_with("fixture_dep::")));
-        assert!(
-            graph
-                .rvs_get("local_app::rvs_local")
-                .is_some_and(|node| node.calls.contains_key("fixture_dep::dependency_helper"))
-        );
+        assert!(graph.rvs_get("local_app::rvs_local").is_some_and(|node| {
+            node.calls.keys().any(|identity| {
+                identity.def_path == crate::symbols::DefPath::from("fixture_dep::dependency_helper")
+            })
+        }));
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -2685,7 +2693,7 @@ mod tests {
     }
 
     #[test]
-    fn test_20260714_merged_coverage_distinguishes_same_path_targets() {
+    fn test_20260714_merged_coverage_conservatively_merges_same_path_targets() {
         let dir = rvs_make_workspace_temp_dir_BIS("merged-coverage-target-identity");
         std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::write(
@@ -2710,29 +2718,27 @@ mod tests {
             .output()
             .unwrap();
         let stderr = String::from_utf8_lossy(&output.stderr);
-        let warning = "good fn 'rvs_same' not called by any test";
-        let warning_count = stderr.matches(warning).count();
+        let has_merge_conflict =
+            stderr.contains("conflicting ordinary definitions across Cargo targets");
         let report_output = Command::new(rvs_current_wrapper_exe_BIS().unwrap())
             .arg("report")
             .arg(&dir)
             .output()
             .unwrap();
         let report_stdout = String::from_utf8_lossy(&report_output.stdout);
-        let report_counts_both = report_stdout.contains("Total: 2 functions, 2 lines");
+        let report_counts_both = report_stdout.contains("Total: 1 functions, 1 lines");
         let summary = format!(
-            "success={}\nwarning_count={warning_count}\nmerge_conflict={}\nreport_success={}\nreport_counts_both={report_counts_both}\n",
+            "success={}\nmerge_conflict={has_merge_conflict}\nreport_success={}\nreport_counts_both={report_counts_both}\n",
             output.status.success(),
-            stderr.contains("conflicting ordinary definitions across Cargo targets"),
             report_output.status.success(),
         );
         rvs_snapshot_BIS(
-            "test_20260714_merged_coverage_distinguishes_same_path_targets",
+            "test_20260714_merged_coverage_conservatively_merges_same_path_targets",
             &summary,
         );
 
         assert!(output.status.success());
-        assert_eq!(warning_count, 1, "{stderr}");
-        assert!(!stderr.contains("conflicting ordinary definitions across Cargo targets"));
+        assert!(!has_merge_conflict);
         assert!(report_output.status.success(), "{report_stdout}");
         assert!(report_counts_both, "{report_stdout}");
         std::fs::remove_dir_all(dir).unwrap();
@@ -3085,29 +3091,25 @@ name = "throughput-bench"
                 "default",
                 "[package]\nname = \"default-build\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
                 Some("build.rs"),
-                true,
             ),
             (
                 "absent",
                 "[package]\nname = \"absent-build\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
                 None,
-                false,
             ),
             (
                 "explicit",
                 "[package]\nname = \"explicit-build\"\nversion = \"0.1.0\"\nedition = \"2024\"\nbuild = \"build/custom.rs\"\n",
                 Some("build/custom.rs"),
-                true,
             ),
             (
                 "disabled",
                 "[package]\nname = \"disabled-build\"\nversion = \"0.1.0\"\nedition = \"2024\"\nbuild = false\n",
                 Some("build.rs"),
-                false,
             ),
         ];
         let mut output = String::new();
-        for (label, manifest, build_path, expected_build_script) in cases {
+        for (label, manifest, build_path) in cases {
             let dir = root.join(label);
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(dir.join("Cargo.toml"), manifest).unwrap();
@@ -3130,10 +3132,9 @@ name = "throughput-bench"
                 .collect::<Vec<_>>()
                 .join(",");
             output.push_str(&format!("{label}={rendered}\n"));
-            assert_eq!(
-                prefixes.contains(&CrateName::from("build_script_build")),
-                expected_build_script,
-                "{label}"
+            assert!(
+                !prefixes.contains(&CrateName::from("build_script_build")),
+                "build-script crates are excluded from local prefixes: {label}"
             );
         }
         rvs_snapshot_BIS(
@@ -3145,7 +3146,7 @@ name = "throughput-bench"
     }
 
     #[test]
-    fn test_20260715_build_script_artifact_uses_shared_local_scope() {
+    fn test_20260715_build_script_functions_are_excluded() {
         let dir = rvs_make_cargo_project_BIS(
             "build-script-shared-scope",
             "build-script-shared-scope",
@@ -3166,35 +3167,60 @@ name = "throughput-bench"
         )
         .unwrap();
         let path = crate::symbols::DefPath::from("build_script_build::rvs_build_helper");
-        let node = callgraph
-            .rvs_get(path.rvs_as_str())
-            .expect("never: build script helper should be collected");
-        let classification = crate::function_classification::FunctionClassification::rvs_new(
-            &LocalScope::rvs_new(&local_crate_names),
-            &path,
-            node,
-        );
         let output = format!(
-            "prefix={}\nartifact={}\noffline={}\nreport={}\nstrip={}\n",
+            "prefix={}\nartifact={}\n",
             local_crate_names.contains(&CrateName::from("build_script_build")),
             callgraph.rvs_get(path.rvs_as_str()).is_some(),
-            classification.rvs_is_offline_checked(),
-            classification.rvs_is_report_candidate(),
-            classification.rvs_is_strip_candidate(),
         );
-        rvs_snapshot_BIS(
-            "test_20260715_build_script_artifact_uses_shared_local_scope",
-            &output,
-        );
+        rvs_snapshot_BIS("test_20260715_build_script_functions_are_excluded", &output);
 
-        assert!(classification.rvs_is_offline_checked());
-        assert!(classification.rvs_is_report_candidate());
-        assert!(classification.rvs_is_strip_candidate());
+        assert!(!local_crate_names.contains(&CrateName::from("build_script_build")));
+        assert!(
+            callgraph.rvs_get(path.rvs_as_str()).is_none(),
+            "build-script helper must not enter the callgraph"
+        );
+        assert!(callgraph.rvs_get("build_script_build::main").is_none());
         std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
-    fn test_20260729_all_crates_build_script_scope_uses_package_identity() {
+    fn test_20260814_ordinary_package_named_build_script_build_is_analyzed() {
+        let dir = rvs_make_cargo_project_BIS(
+            "ordinary-build-script-build",
+            "build-script-build",
+            &[(
+                "src/lib.rs",
+                "#![allow(non_snake_case)]\npub fn rvs_value() -> u8 { 1 }\n",
+            )],
+        );
+        let local_crate_names =
+            rvs_load_local_crate_prefixes_BIS(&dir, CargoTargetScope::Production).unwrap();
+        let callgraph = rvs_collect_workspace_callgraph_BIST(
+            &dir,
+            CargoTargetScope::Production,
+            &local_crate_names,
+        )
+        .unwrap();
+        let output = format!(
+            "prefix={}\nnode={}\n",
+            local_crate_names.contains(&CrateName::from("build_script_build")),
+            callgraph.rvs_get("build_script_build::rvs_value").is_some(),
+        );
+        rvs_snapshot_BIS(
+            "test_20260814_ordinary_package_named_build_script_build_is_analyzed",
+            &output,
+        );
+
+        assert!(local_crate_names.contains(&CrateName::from("build_script_build")));
+        assert!(
+            callgraph.rvs_get("build_script_build::rvs_value").is_some(),
+            "an ordinary package named build-script-build must be analyzed, not excluded"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260729_all_crates_excludes_build_script_nodes() {
         let dir = rvs_make_workspace_temp_dir_BIS("build-script-package-identity");
         std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::create_dir_all(dir.join("fixture-dep/src")).unwrap();
@@ -3238,62 +3264,23 @@ name = "throughput-bench"
             &local_crate_names,
         )
         .unwrap();
-        let path = crate::symbols::DefPath::from("build_script_build::rvs_shared_helper");
-        let node = graph
-            .rvs_get(path.rvs_as_str())
-            .expect("never: both build script helper records are merged by DefPath");
-        let scope = LocalScope::rvs_new(&local_crate_names);
-        let dependency_root = dir.join("fixture-dep").canonicalize().unwrap();
-        let mut local_checked = None;
-        let mut dependency_checked = None;
-        let mut local_provenance = None;
-        let mut dependency_provenance = None;
-        for (crate_id, target) in &node.targets {
-            let source = target
-                .sources
-                .first()
-                .expect("never: source-defined build helper has a source record");
-            let source_path = if source.file.is_absolute() {
-                source.file.clone()
-            } else {
-                source
-                    .base
-                    .as_deref()
-                    .expect("never: relative source has an exact rustc working directory")
-                    .join(&source.file)
-            };
-            let classification =
-                crate::function_classification::FunctionClassification::rvs_new_for_crate(
-                    &scope, &path, node, *crate_id,
-                );
-            if source_path.starts_with(&dependency_root) {
-                dependency_checked = Some(classification.rvs_is_offline_checked());
-                dependency_provenance = Some(target.crate_provenance);
-            } else {
-                local_checked = Some(classification.rvs_is_offline_checked());
-                local_provenance = Some(target.crate_provenance);
-            }
-        }
-        let output = format!(
-            "target_count={}\nlocal_provenance={local_provenance:?}\ndependency_provenance={dependency_provenance:?}\nlocal_offline={local_checked:?}\ndependency_offline={dependency_checked:?}\n",
-            node.targets.len(),
-        );
+        let build_script_nodes: Vec<String> = graph
+            .rvs_keys()
+            .filter(|path| path.rvs_is_build_script_crate())
+            .map(|path| path.rvs_as_str().to_string())
+            .collect();
+        let output = format!("build_script_nodes={build_script_nodes:?}\n");
         rvs_snapshot_BIS(
-            "test_20260729_all_crates_build_script_scope_uses_package_identity",
+            "test_20260729_all_crates_excludes_build_script_nodes",
             &output,
         );
 
-        assert_eq!(node.targets.len(), 2);
-        assert_eq!(
-            local_provenance,
-            Some(crate::artifacts::CrateProvenance::PrimaryPackage)
+        assert!(
+            build_script_nodes.is_empty(),
+            "local and dependency build scripts must both be excluded from the graph"
         );
-        assert_eq!(
-            dependency_provenance,
-            Some(crate::artifacts::CrateProvenance::Dependency)
-        );
-        assert_eq!(local_checked, Some(true));
-        assert_eq!(dependency_checked, Some(false));
+        assert!(graph.rvs_get("local_app::rvs_local").is_some());
+        assert!(graph.rvs_get("fixture_dep::value").is_some());
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -3339,11 +3326,7 @@ name = "throughput-bench"
         let dependency = graph
             .rvs_get("fixture_dep::rvs_dependency")
             .expect("never: path dependency function should be collected");
-        let provenances = dependency
-            .targets
-            .values()
-            .map(|target| target.crate_provenance)
-            .collect::<Vec<_>>();
+        let provenances = vec![dependency.crate_provenance];
         let output = format!("dependency_provenance={provenances:?}\n");
         rvs_snapshot_BIS(
             "test_20260730_cargo_env_cannot_forge_primary_package_provenance",
@@ -3609,7 +3592,7 @@ name = "throughput-bench"
 
         assert_eq!(
             output,
-            "production=check\nall_targets=check --all-targets\n"
+            "production=check --profile test\nall_targets=check --profile test --all-targets\n"
         );
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -4121,7 +4104,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
         .unwrap();
         std::fs::write(
             dir.join("src/lib.rs"),
-            "#![feature(register_tool)]\n#![register_tool(rivus)]\n\nextern crate anyhow as anyhow_alias;\nuse anyhow::{Context, Error, Result};\nuse anyhow::Context as AllowedContext; use anyhow::Error as DeniedError;\n\nmacro_rules! import_anyhow { ($alias:ident) => { use anyhow::Context as $alias; } }\nmod allowed_macro {\n    import_anyhow!(AllowedMacroContext);\n    const _: usize = core::mem::size_of::<AllowedMacroContext>();\n}\n\nimport_anyhow!(DeniedMacroContext);\n\nconst _: usize = core::mem::size_of::<(anyhow_alias::Error, Context, Error, Result, AllowedContext, DeniedError, DeniedMacroContext)>();\n",
+            "#![feature(register_tool)]\n#![register_tool(rivus)]\n\nextern crate anyhow as anyhow_alias;\nuse anyhow::{Context, Error, Result};\nuse anyhow::Context as AllowedContext; use anyhow::Error as DeniedError;\n\nmacro_rules! import_anyhow { ($alias:ident) => { use anyhow::Context as $alias;     }\n}\nmod allowed_macro {\n    import_anyhow!(AllowedMacroContext);\n    const _: usize = core::mem::size_of::<AllowedMacroContext>();\n}\n\nimport_anyhow!(DeniedMacroContext);\n\nconst _: usize = core::mem::size_of::<(anyhow_alias::Error, Context, Error, Result, AllowedContext, DeniedError, DeniedMacroContext)>();\n",
         )
         .unwrap();
         std::fs::write(
@@ -4966,7 +4949,10 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
         let output = format!(
             "dependency_nodes={}\ncall_matches_dependency_node={}\nreadable_path={}\n",
             dependency_methods.len(),
-            caller.calls.contains_key(dependency_method),
+            caller
+                .calls
+                .keys()
+                .any(|identity| identity.def_path == *dependency_method),
             dependency_method,
         );
         rvs_snapshot_BIS(
@@ -4975,7 +4961,12 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
         );
 
         assert_eq!(dependency_methods.len(), 1);
-        assert!(caller.calls.contains_key(dependency_method));
+        assert!(
+            caller
+                .calls
+                .keys()
+                .any(|identity| identity.def_path == *dependency_method)
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -5493,16 +5484,24 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
     #[test]
     fn test_20260710_merge_std_like_callgraph_preserves_existing_node_merge() {
         let mut target_node = crate::artifacts::FnNode::default();
-        target_node
-            .calls
-            .insert("core::rvs_target_call".into(), CallEdgeType::Strong);
+        target_node.calls.insert(
+            FunctionIdentity {
+                crate_id: 1,
+                def_path: crate::symbols::DefPath::from("core::rvs_target_call"),
+            },
+            CallEdgeType::Strong,
+        );
         let mut target = FnGraph::rvs_new();
         target.rvs_insert_M("std::rvs_shared".into(), target_node);
 
         let mut source_node = crate::artifacts::FnNode::default();
-        source_node
-            .calls
-            .insert("alloc::rvs_source_call".into(), CallEdgeType::Strong);
+        source_node.calls.insert(
+            FunctionIdentity {
+                crate_id: 1,
+                def_path: crate::symbols::DefPath::from("alloc::rvs_source_call"),
+            },
+            CallEdgeType::Strong,
+        );
         source_node.facts.has_async = true;
         let mut source = FnGraph::rvs_new();
         source.rvs_insert_M("std::rvs_shared".into(), source_node);
@@ -5518,7 +5517,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
         let calls = merged
             .calls
             .keys()
-            .map(crate::symbols::DefPath::rvs_as_str)
+            .map(|identity| identity.def_path.rvs_as_str())
             .collect::<Vec<_>>()
             .join(",");
         let output = format!(

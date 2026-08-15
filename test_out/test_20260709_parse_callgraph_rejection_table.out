@@ -3,5 +3,3 @@ missing_has_body: Err(StaleLegacyMissingHasBody { def_path: DefPath("my_crate::r
 reversed_source_range: Err(InvalidSourceRange { def_path: DefPath("my_crate::rvs_add"), start: 10, end: 3 })
 empty_source_file: Err(EmptySourceFile { def_path: DefPath("my_crate::rvs_add") })
 empty_source_range: Err(InvalidSourceRange { def_path: DefPath("my_crate::rvs_add"), start: 10, end: 10 })
-empty_function_path: Err(EmptyFunctionPath)
-empty_callee_path: Err(EmptyCalleePath { caller: DefPath("my_crate::rvs_add") })

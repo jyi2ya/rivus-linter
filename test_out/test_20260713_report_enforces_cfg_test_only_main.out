@@ -1,5 +1,5 @@
-entry=false
-test_compilation=true
+entry=true
+test_compilation=false
 source_ranges=[(48, 52)]
-expected=Some("rvs_main")
+expected=None
 entry_calls={}

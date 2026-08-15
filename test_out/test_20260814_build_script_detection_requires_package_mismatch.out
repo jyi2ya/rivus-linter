@@ -1,0 +1,5 @@
+real build script of package demo=true
+ordinary crate named build-script-build=false
+package name uses the normalized form=false
+rustc invoked outside Cargo=false
+ordinary crate path with foreign package=false

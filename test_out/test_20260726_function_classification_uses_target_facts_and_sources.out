@@ -1,2 +1,1 @@
 ordinary_impl: offline=false report=false outlier=true
-port_without_source: offline=false report=true outlier=false

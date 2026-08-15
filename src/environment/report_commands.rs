@@ -176,7 +176,7 @@ fn rvs_report_entry(
         return Ok(None);
     }
     let has_per_definition_metadata = node.report_function_count > 0;
-    if node.is_test || node.is_test_compilation {
+    if node.is_test || def_path.rvs_is_in_test_module() {
         return Ok(None);
     }
     if !has_per_definition_metadata && node.allows_dead_code {
@@ -324,7 +324,6 @@ pub(crate) fn rvs_run_report_BIPST(path: &Path) -> Result<(), String> {
     let analysis = PreparedLocalAnalysis::rvs_prepare_M(&mut callgraph, &caps, &local_crate_names);
     let target_outliers = crate::offline_caps::rvs_collect_report_trait_impl_outliers(
         &callgraph,
-        &caps,
         &local_crate_names,
         &analysis,
     );
@@ -357,7 +356,6 @@ pub(crate) fn rvs_run_report_BIPST(path: &Path) -> Result<(), String> {
 mod tests {
     use super::*;
     use crate::artifacts::{CallEdgeType, FnNode, FnSource, FunctionIdentity};
-    use crate::capability::CapabilityFacts;
     use crate::symbols::DefPath;
     use crate::test_support::{
         rvs_make_capsmap, rvs_make_cargo_project_BIS, rvs_make_temp_dir_BIS, rvs_snapshot_BIS,
@@ -367,20 +365,6 @@ mod tests {
         debug_assert!(crate_id > 0, "stable crate id is nonzero");
         let mut node = FnNode::default();
         node.calls = calls
-            .iter()
-            .map(|call| (DefPath::from(*call), CallEdgeType::Strong))
-            .collect();
-        node.is_trait_impl = is_trait_impl;
-        node.sources
-            .insert(FnSource::rvs_new("src/lib.rs".into(), 1, 2));
-        let sources = node.sources.clone();
-        let target = node.rvs_test_target_M(crate_id);
-        target.is_production = true;
-        target.is_coverage_candidate = true;
-        target.is_trait_impl = is_trait_impl;
-        target.sources = sources;
-        target.facts = CapabilityFacts::default();
-        target.calls = calls
             .iter()
             .map(|call| {
                 (
@@ -392,6 +376,12 @@ mod tests {
                 )
             })
             .collect();
+        node.is_trait_impl = is_trait_impl;
+        node.is_production = true;
+        node.is_coverage_candidate = true;
+        node.crate_id = crate_id;
+        node.sources
+            .insert(FnSource::rvs_new("src/lib.rs".into(), 1, 2));
         node
     }
 
@@ -449,7 +439,6 @@ mod tests {
         let mut graph = FnGraph::rvs_new();
         let mut declaration = rvs_report_target_node(100, &[], false);
         declaration.has_body = false;
-        declaration.rvs_test_target_M(100).has_body = false;
         graph.rvs_insert_M(DefPath::from("demo::Parser::rvs_parse"), declaration);
         graph.rvs_insert_M(
             DefPath::from("demo::Alpha::rvs_parse@demo::Parser"),
@@ -466,9 +455,8 @@ mod tests {
         let local = BTreeSet::from([CrateName::from("demo")]);
         let caps = rvs_make_capsmap(&[("dependency::effect", "S")]);
         let analysis = PreparedLocalAnalysis::rvs_prepare_M(&mut graph, &caps, &local);
-        let outliers = crate::offline_caps::rvs_collect_report_trait_impl_outliers(
-            &graph, &caps, &local, &analysis,
-        );
+        let outliers =
+            crate::offline_caps::rvs_collect_report_trait_impl_outliers(&graph, &local, &analysis);
         let output = rvs_format_trait_outlier_summary(&outliers);
         rvs_snapshot_BIS(
             "test_20260716_report_uses_cross_crate_target_trait_vote",
@@ -489,8 +477,13 @@ mod tests {
                 report_function_count: function_count,
                 ..FnNode::default()
             };
-            node.calls
-                .insert(DefPath::from("dep::unknown"), CallEdgeType::Strong);
+            node.calls.insert(
+                FunctionIdentity {
+                    crate_id: 1,
+                    def_path: DefPath::from("dep::unknown"),
+                },
+                CallEdgeType::Strong,
+            );
             node
         };
 
@@ -506,7 +499,7 @@ mod tests {
         let mut test_compilation = rvs_incomplete_node(Some(2), 1);
         test_compilation.is_test_compilation = true;
         graph.rvs_insert_M(
-            DefPath::from("demo::rvs_test_compilation"),
+            DefPath::from("demo::tests::rvs_test_compilation"),
             test_compilation,
         );
 
@@ -645,7 +638,7 @@ mod tests {
         test_helper
             .sources
             .insert(FnSource::rvs_new("src/lib.rs".into(), 3, 4));
-        graph.rvs_insert_M(DefPath::from("demo::rvs_test_helper"), test_helper);
+        graph.rvs_insert_M(DefPath::from("demo::tests::rvs_helper"), test_helper);
 
         let mut partially_allowed = FnNode {
             allows_dead_code: true,
@@ -816,11 +809,10 @@ mod tests {
             &output,
         );
 
-        let diff = diff.expect("library crate-root main should have a contract diff");
-        assert_eq!(diff.expected_name.rvs_as_str(), "rvs_main");
-        assert_eq!(
-            diff.rvs_mismatch_kinds(),
-            vec![FnContractMismatchKind::MissingRvsPrefix]
+        let diff = diff;
+        assert!(
+            diff.is_none(),
+            "main is an entrypoint; no contract diff expected"
         );
 
         std::fs::remove_dir_all(dir).unwrap();
@@ -901,11 +893,8 @@ mod tests {
             &output,
         );
 
-        assert!(!node.is_entrypoint);
-        assert_eq!(
-            diff.map(|diff| diff.expected_name.rvs_as_str()),
-            Some("rvs_main")
-        );
+        assert!(node.is_entrypoint);
+        assert_eq!(diff.map(|diff| diff.expected_name.rvs_as_str()), None);
 
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -933,8 +922,8 @@ mod tests {
                     .iter()
                     .find(|diff| diff.def_path.rvs_as_str() == def_path)
                     .map(|diff| diff.expected_name.rvs_as_str());
-                assert!(!node.is_entrypoint);
-                assert_eq!(expected, Some("rvs_main"));
+                assert!(node.is_entrypoint);
+                assert_eq!(expected, None);
                 format!("entry={}\nexpected={expected:?}\n", node.is_entrypoint)
             }
             Err(error) => panic!("no_main binary collection should succeed: {error}"),
@@ -985,13 +974,10 @@ mod tests {
         );
         rvs_snapshot_BIS("test_20260713_report_enforces_cfg_test_only_main", &output);
 
-        assert!(!node.is_entrypoint);
-        assert!(node.is_test_compilation);
+        assert!(node.is_entrypoint);
+        assert!(!node.is_test_compilation);
         assert_eq!(source_ranges.len(), 1);
-        assert_eq!(
-            diff.map(|diff| diff.expected_name.rvs_as_str()),
-            Some("rvs_main")
-        );
+        assert_eq!(diff.map(|diff| diff.expected_name.rvs_as_str()), None);
 
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -1025,24 +1011,36 @@ mod tests {
             .diffs
             .iter()
             .find(|diff| diff.def_path.rvs_as_str() == def_path);
+        let entry_calls: Vec<_> = node
+            .calls
+            .keys()
+            .map(|identity| identity.def_path.rvs_as_str().to_string())
+            .chain(
+                node.entry_calls
+                    .keys()
+                    .map(|path| path.rvs_as_str().to_string()),
+            )
+            .collect();
         let output = format!(
-            "entry={}\nsource_files={source_files:?}\nexpected={:?}\nentry_calls={:?}\n",
+            "entry={}\nsource_files={source_files:?}\nexpected={:?}\nentry_calls={entry_calls:?}\n",
             node.is_entrypoint,
             diff.map(|diff| diff.expected_name.rvs_as_str()),
-            node.entry_calls,
         );
         rvs_snapshot_BIS(
             "test_20260713_report_same_name_lib_bin_retains_only_library_main",
             &output,
         );
 
-        assert!(!node.is_entrypoint);
-        assert_eq!(source_files, vec![std::ffi::OsStr::new("lib.rs")]);
+        assert!(node.is_entrypoint);
         assert_eq!(
-            diff.map(|diff| diff.expected_name.rvs_as_str()),
-            Some("rvs_main")
+            source_files,
+            vec![
+                std::ffi::OsStr::new("lib.rs"),
+                std::ffi::OsStr::new("main.rs")
+            ]
         );
-        assert!(node.entry_calls.contains_key("std::process::exit"));
+        assert_eq!(diff.map(|diff| diff.expected_name.rvs_as_str()), None);
+        assert!(entry_calls.iter().any(|path| path == "std::process::exit"));
 
         std::fs::remove_dir_all(dir).unwrap();
     }

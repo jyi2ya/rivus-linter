@@ -1,2 +1,1 @@
-production: contract=true offline=true report=true outlier=false strip=true
-test: contract=false offline=false report=false outlier=true strip=false
+entry_test_trait_impl: contract=false offline=false report=false outlier=true strip=false

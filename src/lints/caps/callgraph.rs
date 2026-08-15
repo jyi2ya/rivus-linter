@@ -11,7 +11,7 @@ use super::super::utils::{
 };
 use crate::artifacts::{
     CallEdgeType, CallSiteIdentity, CallSiteSource, CrateProvenance, FnGraph, FnNode, FnSource,
-    FnTargetData, FunctionIdentity,
+    FunctionIdentity,
 };
 use crate::capability::{CapabilityFacts, ParsedFunctionName};
 use crate::symbols::DefPath;
@@ -58,7 +58,7 @@ fn rvs_fn_node_from_signature(
     }
 }
 
-pub(crate) fn rvs_collect_callgraph_for_item_MS<'tcx>(
+pub(crate) fn rvs_collect_callgraph_for_item_BMS<'tcx>(
     callgraph: &mut FnGraph,
     cx: &LateContext<'tcx>,
     subject: &FnSubject<'_, 'tcx>,
@@ -67,8 +67,18 @@ pub(crate) fn rvs_collect_callgraph_for_item_MS<'tcx>(
     let local_def_id = subject.hir_id.owner.def_id;
     let def_id = local_def_id.to_def_id();
     let caller_path = DefPath::rvs_new(rvs_def_path(cx, def_id));
+    let cargo_package_name = crate::symbols::rvs_cargo_package_name_BS();
+    if caller_path.rvs_is_build_script_for_package(cargo_package_name.as_deref()) {
+        return CollectedCallgraphItem {
+            caller: FunctionIdentity {
+                crate_id: cx.tcx.stable_crate_id(def_id.krate).as_u64(),
+                def_path: caller_path,
+            },
+            call_sites: Vec::new(),
+        };
+    }
+    let is_in_test_module = caller_path.rvs_is_in_test_module();
     let is_entrypoint = rvs_is_executable_entry(cx, def_id);
-    let is_test_compilation = cx.tcx.sess.opts.test;
     let crate_id = cx.tcx.stable_crate_id(def_id.krate).as_u64();
     let attrs = cx.tcx.hir_attrs(subject.hir_id);
     let mut node = rvs_fn_node_from_signature(
@@ -79,7 +89,7 @@ pub(crate) fn rvs_collect_callgraph_for_item_MS<'tcx>(
         subject.is_test,
         subject.is_port_method,
         is_entrypoint,
-        is_test_compilation,
+        is_in_test_module,
         subject.span,
     );
 
@@ -130,7 +140,7 @@ pub(crate) fn rvs_collect_callgraph_for_item_MS<'tcx>(
     let is_reportable = subject.is_port_method
         || ParsedFunctionName::rvs_parse(subject.rvs_name()).rvs_has_rvs_prefix();
     let report_line_count =
-        if is_reportable && !subject.is_test && !is_test_compilation && !allows_dead_code {
+        if is_reportable && !subject.is_test && !is_in_test_module && !allows_dead_code {
             Some(rvs_count_effective_lines_M(cx, subject.body))
         } else {
             None
@@ -169,9 +179,10 @@ pub(crate) fn rvs_collect_callgraph_for_item_MS<'tcx>(
             span: *span,
         });
     }
-    node.calls = target_calls
+    node.calls = target_calls.clone();
+    node.call_sites = all_call_sites
         .iter()
-        .map(|(identity, edge_type)| (identity.def_path.clone(), *edge_type))
+        .map(|call_site| call_site.identity.clone())
         .collect();
     if subject.is_test {
         node.unresolved_test_calls = subject
@@ -187,7 +198,7 @@ pub(crate) fn rvs_collect_callgraph_for_item_MS<'tcx>(
             .filter(|name| name.starts_with("rvs_"))
             .collect();
     }
-    let is_coverage_candidate = !is_test_compilation
+    let is_coverage_candidate = !is_in_test_module
         && !is_entrypoint
         && !subject.is_test
         && !subject.is_trait_impl
@@ -196,30 +207,10 @@ pub(crate) fn rvs_collect_callgraph_for_item_MS<'tcx>(
     node.report_line_count = report_line_count;
     node.report_function_count = usize::from(report_line_count.is_some());
     node.allows_dead_code = allows_dead_code;
-    node.rvs_insert_target_M(
-        crate_id,
-        FnTargetData {
-            calls: target_calls,
-            call_sites: all_call_sites
-                .iter()
-                .map(|call_site| call_site.identity.clone())
-                .collect(),
-            unresolved_test_calls: node.unresolved_test_calls.clone(),
-            facts: node.facts,
-            has_body: true,
-            is_trait_impl: subject.is_trait_impl,
-            is_test: subject.is_test,
-            is_entrypoint,
-            is_test_compilation,
-            sources: node.sources.clone(),
-            report_line_count,
-            report_function_count: node.report_function_count,
-            allows_dead_code,
-            is_production: !is_test_compilation,
-            is_coverage_candidate,
-            crate_provenance,
-        },
-    );
+    node.is_production = !is_in_test_module;
+    node.is_coverage_candidate = is_coverage_candidate;
+    node.crate_provenance = crate_provenance;
+    node.crate_id = crate_id;
     if let Err(error) = callgraph.rvs_merge_node_M(&caller_path, &node) {
         cx.tcx
             .dcx()
@@ -236,7 +227,7 @@ pub(crate) fn rvs_collect_callgraph_for_item_MS<'tcx>(
 
 /// Collect callgraph entry from a signature alone (no body — e.g. trait method
 /// declarations without default implementation).
-pub(crate) fn rvs_collect_callgraph_for_signature_MS(
+pub(crate) fn rvs_collect_callgraph_for_signature_BMS(
     callgraph: &mut FnGraph,
     cx: &LateContext<'_>,
     hir_id: HirId,
@@ -249,8 +240,12 @@ pub(crate) fn rvs_collect_callgraph_for_signature_MS(
     let local_def_id = hir_id.owner.def_id;
     let def_id = local_def_id.to_def_id();
     let caller_path = DefPath::rvs_new(rvs_def_path(cx, def_id));
+    let cargo_package_name = crate::symbols::rvs_cargo_package_name_BS();
+    if caller_path.rvs_is_build_script_for_package(cargo_package_name.as_deref()) {
+        return caller_path;
+    }
+    let is_in_test_module = caller_path.rvs_is_in_test_module();
     let crate_id = cx.tcx.stable_crate_id(def_id.krate).as_u64();
-    let is_test_compilation = cx.tcx.sess.opts.test;
     let mut node = rvs_fn_node_from_signature(
         cx,
         ident,
@@ -259,22 +254,13 @@ pub(crate) fn rvs_collect_callgraph_for_signature_MS(
         false,
         is_port_method,
         false,
-        is_test_compilation,
+        is_in_test_module,
         cx.tcx.hir_span(hir_id),
     );
-    node.rvs_insert_target_M(
-        crate_id,
-        FnTargetData {
-            facts: node.facts,
-            has_body: false,
-            is_trait_impl,
-            is_test_compilation,
-            sources: node.sources.clone(),
-            is_production: !is_test_compilation,
-            crate_provenance,
-            ..FnTargetData::default()
-        },
-    );
+    node.has_body = false;
+    node.is_production = !is_in_test_module;
+    node.crate_provenance = crate_provenance;
+    node.crate_id = crate_id;
     if let Err(error) = callgraph.rvs_merge_node_M(&caller_path, &node) {
         cx.tcx
             .dcx()
@@ -284,11 +270,17 @@ pub(crate) fn rvs_collect_callgraph_for_signature_MS(
 }
 
 fn rvs_is_executable_entry(cx: &LateContext<'_>, def_id: rustc_span::def_id::DefId) -> bool {
-    !cx.tcx.sess.opts.test
-        && cx
-            .tcx
-            .entry_fn(())
-            .is_some_and(|(entry_def_id, _)| entry_def_id == def_id)
+    if cx
+        .tcx
+        .entry_fn(())
+        .is_some_and(|(entry_def_id, _)| entry_def_id == def_id)
+    {
+        return true;
+    }
+    let path = rvs_def_path(cx, def_id);
+    let segs: Vec<&str> = path.split("::").collect();
+    segs.get(1)
+        .is_some_and(|seg| segs.len() == 2 && *seg == "main")
 }
 
 fn rvs_fn_source(cx: &LateContext<'_>, ident: Ident, declaration_span: Span) -> Option<FnSource> {
@@ -359,8 +351,8 @@ mod tests {
     #[test]
     fn test_20260630_callgraph_helper_coverage() {
         rvs_register_test_coverage((
-            rvs_collect_callgraph_for_item_MS,
-            rvs_collect_callgraph_for_signature_MS,
+            rvs_collect_callgraph_for_item_BMS,
+            rvs_collect_callgraph_for_signature_BMS,
             rvs_fn_source,
             rvs_real_file_name,
         ));

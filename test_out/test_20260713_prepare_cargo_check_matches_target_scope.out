@@ -1,2 +1,2 @@
-production=check
-all_targets=check --all-targets
+production=check --profile test
+all_targets=check --profile test --all-targets

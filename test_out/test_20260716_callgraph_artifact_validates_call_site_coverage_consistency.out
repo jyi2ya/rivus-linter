@@ -1,3 +1,3 @@
-missing_site=invalid callgraph artifact: target call sites for demo::rvs_run crate id 7 do not match target calls
-duplicate_occurrence=invalid callgraph artifact: call_sites for demo::rvs_run crate id 7 repeats occurrence 0
+missing_site=invalid callgraph artifact: call sites for demo::rvs_run do not match calls
+duplicate_occurrence=invalid callgraph artifact: call_sites for demo::rvs_run repeats occurrence 0
 valid=true

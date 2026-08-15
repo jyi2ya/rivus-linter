@@ -7,7 +7,7 @@ warning[incomplete_caps_knowledge]: demo::rvs_handle
   completeness: unknown
   knowledge bases: inferred
   affected callees: 1
-  callee: dependency::maybe_effectful [crate_id=1] (known caps: pure, basis=inferred)
+  callee: dependency::maybe_effectful [crate_id=2] (known caps: pure, basis=inferred)
   affected callers: 1
   caller: demo::rvs_handle [crate_id=1]
-  inferred dependency knowledge for 'dependency::maybe_effectful' remains incomplete because a dependency body is opaque or reaches other incomplete knowledge (callee target crate_id=1: dependency::maybe_effectful); inspect `cargo rivus why 'dependency::maybe_effectful' .`; rerunning `cargo rivus infer-capsmap -o caps/deps` without resolving that boundary will preserve the lower bound
+  inferred dependency knowledge for 'dependency::maybe_effectful' remains incomplete because a dependency body is opaque or reaches other incomplete knowledge (callee target crate_id=2: dependency::maybe_effectful); inspect `cargo rivus why 'dependency::maybe_effectful' .`; rerunning `cargo rivus infer-capsmap -o caps/deps` without resolving that boundary will preserve the lower bound

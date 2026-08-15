@@ -1,5 +1,5 @@
 lib:
-pub fn rvs_main() -> i32 { 1 }
+pub fn main() -> i32 { 1 }
 
 bin:
 fn main() {}

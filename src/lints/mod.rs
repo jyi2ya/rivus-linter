@@ -171,6 +171,11 @@ rvs_declare_lints!(
     ),
     (RVS_WILDCARD_IMPORT, Warn, "use xxx::*; wildcard import"),
     (
+        RVS_TESTS_IMPORT,
+        Deny,
+        "import of tests-module symbol from non-test code"
+    ),
+    (
         RVS_MISSING_DOC,
         Warn,
         "pub fn/method missing /// doc comment"
@@ -270,6 +275,8 @@ pub struct RivusLintPass<E: LintEnvironment> {
 }
 
 impl<E: LintEnvironment> RivusLintPass<E> {
+    /// Build a lint pass from the typed driver configuration, retaining
+    /// load failures as deferred diagnostics instead of failing eagerly.
     pub fn rvs_new(config: RivusLintConfig<E>) -> Self {
         let RivusLintConfig {
             capsmap,
@@ -490,7 +497,7 @@ impl<'tcx, E: LintEnvironment> LateLintPass<'tcx> for RivusLintPass<E> {
             }
         }
         let mut data = rvs_fn_check_data!(self);
-        rvs_check_item_MS(
+        rvs_check_item_BMS(
             cx,
             item,
             &self.test_fn_names,
@@ -508,7 +515,7 @@ impl<'tcx, E: LintEnvironment> LateLintPass<'tcx> for RivusLintPass<E> {
     ) {
         rvs_check_scoped_rivus_lint_attrs_S(cx, impl_item.hir_id(), impl_item.span);
         let mut data = rvs_fn_check_data!(self);
-        rvs_check_impl_item_MS(
+        rvs_check_impl_item_BMS(
             cx,
             impl_item,
             &self.test_fn_names,
@@ -525,7 +532,7 @@ impl<'tcx, E: LintEnvironment> LateLintPass<'tcx> for RivusLintPass<E> {
     ) {
         rvs_check_scoped_rivus_lint_attrs_S(cx, trait_item.hir_id(), trait_item.span);
         let mut data = rvs_fn_check_data!(self);
-        rvs_check_trait_item_MS(cx, trait_item, &mut data);
+        rvs_check_trait_item_BMS(cx, trait_item, &mut data);
     }
 
     fn check_stmt(&mut self, cx: &LateContext<'tcx>, statement: &'tcx rustc_hir::Stmt<'tcx>) {
@@ -759,7 +766,7 @@ fn rvs_run_fn_checks_MS<'tcx>(
     test_name_format::rvs_check_fn_S(cx, name, subject.span, subject.is_test);
 }
 
-fn rvs_run_body_fn_pipeline_MS<'tcx, F>(
+fn rvs_run_body_fn_pipeline_BMS<'tcx, F>(
     cx: &LateContext<'tcx>,
     subject: &FnSubject<'_, 'tcx>,
     data: &mut FnCheckData<'_>,
@@ -778,7 +785,7 @@ fn rvs_run_body_fn_pipeline_MS<'tcx, F>(
         rvs_check_unsupported_implicit_execution_S(cx, subject.body_facts);
     }
     if data.collect_caps_facts {
-        let collected = callgraph::rvs_collect_callgraph_for_item_MS(
+        let collected = callgraph::rvs_collect_callgraph_for_item_BMS(
             data.callgraph,
             cx,
             subject,
@@ -796,7 +803,7 @@ fn rvs_run_body_fn_pipeline_MS<'tcx, F>(
 }
 
 /// Check free-fn / struct / enum / use / impl items.
-fn rvs_check_item_MS<'tcx>(
+fn rvs_check_item_BMS<'tcx>(
     cx: &LateContext<'tcx>,
     item: &'tcx rustc_hir::Item<'tcx>,
     test_fn_names: &HashSet<String>,
@@ -832,7 +839,7 @@ fn rvs_check_item_MS<'tcx>(
                 false,
                 false,
             );
-            rvs_run_body_fn_pipeline_MS(cx, &subject, data, data.should_emit_lints, || {
+            rvs_run_body_fn_pipeline_BMS(cx, &subject, data, data.should_emit_lints, || {
                 if is_test {
                     test_names
                         .entry(name.to_string())
@@ -898,7 +905,7 @@ fn rvs_check_item_MS<'tcx>(
 }
 
 /// Check inherent impl method.
-fn rvs_check_impl_item_MS<'tcx>(
+fn rvs_check_impl_item_BMS<'tcx>(
     cx: &LateContext<'tcx>,
     impl_item: &'tcx rustc_hir::ImplItem<'tcx>,
     test_fn_names: &HashSet<String>,
@@ -947,7 +954,7 @@ fn rvs_check_impl_item_MS<'tcx>(
             is_trait_impl,
             is_port_method,
         );
-        rvs_run_body_fn_pipeline_MS(cx, &subject, data, should_check_fn, || {
+        rvs_run_body_fn_pipeline_BMS(cx, &subject, data, should_check_fn, || {
             if is_test {
                 test_names
                     .entry(name.to_string())
@@ -975,7 +982,7 @@ fn rvs_check_impl_item_MS<'tcx>(
 }
 
 /// Check trait method (provided or required).
-fn rvs_check_trait_item_MS<'tcx>(
+fn rvs_check_trait_item_BMS<'tcx>(
     cx: &LateContext<'tcx>,
     trait_item: &'tcx rustc_hir::TraitItem<'tcx>,
     data: &mut FnCheckData<'_>,
@@ -1005,7 +1012,7 @@ fn rvs_check_trait_item_MS<'tcx>(
                 false,
                 is_port_trait,
             );
-            rvs_run_body_fn_pipeline_MS(cx, &subject, data, data.should_emit_lints, || {
+            rvs_run_body_fn_pipeline_BMS(cx, &subject, data, data.should_emit_lints, || {
                 missing_doc::rvs_check_fn_S(
                     cx,
                     trait_item.ident.name.as_str(),
@@ -1048,7 +1055,7 @@ fn rvs_check_trait_item_MS<'tcx>(
             }
             // Required methods (no body) — collect signature info for callgraph.
             if data.collect_caps_facts {
-                let def_path = callgraph::rvs_collect_callgraph_for_signature_MS(
+                let def_path = callgraph::rvs_collect_callgraph_for_signature_BMS(
                     data.callgraph,
                     cx,
                     trait_item.hir_id(),

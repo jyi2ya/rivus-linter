@@ -42,14 +42,6 @@ fn test_20260801_419_nested_source_definitions_have_distinct_stable_identities_B
 #![deny(rivus::rvs_untested_good_fn)]
 
 pub fn rvs_dispatch(first: bool) -> u8 {
-    #[cfg(test)]
-    {
-        fn rvs_probe() -> u8 {
-            0
-        }
-        let _ = rvs_probe as fn() -> u8;
-    }
-
     if first {
         fn rvs_probe() -> u8 {
             1

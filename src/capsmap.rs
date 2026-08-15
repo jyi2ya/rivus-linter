@@ -558,6 +558,52 @@ mod tests {
     }
 
     #[test]
+    fn test_20260815_distributed_seed_covers_erased_fs_callback_dispatchers() {
+        let seed = rvs_load_distributed_seed().unwrap();
+        let caps = |path| {
+            seed.rvs_lookup(path)
+                .map(crate::inference::rvs_caps_to_string)
+        };
+        let cases = [
+            (
+                "std::sys::helpers::small_c_string::run_path_with_cstr",
+                Some("BI"),
+            ),
+            ("std::sys::helpers::small_c_string::run_with_cstr", None),
+            ("std::sys::fs::remove_dir", Some("BIS")),
+            ("std::sys::fs::remove_dir_all", Some("BIS")),
+            ("std::sys::fs::remove_file", Some("BIS")),
+            ("std::fs::remove_dir", Some("BIS")),
+            ("std::fs::remove_dir_all", Some("BIS")),
+            ("std::fs::remove_file", Some("BIS")),
+            ("std::sys::env::unix::getenv", Some("BS")),
+            ("std::sys::env::unix::setenv", Some("BSTU")),
+            ("std::sys::env::unix::unsetenv", Some("BSTU")),
+            ("std::env::var", Some("BS")),
+            ("std::env::set_var", Some("BSTU")),
+            ("std::env::remove_var", Some("BSTU")),
+            ("libc::unix::mkdir", Some("BI")),
+            ("libc::unix::rename", Some("BI")),
+            ("libc::unix::rmdir", Some("BI")),
+            ("libc::unix::unlink", Some("BI")),
+        ];
+        let output = cases
+            .into_iter()
+            .map(|(path, _)| format!("{path}={:?}", caps(path)))
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        rvs_snapshot_BIS(
+            "test_20260815_distributed_seed_covers_erased_fs_callback_dispatchers",
+            &output,
+        );
+
+        for (path, expected) in cases {
+            assert_eq!(caps(path).as_deref(), expected, "{path}");
+        }
+    }
+
+    #[test]
     fn test_20260709_capsmap_parse_error_table() {
         let cases = [
             ("missing_header", "{}"),

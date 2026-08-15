@@ -239,8 +239,7 @@ mod tests {
         test_target.calls = BTreeMap::from([(helper_identity.clone(), CallEdgeType::Strong)]);
         graph.rvs_insert_M(DefPath::from("demo::test_calls_helper"), test_node);
         let mut helper_node = FnNode::default();
-        helper_node.rvs_test_target_M(1).calls =
-            BTreeMap::from([(target_identity.clone(), CallEdgeType::Strong)]);
+        helper_node.calls = BTreeMap::from([(target_identity.clone(), CallEdgeType::Strong)]);
         graph.rvs_insert_M(helper_identity.def_path.clone(), helper_node);
         graph.rvs_insert_M(target_identity.def_path.clone(), FnNode::default());
         let transitive_covered = rvs_direct_covered_functions(&graph);

@@ -1,4 +1,2 @@
-library_contract=true
-library_offline=true
 binary_contract=false
 binary_offline=false

@@ -212,28 +212,14 @@ impl PreparedInference {
             }
         };
         for (func, behavior) in graph.rvs_iter() {
-            if behavior.targets.is_empty() {
-                if !local_scope.rvs_contains(func) {
-                    continue;
-                }
-                for callee in behavior.rvs_dependency_calls() {
-                    if !local_scope.rvs_contains(callee) {
-                        record_external(func, callee);
-                    }
-                }
+            if !local_scope.rvs_contains_target(func, behavior.crate_provenance) {
                 continue;
             }
-            for target in behavior
-                .targets
-                .values()
-                .filter(|target| local_scope.rvs_contains_target(func, target.crate_provenance))
-            {
-                for callee in target.calls.keys() {
-                    if local_scope.rvs_contains_identity(callee) {
-                        continue;
-                    }
-                    record_external(func, &callee.def_path);
+            for callee in behavior.calls.keys() {
+                if local_scope.rvs_contains_identity(callee) {
+                    continue;
                 }
+                record_external(func, &callee.def_path);
             }
         }
         (known, unknown)
@@ -292,7 +278,6 @@ impl PreparedLocalAnalysis {
         Self::rvs_prepare(graph, seed, local_crate_names)
     }
 
-    #[cfg(test)]
     pub(crate) fn rvs_inferred(&self) -> &BTreeMap<DefPath, CapabilitySet> {
         self.inference.rvs_inferred()
     }
@@ -509,13 +494,7 @@ fn rvs_scoped_port_methods(
     let mut methods: BTreeSet<DefPath> = graph
         .rvs_iter()
         .filter(|(path, node)| {
-            if node.targets.is_empty() {
-                return scope.rvs_contains(path) && node.facts.is_port_method;
-            }
-            node.targets.values().any(|target| {
-                scope.rvs_contains_target(path, target.crate_provenance)
-                    && target.facts.is_port_method
-            })
+            scope.rvs_contains_target(path, node.crate_provenance) && node.facts.is_port_method
         })
         .map(|(path, _)| path.clone())
         .collect();
@@ -964,14 +943,14 @@ fn rvs_infer_caps_with_knowledge_and_ports(
     let mut inferred = rvs_initial_caps_with_knowledge(graph, knowledge, port_methods);
     for (_, behavior) in graph.rvs_iter() {
         for callee in behavior.calls.keys() {
-            if !inferred.contains_key(callee)
-                && let Some(caps) = knowledge.rvs_lookup_caps(callee)
+            if !inferred.contains_key(&callee.def_path)
+                && let Some(caps) = knowledge.rvs_lookup_caps(&callee.def_path)
             {
-                inferred.insert(callee.clone(), caps.clone());
-            } else if !inferred.contains_key(callee)
-                && let Some(caps) = rvs_declared_caps_from_def_path(callee)
+                inferred.insert(callee.def_path.clone(), caps.clone());
+            } else if !inferred.contains_key(&callee.def_path)
+                && let Some(caps) = rvs_declared_caps_from_def_path(&callee.def_path)
             {
-                inferred.insert(callee.clone(), caps);
+                inferred.insert(callee.def_path.clone(), caps);
             }
         }
     }
@@ -1017,12 +996,10 @@ fn rvs_infer_caps_with_knowledge_and_ports(
         };
         if let Some(voted_caps) = voted_caps {
             let _ = effective_caps.rvs_extend_filtered_M(&voted_caps, |_| true);
-            if port_methods.contains(&func) && !is_port_impl {
-                let inferred_caps = inferred
-                    .entry(func.clone())
-                    .or_insert_with(CapabilitySet::rvs_new);
-                let _ = inferred_caps.rvs_extend_filtered_M(&effective_caps, |_| true);
-            }
+            let inferred_caps = inferred
+                .entry(func.clone())
+                .or_insert_with(CapabilitySet::rvs_new);
+            let _ = inferred_caps.rvs_extend_filtered_M(&effective_caps, |_| true);
         }
         let propagated_caps = rvs_propagated_caps(&effective_caps);
         if propagated_caps.rvs_is_empty() {
@@ -1102,7 +1079,7 @@ pub(crate) fn rvs_build_inference_dependents(
     for (caller, behavior) in graph.rvs_iter() {
         for callee in behavior.calls.keys() {
             callers
-                .entry(callee.clone())
+                .entry(callee.def_path.clone())
                 .or_default()
                 .insert(caller.clone());
         }
@@ -1179,35 +1156,20 @@ pub(crate) fn rvs_scope_port_methods_M(
 ) {
     let scope = LocalScope::rvs_for_graph(local_crate_names, graph);
     for (def_path, node) in graph.rvs_iter_mut_M() {
-        if node.targets.is_empty() {
-            if !scope.rvs_contains(def_path) {
-                node.facts.is_port_method = false;
-            }
-            continue;
+        let identity = FunctionIdentity {
+            crate_id: node.crate_id,
+            def_path: def_path.clone(),
+        };
+        if !scope.rvs_contains_identity(&identity) {
+            node.facts.is_port_method = false;
         }
-        for (crate_id, target) in &mut node.targets {
-            let identity = FunctionIdentity {
-                crate_id: *crate_id,
-                def_path: def_path.clone(),
-            };
-            if !scope.rvs_contains_identity(&identity) {
-                target.facts.is_port_method = false;
-            }
-        }
-        node.facts.is_port_method = node.targets.iter().any(|(crate_id, target)| {
-            scope.rvs_contains_identity(&FunctionIdentity {
-                crate_id: *crate_id,
-                def_path: def_path.clone(),
-            }) && target.facts.is_port_method
-        });
     }
     debug_assert!(graph.rvs_iter().all(|(def_path, node)| {
-        node.targets.iter().all(|(crate_id, target)| {
-            scope.rvs_contains_identity(&FunctionIdentity {
-                crate_id: *crate_id,
-                def_path: def_path.clone(),
-            }) || !target.facts.is_port_method
-        })
+        let identity = FunctionIdentity {
+            crate_id: node.crate_id,
+            def_path: def_path.clone(),
+        };
+        scope.rvs_contains_identity(&identity) || !node.facts.is_port_method
     }));
 }
 
@@ -1353,9 +1315,22 @@ fn rvs_incomplete_inference_paths_with_knowledge(
     let mut incomplete: BTreeSet<DefPath> = graph
         .rvs_iter()
         .filter(|(path, node)| {
-            !rvs_is_inference_taint_barrier(path, knowledge)
-                && (!node.complete
-                    || rvs_has_incomplete_capsmap_knowledge(path, knowledge, port_methods))
+            if rvs_is_inference_taint_barrier(path, knowledge) {
+                return false;
+            }
+            if !node.complete || rvs_has_incomplete_capsmap_knowledge(path, knowledge, port_methods)
+            {
+                return true;
+            }
+            let has_declared_caps = ParsedFunctionName::rvs_parse(path.rvs_as_str())
+                .rvs_declared_caps()
+                .is_some();
+            let has_exact = knowledge.rvs_lookup_info(path).is_some();
+            !node.has_body
+                && !port_methods.contains(*path)
+                && !has_exact
+                && !has_declared_caps
+                && resolver.rvs_for_contract_check(path).is_none()
         })
         .map(|(path, _)| path.clone())
         .collect();
@@ -1769,6 +1744,9 @@ mod tests {
     /// Helper: build a default `FnNode` with all flags false and no calls.
     fn rvs_make_behavior() -> FnNode {
         FnNode {
+            crate_id: 1,
+            crate_provenance: crate::artifacts::CrateProvenance::PrimaryPackage,
+            is_production: true,
             sources: BTreeSet::from([crate::artifacts::FnSource::rvs_new(
                 "src/lib.rs".into(),
                 1,
@@ -1786,7 +1764,10 @@ mod tests {
             let mut node = rvs_make_behavior();
             if index + 1 < NODE_COUNT {
                 node.calls.insert(
-                    DefPath::from(format!("chain::rvs_node_{:04}", index + 1)),
+                    FunctionIdentity {
+                        crate_id: 1,
+                        def_path: DefPath::from(format!("chain::rvs_node_{:04}", index + 1)),
+                    },
                     CallEdgeType::Strong,
                 );
             } else {
@@ -1840,9 +1821,15 @@ mod tests {
             let mut node = rvs_make_behavior();
             node.calls.insert(
                 if index + 1 < NODE_COUNT {
-                    DefPath::from(format!("chain::rvs_node_{:04}", index + 1))
+                    FunctionIdentity {
+                        crate_id: 1,
+                        def_path: DefPath::from(format!("chain::rvs_node_{:04}", index + 1)),
+                    }
                 } else {
-                    DefPath::from("opaque::missing")
+                    FunctionIdentity {
+                        crate_id: 2,
+                        def_path: DefPath::from("opaque::missing"),
+                    }
                 },
                 CallEdgeType::Strong,
             );
@@ -1882,9 +1869,13 @@ mod tests {
     fn test_20260711_prepare_local_analysis_builds_shared_derivatives() {
         let mut graph = FnGraph::rvs_new();
         let mut caller = rvs_make_behavior();
-        caller
-            .calls
-            .insert(DefPath::from("dep::read"), CallEdgeType::Strong);
+        caller.calls.insert(
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: DefPath::from("dep::read"),
+            },
+            CallEdgeType::Strong,
+        );
         graph.rvs_insert_M(DefPath::from("demo::rvs_run"), caller);
         let mut impl_method = rvs_make_behavior();
         impl_method.is_trait_impl = true;
@@ -1932,14 +1923,22 @@ mod tests {
     fn test_20260715_unknown_callees_suppress_provisional_name_mismatches() {
         let mut graph = FnGraph::rvs_new();
         let mut inner = rvs_make_behavior();
-        inner
-            .calls
-            .insert(DefPath::from("dep::unknown"), CallEdgeType::Strong);
+        inner.calls.insert(
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: DefPath::from("dep::unknown"),
+            },
+            CallEdgeType::Strong,
+        );
         graph.rvs_insert_M(DefPath::from("demo::rvs_inner_BIS"), inner);
         let mut outer = rvs_make_behavior();
-        outer
-            .calls
-            .insert(DefPath::from("demo::rvs_inner_BIS"), CallEdgeType::Strong);
+        outer.calls.insert(
+            FunctionIdentity {
+                crate_id: 1,
+                def_path: DefPath::from("demo::rvs_inner_BIS"),
+            },
+            CallEdgeType::Strong,
+        );
         graph.rvs_insert_M(DefPath::from("demo::rvs_outer_BIS"), outer);
         let local = BTreeSet::from([CrateName::from("demo")]);
 
@@ -1974,9 +1973,13 @@ mod tests {
     fn test_20260715_incomplete_inference_only_preserves_propagated_declared_caps() {
         let mut graph = FnGraph::rvs_new();
         let mut behavior = rvs_make_behavior();
-        behavior
-            .calls
-            .insert(DefPath::from("dep::unknown"), CallEdgeType::Strong);
+        behavior.calls.insert(
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: DefPath::from("dep::unknown"),
+            },
+            CallEdgeType::Strong,
+        );
         graph.rvs_insert_M(DefPath::from("demo::rvs_run_AMU"), behavior);
 
         let diff = rvs_collect_local_contract_diffs_M(
@@ -2011,7 +2014,10 @@ mod tests {
         let mut graph = FnGraph::rvs_new();
         let mut caller = rvs_make_behavior();
         caller.calls.insert(
-            DefPath::from("demo::ApiClient::rvs_fetch_P"),
+            FunctionIdentity {
+                crate_id: 1,
+                def_path: DefPath::from("demo::ApiClient::rvs_fetch_P"),
+            },
             CallEdgeType::Strong,
         );
         graph.rvs_insert_M(DefPath::from("demo::rvs_call_PS"), caller);
@@ -2024,18 +2030,26 @@ mod tests {
         let mut impl_method = rvs_make_behavior();
         impl_method.is_trait_impl = true;
         impl_method.facts.is_port_method = true;
-        impl_method
-            .calls
-            .insert(DefPath::from("dep::unknown"), CallEdgeType::Strong);
+        impl_method.calls.insert(
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: DefPath::from("dep::unknown"),
+            },
+            CallEdgeType::Strong,
+        );
         graph.rvs_insert_M(
             DefPath::from("demo::DiskClient::rvs_fetch_P@demo::ApiClient"),
             impl_method,
         );
 
         let mut seeded = rvs_make_behavior();
-        seeded
-            .calls
-            .insert(DefPath::from("dep::unknown"), CallEdgeType::Strong);
+        seeded.calls.insert(
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: DefPath::from("dep::unknown"),
+            },
+            CallEdgeType::Strong,
+        );
         graph.rvs_insert_M(DefPath::from("demo::rvs_seeded_BIS"), seeded);
         let seed = rvs_make_capsmap(&[("demo::rvs_seeded_BIS", "S")]);
 
@@ -2081,9 +2095,13 @@ mod tests {
 
         let mut implementation = rvs_make_behavior();
         implementation.is_trait_impl = true;
-        implementation
-            .calls
-            .insert(DefPath::from("dep::unknown"), CallEdgeType::Strong);
+        implementation.calls.insert(
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: DefPath::from("dep::unknown"),
+            },
+            CallEdgeType::Strong,
+        );
         graph.rvs_insert_M(
             DefPath::from("demo::MemoryFetcher::rvs_fetch_BIS@demo::Fetcher"),
             implementation,
@@ -2131,7 +2149,10 @@ mod tests {
         );
         let mut caller = rvs_make_behavior();
         caller.calls.insert(
-            DefPath::from("dep::DavFileSystem::open"),
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: DefPath::from("dep::DavFileSystem::open"),
+            },
             CallEdgeType::Strong,
         );
         graph.rvs_insert_M(DefPath::from("demo::rvs_open"), caller);
@@ -2164,16 +2185,24 @@ mod tests {
         let mut graph = FnGraph::rvs_new();
         let wrapper_path = DefPath::from("dep::log");
         let mut caller = rvs_make_behavior();
-        caller
-            .calls
-            .insert(wrapper_path.clone(), CallEdgeType::Strong);
+        caller.calls.insert(
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: wrapper_path.clone(),
+            },
+            CallEdgeType::Strong,
+        );
         graph.rvs_insert_M(DefPath::from("demo::rvs_run"), caller);
 
         let mut wrapper = rvs_make_behavior();
         wrapper.facts.has_static_ref = true;
-        wrapper
-            .calls
-            .insert(DefPath::from("dep::Log::log"), CallEdgeType::Strong);
+        wrapper.calls.insert(
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: DefPath::from("dep::Log::log"),
+            },
+            CallEdgeType::Strong,
+        );
         graph.rvs_insert_M(wrapper_path.clone(), wrapper);
         graph.rvs_insert_M(
             DefPath::from("dep::Log::log"),
@@ -2210,13 +2239,25 @@ mod tests {
 
     #[test]
     fn test_20260729_direct_external_deps_use_primary_target_calls() {
-        let caller_path = DefPath::from("build_script_build::rvs_shared_helper");
-        let local_callee = DefPath::from("build_script_build::rvs_local_only");
+        let caller_path = DefPath::from("demo::rvs_shared_helper");
+        let local_callee = DefPath::from("demo::rvs_local_only");
         let dependency_callee = DefPath::from("dependency::effect");
         let mut caller = rvs_make_behavior();
         caller.calls = BTreeMap::from([
-            (local_callee.clone(), CallEdgeType::Strong),
-            (dependency_callee.clone(), CallEdgeType::Strong),
+            (
+                FunctionIdentity {
+                    crate_id: 2,
+                    def_path: local_callee.clone(),
+                },
+                CallEdgeType::Strong,
+            ),
+            (
+                FunctionIdentity {
+                    crate_id: 2,
+                    def_path: dependency_callee.clone(),
+                },
+                CallEdgeType::Strong,
+            ),
         ]);
         let local_target = caller.rvs_test_target_M(10);
         local_target.crate_provenance = crate::artifacts::CrateProvenance::PrimaryPackage;
@@ -2240,11 +2281,10 @@ mod tests {
         graph.rvs_insert_M(caller_path, caller);
         let mut dependency = rvs_make_behavior();
         dependency.facts.has_static_ref = true;
-        dependency.rvs_test_target_M(30).crate_provenance =
-            crate::artifacts::CrateProvenance::Dependency;
+        dependency.crate_provenance = crate::artifacts::CrateProvenance::Dependency;
         graph.rvs_insert_M(dependency_callee.clone(), dependency);
 
-        let local = BTreeSet::from([CrateName::from("build_script_build")]);
+        let local = BTreeSet::from([CrateName::from("demo")]);
         let seed = capsmap::CapsMap::rvs_new();
         let inference = PreparedInference::rvs_prepare_M(&mut graph, &seed, &local);
         let (known, unknown) = inference.rvs_collect_direct_external_deps(&graph, &local, &seed);
@@ -2269,9 +2309,13 @@ mod tests {
         let implementation_path = DefPath::from("dep::MemoryFetcher::rvs_fetch_S@dep::Fetcher");
 
         let mut caller = rvs_make_behavior();
-        caller
-            .calls
-            .insert(dispatch_path.clone(), CallEdgeType::Strong);
+        caller.calls.insert(
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: dispatch_path.clone(),
+            },
+            CallEdgeType::Strong,
+        );
         graph.rvs_insert_M(DefPath::from("demo::rvs_run_S"), caller);
         graph.rvs_insert_M(
             dispatch_path.clone(),
@@ -2284,9 +2328,13 @@ mod tests {
         let mut implementation = rvs_make_behavior();
         implementation.is_trait_impl = true;
         implementation.facts.has_static_ref = true;
-        implementation
-            .calls
-            .insert(DefPath::from("dep::unknown"), CallEdgeType::Strong);
+        implementation.calls.insert(
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: DefPath::from("dep::unknown"),
+            },
+            CallEdgeType::Strong,
+        );
         graph.rvs_insert_M(implementation_path.clone(), implementation);
 
         let local = BTreeSet::from([CrateName::from("demo")]);
@@ -2333,16 +2381,24 @@ mod tests {
         let implementation_path = DefPath::from("dep::MemoryFetcher::rvs_fetch_S@dep::Fetcher");
 
         let mut caller = rvs_make_behavior();
-        caller
-            .calls
-            .insert(dispatch_path.clone(), CallEdgeType::Strong);
+        caller.calls.insert(
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: dispatch_path.clone(),
+            },
+            CallEdgeType::Strong,
+        );
         graph.rvs_insert_M(DefPath::from("demo::rvs_run_S"), caller);
 
         let mut provided_method = rvs_make_behavior();
         provided_method.facts.has_static_ref = true;
-        provided_method
-            .calls
-            .insert(DefPath::from("dep::unknown"), CallEdgeType::Strong);
+        provided_method.calls.insert(
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: DefPath::from("dep::unknown"),
+            },
+            CallEdgeType::Strong,
+        );
         graph.rvs_insert_M(dispatch_path.clone(), provided_method);
 
         let mut implementation = rvs_make_behavior();
@@ -2399,9 +2455,13 @@ mod tests {
             DefPath::from("dep::MemoryTransformer::rvs_transform_AMU@dep::Transformer");
 
         let mut caller = rvs_make_behavior();
-        caller
-            .calls
-            .insert(dispatch_path.clone(), CallEdgeType::Strong);
+        caller.calls.insert(
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: dispatch_path.clone(),
+            },
+            CallEdgeType::Strong,
+        );
         graph.rvs_insert_M(DefPath::from("demo::rvs_run_S"), caller);
 
         let mut required_method = rvs_make_behavior();
@@ -2453,9 +2513,13 @@ mod tests {
     fn test_20260712_prepare_inference_builds_shared_derivatives_once() {
         let mut graph = FnGraph::rvs_new();
         let mut caller = rvs_make_behavior();
-        caller
-            .calls
-            .insert(DefPath::from("dep::read"), CallEdgeType::Strong);
+        caller.calls.insert(
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: DefPath::from("dep::read"),
+            },
+            CallEdgeType::Strong,
+        );
         graph.rvs_insert_M(DefPath::from("demo::rvs_run"), caller);
         let mut port_method = rvs_make_behavior();
         port_method.facts.is_port_method = true;
@@ -2500,7 +2564,10 @@ mod tests {
         assert_eq!(inference.rvs_impl_index().len(), 1);
         assert_eq!(
             inference.rvs_synthetic_paths(),
-            &BTreeSet::from([DefPath::from("dep::read")])
+            &BTreeSet::from([
+                DefPath::from("dep::read"),
+                DefPath::from("demo::Repository::rvs_load"),
+            ])
         );
     }
 
@@ -2540,7 +2607,13 @@ mod tests {
             } else {
                 DefPath::from(format!("demo::rvs_f{:02}", i + 1))
             };
-            node.calls.insert(callee, CallEdgeType::Strong);
+            node.calls.insert(
+                FunctionIdentity {
+                    crate_id: 2,
+                    def_path: callee,
+                },
+                CallEdgeType::Strong,
+            );
             graph.rvs_insert_M(DefPath::from(format!("demo::rvs_f{i:02}")), node);
         }
         let seed = rvs_make_capsmap(&[("std::fs::read_to_string", "BI")]);
@@ -2563,8 +2636,13 @@ mod tests {
     fn test_20260704_infer_caps_uses_absent_rvs_callee_suffix() {
         let mut graph = FnGraph::rvs_new();
         let mut node = rvs_make_behavior();
-        node.calls
-            .insert(DefPath::from("dep::rvs_write_BI"), CallEdgeType::Strong);
+        node.calls.insert(
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: DefPath::from("dep::rvs_write_BI"),
+            },
+            CallEdgeType::Strong,
+        );
         graph.rvs_insert_M(DefPath::from("demo::rvs_run"), node);
         let seed = capsmap::CapsMap::rvs_new();
 
@@ -2599,9 +2677,13 @@ mod tests {
     fn test_20260705_infer_caps_uses_known_caps_from_mixed_unknown_suffix() {
         let mut graph = FnGraph::rvs_new();
         let mut caller = rvs_make_behavior();
-        caller
-            .calls
-            .insert(DefPath::from("dep::rvs_send_AEIS"), CallEdgeType::Strong);
+        caller.calls.insert(
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: DefPath::from("dep::rvs_send_AEIS"),
+            },
+            CallEdgeType::Strong,
+        );
         graph.rvs_insert_M(DefPath::from("demo::rvs_run"), caller);
         let inferred = rvs_infer_caps(&graph, &capsmap::CapsMap::rvs_new());
         let caps = inferred
@@ -2642,7 +2724,10 @@ mod tests {
 
         let mut caller = rvs_make_behavior();
         caller.calls.insert(
-            DefPath::from("demo::Fetcher::rvs_fetch"),
+            FunctionIdentity {
+                crate_id: 1,
+                def_path: DefPath::from("demo::Fetcher::rvs_fetch"),
+            },
             CallEdgeType::Strong,
         );
         graph.rvs_insert_M(DefPath::from("demo::rvs_run"), caller);
@@ -2657,7 +2742,10 @@ mod tests {
 
         let mut impl_method = rvs_make_behavior();
         impl_method.calls.insert(
-            DefPath::from("std::fs::read_to_string"),
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: DefPath::from("std::fs::read_to_string"),
+            },
             CallEdgeType::Strong,
         );
         graph.rvs_insert_M(
@@ -2691,7 +2779,10 @@ mod tests {
 
         let mut caller = rvs_make_behavior();
         caller.calls.insert(
-            DefPath::from("demo::Fetcher::rvs_fetch_BI"),
+            FunctionIdentity {
+                crate_id: 1,
+                def_path: DefPath::from("demo::Fetcher::rvs_fetch_BI"),
+            },
             CallEdgeType::Strong,
         );
         graph.rvs_insert_M(DefPath::from("demo::rvs_run"), caller);
@@ -2734,7 +2825,10 @@ mod tests {
 
         let mut caller = rvs_make_behavior();
         caller.calls.insert(
-            DefPath::from("demo::Fetcher::rvs_fetch_A"),
+            FunctionIdentity {
+                crate_id: 1,
+                def_path: DefPath::from("demo::Fetcher::rvs_fetch_A"),
+            },
             CallEdgeType::Strong,
         );
         graph.rvs_insert_M(DefPath::from("demo::rvs_run"), caller);
@@ -2773,7 +2867,10 @@ mod tests {
         let mut graph = FnGraph::rvs_new();
         let mut caller = rvs_make_behavior();
         caller.calls.insert(
-            DefPath::from("demo::ApiClient::rvs_fetch_P"),
+            FunctionIdentity {
+                crate_id: 1,
+                def_path: DefPath::from("demo::ApiClient::rvs_fetch_P"),
+            },
             CallEdgeType::Strong,
         );
         graph.rvs_insert_M(DefPath::from("demo::rvs_run"), caller);
@@ -2785,7 +2882,10 @@ mod tests {
 
         let mut impl_method = rvs_make_behavior();
         impl_method.calls.insert(
-            DefPath::from("std::fs::read_to_string"),
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: DefPath::from("std::fs::read_to_string"),
+            },
             CallEdgeType::Strong,
         );
         graph.rvs_insert_M(
@@ -2821,7 +2921,10 @@ mod tests {
         let mut graph = FnGraph::rvs_new();
         let mut caller = rvs_make_behavior();
         caller.calls.insert(
-            DefPath::from("demo::ApiClient::rvs_fetch_P"),
+            FunctionIdentity {
+                crate_id: 1,
+                def_path: DefPath::from("demo::ApiClient::rvs_fetch_P"),
+            },
             CallEdgeType::Strong,
         );
         graph.rvs_insert_M(DefPath::from("demo::rvs_run"), caller);
@@ -3143,7 +3246,10 @@ mod tests {
     fn test_20260710_infer_graph_returns_installed_caps_map() {
         let mut run = rvs_make_behavior();
         run.calls.insert(
-            DefPath::from("std::fs::read_to_string"),
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: DefPath::from("std::fs::read_to_string"),
+            },
             CallEdgeType::Strong,
         );
         let mut graph = FnGraph::rvs_new();
@@ -3183,7 +3289,10 @@ mod tests {
         let mut graph = FnGraph::rvs_new();
         let mut run = rvs_make_behavior();
         run.calls.insert(
-            DefPath::from("std::fs::read_to_string"),
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: DefPath::from("std::fs::read_to_string"),
+            },
             CallEdgeType::Strong,
         );
         graph.rvs_insert_M(DefPath::from("demo::rvs_run"), run);
@@ -3523,7 +3632,10 @@ mod tests {
         let mut graph = FnGraph::rvs_new();
         let mut caller = rvs_make_behavior();
         caller.calls.insert(
-            DefPath::from("demo::rvs_generated_BI"),
+            FunctionIdentity {
+                crate_id: 1,
+                def_path: DefPath::from("demo::rvs_generated_BI"),
+            },
             CallEdgeType::Strong,
         );
         graph.rvs_insert_M(DefPath::from("demo::rvs_run"), caller);
@@ -3727,15 +3839,23 @@ mod tests {
         let mut graph = FnGraph::rvs_new();
 
         let mut impl_a = rvs_make_behavior();
-        impl_a
-            .calls
-            .insert("std::fs::read_to_string".into(), CallEdgeType::Strong);
+        impl_a.calls.insert(
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: crate::symbols::DefPath::from("std::fs::read_to_string"),
+            },
+            CallEdgeType::Strong,
+        );
         graph.rvs_insert_M("demo::Reader::read@std::io::Read".into(), impl_a);
 
         let mut impl_b = rvs_make_behavior();
-        impl_b
-            .calls
-            .insert("std::fs::read_to_string".into(), CallEdgeType::Strong);
+        impl_b.calls.insert(
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: crate::symbols::DefPath::from("std::fs::read_to_string"),
+            },
+            CallEdgeType::Strong,
+        );
         graph.rvs_insert_M("demo::Buffer::read@std::io::Read".into(), impl_b);
 
         let inferred = rvs_infer_caps(
@@ -3857,9 +3977,13 @@ mod tests {
     fn test_20260703_collect_graph_external_dep_wrappers() {
         let mut graph = FnGraph::rvs_new();
         let mut local = rvs_make_behavior();
-        local
-            .calls
-            .insert("std::fs::write".into(), CallEdgeType::Strong);
+        local.calls.insert(
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: crate::symbols::DefPath::from("std::fs::write"),
+            },
+            CallEdgeType::Strong,
+        );
         graph.rvs_insert_M("demo::rvs_run".into(), local);
 
         let local_prefixes = BTreeSet::from([CrateName::from("demo")]);
@@ -3888,9 +4012,13 @@ mod tests {
         let mut graph = FnGraph::rvs_new();
 
         let mut cap_overflow = rvs_make_behavior();
-        cap_overflow
-            .calls
-            .insert("core::panicking::panic".into(), CallEdgeType::Strong);
+        cap_overflow.calls.insert(
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: crate::symbols::DefPath::from("core::panicking::panic"),
+            },
+            CallEdgeType::Strong,
+        );
         graph.rvs_insert_M("alloc::raw_vec::capacity_overflow".into(), cap_overflow);
 
         let panic = rvs_make_behavior();
@@ -3898,7 +4026,10 @@ mod tests {
 
         let mut handle_error = rvs_make_behavior();
         handle_error.calls.insert(
-            "alloc::raw_vec::capacity_overflow".into(),
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: crate::symbols::DefPath::from("alloc::raw_vec::capacity_overflow"),
+            },
             CallEdgeType::Strong,
         );
         graph.rvs_insert_M("alloc::raw_vec::handle_error".into(), handle_error);
@@ -3996,9 +4127,13 @@ mod tests {
     fn test_20260709_infer_caps_propagation_cycle_table() {
         let caller_gets_io = {
             let mut caller_behavior = rvs_make_behavior();
-            caller_behavior
-                .calls
-                .insert("std::fs::read_to_string".into(), CallEdgeType::Strong);
+            caller_behavior.calls.insert(
+                FunctionIdentity {
+                    crate_id: 2,
+                    def_path: crate::symbols::DefPath::from("std::fs::read_to_string"),
+                },
+                CallEdgeType::Strong,
+            );
             vec![
                 ("my_crate::rvs_process", caller_behavior),
                 ("std::fs::read_to_string", rvs_make_behavior()),
@@ -4006,13 +4141,21 @@ mod tests {
         };
         let propagation_chain = {
             let mut a_behavior = rvs_make_behavior();
-            a_behavior
-                .calls
-                .insert("my_crate::B".into(), CallEdgeType::Strong);
+            a_behavior.calls.insert(
+                FunctionIdentity {
+                    crate_id: 1,
+                    def_path: crate::symbols::DefPath::from("my_crate::B"),
+                },
+                CallEdgeType::Strong,
+            );
             let mut b_behavior = rvs_make_behavior();
-            b_behavior
-                .calls
-                .insert("my_crate::C".into(), CallEdgeType::Strong);
+            b_behavior.calls.insert(
+                FunctionIdentity {
+                    crate_id: 1,
+                    def_path: crate::symbols::DefPath::from("my_crate::C"),
+                },
+                CallEdgeType::Strong,
+            );
             vec![
                 ("my_crate::A", a_behavior),
                 ("my_crate::B", b_behavior),
@@ -4021,20 +4164,32 @@ mod tests {
         };
         let cycle_self = {
             let mut behavior = rvs_make_behavior();
-            behavior
-                .calls
-                .insert("my_crate::rvs_loop".into(), CallEdgeType::Strong);
+            behavior.calls.insert(
+                FunctionIdentity {
+                    crate_id: 1,
+                    def_path: crate::symbols::DefPath::from("my_crate::rvs_loop"),
+                },
+                CallEdgeType::Strong,
+            );
             vec![("my_crate::rvs_loop", behavior)]
         };
         let cycle_mutual = {
             let mut a_behavior = rvs_make_behavior();
-            a_behavior
-                .calls
-                .insert("my_crate::B".into(), CallEdgeType::Strong);
+            a_behavior.calls.insert(
+                FunctionIdentity {
+                    crate_id: 1,
+                    def_path: crate::symbols::DefPath::from("my_crate::B"),
+                },
+                CallEdgeType::Strong,
+            );
             let mut b_behavior = rvs_make_behavior();
-            b_behavior
-                .calls
-                .insert("my_crate::A".into(), CallEdgeType::Strong);
+            b_behavior.calls.insert(
+                FunctionIdentity {
+                    crate_id: 1,
+                    def_path: crate::symbols::DefPath::from("my_crate::A"),
+                },
+                CallEdgeType::Strong,
+            );
             vec![("my_crate::A", a_behavior), ("my_crate::B", b_behavior)]
         };
 
@@ -4087,7 +4242,12 @@ mod tests {
         let mut caller_behavior = rvs_make_behavior();
         caller_behavior.facts.has_mut_param = true;
         caller_behavior.calls.insert(
-            "std::sys::process::unix::unix::impl::spawn".into(),
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: crate::symbols::DefPath::from(
+                    "std::sys::process::unix::unix::impl::spawn",
+                ),
+            },
             CallEdgeType::Strong,
         );
         graph.rvs_insert_M("std::process::impl::spawn".into(), caller_behavior);
@@ -4095,27 +4255,44 @@ mod tests {
         let mut callee_behavior = rvs_make_behavior();
         callee_behavior.facts.has_mut_param = true;
         callee_behavior.calls.insert(
-            "std::sys::pal::unix::kernel_copy::rvs_write".into(),
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: crate::symbols::DefPath::from(
+                    "std::sys::pal::unix::kernel_copy::rvs_write",
+                ),
+            },
             CallEdgeType::Strong,
         );
-        callee_behavior
-            .calls
-            .insert("std::sys::cycle_a".into(), CallEdgeType::Strong);
+        callee_behavior.calls.insert(
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: crate::symbols::DefPath::from("std::sys::cycle_a"),
+            },
+            CallEdgeType::Strong,
+        );
         graph.rvs_insert_M(
             "std::sys::process::unix::unix::impl::spawn".into(),
             callee_behavior,
         );
 
         let mut cycle_a = rvs_make_behavior();
-        cycle_a
-            .calls
-            .insert("std::sys::cycle_b".into(), CallEdgeType::Strong);
+        cycle_a.calls.insert(
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: crate::symbols::DefPath::from("std::sys::cycle_b"),
+            },
+            CallEdgeType::Strong,
+        );
         graph.rvs_insert_M("std::sys::cycle_a".into(), cycle_a);
 
         let mut cycle_b = rvs_make_behavior();
-        cycle_b
-            .calls
-            .insert("std::sys::cycle_a".into(), CallEdgeType::Strong);
+        cycle_b.calls.insert(
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: crate::symbols::DefPath::from("std::sys::cycle_a"),
+            },
+            CallEdgeType::Strong,
+        );
         graph.rvs_insert_M("std::sys::cycle_b".into(), cycle_b);
 
         let seed = rvs_make_capsmap(&[("std::sys::pal::unix::kernel_copy::rvs_write", "BIS")]);
@@ -4175,16 +4352,24 @@ mod tests {
         let mut graph = FnGraph::rvs_new();
 
         let mut caller = rvs_make_behavior();
-        caller
-            .calls
-            .insert("std::io::Read::read".into(), CallEdgeType::Strong);
+        caller.calls.insert(
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: crate::symbols::DefPath::from("std::io::Read::read"),
+            },
+            CallEdgeType::Strong,
+        );
         graph.rvs_insert_M("my_crate::rvs_copy".into(), caller);
 
         let mut file_read = rvs_make_behavior();
         file_read.facts.has_mut_param = true;
-        file_read
-            .calls
-            .insert("libc::unix::read".into(), CallEdgeType::Strong);
+        file_read.calls.insert(
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: crate::symbols::DefPath::from("libc::unix::read"),
+            },
+            CallEdgeType::Strong,
+        );
         graph.rvs_insert_M("std::fs::read@std::io::Read".into(), file_read);
 
         let mut cursor_read = rvs_make_behavior();
@@ -4238,9 +4423,13 @@ mod tests {
         }
         let mut env_impl = rvs_make_behavior();
         env_impl.is_trait_impl = true;
-        env_impl
-            .calls
-            .insert(DefPath::from("std::env::var"), CallEdgeType::Strong);
+        env_impl.calls.insert(
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: DefPath::from("std::env::var"),
+            },
+            CallEdgeType::Strong,
+        );
         graph.rvs_insert_M(
             DefPath::from("demo::EnvValue::rvs_parse@demo::FromString"),
             env_impl,
@@ -4305,9 +4494,13 @@ mod tests {
         }
         let mut uncertain = rvs_make_behavior();
         uncertain.is_trait_impl = true;
-        uncertain
-            .calls
-            .insert(DefPath::from("dep::uncertain"), CallEdgeType::Strong);
+        uncertain.calls.insert(
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: DefPath::from("dep::uncertain"),
+            },
+            CallEdgeType::Strong,
+        );
         let uncertain_path = DefPath::from("demo::Uncertain::rvs_parse@demo::Parser");
         graph.rvs_insert_M(uncertain_path.clone(), uncertain);
         let mut seed = capsmap::CapsMap::rvs_new();
@@ -4363,19 +4556,29 @@ mod tests {
         let mut port_impl = rvs_make_behavior();
         port_impl.is_trait_impl = true;
         port_impl.facts.is_port_method = true;
-        port_impl
-            .calls
-            .insert(DefPath::from("dep::effect"), CallEdgeType::Strong);
+        port_impl.calls.insert(
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: DefPath::from("dep::effect"),
+            },
+            CallEdgeType::Strong,
+        );
         graph.rvs_insert_M(
             DefPath::from("demo::EnvClient::rvs_load_P@demo::ConfigClient"),
             port_impl,
         );
 
+        let dep_node = || {
+            let mut node = rvs_make_behavior();
+            node.crate_id = 2;
+            node.crate_provenance = crate::artifacts::CrateProvenance::Dependency;
+            node
+        };
         graph.rvs_insert_M(
             DefPath::from("dependency::Parser::rvs_parse"),
             FnNode {
                 has_body: false,
-                ..rvs_make_behavior()
+                ..dep_node()
             },
         );
         for (implementation, effectful) in [
@@ -4383,11 +4586,16 @@ mod tests {
             ("dependency::B", false),
             ("dependency::Env", true),
         ] {
-            let mut node = rvs_make_behavior();
+            let mut node = dep_node();
             node.is_trait_impl = true;
             if effectful {
-                node.calls
-                    .insert(DefPath::from("dep::effect"), CallEdgeType::Strong);
+                node.calls.insert(
+                    FunctionIdentity {
+                        crate_id: 2,
+                        def_path: DefPath::from("dep::effect"),
+                    },
+                    CallEdgeType::Strong,
+                );
             }
             graph.rvs_insert_M(
                 DefPath::from(format!("{implementation}::rvs_parse@dependency::Parser")),
@@ -4414,9 +4622,13 @@ mod tests {
             is_trait_impl: true,
             ..FnNode::default()
         };
-        sourceless
-            .calls
-            .insert(DefPath::from("dep::effect"), CallEdgeType::Strong);
+        sourceless.calls.insert(
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: DefPath::from("dep::effect"),
+            },
+            CallEdgeType::Strong,
+        );
         graph.rvs_insert_M(
             DefPath::from("demo::Generated::rvs_parse@demo::LocalParser"),
             sourceless,
@@ -4446,9 +4658,13 @@ mod tests {
 
         let mut caller = rvs_make_behavior();
         caller.facts.has_async = true;
-        caller
-            .calls
-            .insert("my_crate::sort_inplace".into(), CallEdgeType::Strong);
+        caller.calls.insert(
+            FunctionIdentity {
+                crate_id: 1,
+                def_path: crate::symbols::DefPath::from("my_crate::sort_inplace"),
+            },
+            CallEdgeType::Strong,
+        );
         graph.rvs_insert_M("my_crate::handle".into(), caller);
 
         let mut callee = rvs_make_behavior();
@@ -4471,15 +4687,23 @@ mod tests {
         let mut graph = FnGraph::rvs_new();
 
         let mut caller = rvs_make_behavior();
-        caller
-            .calls
-            .insert("std::io::Read::read".into(), CallEdgeType::Strong);
+        caller.calls.insert(
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: crate::symbols::DefPath::from("std::io::Read::read"),
+            },
+            CallEdgeType::Strong,
+        );
         graph.rvs_insert_M("my_crate::rvs_read_data".into(), caller);
 
         let mut file_read = rvs_make_behavior();
-        file_read
-            .calls
-            .insert("libc::unix::read".into(), CallEdgeType::Strong);
+        file_read.calls.insert(
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: crate::symbols::DefPath::from("libc::unix::read"),
+            },
+            CallEdgeType::Strong,
+        );
         graph.rvs_insert_M("std::fs::read@std::io::Read".into(), file_read);
 
         let mut rwlock_read = rvs_make_behavior();
@@ -4649,9 +4873,13 @@ mod tests {
     fn test_20260630_collect_direct_external_deps_uses_bin_prefix() {
         let mut graph = FnGraph::rvs_new();
         let mut local = rvs_make_behavior();
-        local
-            .calls
-            .insert("serde_json::de::from_str".into(), CallEdgeType::Strong);
+        local.calls.insert(
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: crate::symbols::DefPath::from("serde_json::de::from_str"),
+            },
+            CallEdgeType::Strong,
+        );
         graph.rvs_insert_M("cargo_rivus::rvs_parse".into(), local);
 
         let seed = capsmap::CapsMap::rvs_new();
@@ -4677,9 +4905,13 @@ mod tests {
     fn test_20260713_collect_direct_external_deps_includes_entry_calls() {
         let mut graph = FnGraph::rvs_new();
         let mut local = rvs_make_behavior();
-        local
-            .entry_calls
-            .insert("external_crate::shutdown_S".into(), CallEdgeType::Strong);
+        local.calls.insert(
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: crate::symbols::DefPath::from("external_crate::shutdown_S"),
+            },
+            CallEdgeType::Strong,
+        );
         graph.rvs_insert_M("demo::main".into(), local);
         let inferred = BTreeMap::from([(
             DefPath::from("external_crate::shutdown_S"),
@@ -4707,7 +4939,10 @@ mod tests {
         let mut graph = FnGraph::rvs_new();
         let mut behavior = rvs_make_behavior();
         behavior.calls.insert(
-            "some_external_crate::unknown_fn".into(),
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: crate::symbols::DefPath::from("some_external_crate::unknown_fn"),
+            },
             CallEdgeType::Strong,
         );
         graph.rvs_insert_M("my_crate::caller".into(), behavior);
@@ -4737,9 +4972,13 @@ mod tests {
     fn test_20260611_inferred_callee_is_known() {
         let mut graph = FnGraph::rvs_new();
         let mut behavior = rvs_make_behavior();
-        behavior
-            .calls
-            .insert("some_external_crate::known_fn".into(), CallEdgeType::Strong);
+        behavior.calls.insert(
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: crate::symbols::DefPath::from("some_external_crate::known_fn"),
+            },
+            CallEdgeType::Strong,
+        );
         graph.rvs_insert_M("my_crate::caller".into(), behavior);
 
         let seed = capsmap::CapsMap::rvs_new();
@@ -4771,7 +5010,10 @@ mod tests {
         let mut graph = FnGraph::rvs_new();
         let mut caller = rvs_make_behavior();
         caller.calls.insert(
-            DefPath::from("dep::Fetcher::rvs_fetch_BI"),
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: DefPath::from("dep::Fetcher::rvs_fetch_BI"),
+            },
             CallEdgeType::Strong,
         );
         graph.rvs_insert_M(DefPath::from("my_crate::rvs_run"), caller);
@@ -4816,9 +5058,13 @@ mod tests {
     fn test_20260611_seed_callee_is_skipped() {
         let mut graph = FnGraph::rvs_new();
         let mut behavior = rvs_make_behavior();
-        behavior
-            .calls
-            .insert("std::fs::write".into(), CallEdgeType::Strong);
+        behavior.calls.insert(
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: crate::symbols::DefPath::from("std::fs::write"),
+            },
+            CallEdgeType::Strong,
+        );
         graph.rvs_insert_M("my_crate::caller".into(), behavior);
 
         let seed = rvs_make_capsmap(&[("std::fs::write", "BI")]);
@@ -4841,9 +5087,13 @@ mod tests {
     fn test_20260613_inherent_impl_no_collision() {
         let mut graph = FnGraph::rvs_new();
         let mut behavior = rvs_make_behavior();
-        behavior
-            .calls
-            .insert("std::time::SystemTime::now".into(), CallEdgeType::Strong);
+        behavior.calls.insert(
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: crate::symbols::DefPath::from("std::time::SystemTime::now"),
+            },
+            CallEdgeType::Strong,
+        );
         graph.rvs_insert_M("my_crate::rvs_get_time".into(), behavior);
 
         let seed = rvs_make_capsmap(&[("std::time::SystemTime::now", "S")]);
@@ -4872,12 +5122,21 @@ mod tests {
     fn test_20260630_main_helper_coverage() {
         let mut merged = rvs_make_behavior();
         let mut other = rvs_make_behavior();
-        other
-            .calls
-            .insert("std::io::Read::read".into(), CallEdgeType::Strong);
+        other.calls.insert(
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: crate::symbols::DefPath::from("std::io::Read::read"),
+            },
+            CallEdgeType::Strong,
+        );
         other.facts.has_async = true;
         merged.rvs_merge_M(&other);
-        assert!(merged.calls.contains_key("std::io::Read::read"));
+        assert!(
+            merged
+                .calls
+                .keys()
+                .any(|k| k.def_path == "std::io::Read::read".into())
+        );
         assert!(merged.facts.has_async);
 
         let mut graph = FnGraph::rvs_new();
@@ -4927,8 +5186,12 @@ mod tests {
         local.facts.is_port_method = true;
         let mut dependency = rvs_make_behavior();
         dependency.facts.is_port_method = true;
+        dependency.crate_id = 2;
+        dependency.crate_provenance = crate::artifacts::CrateProvenance::Dependency;
         let mut std_method = rvs_make_behavior();
         std_method.facts.is_port_method = true;
+        std_method.crate_id = 3;
+        std_method.crate_provenance = crate::artifacts::CrateProvenance::Dependency;
         let mut graph = FnGraph::rvs_new();
         graph.rvs_insert_M(DefPath::from("app::ApiClient::rvs_fetch_P"), local);
         graph.rvs_insert_M(DefPath::from("dependency::HttpClient::fetch"), dependency);
@@ -4969,7 +5232,7 @@ mod tests {
         };
         let mut local = rvs_make_behavior();
         local.facts = port_facts;
-        local.rvs_test_target_M(10).facts = port_facts;
+        local.facts = port_facts;
         let mut external = rvs_make_behavior();
         external.facts = port_facts;
         let external_target = external.rvs_test_target_M(20);
@@ -4983,11 +5246,11 @@ mod tests {
 
         let local_target_port = graph
             .rvs_get("app::ApiClient::rvs_fetch_P")
-            .and_then(|node| node.targets.get(&10))
+            .map(|node| node)
             .is_some_and(|target| target.facts.is_port_method);
         let external_target_port = graph
             .rvs_get("dependency::HttpClient::fetch")
-            .and_then(|node| node.targets.get(&20))
+            .map(|node| node)
             .is_some_and(|target| target.facts.is_port_method);
         let output = format!(
             "local_target_port={local_target_port}\nexternal_target_port={external_target_port}\n"
@@ -5006,10 +5269,16 @@ mod tests {
         let external_path = DefPath::from("dependency::HttpClient::fetch");
         let mut external = rvs_make_behavior();
         external.facts.is_port_method = true;
+        external.crate_id = 2;
+        external.crate_provenance = crate::artifacts::CrateProvenance::Dependency;
         let mut caller = rvs_make_behavior();
-        caller
-            .calls
-            .insert(external_path.clone(), CallEdgeType::Strong);
+        caller.calls.insert(
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: external_path.clone(),
+            },
+            CallEdgeType::Strong,
+        );
         let mut graph = FnGraph::rvs_new();
         graph.rvs_insert_M(DefPath::from("app::rvs_run_BI"), caller);
         graph.rvs_insert_M(external_path.clone(), external);
@@ -5072,7 +5341,10 @@ mod tests {
         let mut graph = FnGraph::rvs_new();
         let mut local_caller = rvs_make_behavior();
         local_caller.calls.insert(
-            DefPath::from("tempfile::Builder::tempdir_in"),
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: DefPath::from("tempfile::Builder::tempdir_in"),
+            },
             CallEdgeType::Strong,
         );
         graph.rvs_insert_M(DefPath::from("cargo_rivus::rvs_reserve"), local_caller);
@@ -5080,22 +5352,37 @@ mod tests {
         let mut tempdir_in = rvs_make_behavior();
         tempdir_in.has_body = true;
         tempdir_in.calls.insert(
-            DefPath::from("tempfile::util::create_helper"),
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: DefPath::from("tempfile::util::create_helper"),
+            },
             CallEdgeType::Strong,
         );
         graph.rvs_insert_M(DefPath::from("tempfile::Builder::tempdir_in"), tempdir_in);
 
         let mut create_helper = rvs_make_behavior();
         create_helper.has_body = true;
-        create_helper
-            .calls
-            .insert(DefPath::from("fastrand::Rng::new"), CallEdgeType::Strong);
-        create_helper
-            .calls
-            .insert(DefPath::from("std::env::current_dir"), CallEdgeType::Strong);
-        create_helper
-            .calls
-            .insert(DefPath::from("std::fs::create_dir"), CallEdgeType::Strong);
+        create_helper.calls.insert(
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: DefPath::from("fastrand::Rng::new"),
+            },
+            CallEdgeType::Strong,
+        );
+        create_helper.calls.insert(
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: DefPath::from("std::env::current_dir"),
+            },
+            CallEdgeType::Strong,
+        );
+        create_helper.calls.insert(
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: DefPath::from("std::fs::create_dir"),
+            },
+            CallEdgeType::Strong,
+        );
         graph.rvs_insert_M(
             DefPath::from("tempfile::util::create_helper"),
             create_helper,
@@ -5166,7 +5453,10 @@ mod tests {
         let mut graph = FnGraph::rvs_new();
         let mut local_caller = rvs_make_behavior();
         local_caller.calls.insert(
-            DefPath::from("tempfile::Builder::new"),
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: DefPath::from("tempfile::Builder::new"),
+            },
             CallEdgeType::Strong,
         );
         graph.rvs_insert_M(DefPath::from("cargo_rivus::rvs_run"), local_caller);
@@ -5209,7 +5499,10 @@ mod tests {
         let mut graph = FnGraph::rvs_new();
         let mut local_caller = rvs_make_behavior();
         local_caller.calls.insert(
-            DefPath::from("tempfile::Builder::prefix"),
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: DefPath::from("tempfile::Builder::prefix"),
+            },
             CallEdgeType::Strong,
         );
         graph.rvs_insert_M(DefPath::from("cargo_rivus::rvs_run"), local_caller);

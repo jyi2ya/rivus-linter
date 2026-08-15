@@ -306,10 +306,11 @@ fn rvs_format_why_callees(
         .calls
         .keys()
         .map(|callee| {
-            let caps = resolver.rvs_for_explanation_view(callee);
-            let completeness = rvs_why_path_completeness(callee, analysis, resolver);
+            let caps = resolver.rvs_for_explanation_view(&callee.def_path);
+            let completeness = rvs_why_path_completeness(&callee.def_path, analysis, resolver);
             format!(
-                "    {callee}: {}",
+                "    {}: {}",
+                callee.def_path,
                 rvs_format_why_callee_caps(caps.as_ref(), completeness)
             )
         })
@@ -540,7 +541,7 @@ fn rvs_format_enforced_contract_diff_summary(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::artifacts::CallEdgeType;
+    use crate::artifacts::{CallEdgeType, FunctionIdentity};
     use std::collections::HashMap;
 
     use crate::artifacts::{FnGraph, FnNode, FnSource};
@@ -654,9 +655,13 @@ mod tests {
         );
         let mut outlier = node();
         outlier.is_trait_impl = true;
-        outlier
-            .calls
-            .insert(DefPath::from("dep::environment"), CallEdgeType::Strong);
+        outlier.calls.insert(
+            FunctionIdentity {
+                crate_id: 1,
+                def_path: DefPath::from("dep::environment"),
+            },
+            CallEdgeType::Strong,
+        );
         let outlier_path = DefPath::from("demo::EnvValue::rvs_parse@demo::FromString");
         graph.rvs_insert_M(outlier_path.clone(), outlier);
         let analysis = PreparedLocalAnalysis::rvs_prepare_M(
@@ -708,18 +713,26 @@ mod tests {
 
         let mut empty_incomplete_impl = node();
         empty_incomplete_impl.is_trait_impl = true;
-        empty_incomplete_impl
-            .calls
-            .insert(DefPath::from("dep::opaque_empty"), CallEdgeType::Strong);
+        empty_incomplete_impl.calls.insert(
+            FunctionIdentity {
+                crate_id: 1,
+                def_path: DefPath::from("dep::opaque_empty"),
+            },
+            CallEdgeType::Strong,
+        );
         let empty_incomplete_path = DefPath::from("demo::EmptyIncomplete::rvs_parse@demo::Parser");
         graph.rvs_insert_M(empty_incomplete_path.clone(), empty_incomplete_impl);
 
         let mut stateful_incomplete_impl = node();
         stateful_incomplete_impl.is_trait_impl = true;
         stateful_incomplete_impl.facts.has_static_ref = true;
-        stateful_incomplete_impl
-            .calls
-            .insert(DefPath::from("dep::opaque_stateful"), CallEdgeType::Strong);
+        stateful_incomplete_impl.calls.insert(
+            FunctionIdentity {
+                crate_id: 1,
+                def_path: DefPath::from("dep::opaque_stateful"),
+            },
+            CallEdgeType::Strong,
+        );
         graph.rvs_insert_M(
             DefPath::from("demo::StatefulIncomplete::rvs_parse@demo::Parser"),
             stateful_incomplete_impl,
@@ -788,16 +801,28 @@ mod tests {
                 "dep::opaque",
             ]
             .into_iter()
-            .map(|c| (DefPath::from(c), CallEdgeType::Strong)),
+            .map(|c| {
+                (
+                    FunctionIdentity {
+                        crate_id: 1,
+                        def_path: DefPath::from(c),
+                    },
+                    CallEdgeType::Strong,
+                )
+            }),
         );
         graph.rvs_insert_M(caller_path.clone(), caller);
         graph.rvs_insert_M(DefPath::from("demo::rvs_complete"), node());
 
         let mut partial = node();
         partial.facts.has_static_ref = true;
-        partial
-            .calls
-            .insert(DefPath::from("dep::opaque_nested"), CallEdgeType::Strong);
+        partial.calls.insert(
+            FunctionIdentity {
+                crate_id: 1,
+                def_path: DefPath::from("dep::opaque_nested"),
+            },
+            CallEdgeType::Strong,
+        );
         graph.rvs_insert_M(DefPath::from("demo::rvs_partial_S"), partial);
 
         let mut caps = crate::capsmap::CapsMap::rvs_new();
@@ -921,9 +946,13 @@ mod tests {
             is_trait_impl: true,
             ..FnNode::default()
         };
-        generated
-            .calls
-            .insert(DefPath::from("dep::effect"), CallEdgeType::Strong);
+        generated.calls.insert(
+            FunctionIdentity {
+                crate_id: 1,
+                def_path: DefPath::from("dep::effect"),
+            },
+            CallEdgeType::Strong,
+        );
         let generated_path = DefPath::from("demo::Generated::rvs_parse@demo::Parser");
         graph.rvs_insert_M(generated_path.clone(), generated);
         let analysis = PreparedLocalAnalysis::rvs_prepare_M(
@@ -1741,7 +1770,7 @@ path = "src/main.rs"
         );
 
         assert!(result.is_ok(), "annotate should succeed: {result:?}");
-        assert!(lib_source.contains("pub fn rvs_main()"));
+        assert!(lib_source.contains("pub fn main()"));
         assert_eq!(bin_source, "fn main() {}\n");
 
         std::fs::remove_dir_all(dir).unwrap();
