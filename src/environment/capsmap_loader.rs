@@ -150,14 +150,11 @@ fn rvs_load_caps_dir_BIS(
         {
             continue;
         }
-        let bytes = fs_guard::rvs_read_file_BIS(&path).map_err(|error| CapsMapError::FileRead {
-            path: path.display().to_string(),
-            error: error.to_string(),
-        })?;
-        let content = String::from_utf8(bytes).map_err(|error| CapsMapError::FileRead {
-            path: path.display().to_string(),
-            error: format!("invalid UTF-8: {error}"),
-        })?;
+        let content =
+            fs_guard::rvs_read_file_utf8_BIS(&path).map_err(|error| CapsMapError::FileRead {
+                path: path.display().to_string(),
+                error: error.to_string(),
+            })?;
         let partial = rvs_parse_caps_file(&path, &content)?;
         result.rvs_extend_from_M(partial);
     }

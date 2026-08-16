@@ -408,11 +408,7 @@ fn rvs_write_collected_edits_BIS(
 }
 
 fn rvs_checked_rename_count(current: usize, delta: usize, label: &str) -> Result<usize, String> {
-    debug_assert!(current.checked_add(0).is_some(), "current count is valid");
-    debug_assert!(delta.checked_add(0).is_some(), "delta count is valid");
-    current
-        .checked_add(delta)
-        .ok_or_else(|| format!("{label} overflow while applying rust-analyzer renames"))
+    super::rvs_checked_count_sum(current, delta, label)
 }
 
 fn rvs_require_local_real_file_BIS(file_path: &Path, canonical_path: &Path) -> Result<(), String> {
@@ -673,8 +669,8 @@ fn rvs_invalidate_callgraph_cache_BIS(project_path: &Path) -> Result<(), String>
     let target = project_path.join("target");
     let caches = [
         target.join("rivus-callgraph"),
-        target.join("rivus-callgraph-std"),
-        target.join("rivus-callgraph-std.json"),
+        super::callgraph_cache::rvs_std_callgraph_cache_dir(project_path),
+        super::callgraph_cache::rvs_std_callgraph_cache_path(project_path),
     ];
     rvs_invalidate_callgraph_cache_paths_BIS(&caches)
 }

@@ -1606,12 +1606,7 @@ fn rvs_format_optional_caps(caps: Option<&CapabilitySet>) -> String {
 }
 
 fn rvs_format_caps(caps: &CapabilitySet) -> String {
-    let caps_str = caps.rvs_letters();
-    if caps_str.is_empty() {
-        "pure".to_string()
-    } else {
-        caps_str
-    }
+    caps.rvs_letters_or_pure()
 }
 
 fn rvs_format_cap_list(caps: &[Capability]) -> String {

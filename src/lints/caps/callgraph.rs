@@ -191,7 +191,9 @@ pub(crate) fn rvs_collect_callgraph_for_item_BMS<'tcx>(
             .iter()
             .filter(|observation| observation.kind == crate::lints::utils::ObservationKind::Direct)
             .filter_map(|observation| match &observation.target {
-                CallTarget::UnresolvedPath { path } => path.rsplit("::").next().map(str::to_string),
+                CallTarget::UnresolvedPath { path } => {
+                    Some(crate::lints::body::collector::rvs_unresolved_call_name(path).to_string())
+                }
                 CallTarget::UnresolvedMethod { name } => Some(name.clone()),
                 CallTarget::Resolved { .. } => None,
             })

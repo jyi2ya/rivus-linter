@@ -160,11 +160,7 @@ fn rvs_build_report(entries: &[FnEntry]) -> Result<Report, String> {
 }
 
 fn rvs_checked_report_sum(current: usize, delta: usize, label: &str) -> Result<usize, String> {
-    debug_assert!(current.checked_add(0).is_some(), "current count is valid");
-    debug_assert!(delta.checked_add(0).is_some(), "delta count is valid");
-    current
-        .checked_add(delta)
-        .ok_or_else(|| format!("{label} overflow while building capability report"))
+    super::rvs_checked_count_sum(current, delta, label)
 }
 
 fn rvs_report_entry(
@@ -299,11 +295,7 @@ fn rvs_format_trait_outlier_summary(
             "{}: {} outside {} for {} (threshold {}/{}, targets {targets})\n",
             outlier.implementation,
             outlier.unexpected_caps.rvs_letters(),
-            if outlier.selected_caps.rvs_is_empty() {
-                "pure".to_string()
-            } else {
-                outlier.selected_caps.rvs_letters()
-            },
+            outlier.selected_caps.rvs_letters_or_pure(),
             outlier.trait_method,
             outlier.threshold,
             outlier.implementations,

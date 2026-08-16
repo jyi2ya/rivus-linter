@@ -386,18 +386,13 @@ fn rvs_read_optional_setup_file_BIS(
     rvs_preflight_setup_file_BIS(path, label, requirement)?;
     match std::fs::symlink_metadata(path) {
         Ok(_) => {
-            let bytes = super::fs_guard::rvs_read_file_BIS(path).map_err(|source| {
+            let content = super::fs_guard::rvs_read_file_utf8_BIS(path).map_err(|source| {
                 SetupError::ReadTarget {
                     path: path.to_path_buf(),
                     source,
                 }
             })?;
-            String::from_utf8(bytes)
-                .map(Some)
-                .map_err(|source| SetupError::ReadTarget {
-                    path: path.to_path_buf(),
-                    source: std::io::Error::other(format!("invalid UTF-8: {source}")),
-                })
+            Ok(Some(content))
         }
         Err(error)
             if error.kind() == std::io::ErrorKind::NotFound

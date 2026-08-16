@@ -158,11 +158,7 @@ pub(crate) fn rvs_detect_local_crate_prefixes_for_function_query_BIS(
     path: &Path,
     target_scope: CargoTargetScope,
 ) -> Result<Option<BTreeSet<CrateName>>, String> {
-    let cargo_toml = path.join("Cargo.toml");
-    let content = std::fs::read_to_string(&cargo_toml)
-        .map_err(|e| format!("cannot read '{}': {e}", cargo_toml.display()))?;
-    let model = rvs_parse_cargo_project_model(&content)
-        .map_err(|e| format!("invalid TOML in '{}': {e}", cargo_toml.display()))?;
+    let model = rvs_load_cargo_project_model_BIS(path)?;
     if model.document.get("package").is_none() {
         return Ok(None);
     }
@@ -174,11 +170,7 @@ pub(crate) fn rvs_collect_auto_target_prefixes_BIMS(
     path: &Path,
     prefixes: &mut BTreeSet<CrateName>,
 ) -> Result<(), String> {
-    let cargo_toml = path.join("Cargo.toml");
-    let content = std::fs::read_to_string(&cargo_toml)
-        .map_err(|e| format!("cannot read {}: {e}", cargo_toml.display()))?;
-    let model = rvs_parse_cargo_project_model(&content)
-        .map_err(|e| format!("{}: {e}", cargo_toml.display()))?;
+    let model = rvs_load_cargo_project_model_BIS(path)?;
     let auto_target_flags = rvs_parse_auto_target_flags(&model.document);
     rvs_collect_auto_target_prefixes_for_targets_BIMS(
         path,

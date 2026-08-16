@@ -840,16 +840,15 @@ fn rvs_check_item_BMS<'tcx>(
                 false,
             );
             rvs_run_body_fn_pipeline_BMS(cx, &subject, data, data.should_emit_lints, || {
-                if is_test {
-                    test_names
-                        .entry(name.to_string())
-                        .or_default()
-                        .push(ctx::TestSite {
-                            hir_id: item.hir_id(),
-                            span: item.span,
-                        });
-                    body::collector::rvs_collect_test_calls_M(&body_facts, test_calls);
-                }
+                ctx::rvs_record_test_site_MS(
+                    is_test,
+                    name,
+                    item.hir_id(),
+                    item.span,
+                    &body_facts,
+                    test_names,
+                    test_calls,
+                );
                 let vis = cx.tcx.visibility(item.owner_id.def_id);
                 let is_pub = vis.is_public();
                 missing_doc::rvs_check_fn_S(cx, name, item.span, attrs, is_pub);
@@ -955,16 +954,15 @@ fn rvs_check_impl_item_BMS<'tcx>(
             is_port_method,
         );
         rvs_run_body_fn_pipeline_BMS(cx, &subject, data, should_check_fn, || {
-            if is_test {
-                test_names
-                    .entry(name.to_string())
-                    .or_default()
-                    .push(ctx::TestSite {
-                        hir_id: impl_item.hir_id(),
-                        span: impl_item.span,
-                    });
-                body::collector::rvs_collect_test_calls_M(&body_facts, test_calls);
-            }
+            ctx::rvs_record_test_site_MS(
+                is_test,
+                name,
+                impl_item.hir_id(),
+                impl_item.span,
+                &body_facts,
+                test_names,
+                test_calls,
+            );
             if !is_test && is_pub {
                 missing_doc::rvs_check_fn_S(cx, name, impl_item.span, attrs, true);
             }

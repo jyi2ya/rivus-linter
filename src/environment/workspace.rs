@@ -500,16 +500,10 @@ fn rvs_read_primary_package_targets_BIS(
     generation_id: &str,
 ) -> Result<PrimaryPackageTargets, DriverProtocolError> {
     let path = root.join(RVS_PRIMARY_PACKAGE_TARGETS_FILE);
-    let json = super::fs_guard::rvs_read_file_BIS(&path).map_err(|source| {
+    let json = super::fs_guard::rvs_read_file_utf8_BIS(&path).map_err(|source| {
         DriverProtocolError::ReadPrimaryPackageTargets {
             path: path.clone(),
             source,
-        }
-    })?;
-    let json = String::from_utf8(json).map_err(|source| {
-        DriverProtocolError::ReadPrimaryPackageTargets {
-            path: path.clone(),
-            source: std::io::Error::other(format!("invalid UTF-8: {source}")),
         }
     })?;
     let targets: PrimaryPackageTargets = serde_json::from_str(&json).map_err(|source| {
@@ -1085,7 +1079,9 @@ fn rvs_write_primary_package_targets_BIST(
             )
         })?;
         targets.insert(PrimaryPackageTarget {
-            crate_name: target.name.replace('-', "_"),
+            crate_name: CrateName::rvs_from_manifest_name(&target.name)
+                .rvs_as_str()
+                .to_string(),
             source_path,
         });
     }
@@ -1897,15 +1893,11 @@ fn rvs_read_run_generation_marker_BIS(
         Ok(_) => return Err(RunGenerationError::MarkerNotFile { path }),
         Err(source) => return Err(RunGenerationError::ReadMarker { path, source }),
     }
-    let json_bytes = super::fs_guard::rvs_read_file_BIS(&path).map_err(|source| {
+    let json = super::fs_guard::rvs_read_file_utf8_BIS(&path).map_err(|source| {
         RunGenerationError::ReadMarker {
             path: path.clone(),
             source,
         }
-    })?;
-    let json = String::from_utf8(json_bytes).map_err(|source| RunGenerationError::ReadMarker {
-        path: path.clone(),
-        source: std::io::Error::other(format!("invalid UTF-8: {source}")),
     })?;
     let marker: RunGenerationMarker =
         serde_json::from_str(&json).map_err(|source| RunGenerationError::ParseMarker {
@@ -1965,7 +1957,7 @@ fn rvs_load_required_std_callgraph_cache_BIS(path: &Path) -> Result<FnGraph, Str
         Ok(None) => {}
         Err(error) => return Err(format!("{error}; run cargo rivus infer-std first")),
     }
-    let cg_std_dir = path.join("target").join("rivus-callgraph-std");
+    let cg_std_dir = super::callgraph_cache::rvs_std_callgraph_cache_dir(path);
     if super::fs_guard::rvs_validate_optional_dir_BIS(&cg_std_dir, "std callgraph cache")? {
         let cg = rvs_merge_callgraph_dir_BIS(&cg_std_dir, &BTreeSet::new())
             .map_err(|e| format!("{e}; run cargo rivus infer-std first"))?;
@@ -2048,7 +2040,7 @@ fn rvs_collect_project_callgraph_with_optional_std_cache_BIST(
             return Ok(callgraph);
         }
     }
-    let cg_std_dir = path.join("target").join("rivus-callgraph-std");
+    let cg_std_dir = super::callgraph_cache::rvs_std_callgraph_cache_dir(path);
     if rvs_warn_optional_dir_BIST(&cg_std_dir, "std callgraph cache") {
         match rvs_merge_callgraph_dir_BIS(&cg_std_dir, &BTreeSet::new()) {
             Ok(std_graph) => {

@@ -11,6 +11,8 @@ use crate::callgraph::{
 use crate::symbols::CrateName;
 
 const STD_CALLGRAPH_CACHE_FILE: &str = "rivus-callgraph-std.json";
+/// Legacy per-unit std callgraph directory kept for read-only diagnostics.
+pub(crate) const STD_CALLGRAPH_CACHE_DIR: &str = "rivus-callgraph-std";
 
 #[derive(Debug, Snafu)]
 pub(crate) enum CallgraphCacheError {
@@ -68,6 +70,10 @@ pub(crate) fn rvs_std_callgraph_cache_path(project_path: &Path) -> PathBuf {
     project_path.join("target").join(STD_CALLGRAPH_CACHE_FILE)
 }
 
+pub(crate) fn rvs_std_callgraph_cache_dir(project_path: &Path) -> PathBuf {
+    project_path.join("target").join(STD_CALLGRAPH_CACHE_DIR)
+}
+
 pub(crate) fn rvs_load_published_std_callgraph_cache_BIS(
     project_path: &Path,
 ) -> Result<Option<FnGraph>, CallgraphCacheError> {
@@ -83,15 +89,11 @@ fn rvs_load_published_std_callgraph_cache_with_hook_BIS(
         return Ok(None);
     }
     before_read(&path);
-    let json = super::fs_guard::rvs_read_file_BIS(&path).map_err(|source| {
+    let json = super::fs_guard::rvs_read_file_utf8_BIS(&path).map_err(|source| {
         CallgraphCacheError::ReadArtifact {
             path: path.to_path_buf(),
             source,
         }
-    })?;
-    let json = String::from_utf8(json).map_err(|source| CallgraphCacheError::ReadArtifact {
-        path: path.to_path_buf(),
-        source: std::io::Error::other(format!("invalid UTF-8: {source}")),
     })?;
     let graph = artifacts::rvs_parse_callgraph_json_S(&json).map_err(|source| {
         CallgraphCacheError::ParseArtifact {
@@ -201,15 +203,11 @@ fn rvs_merge_callgraph_dir_for_generation_with_hook_BIS(
     json_paths.sort();
     for path in &json_paths {
         before_read(path);
-        let json = super::fs_guard::rvs_read_file_BIS(path).map_err(|source| {
+        let json = super::fs_guard::rvs_read_file_utf8_BIS(path).map_err(|source| {
             CallgraphCacheError::ReadArtifact {
                 path: path.to_path_buf(),
                 source,
             }
-        })?;
-        let json = String::from_utf8(json).map_err(|source| CallgraphCacheError::ReadArtifact {
-            path: path.to_path_buf(),
-            source: std::io::Error::other(format!("invalid UTF-8: {source}")),
         })?;
         artifacts.push(
             artifacts::rvs_parse_callgraph_json_S(&json).map_err(|source| {

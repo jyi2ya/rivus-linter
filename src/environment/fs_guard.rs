@@ -115,6 +115,13 @@ pub(crate) fn rvs_read_file_BIS(path: &Path) -> std::io::Result<Vec<u8>> {
     std::fs::read(path)
 }
 
+pub(crate) fn rvs_read_file_utf8_BIS(path: &Path) -> std::io::Result<String> {
+    let bytes = rvs_read_file_BIS(path)?;
+    String::from_utf8(bytes).map_err(|source| {
+        std::io::Error::other(format!("invalid UTF-8 in {}: {source}", path.display()))
+    })
+}
+
 pub(crate) fn rvs_validate_optional_dir_BIS(path: &Path, label: &str) -> Result<bool, String> {
     match std::fs::symlink_metadata(path) {
         Ok(_) if path.is_dir() => Ok(true),

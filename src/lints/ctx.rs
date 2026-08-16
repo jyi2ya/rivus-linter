@@ -20,6 +20,27 @@ pub(crate) struct TestSite {
     pub(crate) span: Span,
 }
 
+/// Shared test-site accounting for free-fn and impl-item handlers:
+/// registers the site by name and harvests direct `rvs_` calls from the body.
+pub(crate) fn rvs_record_test_site_MS(
+    is_test: bool,
+    name: &str,
+    hir_id: HirId,
+    span: Span,
+    body_facts: &BodyFacts,
+    test_names: &mut BTreeMap<String, Vec<TestSite>>,
+    test_calls: &mut std::collections::HashSet<TestCallTarget>,
+) {
+    if !is_test {
+        return;
+    }
+    test_names
+        .entry(name.to_string())
+        .or_default()
+        .push(TestSite { hir_id, span });
+    super::body::collector::rvs_collect_test_calls_M(body_facts, test_calls);
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum TestCallTarget {
     Resolved(FunctionIdentity),

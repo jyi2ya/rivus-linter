@@ -386,12 +386,7 @@ fn rvs_format_known_propagated_caps(caps: &crate::capability::CapabilitySet) -> 
 }
 
 fn rvs_format_caps_letters(caps: &crate::capability::CapabilitySet) -> String {
-    let letters = caps.rvs_letters();
-    if letters.is_empty() {
-        "(pure)".to_string()
-    } else {
-        letters
-    }
+    caps.rvs_letters_or_pure()
 }
 
 fn rvs_why_function_matches(
@@ -432,11 +427,7 @@ fn rvs_format_why_caps(
             Unknown => " (no known caps; completeness unknown)".to_string(),
         }
     } else {
-        let mut description = caps
-            .rvs_iter()
-            .map(|capability| capability.rvs_description())
-            .collect::<Vec<_>>()
-            .join(" ");
+        let mut description = caps.rvs_descriptions();
         match completeness {
             Complete => {}
             Incomplete => description.push_str("; inference incomplete"),

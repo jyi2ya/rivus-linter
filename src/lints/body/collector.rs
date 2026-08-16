@@ -466,7 +466,7 @@ pub(crate) fn rvs_collect_test_calls_M(facts: &BodyFacts, out: &mut HashSet<Test
                 }),
             ),
             CallTarget::UnresolvedPath { path } => {
-                let name = path.rsplit("::").next().unwrap_or(path);
+                let name = rvs_unresolved_call_name(path);
                 (name, TestCallTarget::UnresolvedName(name.to_string()))
             }
             CallTarget::UnresolvedMethod { name } => {
@@ -477,6 +477,11 @@ pub(crate) fn rvs_collect_test_calls_M(facts: &BodyFacts, out: &mut HashSet<Test
             out.insert(target);
         }
     }
+}
+
+/// Last path segment of an unresolved call path, used as the call's short name.
+pub(crate) fn rvs_unresolved_call_name(path: &str) -> &str {
+    path.rsplit("::").next().unwrap_or(path)
 }
 
 fn rvs_expr_is_stub(cx: &LateContext<'_>, expr: &rustc_hir::Expr<'_>) -> bool {

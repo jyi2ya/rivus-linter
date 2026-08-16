@@ -789,6 +789,16 @@ impl CapabilitySet {
         self.rvs_iter().map(Capability::rvs_as_char).collect()
     }
 
+    /// Render letters with the canonical empty-set label "pure".
+    pub fn rvs_letters_or_pure(&self) -> String {
+        let letters = self.rvs_letters();
+        if letters.is_empty() {
+            "pure".to_string()
+        } else {
+            letters
+        }
+    }
+
     /// Render the canonical descriptions used in capsmap comments.
     pub fn rvs_descriptions(&self) -> String {
         self.rvs_iter()
