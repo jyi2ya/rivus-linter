@@ -1,12 +1,16 @@
 # 能力检查
 
-## 实体
+## 实体与事实源
 
-**函数**是基本实体。每个函数有一个**名字**，名字中的后缀编码了该函数的**后缀能力集合**（`B/I/M/P/S/T` 的子集）；`A/C/U` 由签名与函数体事实测量，不进入名字。
+**函数**是基本实体。函数的**语义能力集合**（`ABCIMPSTU` 的子集）唯一来自调用图：函数签名与函数体事实、直接调用边、capsmap 精确条目、trait 实现投票和 Port 结构规则共同推断出每个节点的 semantic caps。函数**名字不是能力来源**。
+
+名字中的能力后缀只是 semantic caps 的**只读视图**：把 semantic caps 投影到 `B/I/M/P/S/T` 并按字母序排列，方便人类和大模型即时阅读。后缀与投影不一致时产生 naming view 诊断；后缀永不参与能力推断、传播、调用检查、报告统计或覆盖分类。修改函数名（含删除或伪造后缀）不会改变任何语义分析结果。
+
+`A/C/U` 永不进入视图：A 来自 `async fn`、C 来自 `const fn`、U 来自 `unsafe fn` 或 `static mut` 访问，这些信息从签名与函数体直接可见。
 
 ## 能力
 
-能力是函数的运行时性质的声明，共有九种：
+能力是函数的运行时性质，共有九种：
 
 | 能力 | 含义 | 参与调用规则 | 推断方式 |
 |------|------|------------|---------|
@@ -30,18 +34,23 @@
 
 good 和 ok 的统计集合可以重叠，但未测试诊断采用互斥分类：good 函数只报告 good，只有属于 ok 且不属于 good 的函数才报告 ok。
 
-## 命名约定
+## 命名视图
 
-函数名以 `rvs_` 开头。名字的最后一节（以下划线分隔）若全由能力字母组成，则视为能力后缀。
+函数名以 `rvs_` 开头。名字的最后一节（以下划线分隔）若全由大写 ASCII 字母组成，则视为能力后缀视图：
+
+- 期望视图 = `project_BIMPST(semantic caps)`，按字母序排列
+- 完整知识下，actual 后缀必须精确等于期望视图
+- 后缀含 A/C/U、未知字母、重复字母或乱序是**视图结构错误**
+- 缺失或多出 B/I/M/P/S/T 是**视图与语义不一致**
 
 例：
-- `rvs_add` → 无能力
-- `rvs_divide` → 无能力
-- `rvs_write_db_BIS` → 能力 {B, I, S}（A/C/U 由签名与函数体测量，永不进入名字）
+- `rvs_add` → 期望视图为空（semantic caps 为空集时）
+- `rvs_write_db_BIS` → semantic caps 含 B/I/S 时期望视图为 `BIS`（A/C/U 由签名与函数体测量，永不进入名字）
+- 纯函数错误写 `_I` → semantic caps 仍为空集，只报 extra-view 诊断，调用方仍按纯函数检查
 
 ### P（Port）能力
 
-P 是特殊的能力：普通函数可以通过 `_P` 后缀声明自己依赖端口；World Port 的操作由 trait 结构获得 P，并通过实现投票获得完整的 `B/I/S/T` 契约。
+P 是特殊能力：普通函数可以通过 `_P` 视图声明自己依赖端口；World Port 的操作由 trait 结构获得 P，并通过实现投票获得完整的 `B/I/S/T` 契约。
 
 本地 trait 声明一个非泛型 associated type `World`，至少包含一个无 `self` receiver 的操作，并且每个操作都显式接收 `&Self::World` 或 `&mut Self::World` 时，该 trait 被标记为 **Port**。额外 associated type 表示长期资源；associated constant、generic World、receiver 方法或缺少 World 参数的操作都会使整个 trait 按普通 trait 处理。trait 名不参与判断。
 
@@ -69,12 +78,14 @@ P 参与调用规则并向上传播：只要被调用方的完整能力包含 P�
 
 1. rustc lint pass 从 HIR 收集函数签名、静态状态、源码位置和直接调用边
 2. 将各 crate 的事实合并为函数语义图
-3. 从函数名、签名、Port 规则和 capsmap 解析声明能力
-4. 在函数图上推断期望能力和命名契约
-5. 使用同一个离线能力引擎检查契约、后缀、静态状态和调用关系
+3. 从签名/函数体事实、Port 规则、trait 投票和 capsmap 精确条目推断 semantic caps（函数名不参与）
+4. 在函数图上传播可传播能力到固定点
+5. 使用同一个离线能力引擎检查调用关系、静态状态和视图一致性
 6. 直接 rustc/UI 模式把当前 crate 的诊断映射为 rustc lint；`cargo rivus check` 输出全项目诊断
 
 命名契约不一致只有一套语义分类。离线报告直接携带推断阶段产生的 contract kind，并由输出层分别映射为稳定诊断 code 或 rustc lint；输出层不得复制另一套 `MissingBlocking`、`MissingIo` 等分类枚举。
+
+不完整知识下的视图比较规则：known lower bound 中存在而视图缺失的能力可以报 missing；视图中存在而 lower bound 未证明的能力不能报 extra——它可能来自尚未证明的传播。A/C/U、未知字母、重复、乱序不依赖 completeness，始终可报。bodyless 函数没有函数体、impl 投票或 capsmap 条目时保持 unknown，即使名字写了 `_BI` 也不从名字补全。
 
 能力集合和能力知识是不同概念。调用检查消费能力集合；解释和设计反馈还消费能力来源、完整度与 trait 投票证据。旧记录迁移不得伪造已经丢失的证据。详见 `capability-knowledge.md`。
 

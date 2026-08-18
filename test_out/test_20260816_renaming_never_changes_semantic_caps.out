@@ -1,0 +1,3 @@
+plain=["demo::rvs_handle=BI", "dep::fs::read=BI"]
+forged=["demo::rvs_handle_IS=BI", "dep::fs::read=BI"]
+wrong=["demo::rvs_handle_B=BI", "dep::fs::read=BI"]

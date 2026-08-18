@@ -5688,4 +5688,65 @@ mod tests {
         );
         assert!(unknown.is_empty());
     }
+
+    #[test]
+    fn test_20260816_renaming_never_changes_semantic_caps() {
+        // The suffix is a view over callgraph facts. Renaming a function
+        // (adding, removing, or forging suffix letters) must not change
+        // inferred semantic caps for it or any caller.
+        let build = |caller_name: &str| {
+            let mut graph = FnGraph::rvs_new();
+            let mut caller = rvs_make_behavior();
+            caller.calls.insert(
+                FunctionIdentity {
+                    crate_id: 2,
+                    def_path: DefPath::from("dep::fs::read"),
+                },
+                CallEdgeType::Strong,
+            );
+            graph.rvs_insert_M(DefPath::from(caller_name), caller);
+            let seed = rvs_make_capsmap(&[("dep::fs::read", "BI")]);
+            rvs_infer_caps(&graph, &seed)
+                .into_iter()
+                .map(|(path, caps)| (path.rvs_as_str().to_string(), caps))
+                .collect::<Vec<_>>()
+        };
+        let plain = build("demo::rvs_handle");
+        let forged_suffix = build("demo::rvs_handle_IS");
+        let wrong_suffix = build("demo::rvs_handle_B");
+        let output = format!(
+            "plain={:?}\nforged={:?}\nwrong={:?}\n",
+            plain
+                .iter()
+                .map(|(path, caps)| format!("{path}={}", caps.rvs_letters()))
+                .collect::<Vec<_>>(),
+            forged_suffix
+                .iter()
+                .map(|(path, caps)| format!("{path}={}", caps.rvs_letters()))
+                .collect::<Vec<_>>(),
+            wrong_suffix
+                .iter()
+                .map(|(path, caps)| format!("{path}={}", caps.rvs_letters()))
+                .collect::<Vec<_>>(),
+        );
+        rvs_snapshot_BIS(
+            "test_20260816_renaming_never_changes_semantic_caps",
+            &output,
+        );
+
+        let render = |entries: &Vec<(String, crate::capability::CapabilitySet)>| {
+            entries
+                .iter()
+                .map(|(_, caps)| caps.rvs_letters())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(render(&plain), render(&forged_suffix));
+        assert_eq!(render(&plain), render(&wrong_suffix));
+        // The propagated B/I arrive from the callee regardless of naming.
+        assert!(
+            plain
+                .iter()
+                .any(|(path, caps)| path.contains("rvs_handle") && caps.rvs_letters() == "BI")
+        );
+    }
 }

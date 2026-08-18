@@ -164,38 +164,40 @@ fn rvs_checked_report_sum(current: usize, delta: usize, label: &str) -> Result<u
     super::rvs_checked_count_sum(current, delta, label)
 }
 
+/// Whether a node contributes to the report at all (scope, test, and
+/// naming-prefix gates shared by capability rows and incomplete counts).
+fn rvs_is_report_function(scope: &LocalScope, def_path: &DefPath, node: &FnNode) -> bool {
+    if !FunctionClassification::rvs_new(scope, def_path, node).rvs_is_report_candidate() {
+        return false;
+    }
+    let has_per_definition_metadata = node.report_function_count > 0;
+    if node.is_test || def_path.rvs_is_in_test_module() {
+        return false;
+    }
+    if !has_per_definition_metadata && node.allows_dead_code {
+        return false;
+    }
+    // The rvs_ prefix gates ordinary functions; World Port impl methods
+    // are reported through their structural P contract even when the impl
+    // method itself carries no rvs_ prefix.
+    ParsedFunctionName::rvs_parse(def_path.rvs_as_str()).rvs_has_rvs_prefix()
+        || node.facts.is_port_method
+}
+
 fn rvs_report_entry(
     scope: &LocalScope,
     def_path: &DefPath,
     node: &FnNode,
+    semantic_caps: &CapabilitySet,
 ) -> Result<Option<FnEntry>, String> {
-    if !FunctionClassification::rvs_new(scope, def_path, node).rvs_is_report_candidate() {
+    if !rvs_is_report_function(scope, def_path, node) {
         return Ok(None);
     }
-    let has_per_definition_metadata = node.report_function_count > 0;
-    if node.is_test || def_path.rvs_is_in_test_module() {
-        return Ok(None);
-    }
-    if !has_per_definition_metadata && node.allows_dead_code {
-        return Ok(None);
-    }
-    let parsed = ParsedFunctionName::rvs_parse(def_path.rvs_as_str());
-    let capabilities = if node.facts.is_port_method {
-        let mut caps = if parsed.rvs_has_rvs_prefix() {
-            parsed.rvs_known_caps().clone()
-        } else {
-            CapabilitySet::rvs_new()
-        };
-        caps.rvs_insert_M(Capability::P);
-        caps
-    } else if parsed.rvs_has_rvs_prefix() {
-        parsed.rvs_known_caps().clone()
-    } else {
-        return Ok(None);
-    };
-    // Signature-only caps (A/C/U) never appear in names; merge them from the
-    // collected signature facts so reports still measure them.
-    let capabilities = CapabilityPolicy::rvs_report_caps(node.facts, capabilities);
+    // Reports measure callgraph semantics only: semantic caps come from the
+    // prepared inference (facts + propagation + votes + capsmap), never
+    // from the name. The rvs_ prefix is still required for a function to be
+    // counted, but its suffix letters are ignored here.
+    let capabilities = semantic_caps.clone();
     let Some(line_count) = node.report_line_count else {
         return Ok(None);
     };
@@ -214,11 +216,15 @@ fn rvs_report_entry(
 fn rvs_report_entries_from_callgraph(
     graph: &FnGraph,
     local_crate_names: &BTreeSet<CrateName>,
+    semantic_caps: &BTreeMap<DefPath, CapabilitySet>,
 ) -> Result<Vec<FnEntry>, String> {
     let mut entries = Vec::new();
     let scope = LocalScope::rvs_for_graph(local_crate_names, graph);
     for (def_path, node) in graph.rvs_iter() {
-        if let Some(entry) = rvs_report_entry(&scope, def_path, node)? {
+        let Some(caps) = semantic_caps.get(def_path) else {
+            continue;
+        };
+        if let Some(entry) = rvs_report_entry(&scope, def_path, node, caps)? {
             entries.push(entry);
         }
     }
@@ -236,14 +242,11 @@ fn rvs_incomplete_report_function_count(
         let Some(node) = graph.rvs_get(path.rvs_as_str()) else {
             continue;
         };
-        let Some(entry) = rvs_report_entry(&scope, path, node)? else {
+        if !rvs_is_report_function(&scope, path, node) || node.report_line_count.is_none() {
             continue;
-        };
-        count = rvs_checked_report_sum(
-            count,
-            entry.function_count,
-            "incomplete report function count",
-        )?;
+        }
+        let function_count = node.report_function_count.max(1);
+        count = rvs_checked_report_sum(count, function_count, "incomplete report function count")?;
     }
     Ok(count)
 }
@@ -323,7 +326,8 @@ pub(crate) fn rvs_run_report_BIPST(path: &Path) -> Result<(), String> {
         &local_crate_names,
         &analysis,
     );
-    let report_entries = rvs_report_entries_from_callgraph(&callgraph, &local_crate_names)?;
+    let report_entries =
+        rvs_report_entries_from_callgraph(&callgraph, &local_crate_names, analysis.rvs_inferred())?;
     let report = rvs_build_report(&report_entries)?;
     let incomplete_count = rvs_incomplete_report_function_count(
         &callgraph,
@@ -530,7 +534,8 @@ mod tests {
             &crate::capsmap::CapsMap::rvs_new(),
             &local,
         );
-        let entries = rvs_report_entries_from_callgraph(&graph, &local).unwrap();
+        let entries =
+            rvs_report_entries_from_callgraph(&graph, &local, analysis.rvs_inferred()).unwrap();
         let report = rvs_build_report(&entries).unwrap();
         let incomplete_count =
             rvs_incomplete_report_function_count(&graph, &local, analysis.rvs_incomplete_paths())
@@ -663,9 +668,15 @@ mod tests {
             partially_allowed,
         );
 
+        let local = BTreeSet::from([CrateName::from("demo")]);
+        let mut scoped_graph = graph.clone();
+        let analysis = PreparedLocalAnalysis::rvs_prepare_M(
+            &mut scoped_graph,
+            &crate::capsmap::CapsMap::rvs_new(),
+            &local,
+        );
         let entries =
-            rvs_report_entries_from_callgraph(&graph, &BTreeSet::from([CrateName::from("demo")]))
-                .unwrap();
+            rvs_report_entries_from_callgraph(&graph, &local, analysis.rvs_inferred()).unwrap();
         let report = rvs_build_report(&entries).unwrap();
         let output = report.to_string();
         rvs_snapshot_BIS(
@@ -1124,11 +1135,15 @@ mod tests {
         port_impl.facts.is_port_method = true;
         graph.rvs_insert_M(DefPath::from("demo::Repo::rvs_get@demo::Client"), port_impl);
 
-        let entries = rvs_report_entries_from_callgraph(
-            &graph,
-            &std::collections::BTreeSet::from([CrateName::from("demo")]),
-        )
-        .unwrap();
+        let local = std::collections::BTreeSet::from([CrateName::from("demo")]);
+        let mut scoped_graph = graph.clone();
+        let analysis = PreparedLocalAnalysis::rvs_prepare_M(
+            &mut scoped_graph,
+            &crate::capsmap::CapsMap::rvs_new(),
+            &local,
+        );
+        let entries =
+            rvs_report_entries_from_callgraph(&graph, &local, analysis.rvs_inferred()).unwrap();
         let output = format!("{entries:?}\n");
         rvs_snapshot_BIS(
             "test_20260709_report_entries_skip_non_port_trait_impl_methods",
@@ -1139,7 +1154,7 @@ mod tests {
         assert!(
             entries
                 .iter()
-                .any(|entry| entry.capabilities == CapabilitySet::rvs_from_validated("B"))
+                .any(|entry| entry.capabilities == CapabilitySet::rvs_new())
         );
         assert!(
             entries
@@ -1154,21 +1169,30 @@ mod tests {
     }
 
     #[test]
-    fn test_20260710_report_entries_derive_caps_from_names_and_port_facts() {
+    fn test_20260816_report_entries_derive_caps_from_callgraph_facts() {
         let mut graph = FnGraph::rvs_new();
-        for (path, line_count) in [
-            ("demo::rvs_mixed_AEIS", 5),
-            ("demo::rvs_unknown_E", 6),
-            ("demo::plain_BI", 7),
-        ] {
-            graph.rvs_insert_M(
-                DefPath::from(path),
-                FnNode {
-                    report_line_count: Some(line_count),
-                    ..FnNode::default()
-                },
-            );
-        }
+        // Name suffixes are ignored: capabilities come from facts and
+        // callee edges only.
+        let mut io_static = FnNode {
+            report_line_count: Some(5),
+            ..FnNode::default()
+        };
+        io_static.facts.has_static_ref = true;
+        graph.rvs_insert_M(DefPath::from("demo::rvs_mixed_AEIS"), io_static);
+        graph.rvs_insert_M(
+            DefPath::from("demo::rvs_unknown_E"),
+            FnNode {
+                report_line_count: Some(6),
+                ..FnNode::default()
+            },
+        );
+        graph.rvs_insert_M(
+            DefPath::from("demo::plain_BI"),
+            FnNode {
+                report_line_count: Some(7),
+                ..FnNode::default()
+            },
+        );
         let mut port = FnNode {
             report_line_count: Some(8),
             ..FnNode::default()
@@ -1176,20 +1200,24 @@ mod tests {
         port.facts.is_port_method = true;
         graph.rvs_insert_M(DefPath::from("demo::Repo::plain_AB@demo::Client"), port);
 
-        let entries = rvs_report_entries_from_callgraph(
-            &graph,
-            &std::collections::BTreeSet::from([CrateName::from("demo")]),
-        )
-        .unwrap();
+        let local = std::collections::BTreeSet::from([CrateName::from("demo")]);
+        let mut scoped_graph = graph.clone();
+        let analysis = PreparedLocalAnalysis::rvs_prepare_M(
+            &mut scoped_graph,
+            &crate::capsmap::CapsMap::rvs_new(),
+            &local,
+        );
+        let entries =
+            rvs_report_entries_from_callgraph(&graph, &local, analysis.rvs_inferred()).unwrap();
         let output = format!("{entries:?}\n");
         rvs_snapshot_BIS(
-            "test_20260710_report_entries_derive_caps_from_names_and_port_facts",
+            "test_20260816_report_entries_derive_caps_from_callgraph_facts",
             &output,
         );
 
         assert_eq!(entries.len(), 3);
         assert!(entries.iter().any(|entry| {
-            entry.line_count == 5 && entry.capabilities == CapabilitySet::rvs_from_validated("IS")
+            entry.line_count == 5 && entry.capabilities == CapabilitySet::rvs_from_validated("S")
         }));
         assert!(entries.iter().any(|entry| {
             entry.line_count == 6 && entry.capabilities == CapabilitySet::rvs_new()
@@ -1230,11 +1258,15 @@ mod tests {
         static_mut_reader.facts.has_static_mut_ref = true;
         graph.rvs_insert_M(DefPath::from("demo::rvs_read_counter_S"), static_mut_reader);
 
-        let entries = rvs_report_entries_from_callgraph(
-            &graph,
-            &std::collections::BTreeSet::from([CrateName::from("demo")]),
-        )
-        .unwrap();
+        let local = std::collections::BTreeSet::from([CrateName::from("demo")]);
+        let mut scoped_graph = graph.clone();
+        let analysis = PreparedLocalAnalysis::rvs_prepare_M(
+            &mut scoped_graph,
+            &crate::capsmap::CapsMap::rvs_new(),
+            &local,
+        );
+        let entries =
+            rvs_report_entries_from_callgraph(&graph, &local, analysis.rvs_inferred()).unwrap();
         let output = format!("{entries:?}\n");
         rvs_snapshot_BIS(
             "test_20260816_report_merges_non_suffix_caps_from_facts",
@@ -1243,17 +1275,67 @@ mod tests {
 
         assert_eq!(entries.len(), 4);
         assert!(entries.iter().any(|entry| {
-            entry.line_count == 3 && entry.capabilities == CapabilitySet::rvs_from_validated("AI")
+            entry.line_count == 3 && entry.capabilities == CapabilitySet::rvs_from_validated("A")
         }));
         assert!(entries.iter().any(|entry| {
             entry.line_count == 4 && entry.capabilities == CapabilitySet::rvs_from_validated("C")
         }));
         assert!(entries.iter().any(|entry| {
-            entry.line_count == 5 && entry.capabilities == CapabilitySet::rvs_from_validated("BU")
+            entry.line_count == 5 && entry.capabilities == CapabilitySet::rvs_from_validated("U")
         }));
         assert!(entries.iter().any(|entry| {
             entry.line_count == 6 && entry.capabilities == CapabilitySet::rvs_from_validated("SU")
         }));
+    }
+
+    #[test]
+    fn test_20260816_report_is_invariant_under_renaming() {
+        // Reports measure callgraph semantics; renaming (adding/removing
+        // suffix letters) must only change naming diagnostics, never the
+        // per-function capability rows.
+        let build = |names: &[&str]| {
+            let mut graph = FnGraph::rvs_new();
+            let mut io_fn = FnNode {
+                report_line_count: Some(5),
+                ..FnNode::default()
+            };
+            io_fn.calls.insert(
+                FunctionIdentity {
+                    crate_id: 2,
+                    def_path: DefPath::from("dep::fs::read"),
+                },
+                CallEdgeType::Strong,
+            );
+            graph.rvs_insert_M(DefPath::from(names[0]), io_fn);
+            let mut pure_fn = FnNode {
+                report_line_count: Some(3),
+                ..FnNode::default()
+            };
+            pure_fn.facts.has_const = true;
+            graph.rvs_insert_M(DefPath::from(names[1]), pure_fn);
+            let local = std::collections::BTreeSet::from([CrateName::from("demo")]);
+            let mut scoped_graph = graph.clone();
+            let analysis = PreparedLocalAnalysis::rvs_prepare_M(
+                &mut scoped_graph,
+                &crate::capsmap::CapsMap::rvs_new(),
+                &local,
+            );
+            rvs_report_entries_from_callgraph(&graph, &local, analysis.rvs_inferred())
+                .unwrap()
+                .into_iter()
+                .map(|entry| entry.capabilities.rvs_letters())
+                .collect::<Vec<_>>()
+        };
+        let plain = build(&["demo::rvs_handle", "demo::rvs_factorial"]);
+        let forged = build(&["demo::rvs_handle_ST", "demo::rvs_factorial_M"]);
+        let output = format!("plain={plain:?}\nforged={forged:?}\n");
+        rvs_snapshot_BIS("test_20260816_report_is_invariant_under_renaming", &output);
+
+        assert_eq!(plain, forged);
+        // C is measured from the const fn signature; the callee edge
+        // without capsmap knowledge contributes no capability (it lands in
+        // the incomplete-inference summary instead).
+        assert!(plain.iter().any(|caps| caps == &"C".to_string()));
     }
 
     #[test]
@@ -1325,7 +1407,13 @@ mod tests {
             &caps,
             &local_crate_names,
         );
-        let report_entries = rvs_report_entries_from_callgraph(&callgraph, &local_crate_names);
+        let analysis =
+            PreparedLocalAnalysis::rvs_prepare_M(&mut callgraph, &caps, &local_crate_names);
+        let report_entries = rvs_report_entries_from_callgraph(
+            &callgraph,
+            &local_crate_names,
+            analysis.rvs_inferred(),
+        );
         let async_lines = report_entries.as_ref().ok().and_then(|entries| {
             entries
                 .iter()

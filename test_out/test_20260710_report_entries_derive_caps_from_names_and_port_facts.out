@@ -1,1 +1,0 @@
-[FnEntry { capabilities: CapabilitySet({P}), function_count: 1, line_count: 8 }, FnEntry { capabilities: CapabilitySet({I, S}), function_count: 1, line_count: 5 }, FnEntry { capabilities: CapabilitySet({}), function_count: 1, line_count: 6 }]
