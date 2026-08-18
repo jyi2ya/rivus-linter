@@ -149,10 +149,10 @@ struct Raw<T>(T);
 struct Validated<T>(T);
 
 fn rvs_parse_email(raw: Raw<String>) -> Result<Validated<Email>, ParseError>
-async fn rvs_send_email_AIS(email: &Validated<Email>, body: &str) -> Result<(), SendError>
+async fn rvs_send_email_IS(email: &Validated<Email>, body: &str) -> Result<(), SendError>
 ```
 
-`rvs_send_email_AIS` 只接受 `Validated<Email>`，从类型层面杜绝了未验证邮箱被发送的可能性。返回的 `Result` 表达错误流程，不增加能力标记。
+`rvs_send_email_IS` 只接受 `Validated<Email>`，从类型层面杜绝了未验证邮箱被发送的可能性。返回的 `Result` 表达错误流程，不增加能力标记。
 
 ---
 
@@ -164,7 +164,7 @@ async fn rvs_send_email_AIS(email: &Validated<Email>, body: &str) -> Result<(), 
 
 你的所有函数名必须以 `rvs_` 开头！实现外部 traits 除外。
 
-后缀提取规则：去除 `rvs_` 前缀后，取最后一个 `_` 之后的部分；仅当该部分全部为大写 ASCII 字母时才识别为能力后缀，否则视为无后缀的纯函数。已知字母（`ABIMPSTU`）正常提取，未知字母触发 `UnknownSuffixLetter` 警告。
+后缀提取规则：去除 `rvs_` 前缀后，取最后一个 `_` 之后的部分；仅当该部分全部为大写 ASCII 字母时才识别为能力后缀，否则视为无后缀（无后缀只表示没有声明 BIMPST 能力；A/C/U 仍从签名和函数体测量，无后缀的 async/const/unsafe 函数不是纯函数）。后缀字母表是 `BIMPST`；`A/C/U` 是签名/函数体能力（A 来自 `async fn`，C 来自 `const fn`，U 来自 `unsafe fn` 或 `static mut` 访问），从函数自身测量，不允许出现在后缀中（出现即触发 `NonSuffixCapInSuffix` 错误）；未知字母触发 `UnknownSuffixLetter` 警告。
 
 推荐在 crate 根（`lib.rs` 或 `main.rs`）加一行全局标注即可：
 
@@ -180,6 +180,7 @@ async fn rvs_send_email_AIS(email: &Validated<Email>, body: &str) -> Result<(), 
 |------|------|------|---------|
 | `A` | **Async** | 声明为 `async fn` | 同步 |
 | `B` | **Blocking** | 可能阻塞当前线程（等待 I/O、锁、sleep、大量计算） | 非阻塞 |
+| `C` | **Const** | 声明为 `const fn`（签名能力，同 A/U 不参与调用传播） | 运行时求值 |
 | `I` | **IO** | 执行 I/O 操作（网络、文件、数据库） | 纯计算 |
 | `M` | **Mutable** | 修改参数中的可变状态 | 只读 |
 | `P` | **Port** | World 端口操作，由本地 trait 结构推断 | 直接实现 |
@@ -187,8 +188,8 @@ async fn rvs_send_email_AIS(email: &Validated<Email>, body: &str) -> Result<(), 
 | `T` | **ThreadLocal** | 依赖线程局部状态，不可跨线程共享 | 线程安全 / 无状态 |
 | `U` | **Unsafe** | `unsafe fn` 或访问 `static mut` | 安全代码 |
 
-其中，能力集合是 `{A,B,M}` 的子集的函数为好函数（good），即 `{A,B,M}` 的部分函数；
-能力集合是 `{A,B,M,P}` 的子集的函数为 `ok` 函数。
+其中，能力集合是 `{A,B,C,M}` 的子集的函数为好函数（good），即 `{A,B,C,M}` 的部分函数；
+能力集合是 `{A,B,C,M,P}` 的子集的函数为 `ok` 函数。
 `ok` 包含 `good`，用于 Port 场景下通过 mock 进行隔离测试。
 
 ### 常见行为模式示例
@@ -199,13 +200,13 @@ async fn rvs_send_email_AIS(email: &Validated<Email>, body: &str) -> Result<(), 
 | `rvs_parse_int` | （无标记） | 返回 Result 的解析——类型系统已强制处理错误 |
 | `rvs_sort_inplace_M` | M | 修改可变状态：原地排序 |
 | `rvs_read_file_BI` | B + I | 阻塞 + I/O：同步读文件（失败由 Result 表达） |
-| `rvs_fetch_user_AI` | A + I | 异步 + I/O：从 API 获取用户 |
-| `rvs_write_db_AIS` | A + I + S | 异步数据库写入（I/O + 外部副作用，不阻塞当前线程） |
+| `rvs_fetch_user_I` | A + I | 异步 + I/O：从 API 获取用户 |
+| `rvs_write_db_IS` | A + I + S | 异步数据库写入（I/O + 外部副作用，不阻塞当前线程） |
 | `rvs_increment_M` | M | 通过 `&mut` 参数递增计数器 |
 | `rvs_cache_lookup` | （无标记） | 纯线程安全缓存读取，无副作用 |
-| `rvs_ffi_call_BU` | B + U | 阻塞 + 不安全：调用 C FFI |
+| `rvs_ffi_call_B` | B + U | 阻塞 + 不安全：调用 C FFI |
 | `rvs_hash_password_B` | B | 确定但计算密集的密码哈希，可能长时间占用当前线程 |
-| `rvs_send_email_AIS` | A + I + S | 异步网络 I/O + 不可撤回的发信副作用，不阻塞当前线程 |
+| `rvs_send_email_IS` | A + I + S | 异步网络 I/O + 不可撤回的发信副作用，不阻塞当前线程 |
 | `rvs_random_uuid_ST` | S + T | 副作用（非确定性）+ 线程局部：使用 thread-local RNG 生成 UUID |
 | `rvs_get_env_S` | S | 读取环境变量，有副作用 |
 
@@ -219,7 +220,7 @@ Port 操作的 P 不从函数后缀或 trait 名推断，而是由本地 trait �
 - 可以声明额外 associated type 表示连接、流、事务等长期资源
 - 不得包含 associated constant；generic World、receiver 方法或缺少 World 参数的操作会使整个 trait 按普通 trait 处理
 
-World Port 操作自动获得 P；各 impl 的 `B/I/S/T` 能力仍按至少半数规则逐项投票，入选能力与操作自身的 `A/M/U` 一起构成完整契约和函数后缀。具体 impl body 和默认 trait body 都按这个完整契约向下检查。调用边遇到任何包含 P 的完整契约时，只向调用方传播 P，不传播同一契约中的 `B/I/S/T`。
+World Port 操作自动获得 P；各 impl 的 `B/I/S/T` 能力仍按至少半数规则逐项投票，入选能力与操作自身的 `A/C/M/U` 一起构成完整契约；后缀只保留 BIMPST 字母。具体 impl body 和默认 trait body 都按这个完整契约向下检查。调用边遇到任何包含 P 的完整契约时，只向调用方传播 P，不传播同一契约中的 `B/I/S/T`。
 
 调用方通过类型级解释器和显式 World 使用端口，不保存 `Box<dyn>` 服务对象。普通结果和领域错误使用具体类型；associated type 只用于调用方需要跨多次操作持有的长期资源。测试时替换解释器类型并提供内存 World。
 
@@ -231,7 +232,7 @@ Trait 方法对 `B/I/P/S/T` 逐项执行 at-least-half vote，阈值为 `ceil(�
 
 ### 调用规则
 
-**唯一规则：普通调用对 `B/I/P/S/T` 五个可传播能力逐字母检查；若被调用方包含 P，则该调用边只要求 P。`A/M/U` 只从函数自身的签名或函数体事实推断，不参与调用规则。**
+**唯一规则：普通调用对 `B/I/P/S/T` 五个可传播能力逐字母检查；若被调用方包含 P，则该调用边只要求 P。`A/C/M/U` 只从函数自身的签名或函数体事实推断，不参与调用规则。**
 
 每个字母独立判定，只需逐字母检查：
 
@@ -239,6 +240,7 @@ Trait 方法对 `B/I/P/S/T` 逐项执行 at-least-half vote，阈值为 `ceil(�
 |------|-------------|---------------|------|
 | `A` | 调用规则不检查 | 调用规则不检查 | 仅由 `async fn` 自身推断，不传播 |
 | `B` | 可阻塞可调用非阻塞 | 非阻塞不可调用阻塞 | 非阻塞函数（如异步）中阻塞会卡死事件循环 |
+| `C` | 调用规则不检查 | 调用规则不检查 | 仅由 `const fn` 自身推断，不传播 |
 | `I` | 有 I/O 可调用纯计算 | 无 I/O 不可调用有 I/O | 保持计算层的纯粹性 |
 | `M` | 调用规则不检查 | 调用规则不检查 | 仅由 `&mut` 参数自身推断，不传播 |
 | `P` | 有端口可调用纯函数 | 纯函数不可调用有端口 | 端口操作需要通过类型解释器和 World 使用 |
@@ -249,10 +251,10 @@ Trait 方法对 `B/I/P/S/T` 逐项执行 at-least-half vote，阈值为 `ceil(�
 示例：
 
 ```
-rvs_write_db_AIS   可调用  rvs_parse_int        ✅ (被调用方没有传播屏障)
+rvs_write_db_IS    可调用  rvs_parse_int        ✅ (被调用方没有传播屏障)
 rvs_parse_int      不可调用 rvs_read_file_BI     ❌ (无 B/I 不可调有 B/I)
 rvs_add            可调用  rvs_sort_inplace_M    ✅ (M 为签名能力，不参与调用规则)
-rvs_parse_int      可调用  rvs_fetch_user_A      ✅ (A 为签名能力，不参与调用规则)
+rvs_parse_int      可调用  rvs_fetch_user      ✅ (A 为签名能力，不参与调用规则)
 rvs_order_P        可调用  Port::rvs_store_BIPS ✅ (包含 P 的调用边只传播 P)
 ```
 
@@ -299,7 +301,7 @@ cargo rivus infer-capsmap -o caps/deps
 {"path":"std::collections::HashMap::new","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
 ```
 
-`caps` 使用按字母序排列的 `ABIMPSTU` 字符串，空字符串表示 pure。`basis` 记录能力知识来自显式声明、推断、trait 投票或 Port；`completeness` 为 `complete`、`incomplete` 或 `unknown`。Trait vote record 还会保存实现数量、阈值和逐能力票数。
+`caps` 使用按字母序排列的 `ABCIMPSTU` 字符串，空字符串表示 pure。`basis` 记录能力知识来自显式声明、推断、trait 投票或 Port；`completeness` 为 `complete`、`incomplete` 或 `unknown`。Trait vote record 还会保存实现数量、阈值和逐能力票数。
 
 - linter 对 capsmap 中的键做 def_path 精确匹配，不支持后缀匹配。specialized impl 会先匹配带内部 identity marker 的精确路径，再回退到诊断中显示的无 marker 可读 def_path；因此一个可读路径条目默认作用于该方法的所有 specialization
 - 如果 linter 报告某函数"既非 rvs_-prefixed nor in capsmap"，你需要补全 capsmap。方法优先级：检查源码 > 编写测试验证行为 > 合理猜测
@@ -389,7 +391,7 @@ docs/theory/
 ┌──────────────▼──────────────────────┐
 │              Domain                  │
 │  Entities / Use Cases / Events       │
-│  （纯函数 / 好函数≤ABM / ok≤ABMP）   │
+│  （纯函数 / 好函数≤ABCM / ok≤ABCMP）│
 └─────────────────────────────────────┘
 ```
 
@@ -400,18 +402,18 @@ docs/theory/
 trait UserLookup {
     type World;
 
-    async fn rvs_find_by_id_AIP(
+    async fn rvs_find_by_id_IP(
         world: &Self::World,
         id: UserId,
     ) -> Result<Option<User>, LookupError>;
 }
 
 // domain/services.rs — 调用端口时，标记覆盖端口方法即可
-async fn rvs_create_order_AP<E: UserLookup>(
+async fn rvs_create_order_P<E: UserLookup>(
     world: &E::World,
     cmd: CreateOrderCmd,
 ) -> Result<Order, OrderError> {
-    let user = E::rvs_find_by_id_AIP(world, cmd.user_id).await?;
+    let user = E::rvs_find_by_id_IP(world, cmd.user_id).await?;
     let order = Order::rvs_new(user, cmd.items); // 纯函数，无标记
     Ok(order)
 }
@@ -439,17 +441,17 @@ fn rvs_handle_packet(state: &ConnectionState, packet: &[u8]) -> (ConnectionState
 }
 
 // 薄适配器：执行副作用
-async fn rvs_process_packet_AIMS(conn: &mut Connection, packet: &[u8]) -> Result<(), ConnError> {
+async fn rvs_process_packet_IMS(conn: &mut Connection, packet: &[u8]) -> Result<(), ConnError> {
     let (new_state, actions) = rvs_handle_packet(&conn.state, packet);
     for action in actions {
-        rvs_execute_action_AIS(action).await?; // 异步 I/O 和副作用在这里
+        rvs_execute_action_IS(action).await?; // 异步 I/O 和副作用在这里
     }
     conn.state = new_state;
     Ok(())
 }
 ```
 
-好处：`rvs_handle_packet` 是纯函数，能力无标记，可以穷举测试；`rvs_process_packet_AIMS` 是薄壳，几乎不含业务逻辑。
+好处：`rvs_handle_packet` 是纯函数，能力无标记，可以穷举测试；`rvs_process_packet_IMS` 是薄壳，几乎不含业务逻辑。
 
 #### Decision / Effect 分离
 
@@ -467,10 +469,13 @@ fn rvs_plan_retry(policy: &RetryPolicy, attempt: u32, last_error: &str) -> Retry
 }
 
 // 执行层：拿到决策后才做 I/O
-async fn rvs_execute_with_retry_A(...) -> Result<(), Error> {
+async fn rvs_execute_with_retry_I(operation: impl AsyncOperation) -> Result<(), Error> {
     loop {
         match rvs_plan_retry(&policy, attempt, &last_error) {
-            RetryDecision::RetryAfter(delay) => tokio::time::sleep(delay).await,
+            RetryDecision::RetryAfter(delay) => {
+                tokio::time::sleep(delay).await;
+                operation.rvs_perform_I().await?; // I/O 只在执行层
+            }
             RetryDecision::GiveUp => return Err(last_error.into()),
         }
     }
@@ -490,7 +495,7 @@ fn rvs_build_query(filter: &Filter) -> QueryPlan {
 }
 
 // 执行层：拿到查询计划后才做 I/O
-async fn rvs_execute_query_AI(plan: &QueryPlan, pool: &PgPool) -> Result<ResultSet, DbError> {
+async fn rvs_execute_query_I(plan: &QueryPlan, pool: &PgPool) -> Result<ResultSet, DbError> {
     let sql = rvs_plan_to_sql(plan); // 纯函数
     sqlx::query(&sql).fetch_all(pool).await
 }
@@ -524,7 +529,7 @@ struct InMemoryUserLookup;
 impl UserLookup for InMemoryUserLookup {
     type World = InMemoryWorld;
 
-    async fn rvs_find_by_id_AIP(
+    async fn rvs_find_by_id_IP(
         world: &Self::World,
         id: UserId,
     ) -> Result<Option<User>, LookupError> {
@@ -536,7 +541,7 @@ impl UserLookup for InMemoryUserLookup {
 #[tokio::test]
 async fn test_20260422_create_order_ok() {
     let world = InMemoryWorld { users };
-    let result = rvs_create_order_AP::<InMemoryUserLookup>(&world, cmd).await;
+    let result = rvs_create_order_P::<InMemoryUserLookup>(&world, cmd).await;
 }
 ```
 

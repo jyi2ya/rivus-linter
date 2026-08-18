@@ -1,8 +1,8 @@
-error: caller lacks propagated capabilities required by callee; callee: 421_guard_pattern_call_collected::rvs_check_ABI; caller declared caps: pure; callee caps: ABI; missing propagated caps: B, I
+error: caller lacks propagated capabilities required by callee; callee: 421_guard_pattern_call_collected::rvs_check_BI; caller declared caps: pure; callee caps: BI; missing propagated caps: B, I
   --> $DIR/tests/ui/421_guard_pattern_call_collected.rs:21:19
    |
-LL |         Some(x if rvs_check_ABI(x)) => {}
-   |                   ^^^^^^^^^^^^^^^^
+LL |         Some(x if rvs_check_BI(x)) => {}
+   |                   ^^^^^^^^^^^^^^^
    |
    = note: `#[deny(rivus::rvs_call_violation)]` on by default
 

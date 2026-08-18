@@ -1,7 +1,7 @@
 error: unsafe fn missing /// # Safety
   --> $DIR/tests/ui/233_safety_heading_boundary.rs:6:1
    |
-LL | / unsafe fn rvs_bad_heading_U() {
+LL | / unsafe fn rvs_bad_heading() {
 LL | |     let _ = 1;
 LL | | }
    | |_^

@@ -363,9 +363,9 @@ mod tests {
             ),
             (
                 "all_caps",
-                CapsMap::rvs_parse(&rvs_caps_v2(&[("danger", "ABIMPSTU")])).unwrap(),
+                CapsMap::rvs_parse(&rvs_caps_v2(&[("danger", "ABCIMPSTU")])).unwrap(),
                 "danger",
-                Some("ABIMPSTU"),
+                Some("ABCIMPSTU"),
             ),
         ];
         let mut output = String::new();

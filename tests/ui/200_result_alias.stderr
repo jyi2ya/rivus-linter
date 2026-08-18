@@ -40,10 +40,10 @@ error: rvs_validate_flipped_alias: validate returning Result<(),E> — use TryFr
 LL | fn rvs_validate_flipped_alias(value: String) -> FlippedResult<ParseError, ()> {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-error: owned param 'String' consumed but not preserved in error type of rvs_validate_async_A
-  --> $DIR/tests/ui/200_result_alias.rs:30:38
+error: owned param 'String' consumed but not preserved in error type of rvs_validate_async
+  --> $DIR/tests/ui/200_result_alias.rs:30:36
    |
-LL | async fn rvs_validate_async_A(value: String) -> Result<(), ParseError> {
-   |                                      ^^^^^^
+LL | async fn rvs_validate_async(value: String) -> Result<(), ParseError> {
+   |                                    ^^^^^^
 
 error: aborting due to 7 previous errors

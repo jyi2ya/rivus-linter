@@ -1,8 +1,8 @@
 error: param 'x' missing debug_assert!
-  --> $DIR/tests/ui/151_calls_in_match_guard.rs:4:18
+  --> $DIR/tests/ui/151_calls_in_match_guard.rs:4:17
    |
-LL | fn rvs_check_ABI(x: i32) -> bool {
-   |                  ^
+LL | fn rvs_check_BI(x: i32) -> bool {
+   |                 ^
    |
    = note: `-D rivus::rvs-missing-debug-assert` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_debug_assert)]`
@@ -13,11 +13,11 @@ error: param 'x' missing debug_assert!
 LL | fn rvs_outer(x: i32) {
    |              ^
 
-error: caller lacks propagated capabilities required by callee; callee: 151_calls_in_match_guard::rvs_check_ABI; caller declared caps: pure; callee caps: ABI; missing propagated caps: B, I
+error: caller lacks propagated capabilities required by callee; callee: 151_calls_in_match_guard::rvs_check_BI; caller declared caps: pure; callee caps: BI; missing propagated caps: B, I
   --> $DIR/tests/ui/151_calls_in_match_guard.rs:10:14
    |
-LL |         n if rvs_check_ABI(n) => {}
-   |              ^^^^^^^^^^^^^^^^
+LL |         n if rvs_check_BI(n) => {}
+   |              ^^^^^^^^^^^^^^^
    |
    = note: `#[deny(rivus::rvs_call_violation)]` on by default
 

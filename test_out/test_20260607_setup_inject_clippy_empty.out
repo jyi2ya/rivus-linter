@@ -1,4 +1,4 @@
-count: 40
+count: 41
 [package]
 name = "test"
 
@@ -14,6 +14,7 @@ panic = "warn"
 todo = "warn"
 unimplemented = "warn"
 unreachable = "warn"
+missing_const_for_fn = "warn"
 get_unwrap = "warn"
 unwrap_in_result = "warn"
 unchecked_time_subtraction = "warn"

@@ -2,6 +2,6 @@ dispatch_incomplete=false
 known=true
 unknown=false
 direct=# rivus-caps-v2
-{"path":"dep::Transformer::rvs_transform_AMU","caps":"AMSU","basis":{"kind":"inferred"},"completeness":"complete"}
+{"path":"dep::Transformer::rvs_transform","caps":"AMSU","basis":{"kind":"inferred"},"completeness":"complete"}
 alias=# rivus-caps-v2
-{"path":"dep::Transformer::rvs_transform_AMU","caps":"AMSU","basis":{"kind":"inferred"},"completeness":"complete"}
+{"path":"dep::Transformer::rvs_transform","caps":"AMSU","basis":{"kind":"inferred"},"completeness":"complete"}

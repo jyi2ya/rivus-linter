@@ -2,13 +2,13 @@
 #![allow(non_snake_case)]
 #![feature(try_blocks)]
 
-fn rvs_inner_ABI() {
+fn rvs_inner_BI() {
     let _ = 42;
 }
 
 fn rvs_outer() {
     let _: Result<(), ()> = try {
-        rvs_inner_ABI();
+        rvs_inner_BI();
     };
 }
 

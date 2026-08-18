@@ -637,7 +637,8 @@ mod tests {
         rvs_snapshot_BIS("test_20260729_public_consumer_template", template);
 
         assert!(template.contains("`B/I/P/S/T`"));
-        assert!(template.contains("`A/M/U`"));
+        assert!(template.contains("`A/C/U`"));
+        assert!(template.contains("`BIMPST`"));
         assert!(template.contains("World Port"));
         assert!(template.contains("type-level interpreter"));
         assert!(!template.contains("name ends in `Repository`"));

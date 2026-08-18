@@ -1,4 +1,4 @@
-error: suffix 'Z' contains unknown letters: Z; known letters are A, B, I, M, P, S, T, U
+error: suffix 'Z' contains unknown letters: Z; known suffix letters are B, I, M, P, S, T
   --> $DIR/tests/ui/174_local_unknown_suffix_no_unknown_callee.rs:3:1
    |
 LL | / fn rvs_dep_Z() -> i32 {

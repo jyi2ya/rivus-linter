@@ -3,5 +3,5 @@
 struct Svc;
 
 impl Svc {
-    fn rvs_run_AI(&self) {}
+    fn rvs_run_I(&self) {}
 }

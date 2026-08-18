@@ -1,4 +1,4 @@
-Offline Caps Check: 0 error(s), 1 warning(s)
+Offline Caps Check: 0 error(s), 2 warning(s)
 ------------------------------------------------------------
 warning[incomplete_caps_knowledge]: demo::rvs_use_parser
   calls rely on incomplete caps knowledge; checks use known capability lower bounds
@@ -11,3 +11,7 @@ warning[incomplete_caps_knowledge]: demo::rvs_use_parser
   affected callers: 1
   caller: demo::rvs_use_parser [crate_id=1]
   local inference is incomplete because the call graph reaches unknown or incomplete knowledge (callee target crate_id=1: demo::Parser::rvs_parse); inspect `cargo rivus why 'demo::Parser::rvs_parse' .`; `<inference>` is computed during check and is not a refreshable caps layer
+warning[unknown_callee]: demo::Parser::rvs_parse
+  callee 'demo::Parser::rvs_parse' has no valid capability declaration and no caps/ entry
+  called by: demo::rvs_use_parser
+  run `cargo rivus infer-capsmap -o caps/deps` to refresh dependency capabilities; if inference still reports this path, add its exact def_path to caps/ext

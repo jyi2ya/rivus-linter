@@ -1,0 +1,31 @@
+error: suffix 'U' contains non-suffix letters: U; A/C/U are measured from the signature or body facts, remove them from the name; expected name: rvs_dangerous
+  --> $DIR/tests/ui/431_non_suffix_caps_forbidden.rs:22:1
+   |
+LL | unsafe fn rvs_dangerous_U() {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(rivus::rvs_non_suffix_cap_in_suffix)]` on by default
+
+error: suffix 'C' contains non-suffix letters: C; A/C/U are measured from the signature or body facts, remove them from the name; expected name: rvs_factorial
+  --> $DIR/tests/ui/431_non_suffix_caps_forbidden.rs:18:1
+   |
+LL | / const fn rvs_factorial_C(n: u32) -> u32 {
+LL | |     if n <= 1 { 1 } else { n }
+LL | | }
+   | |_^
+
+error: suffix 'AI' contains non-suffix letters: A; A/C/U are measured from the signature or body facts, remove them from the name; expected name: rvs_fetch_I
+  --> $DIR/tests/ui/431_non_suffix_caps_forbidden.rs:14:1
+   |
+LL | / async fn rvs_fetch_AI(x: i32) -> i32 {
+LL | |     x
+LL | | }
+   | |_^
+
+error: suffix 'ACUB' contains non-suffix letters: A, C, U; A/C/U are measured from the signature or body facts, remove them from the name; expected name: rvs_mixed_B
+  --> $DIR/tests/ui/431_non_suffix_caps_forbidden.rs:24:1
+   |
+LL | fn rvs_mixed_ACUB() {}
+   | ^^^^^^^^^^^^^^^^^^^^^^
+
+error: aborting due to 4 previous errors

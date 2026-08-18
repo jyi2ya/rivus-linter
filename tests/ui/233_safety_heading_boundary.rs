@@ -3,6 +3,6 @@
 /// # SafetyDance
 ///
 /// This is not a Safety section.
-unsafe fn rvs_bad_heading_U() {
+unsafe fn rvs_bad_heading() {
     let _ = 1;
 }

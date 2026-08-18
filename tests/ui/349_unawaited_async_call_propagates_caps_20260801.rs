@@ -3,12 +3,12 @@
 #![register_tool(rivus)]
 #![allow(non_snake_case)]
 
-async fn rvs_effect_ABI() {
+async fn rvs_effect_BI() {
     let _ = 1;
 }
 
 fn rvs_caller() {
-    let _future = rvs_effect_ABI();
+    let _future = rvs_effect_BI();
 }
 
 #[test]

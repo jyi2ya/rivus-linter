@@ -4,7 +4,7 @@ This section contains the public rules enforced or supported by `cargo rivus`.
 
 ## Function contracts
 
-- Project functions and trait methods use the `rvs_` prefix. A final all-uppercase suffix records capabilities in `ABIMPSTU` order.
+- Project functions and trait methods use the `rvs_` prefix. A final all-uppercase suffix records suffix capabilities in `BIMPST` order. A/C/U are measured from the signature and body facts and must not appear in the suffix.
 - Primitive numeric parameters on `rvs_` functions require an appropriate `debug_assert!`, `debug_assert_eq!`, or `debug_assert_ne!` contract.
 - Public `rvs_` functions require `///` documentation. Unsafe functions also require a `# Safety` section.
 
@@ -12,19 +12,20 @@ This section contains the public rules enforced or supported by `cargo rivus`.
 
 | Capability | Meaning |
 |------------|---------|
-| `A` | The function is `async fn` |
+| `A` | The function is `async fn` (never in the suffix) |
 | `B` | The function may block the current thread |
+| `C` | The function is `const fn` (never in the suffix) |
 | `I` | The function performs I/O |
 | `M` | The function accepts mutable state through `&mut` |
 | `P` | The function depends on a local Port trait |
 | `S` | The function observes or changes ambient/global state |
 | `T` | The function depends on thread-local state |
-| `U` | The function is `unsafe fn` or accesses `static mut` |
+| `U` | The function is `unsafe fn` or accesses `static mut` (never in the suffix) |
 
 - The propagated barriers are exactly `B/I/P/S/T`. Ordinary calls require every propagated callee capability; if the callee contains `P`, that call edge requires only `P`.
-- `A/M/U` are signature/body capabilities. They are inferred from the function itself and do not propagate through calls.
+- `A/C/U` are signature/body capabilities measured directly from the function. They do not propagate through calls and never appear in name suffixes; reports and statistics still count them.
 - A local trait is a World Port when it declares one non-generic associated type named `World`, has at least one static operation, and every operation explicitly accepts `&Self::World` or `&mut Self::World`. Its name is irrelevant. Additional associated types represent long-lived resources; associated constants, receiver methods, generic World types, and operations without a World reference make it an ordinary trait.
-- Every World Port operation contains `P`. Its implementations vote on `B/I/S/T`; selected capabilities plus the operation's own `A/M/U` form the full suffix used to check implementation and default bodies. A call to any `P`-containing contract propagates only `P` upward. Use a type-level interpreter and caller-owned World instead of `Box<dyn>` service objects.
+- Every World Port operation contains `P`. Its implementations vote on `B/I/S/T`; selected capabilities plus the operation's own `A/C/M/U` form the full contract used to check implementation and default bodies, while the name suffix keeps only `BIMPST` letters. A call to any `P`-containing contract propagates only `P` upward. Use a type-level interpreter and caller-owned World instead of `Box<dyn>` service objects.
 - `Result/Option` handling is type-system error flow, not a capability. Returning or propagating either type adds no capability letter.
 
 ## Errors and tests

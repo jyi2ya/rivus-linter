@@ -1,9 +1,9 @@
-suffix: base=write_db caps={A, B, I}
+suffix: base=write_db caps={B, I}
 no_suffix: base=add caps={}
 bare_rvs: base= caps={}
 qualified: base=parse caps={}
-qualified_caps: base=do_thing caps={A, B, I, M}
+qualified_caps: base=do_thing caps={B, I, M}
 trait_impl: base=fetch caps={B, I}
 unknown_mixed: base=execute_effects caps={B, I, M, S}
 unknown_only: base=render_art caps={}
-unknown_aeis: base=render_msg caps={A, I, S}
+unknown_aeis: base=render_msg caps={I, S}

@@ -24,4 +24,4 @@ warning[non_alphabetical_suffix]: demo::rvs_handle_IBBZ
   suggested suffix order: BBIZ
 warning[unknown_suffix_letter]: demo::rvs_handle_IBBZ
   suffix 'IBBZ' contains unknown letters: Z
-  known letters are A, B, I, M, P, S, T, U
+  known suffix letters are B, I, M, P, S, T

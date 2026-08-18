@@ -1,0 +1,6 @@
+suppressed=[]
+genuine=[NameMismatch, MissingPort]
+ordering=[NameMismatch]
+stray_a_with_ordering=[NameMismatch]
+stray_a_with_duplicate=[NameMismatch]
+stray_a_with_unknown=[NameMismatch]

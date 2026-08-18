@@ -9,3 +9,8 @@ rvs_bar_E: Some("E")
 rvs_baz_AEIS: Some("AEIS")
 rvs_dep::module::rvs_fetch_BI@rvs_dep::ApiClient: Some("BI")
 rvs_dep::module::plain_BI: None
+rvs_foo_MA: canonical="M"
+rvs_fetch_AI: canonical="I"
+rvs_raw_U: canonical=""
+rvs_const_BC: canonical="B"
+rvs_plain_MI: canonical="IM"

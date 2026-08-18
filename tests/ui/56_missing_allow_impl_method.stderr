@@ -1,8 +1,8 @@
 error: empty function body
   --> $DIR/tests/ui/56_missing_allow_impl_method.rs:6:5
    |
-LL |     fn rvs_run_AI(&self) {}
-   |     ^^^^^^^^^^^^^^^^^^^^^^^
+LL |     fn rvs_run_I(&self) {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^
    |
    = note: `#[deny(rivus::rvs_empty_fn)]` on by default
 

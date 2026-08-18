@@ -61,7 +61,7 @@ cargo rivus check -- --features foo  # 传递额外 cargo check 参数
 
 `check` 必须从待分析 package 的目录运行，不接受 `--workspace`、`--all`、`--package`/`-p` 或 `--exclude` 等 workspace package 选择参数；否则本地 crate 分类会与 Cargo 实际选择范围不一致。`--target-dir` 也不能透传，因为每次命令都会从 canonical project root 在 `target/.rivus-runs/` 下创建自己的隔离临时 target 和 artifact generation。generation 由 RAII guard 管理，正常返回或 panic 展开时自动删除；`kill -9` 或断电可能留下残留，交给 `cargo clean` 或人工清理。driver 在注册 lint 前一次性验证 generation identity、canonical root、模式和所有 `RIVUS_*` 路径组合，畸形或矛盾的协议会直接失败。其他不会覆盖 driver 环境或项目路径的 Cargo 参数可继续透传。
 
-调用传播屏障恰好是 `B/I/P/S/T`；普通调用要求调用方拥有被调用方的每个传播能力，但被调用方包含 P 时该调用边只要求 P。`A/M/U` 只来自函数自己的签名或函数体事实，不沿调用边传播。本地 trait 声明一个非泛型 associated type `World`、至少一个无 receiver 的操作，且每个操作显式接收 `&Self::World` 或 `&mut Self::World` 时成为 World Port；trait 名不参与判断，额外 associated type 表示长期资源。Port 操作固定包含 P，各 impl 的 `B/I/S/T` 仍参与至少半数投票；完整投票契约用于检查具体 impl body 和默认 trait body。`Result`/`Option` 在类型系统中表达错误或缺失流程，不是能力，返回或传播它们不会增加能力字母。
+调用传播屏障恰好是 `B/I/P/S/T`；普通调用要求调用方拥有被调用方的每个传播能力，但被调用方包含 P 时该调用边只要求 P。`A/C/U` 只来自函数自己的签名或函数体事实，不沿调用边传播，也不得出现在后缀中。本地 trait 声明一个非泛型 associated type `World`、至少一个无 receiver 的操作，且每个操作显式接收 `&Self::World` 或 `&mut Self::World` 时成为 World Port；trait 名不参与判断，额外 associated type 表示长期资源。Port 操作固定包含 P，各 impl 的 `B/I/S/T` 仍参与至少半数投票；完整投票契约用于检查具体 impl body 和默认 trait body。`Result`/`Option` 在类型系统中表达错误或缺失流程，不是能力，返回或传播它们不会增加能力字母。
 
 注意：Rivus 从分发 seed 和项目 `caps/` 目录合并能力数据；项目中的每个 layer 必须使用带 `# rivus-caps-v2` 版本头的 v2 JSON Lines。当前版本把分发 seed 编译进 `cargo-rivus`，但调用方只依赖抽象的分发来源，未来可以让 seed 随标准库独立更新而不更换二进制。CLI 不再支持 `-m/--capsmap`，也不再读取或生成 `target/rivus-std-capsmap.txt`、`target/rivus-inferred-capsmap.txt`、`target/rivus-deps-capsmap.txt`、`target/rivus-effective-capsmap/`。项目 `caps/` 不存在时仍加载分发 seed。有效层级顺序为 `std → deps → 分发 seed → 项目 seed → suppress → ext → 其余字母序`；原子写入遗留的 `.层名.PID.序号.tmp` 临时文件会被忽略。
 
@@ -74,7 +74,7 @@ cargo rivus check -- --features foo  # 传递额外 cargo check 参数
 
 ## `cargo rivus report [PATH]`
 
-对 `path` 指定的 Cargo 项目运行 `cargo check`，统计编译过程中发现的所有 `rvs_` 函数的能力分布，输出各能力标记的函数数量和行数占比。`good`（能力集合是 `{A,B,M}` 的子集，包括纯函数）和 `ok`（能力集合是 `{A,B,M,P}` 的子集）应尽量占比高。
+对 `path` 指定的 Cargo 项目运行 `cargo check`，统计编译过程中发现的所有 `rvs_` 函数的能力分布，输出各能力标记的函数数量和行数占比。`good`（能力集合是 `{A,B,C,M}` 的子集，包括纯函数）和 `ok`（能力集合是 `{A,B,C,M,P}` 的子集）应尽量占比高。
 
 `good`、`ok`、`pure` 和各单字母行都是累计视图；同一函数可以进入多行，因此这些计数互相重叠，不能相加得到 Total。
 
@@ -116,7 +116,7 @@ Total: 42 functions, 890 lines
 
 收集调用图并从种子标注自底向上推断 capsmap。对每个 `rvs_` 函数，聚合其所有被调用方的能力，得到推断结果。该命令会包装依赖 crate，但本地归属按 Cargo primary package provenance 和稳定 crate ID 判定，不按 crate 名猜测；build script 是编译期机器代码（按 crate 名 `build_script_build` 加 Cargo 包名不一致识别），其函数不进入函数图（artifact 仍写空图），因此不参与推断、报告或 direct external deps；名为 `build-script-build` 的普通包不受影响。`PATH` 必须是一个可成功执行 `cargo check` 的本地 crate 项目；仅含 `[workspace]` 的虚拟根目录不受支持。
 
-推断分两步：首先对不在 capsmap 精确边界中的函数，直接从行为特征推断能力（`async fn` → A、`unsafe fn` → U、`&mut` 参数 → M、`static` 引用 → S、`static mut` 引用 → S+U、`thread_local!` 引用 → S+T）；然后通过固定点迭代，将普通被调用方的 `B/I/P/S/T` 沿调用图向上传播，包含 P 的被调用方则只传播 P。`A/M/U` 不传播。若同一函数同时被识别为普通 `static` 引用和 `thread_local!` 引用，结果会合并为 `S+T`（幂等）。capsmap 精确条目是冻结的权威边界，不继续吸收其内部调用的能力。
+推断分两步：首先对不在 capsmap 精确边界中的函数，直接从行为特征推断能力（`async fn` → A、`const fn` → C、`unsafe fn` → U、`&mut` 参数 → M、`static` 引用 → S、`static mut` 引用 → S+U、`thread_local!` 引用 → S+T）；然后通过固定点迭代，将普通被调用方的 `B/I/P/S/T` 沿调用图向上传播，包含 P 的被调用方则只传播 P。`A/C/M/U` 不传播；其中 `A/C/U` 不得出现在后缀中。若同一函数同时被识别为普通 `static` 引用和 `thread_local!` 引用，结果会合并为 `S+T`（幂等）。capsmap 精确条目是冻结的权威边界，不继续吸收其内部调用的能力。
 
 Trait 方法的完整能力由各 impl 按传播能力逐项做 at-least-half vote（阈值为 `ceil(n/2)`）决定；trait 声明自身写的后缀只在没有 impl 可聚合时作为回退。因此 2 个 impl 中 1 个带能力会被抬升，3 个 impl 中仅 1 个带能力不会被抬升。World Port 操作固定在结果中加入 P，投票得到的完整契约用于向下检查；只有向调用方传播时才投影为 P。这一规则同样会影响 `annotate` 和 `why` 的显示结果。
 
@@ -197,12 +197,12 @@ cargo rivus strip           # 当前目录
 cargo rivus strip /path/to  # 指定目录
 ```
 
-示例：`rvs_write_db_AIS` → `write_db`，`rvs_add` → `add`
+示例：`rvs_write_db_BIS` → `write_db`，`rvs_add` → `add`
 
 注意：
 - 需要项目能成功 `cargo check`（ra 需要加载完整 workspace）
 - strip 只把普通 package target 的源码作为直接重命名候选；`tests/`、`examples/`、`benches/` 下的独立 Cargo target 暂不作为直接候选处理，以避免 integration test 多 crate 复用同一文件时产生 partial rename
-- 如果 strip 后产生同名冲突（如 `rvs_add_M` 和 `rvs_add_ABIS` 都变成 `add`），rename 可能失败并输出警告
+- 如果 strip 后产生同名冲突（如 `rvs_add_M` 和 `rvs_add_BIS` 都变成 `add`），rename 可能失败并输出警告
 - 宏展开中的引用处理为 best-effort，建议 strip 后运行 `cargo check` 验证
 
 ---
@@ -251,7 +251,7 @@ caps/
 {"path":"std::collections::HashMap::new","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
 ```
 
-`caps` 是按字母序排列的 `ABIMPSTU` 字符串，空字符串表示 pure。`basis.kind` 当前包括 `explicit`、`inferred`、`trait_vote` 和 `port`。`completeness` 为 `complete`、`incomplete` 或 `unknown`。`trait_vote` basis 还保存 `implementations`、`threshold` 和逐能力 `votes`。
+`caps` 是按字母序排列的 `ABCIMPSTU` 字符串，空字符串表示 pure。`basis.kind` 当前包括 `explicit`、`inferred`、`trait_vote` 和 `port`。`completeness` 为 `complete`、`incomplete` 或 `unknown`。`trait_vote` basis 还保存 `implementations`、`threshold` 和逐能力 `votes`。
 
 - linter 对 capsmap 中的键做 def_path 精确匹配，不支持后缀匹配。specialized impl 会先匹配带内部 identity marker 的精确路径，再回退到诊断中显示的无 marker 可读 def_path；因此一个可读路径条目默认作用于该方法的所有 specialization
 - 如果 linter 报告某函数"既非 rvs_-prefixed nor in capsmap"，你需要补全 capsmap。方法优先级：检查源码 > 编写测试验证行为 > 合理猜测
@@ -308,15 +308,15 @@ caps/
 | `DerefPolymorphismWarning` | 实现了 `Deref`——可能用 Deref 模拟继承，应改用组合 |
 | `ReflectionUsageWarning` | 使用了 `std::any::Any`/`type_name`/`type_id`——应改用 trait 分发 |
 | `TodoCommentWarning` | 代码中包含 `// TODO` 或 `// FIXME` 注释（含 `/* */` 块注释，仅检测以 `//` 或 `/*` 开头的行） |
-| `UntestedGoodFnWarning` | good 函数（能力 ≤ ABM）未被任何测试调用 |
-| `UntestedOkFnWarning` | ok 函数（能力 ≤ ABMP）未被任何测试调用 |
+| `UntestedGoodFnWarning` | good 函数（能力 ≤ ABCM）未被任何测试调用 |
+| `UntestedOkFnWarning` | ok 函数（能力 ≤ ABCMP）未被任何测试调用 |
 | `ErrorSwallowWarning` | 对标准库 `Result` 调用 `.ok()`、`.unwrap_or_default()` 或 `drop(Result)`，在未处理错误信息的情况下丢弃结果；`Option::unwrap_or_default()` 和同名自定义方法不适用 |
 | `CatchUnwindWarning` | 使用 `catch_unwind`——应修 panic 源头而非捕获 |
 | `CatchAllErrorVariantWarning` | 错误枚举含 `Unknown`/`Other`/`UnknownError`/`OtherError` 兜底变体 |
 | `MissingTestOutputWarning` | `#[test]` 函数缺少对应的 `test_out/{name}.out` 快照文件（仅当 `test_out/` 目录存在时检查） |
-| `ValidateReturnsUnitWarning` | 名为 `validate`/`check`/`verify` 的函数返回 `Result<(), E>`——应改用 `TryFrom` 返回 `Result<Target, Error>`（parse instead of validate） |
+| `ValidateReturnsUnitWarning` | **纯函数**（能力为空）中名为 `validate`/`check`/`verify` 的函数返回 `Result<(), E>`——应改用 `TryFrom` 返回 `Result<Target, Error>`（parse instead of validate）；非纯函数（含 A/C/U 等）不适用 |
 | `SpawnWarning` | 函数调用了非结构化 spawn（`tokio::spawn`、`std::thread::spawn` 等）——应改用结构化并发原语 |
-| `ContractMismatchWarning` | 函数名与推断出的完整契约不一致；包括 World Port 缺少结构性 `P`、签名能力或投票选中的能力 |
+| `ContractMismatchWarning` | 函数名与推断出的完整契约不一致；包括 World Port 缺少结构性 `P`、后缀字母能力（如 M）或投票选中的能力缺失。A/C/U 从事实测量，缺失时不算契约不一致 |
 | `TraitImplOutlierWarning` | 完整、可修改的普通 trait 实现拥有投票未选中的传播能力；不改变 trait 投票和 capability totals |
 
 ## 推断提示
@@ -325,14 +325,13 @@ caps/
 
 | InferenceKind | 含义 |
 |---------------|------|
-| `MissingAsync` | 函数声明为 `async fn` 但后缀缺少 `A` |
-| `MissingUnsafe` | 函数声明为 `unsafe fn` 但后缀缺少 `U` |
+| `NonSuffixCapInSuffix` | 后缀包含 A/C/U 字母——这些能力从签名或函数体事实测量（U 也来自 `static mut` 访问），不应出现在名字中 |
 | `MissingMutable` | 函数有 `&mut` 参数（含 `&mut self`）但后缀缺少 `M` |
 | `MissingSideEffect` | 函数读取了 `static` 变量但后缀缺少 `S` |
 | `MissingThreadLocal` | 函数读取了 `thread_local!` 变量但后缀缺少 `T`（同时需要 `S`，参见 `StaticRef`） |
 | `NonAlphabeticalSuffix` | 能力后缀字母未按字母序排列 |
 | `DuplicateSuffixLetter` | 能力后缀中有重复字母 |
-| `UnknownSuffixLetter` | 能力后缀包含不在 `ABIMPSTU` 中的字母——已知字母仍正常提取，未知字母仅报告提示 |
+| `UnknownSuffixLetter` | 能力后缀包含不在 `ABCIMPSTU` 中的字母——已知字母仍正常提取，未知字母仅报告提示 |
 
 ---
 

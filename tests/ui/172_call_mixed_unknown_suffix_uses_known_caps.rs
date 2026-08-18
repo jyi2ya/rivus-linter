@@ -4,12 +4,12 @@
 #![allow(non_snake_case)]
 #![allow(rivus::rvs_unknown_suffix_letter)]
 
-fn rvs_send_AEIS() {
+fn rvs_send_EIS() {
     let _ = 1;
 }
 
 fn rvs_outer() {
-    rvs_send_AEIS();
+    rvs_send_EIS();
 }
 
 #[test]

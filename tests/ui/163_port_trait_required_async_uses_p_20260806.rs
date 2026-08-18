@@ -4,5 +4,5 @@
 trait FetchUsers {
     type World;
 
-    async fn rvs_fetch_AP(world: &Self::World, id: u64);
+    async fn rvs_fetch_P(world: &Self::World, id: u64);
 }

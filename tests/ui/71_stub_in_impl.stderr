@@ -1,7 +1,7 @@
 error: stub: todo!()/unimplemented!()
   --> $DIR/tests/ui/71_stub_in_impl.rs:5:5
    |
-LL | /     fn rvs_run_AI(&self) {
+LL | /     fn rvs_run_I(&self) {
 LL | |         todo!("implement async run")
 LL | |     }
    | |_____^

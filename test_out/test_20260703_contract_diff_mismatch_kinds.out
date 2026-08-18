@@ -1,2 +1,2 @@
-mismatches=[NameMismatch, MissingAsync, MissingBlocking, MissingIo, MissingMutable, MissingPort, MissingSideEffect, MissingThreadLocal, MissingUnsafe]
+mismatches=[NameMismatch, MissingBlocking, MissingIo, MissingMutable, MissingPort, MissingSideEffect, MissingThreadLocal]
 declared_all=[]

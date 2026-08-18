@@ -1,12 +1,12 @@
 // compile-flags: --test
 #![allow(non_snake_case)]
 
-fn rvs_inner_ABI() -> i32 {
+fn rvs_inner_BI() -> i32 {
     42
 }
 
 fn rvs_outer() {
-    let _ = rvs_inner_ABI() as i64;
+    let _ = rvs_inner_BI() as i64;
 }
 
 #[test]

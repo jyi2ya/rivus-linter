@@ -1,1 +1,1 @@
-diff=FnContractDiff { def_path: DefPath("demo::rvs_fetch_ABI"), actual_name: FnName("rvs_fetch_ABI"), expected_name: FnName("rvs_fetch_P"), declared_public_caps: Some(CapabilitySet({A, B, I})), expected_public_caps: CapabilitySet({P}) }
+diff=FnContractDiff { def_path: DefPath("demo::rvs_fetch_BI"), actual_name: FnName("rvs_fetch_BI"), expected_name: FnName("rvs_fetch_P"), declared_public_caps: Some(CapabilitySet({B, I})), expected_public_caps: CapabilitySet({P}) }

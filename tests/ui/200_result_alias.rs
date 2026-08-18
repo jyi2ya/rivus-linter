@@ -27,7 +27,7 @@ fn rvs_validate_flipped_alias(value: String) -> FlippedResult<ParseError, ()> {
     Err(ParseError::Invalid)
 }
 
-async fn rvs_validate_async_A(value: String) -> Result<(), ParseError> {
+async fn rvs_validate_async(value: String) -> Result<(), ParseError> {
     drop(value);
     Err(ParseError::Invalid)
 }

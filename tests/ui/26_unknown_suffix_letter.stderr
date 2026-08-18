@@ -15,7 +15,7 @@ LL | pub fn rvs_add_Z() {}
    = note: `-D rivus::rvs-missing-doc` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_doc)]`
 
-error: suffix 'Z' contains unknown letters: Z; known letters are A, B, I, M, P, S, T, U
+error: suffix 'Z' contains unknown letters: Z; known suffix letters are B, I, M, P, S, T
   --> $DIR/tests/ui/26_unknown_suffix_letter.rs:3:1
    |
 LL | pub fn rvs_add_Z() {}

@@ -42,7 +42,7 @@ pub(crate) struct SourceRenameCandidate {
 }
 
 impl SourceRenameCandidate {
-    pub(crate) fn rvs_new(def_path: DefPath, target_name: FnName) -> Self {
+    pub(crate) const fn rvs_new(def_path: DefPath, target_name: FnName) -> Self {
         Self {
             def_path,
             target_name,
@@ -467,7 +467,7 @@ fn rvs_preflight_source_rename_matches(
 /// Strips `rvs_` prefix and capability suffix from all `rvs_` functions in the
 /// workspace at `path`, renaming them to their plain base names.
 ///
-/// For example, `rvs_write_db_AIS` becomes `write_db`, `rvs_add` becomes `add`.
+/// For example, `rvs_write_db_BIS` becomes `write_db`, `rvs_add` becomes `add`.
 ///
 /// # Errors
 ///
@@ -630,7 +630,7 @@ fn rvs_validate_and_dedup_edits(
 
 /// Computes the new name for a strip operation.
 ///
-/// Given a function name like `rvs_write_db_AIS`, returns `write_db`.
+/// Given a function name like `rvs_write_db_BIS`, returns `write_db`.
 /// Given `rvs_add`, returns `add`.
 /// Returns `None` if the name doesn't start with `rvs_`.
 fn rvs_compute_strip_name(name: &str) -> Option<String> {

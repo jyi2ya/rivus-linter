@@ -1,5 +1,6 @@
 A: description=Async display=A(Async)
 B: description=Blocking display=B(Blocking)
+C: description=Const display=C(Const)
 I: description=IO display=I(IO)
 M: description=Mutable display=M(Mutable)
 P: description=Port display=P(Port)

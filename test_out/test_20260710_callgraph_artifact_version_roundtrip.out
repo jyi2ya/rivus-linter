@@ -1,4 +1,5 @@
-schema_version=17
+schema_version=18
 contains_version=true
 nodes=1
-previous_version_error=unsupported callgraph schema version 3; expected 17
+previous_version_error=unsupported callgraph schema version 3; expected 18
+schema_17_error=unsupported callgraph schema version 17; expected 18

@@ -1,1 +1,1 @@
-fn rvs_foo_BAR() {}
+fn rvs_foo_BR() {}

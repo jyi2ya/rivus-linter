@@ -1,4 +1,5 @@
 demo::one::rvs_ambiguous
+demo::rvs_async_helper
 demo::rvs_cfg_production_only
 demo::rvs_partially_allowed
 demo::rvs_uncovered

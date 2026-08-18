@@ -437,7 +437,7 @@ fn rvs_format_why_caps(
     }
 }
 
-fn rvs_callee_absence_message(had_collected_body: bool, is_synthetic: bool) -> &'static str {
+const fn rvs_callee_absence_message(had_collected_body: bool, is_synthetic: bool) -> &'static str {
     if had_collected_body {
         "(no callees)"
     } else if is_synthetic {
@@ -545,10 +545,10 @@ mod tests {
     #[test]
     fn test_20260703_format_contract_diff_summary() {
         let diff = FnContractDiff {
-            def_path: DefPath::from("demo::rvs_fetch_ABI"),
-            actual_name: FnName::from("rvs_fetch_ABI"),
+            def_path: DefPath::from("demo::rvs_fetch_BI"),
+            actual_name: FnName::from("rvs_fetch_BI"),
             expected_name: FnName::from("rvs_fetch_P"),
-            declared_public_caps: Some(crate::capability::CapabilitySet::rvs_from_validated("ABI")),
+            declared_public_caps: Some(crate::capability::CapabilitySet::rvs_from_validated("BI")),
             expected_public_caps: crate::capability::CapabilitySet::rvs_from_validated("AP"),
         };
         let complete_lines = rvs_format_contract_diff_summary(
@@ -590,9 +590,9 @@ mod tests {
             complete_lines,
             vec![
                 "expected name: rvs_fetch_P".to_string(),
-                "declared caps: ABI".to_string(),
+                "declared caps: BI".to_string(),
                 "expected caps: AP".to_string(),
-                "missing caps: P".to_string(),
+                "missing caps: AP".to_string(),
                 "extra declared caps: BI".to_string(),
                 "mismatches: name_mismatch, missing_port".to_string(),
             ]
@@ -601,9 +601,9 @@ mod tests {
             incomplete_lines,
             vec![
                 "expected name: rvs_fetch_P".to_string(),
-                "declared caps: ABI".to_string(),
+                "declared caps: BI".to_string(),
                 "known expected caps (incomplete): AP".to_string(),
-                "missing caps: P".to_string(),
+                "missing caps: AP".to_string(),
                 "mismatches: name_mismatch, missing_port".to_string(),
             ]
         );
@@ -1529,7 +1529,7 @@ path = "src/main.rs"
             "annotate-rvs-demo",
             &[(
                 "src/lib.rs",
-                "pub trait FetchApi { type World; fn rvs_fetch_ABI(world: &Self::World) -> i32 { 1 } }\npub fn rvs_use<E: FetchApi>(world: &E::World) -> i32 { E::rvs_fetch_ABI(world) }\n",
+                "pub trait FetchApi { type World; fn rvs_fetch_BI(world: &Self::World) -> i32 { 1 } }\npub fn rvs_use<E: FetchApi>(world: &E::World) -> i32 { E::rvs_fetch_BI(world) }\n",
             )],
         );
 

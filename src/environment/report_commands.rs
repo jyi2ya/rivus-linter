@@ -81,6 +81,7 @@ impl fmt::Display for Report {
         for cap in [
             Capability::A,
             Capability::B,
+            Capability::C,
             Capability::I,
             Capability::M,
             Capability::P,
@@ -192,6 +193,9 @@ fn rvs_report_entry(
     } else {
         return Ok(None);
     };
+    // Signature-only caps (A/C/U) never appear in names; merge them from the
+    // collected signature facts so reports still measure them.
+    let capabilities = CapabilityPolicy::rvs_report_caps(node.facts, capabilities);
     let Some(line_count) = node.report_line_count else {
         return Ok(None);
     };
@@ -269,7 +273,7 @@ fn rvs_format_incomplete_inference_summary(count: usize) -> String {
     }
     debug_assert!(count > 0);
     format!(
-        "\nInference Status\n------------------------------\n{count} local function(s) depend on unknown callee capability data. Capability totals reflect declared suffixes; rename suggestions may omit unknown capabilities.\n"
+        "\nInference Status\n------------------------------\n{count} local function(s) depend on unknown callee capability data. Capability totals reflect name suffixes merged with measured signature/body facts; rename suggestions may omit unknown capabilities.\n"
     )
 }
 
@@ -390,7 +394,9 @@ mod tests {
         );
 
         assert!(output.contains("3 local function(s)"));
-        assert!(output.contains("Capability totals reflect declared suffixes"));
+        assert!(output.contains(
+            "Capability totals reflect name suffixes merged with measured signature/body facts"
+        ));
         assert!(output.contains("rename suggestions may omit unknown capabilities"));
         assert!(!output.contains("lower bounds"));
     }
@@ -588,6 +594,17 @@ mod tests {
                     line_count: 25,
                 }],
                 (2, 2, 2, 2, 25),
+            ),
+            (
+                // C is a measured non-suffix capability: it renders its own
+                // row and still counts as good (subset of ABCM).
+                "const_only",
+                vec![FnEntry {
+                    capabilities: CapabilitySet::rvs_from_validated("C"),
+                    function_count: 1,
+                    line_count: 5,
+                }],
+                (1, 0, 1, 1, 5),
             ),
         ];
         let mut output = String::new();
@@ -1172,7 +1189,7 @@ mod tests {
 
         assert_eq!(entries.len(), 3);
         assert!(entries.iter().any(|entry| {
-            entry.line_count == 5 && entry.capabilities == CapabilitySet::rvs_from_validated("AIS")
+            entry.line_count == 5 && entry.capabilities == CapabilitySet::rvs_from_validated("IS")
         }));
         assert!(entries.iter().any(|entry| {
             entry.line_count == 6 && entry.capabilities == CapabilitySet::rvs_new()
@@ -1181,6 +1198,62 @@ mod tests {
             entry.line_count == 8 && entry.capabilities == CapabilitySet::rvs_from_validated("P")
         }));
         assert!(!entries.iter().any(|entry| entry.line_count == 7));
+    }
+
+    #[test]
+    fn test_20260816_report_merges_non_suffix_caps_from_facts() {
+        let mut graph = FnGraph::rvs_new();
+        let mut async_fn = FnNode {
+            report_line_count: Some(3),
+            ..FnNode::default()
+        };
+        async_fn.facts.has_async = true;
+        graph.rvs_insert_M(DefPath::from("demo::rvs_fetch_I"), async_fn);
+        let mut const_fn = FnNode {
+            report_line_count: Some(4),
+            ..FnNode::default()
+        };
+        const_fn.facts.has_const = true;
+        graph.rvs_insert_M(DefPath::from("demo::rvs_factorial"), const_fn);
+        // U has two sources: `unsafe fn` signatures and `static mut` access
+        // inside a safe fn.
+        let mut unsafe_fn = FnNode {
+            report_line_count: Some(5),
+            ..FnNode::default()
+        };
+        unsafe_fn.facts.is_unsafe_fn = true;
+        graph.rvs_insert_M(DefPath::from("demo::rvs_raw_B"), unsafe_fn);
+        let mut static_mut_reader = FnNode {
+            report_line_count: Some(6),
+            ..FnNode::default()
+        };
+        static_mut_reader.facts.has_static_mut_ref = true;
+        graph.rvs_insert_M(DefPath::from("demo::rvs_read_counter_S"), static_mut_reader);
+
+        let entries = rvs_report_entries_from_callgraph(
+            &graph,
+            &std::collections::BTreeSet::from([CrateName::from("demo")]),
+        )
+        .unwrap();
+        let output = format!("{entries:?}\n");
+        rvs_snapshot_BIS(
+            "test_20260816_report_merges_non_suffix_caps_from_facts",
+            &output,
+        );
+
+        assert_eq!(entries.len(), 4);
+        assert!(entries.iter().any(|entry| {
+            entry.line_count == 3 && entry.capabilities == CapabilitySet::rvs_from_validated("AI")
+        }));
+        assert!(entries.iter().any(|entry| {
+            entry.line_count == 4 && entry.capabilities == CapabilitySet::rvs_from_validated("C")
+        }));
+        assert!(entries.iter().any(|entry| {
+            entry.line_count == 5 && entry.capabilities == CapabilitySet::rvs_from_validated("BU")
+        }));
+        assert!(entries.iter().any(|entry| {
+            entry.line_count == 6 && entry.capabilities == CapabilitySet::rvs_from_validated("SU")
+        }));
     }
 
     #[test]
@@ -1224,7 +1297,7 @@ mod tests {
                 "src/lib.rs",
                 concat!(
                     "#![allow(non_snake_case)]\n",
-                    "pub async fn rvs_send_messages_AS(x: i32) -> i32 {\n",
+                    "pub async fn rvs_send_messages_S(x: i32) -> i32 {\n",
                     "    debug_assert!(x > 0);\n",
                     "    if x > 1 { x } else { x + 1 }\n",
                     "}\n",
@@ -1235,7 +1308,7 @@ mod tests {
                     "\n",
                     "    #[test]\n",
                     "    fn test_20260708_async_report_project() {\n",
-                    "        std::mem::drop(rvs_send_messages_AS(1));\n",
+                    "        std::mem::drop(rvs_send_messages_S(1));\n",
                     "    }\n",
                     "}\n",
                 ),
@@ -1256,7 +1329,7 @@ mod tests {
         let async_lines = report_entries.as_ref().ok().and_then(|entries| {
             entries
                 .iter()
-                .find(|entry| entry.capabilities == CapabilitySet::rvs_from_str("AS").unwrap())
+                .find(|entry| entry.capabilities.rvs_contains(Capability::A))
                 .map(|entry| entry.line_count)
         });
         let output = format!(

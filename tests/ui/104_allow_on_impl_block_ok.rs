@@ -7,12 +7,12 @@ struct Svc;
 
 #[allow(non_snake_case)]
 impl Svc {
-    fn rvs_run_AI(&self) {
+    fn rvs_run_I(&self) {
         let _ = 42;
     }
 }
 
 #[test]
 fn test_20260612_allow_on_impl_block_ok() {
-    Svc.rvs_run_AI();
+    Svc.rvs_run_I();
 }

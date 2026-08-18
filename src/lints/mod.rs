@@ -14,7 +14,9 @@ use rustc_session::declare_tool_lint;
 use rustc_span::Span;
 
 use crate::artifacts::{CallSiteIdentity, CrateProvenance, FunctionIdentity};
-use crate::capability::{Capability, CapabilityPolicy, CapabilitySet, ParsedFunctionName};
+use crate::capability::{
+    Capability, CapabilityFacts, CapabilityPolicy, CapabilitySet, ParsedFunctionName,
+};
 use crate::capsmap::CapsMap;
 use crate::symbols::{CrateName, DefPath};
 
@@ -94,8 +96,11 @@ rvs_declare_lints!(
         Warn,
         "function has &mut param but suffix lacks M"
     ),
-    (RVS_MISSING_ASYNC, Warn, "async fn but suffix lacks A"),
-    (RVS_MISSING_UNSAFE, Warn, "unsafe code but suffix lacks U"),
+    (
+        RVS_NON_SUFFIX_CAP_IN_SUFFIX,
+        Deny,
+        "suffix contains non-suffix capability A/C/U; those are measured from the signature or body facts"
+    ),
     (
         RVS_MISSING_SIDE_EFFECT,
         Warn,
@@ -215,7 +220,7 @@ rvs_declare_lints!(
     (
         RVS_UNTESTED_OK_FN,
         Warn,
-        "ok function (ABMP subset, mock-testable) not called by any test"
+        "ok function (ABCMP subset, mock-testable) not called by any test"
     ),
     (
         RVS_UNSUPPORTED_INDIRECT_CALL,
@@ -631,13 +636,12 @@ fn rvs_offline_caps_lint_S(
         OfflineCapsLint::ContractMismatch => RVS_CONTRACT_MISMATCH,
         OfflineCapsLint::DuplicateSuffix => RVS_DUPLICATE_SUFFIX,
         OfflineCapsLint::IncompleteCapsKnowledge => RVS_INCOMPLETE_CAPS_KNOWLEDGE,
-        OfflineCapsLint::MissingAsync => RVS_MISSING_ASYNC,
         OfflineCapsLint::MissingMutable => RVS_MISSING_MUTABLE,
         OfflineCapsLint::MissingRvsPrefix => RVS_NON_RVS_FN,
         OfflineCapsLint::MissingSideEffect => RVS_MISSING_SIDE_EFFECT,
         OfflineCapsLint::MissingThreadLocal => RVS_MISSING_THREAD_LOCAL,
-        OfflineCapsLint::MissingUnsafe => RVS_MISSING_UNSAFE,
         OfflineCapsLint::NonAlphabeticalSuffix => RVS_NON_ALPHABETICAL_SUFFIX,
+        OfflineCapsLint::NonSuffixCapInSuffix => RVS_NON_SUFFIX_CAP_IN_SUFFIX,
         OfflineCapsLint::StaticRef => RVS_STATIC_REF,
         OfflineCapsLint::TraitImplOutlier => RVS_TRAIT_IMPL_OUTLIER,
         OfflineCapsLint::UnknownCallee => RVS_UNKNOWN_CALLEE,
@@ -705,6 +709,18 @@ fn rvs_run_fn_checks_MS<'tcx>(
         if subject.is_port_method {
             effective_caps.rvs_insert_M(Capability::P);
         }
+        // A/C/U are measured from the signature/body, never from the name.
+        let facts = CapabilityFacts::rvs_from_signature(
+            subject.sig,
+            utils::rvs_has_mutable_params(subject.sig),
+            subject.is_port_method,
+        )
+        .rvs_with_static_refs(
+            subject.body_facts.has_static_ref,
+            subject.body_facts.has_static_mut_ref,
+            subject.body_facts.has_thread_local_ref,
+        );
+        effective_caps = CapabilityPolicy::rvs_report_caps(facts, effective_caps);
 
         let is_stub = stub_macro::rvs_check_fn_S(cx, subject.body_facts, subject.span);
         empty_fn::rvs_check_fn_MS(cx, subject.body, subject.span, subject.has_body, is_stub);
@@ -1042,6 +1058,14 @@ fn rvs_check_trait_item_BMS<'tcx>(
                 if is_port_trait {
                     effective_caps.rvs_insert_M(Capability::P);
                 }
+                // A/C/U are measured from the signature/body, never from the
+                // name; required methods still have a signature to read.
+                let facts = CapabilityFacts::rvs_from_signature(
+                    sig,
+                    utils::rvs_has_mutable_params(sig),
+                    is_port_trait,
+                );
+                effective_caps = CapabilityPolicy::rvs_report_caps(facts, effective_caps);
                 validate::rvs_check_fn_S(cx, name, sig, &effective_caps);
                 missing_doc::rvs_check_fn_S(cx, name, trait_item.span, attrs, is_pub);
                 missing_safety_doc::rvs_check_fn_S(

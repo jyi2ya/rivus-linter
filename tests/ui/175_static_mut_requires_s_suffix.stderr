@@ -1,0 +1,22 @@
+error: function touches static/thread-local state without declaring required caps; declared caps: pure; required caps from body facts: S; missing: S
+  --> $DIR/tests/ui/175_static_mut_requires_s_suffix.rs:5:1
+   |
+LL | / fn rvs_read_counter() -> u32 {
+LL | |     unsafe { COUNTER }
+LL | | }
+   | |_^
+   |
+   = note: `#[deny(rivus::rvs_static_ref)]` on by default
+
+error: 'rvs_read_counter' is missing capability marker missing_side_effect; expected name: rvs_read_counter_S; declared caps: pure; inferred caps: SU
+  --> $DIR/tests/ui/175_static_mut_requires_s_suffix.rs:5:1
+   |
+LL | / fn rvs_read_counter() -> u32 {
+LL | |     unsafe { COUNTER }
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-missing-side-effect` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_side_effect)]`
+
+error: aborting due to 2 previous errors

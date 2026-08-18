@@ -1,15 +1,15 @@
-error: caller lacks propagated capabilities required by callee; callee: 153_calls_in_struct_rest::rvs_a_ABI; caller declared caps: pure; callee caps: ABI; missing propagated caps: B, I
+error: caller lacks propagated capabilities required by callee; callee: 153_calls_in_struct_rest::rvs_a_BI; caller declared caps: pure; callee caps: BI; missing propagated caps: B, I
   --> $DIR/tests/ui/153_calls_in_struct_rest.rs:19:22
    |
-LL |     let _ = Foo { x: rvs_a_ABI(), ..rvs_b_ABI() };
-   |                      ^^^^^^^^^^^
+LL |     let _ = Foo { x: rvs_a_BI(), ..rvs_b_BI() };
+   |                      ^^^^^^^^^^
    |
    = note: `#[deny(rivus::rvs_call_violation)]` on by default
 
-error: caller lacks propagated capabilities required by callee; callee: 153_calls_in_struct_rest::rvs_b_ABI; caller declared caps: pure; callee caps: ABI; missing propagated caps: B, I
-  --> $DIR/tests/ui/153_calls_in_struct_rest.rs:19:37
+error: caller lacks propagated capabilities required by callee; callee: 153_calls_in_struct_rest::rvs_b_BI; caller declared caps: pure; callee caps: BI; missing propagated caps: B, I
+  --> $DIR/tests/ui/153_calls_in_struct_rest.rs:19:36
    |
-LL |     let _ = Foo { x: rvs_a_ABI(), ..rvs_b_ABI() };
-   |                                     ^^^^^^^^^^^
+LL |     let _ = Foo { x: rvs_a_BI(), ..rvs_b_BI() };
+   |                                    ^^^^^^^^^^
 
 error: aborting due to 2 previous errors

@@ -7,16 +7,16 @@ struct Foo {
     y: i32,
 }
 
-fn rvs_a_ABI() -> i32 {
+fn rvs_a_BI() -> i32 {
     1
 }
 
-fn rvs_b_ABI() -> Foo {
+fn rvs_b_BI() -> Foo {
     Foo { x: 0, y: 0 }
 }
 
 fn rvs_outer() {
-    let _ = Foo { x: rvs_a_ABI(), ..rvs_b_ABI() };
+    let _ = Foo { x: rvs_a_BI(), ..rvs_b_BI() };
 }
 
 #[test]

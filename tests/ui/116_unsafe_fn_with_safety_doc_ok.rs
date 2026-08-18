@@ -7,11 +7,11 @@
 /// # Safety
 ///
 /// Caller must ensure ptr is valid.
-unsafe fn rvs_dangerous_U() {
+unsafe fn rvs_dangerous() {
     let _ = 42;
 }
 
 #[test]
 fn test_20260612_unsafe_fn_with_safety_doc_ok() {
-    unsafe { rvs_dangerous_U() };
+    unsafe { rvs_dangerous() };
 }

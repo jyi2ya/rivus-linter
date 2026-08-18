@@ -1,13 +1,13 @@
 // compile-flags: --test
 #![allow(non_snake_case)]
 
-fn rvs_check_ABI(x: i32) -> bool {
+fn rvs_check_BI(x: i32) -> bool {
     x > 0
 }
 
 fn rvs_outer(x: i32) {
     match x {
-        n if rvs_check_ABI(n) => {}
+        n if rvs_check_BI(n) => {}
         _ => {}
     }
 }

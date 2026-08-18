@@ -1,4 +1,5 @@
 subset_true: subset=true good=true ok=true
 subset_false: subset=false good=false ok=false
 empty_subset: subset=true good=true ok=true
-policy: good=ABM ok=ABMP
+const_good: subset=true good=true ok=true
+policy: good=ABCM ok=ABCMP

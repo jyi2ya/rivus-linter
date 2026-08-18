@@ -1,15 +1,15 @@
 complete:
 expected name: rvs_fetch_P
-declared caps: ABI
+declared caps: BI
 expected caps: AP
-missing caps: P
+missing caps: AP
 extra declared caps: BI
 mismatches: name_mismatch, missing_port
 incomplete:
 expected name: rvs_fetch_P
-declared caps: ABI
+declared caps: BI
 known expected caps (incomplete): AP
-missing caps: P
+missing caps: AP
 mismatches: name_mismatch, missing_port
 empty lower bound:
 declared caps: S

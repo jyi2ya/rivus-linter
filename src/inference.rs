@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use crate::artifacts::{FnGraph, FnNode, FunctionIdentity};
 use crate::capability::{
     Capability, CapabilityBasis, CapabilityCompleteness, CapabilityInfo, CapabilityPolicy,
-    CapabilitySet, ParsedFunctionName, rvs_parse_function,
+    CapabilitySet, ParsedFunctionName, rvs_parse_function, rvs_suffix_without_non_suffix_caps,
 };
 use crate::capsmap;
 use crate::function_classification::{FunctionClassification, LocalScope};
@@ -137,7 +137,7 @@ impl PreparedInference {
         Self::rvs_prepare(graph, seed, local_crate_names)
     }
 
-    pub(crate) fn rvs_inferred(&self) -> &BTreeMap<DefPath, CapabilitySet> {
+    pub(crate) const fn rvs_inferred(&self) -> &BTreeMap<DefPath, CapabilitySet> {
         &self.inferred
     }
 
@@ -146,19 +146,19 @@ impl PreparedInference {
         &self.impl_index
     }
 
-    pub(crate) fn rvs_synthetic_paths(&self) -> &BTreeSet<DefPath> {
+    pub(crate) const fn rvs_synthetic_paths(&self) -> &BTreeSet<DefPath> {
         &self.synthetic_paths
     }
 
-    pub(crate) fn rvs_incomplete_paths(&self) -> &BTreeSet<DefPath> {
+    pub(crate) const fn rvs_incomplete_paths(&self) -> &BTreeSet<DefPath> {
         &self.incomplete_paths
     }
 
-    pub(crate) fn rvs_trait_votes(&self) -> &BTreeMap<DefPath, TraitCapabilityVote> {
+    pub(crate) const fn rvs_trait_votes(&self) -> &BTreeMap<DefPath, TraitCapabilityVote> {
         &self.trait_votes
     }
 
-    pub(crate) fn rvs_resolver<'a>(
+    pub(crate) const fn rvs_resolver<'a>(
         &'a self,
         graph: &'a FnGraph,
         seed: &'a capsmap::CapsMap,
@@ -278,23 +278,23 @@ impl PreparedLocalAnalysis {
         Self::rvs_prepare(graph, seed, local_crate_names)
     }
 
-    pub(crate) fn rvs_inferred(&self) -> &BTreeMap<DefPath, CapabilitySet> {
+    pub(crate) const fn rvs_inferred(&self) -> &BTreeMap<DefPath, CapabilitySet> {
         self.inference.rvs_inferred()
     }
 
-    pub(crate) fn rvs_synthetic_paths(&self) -> &BTreeSet<DefPath> {
+    pub(crate) const fn rvs_synthetic_paths(&self) -> &BTreeSet<DefPath> {
         self.inference.rvs_synthetic_paths()
     }
 
-    pub(crate) fn rvs_incomplete_paths(&self) -> &BTreeSet<DefPath> {
+    pub(crate) const fn rvs_incomplete_paths(&self) -> &BTreeSet<DefPath> {
         self.inference.rvs_incomplete_paths()
     }
 
-    pub(crate) fn rvs_trait_votes(&self) -> &BTreeMap<DefPath, TraitCapabilityVote> {
+    pub(crate) const fn rvs_trait_votes(&self) -> &BTreeMap<DefPath, TraitCapabilityVote> {
         self.inference.rvs_trait_votes()
     }
 
-    pub(crate) fn rvs_resolver<'a>(
+    pub(crate) const fn rvs_resolver<'a>(
         &'a self,
         graph: &'a FnGraph,
         seed: &'a capsmap::CapsMap,
@@ -372,29 +372,25 @@ pub(crate) struct CallContractMismatch {
 pub(crate) enum FnContractMismatchKind {
     MissingRvsPrefix,
     NameMismatch,
-    MissingAsync,
     MissingBlocking,
     MissingIo,
     MissingMutable,
     MissingPort,
     MissingSideEffect,
     MissingThreadLocal,
-    MissingUnsafe,
 }
 
 impl FnContractMismatchKind {
-    pub(crate) fn rvs_as_str(self) -> &'static str {
+    pub(crate) const fn rvs_as_str(self) -> &'static str {
         match self {
             Self::MissingRvsPrefix => "missing_rvs_prefix",
             Self::NameMismatch => "name_mismatch",
-            Self::MissingAsync => "missing_async",
             Self::MissingBlocking => "missing_blocking",
             Self::MissingIo => "missing_io",
             Self::MissingMutable => "missing_mutable",
             Self::MissingPort => "missing_port",
             Self::MissingSideEffect => "missing_side_effect",
             Self::MissingThreadLocal => "missing_thread_local",
-            Self::MissingUnsafe => "missing_unsafe",
         }
     }
 }
@@ -408,11 +404,43 @@ impl FnContractDiff {
         !self.actual_name.rvs_as_str().starts_with("rvs_")
     }
 
+    /// Actual name with stray A/C/U suffix letters removed, used to detect
+    /// names whose only defect is forbidden signature-capability letters.
+    /// Returns `None` when the name carries no A/C/U, so unrelated name
+    /// defects (ordering, duplicates, unknown letters) keep NameMismatch.
+    /// The remaining suffix is filtered in place: ordering, duplicates, and
+    /// unknown letters are preserved so only the A/C/U defect is credited
+    /// to the dedicated diagnostic.
+    fn rvs_actual_name_without_non_suffix_caps(&self) -> Option<FnName> {
+        let name = self.actual_name.rvs_as_str();
+        let parsed = ParsedFunctionName::rvs_parse(name);
+        if !parsed.rvs_has_rvs_prefix() || parsed.rvs_non_suffix_letters().is_empty() {
+            return None;
+        }
+        let stripped = parsed
+            .rvs_raw_suffix()
+            .map(rvs_suffix_without_non_suffix_caps)
+            .unwrap_or_default();
+        if stripped.is_empty() {
+            Some(FnName::rvs_new(format!("rvs_{}", parsed.rvs_base_name())))
+        } else {
+            Some(FnName::rvs_new(format!(
+                "rvs_{}_{}",
+                parsed.rvs_base_name(),
+                stripped
+            )))
+        }
+    }
+
     pub(crate) fn rvs_mismatch_kinds(&self) -> Vec<FnContractMismatchKind> {
         let mut mismatches = Vec::new();
         if self.rvs_missing_rvs_prefix() {
             mismatches.push(FnContractMismatchKind::MissingRvsPrefix);
-        } else if self.rvs_has_name_mismatch() {
+        } else if self.rvs_has_name_mismatch()
+            && self.rvs_actual_name_without_non_suffix_caps() != Some(self.expected_name.clone())
+        {
+            // A name whose only defect is stray A/C/U letters is reported by
+            // the dedicated NonSuffixCapInSuffix diagnostic, not NameMismatch.
             mismatches.push(FnContractMismatchKind::NameMismatch);
         }
         let declared_has = |cap| {
@@ -421,14 +449,12 @@ impl FnContractDiff {
                 .is_some_and(|caps| caps.rvs_contains(cap))
         };
         for (cap, kind) in [
-            (Capability::A, FnContractMismatchKind::MissingAsync),
             (Capability::B, FnContractMismatchKind::MissingBlocking),
             (Capability::I, FnContractMismatchKind::MissingIo),
             (Capability::M, FnContractMismatchKind::MissingMutable),
             (Capability::P, FnContractMismatchKind::MissingPort),
             (Capability::S, FnContractMismatchKind::MissingSideEffect),
             (Capability::T, FnContractMismatchKind::MissingThreadLocal),
-            (Capability::U, FnContractMismatchKind::MissingUnsafe),
         ] {
             if self.expected_public_caps.rvs_contains(cap) && !declared_has(cap) {
                 mismatches.push(kind);
@@ -538,6 +564,8 @@ const PROPAGATION_TARGET_PRECEDENCE: &[CalleeCapsSource] = &[
 const CONTRACT_CHECK_PRECEDENCE: &[CalleeCapsSource] = &[
     CalleeCapsSource::PortMethod,
     CalleeCapsSource::ExactCapsMap,
+    CalleeCapsSource::BodylessImplWithSignature,
+    CalleeCapsSource::BodylessDeclaredCaps,
     CalleeCapsSource::DeclaredCaps,
     CalleeCapsSource::Inferred,
     CalleeCapsSource::ImplMajority,
@@ -556,14 +584,14 @@ struct CapabilityKnowledgeView<'a> {
 }
 
 impl<'a> CapabilityKnowledgeView<'a> {
-    fn rvs_base(base: &'a capsmap::CapsMap) -> Self {
+    const fn rvs_base(base: &'a capsmap::CapsMap) -> Self {
         Self {
             base,
             overlay: None,
         }
     }
 
-    fn rvs_with_overlay(
+    const fn rvs_with_overlay(
         base: &'a capsmap::CapsMap,
         overlay: &'a BTreeMap<DefPath, CapabilityInfo>,
     ) -> Self {
@@ -594,7 +622,7 @@ pub(crate) struct CalleeCapsResolver<'a> {
 }
 
 impl<'a> CalleeCapsResolver<'a> {
-    pub(crate) fn rvs_new(
+    pub(crate) const fn rvs_new(
         graph: &'a FnGraph,
         caps: &'a capsmap::CapsMap,
         inferred: &'a BTreeMap<DefPath, CapabilitySet>,
@@ -609,7 +637,7 @@ impl<'a> CalleeCapsResolver<'a> {
         }
     }
 
-    fn rvs_new_scoped(
+    const fn rvs_new_scoped(
         graph: &'a FnGraph,
         caps: &'a capsmap::CapsMap,
         inferred: &'a BTreeMap<DefPath, CapabilitySet>,
@@ -625,7 +653,7 @@ impl<'a> CalleeCapsResolver<'a> {
         }
     }
 
-    fn rvs_new_with_knowledge(
+    const fn rvs_new_with_knowledge(
         graph: &'a FnGraph,
         knowledge: CapabilityKnowledgeView<'a>,
         inferred: &'a BTreeMap<DefPath, CapabilitySet>,
@@ -738,7 +766,19 @@ impl<'a> CalleeCapsResolver<'a> {
                 .graph
                 .rvs_get(callee.rvs_as_str())
                 .filter(|node| !node.has_body)
-                .and_then(|_| rvs_declared_caps_from_def_path(callee)),
+                .and_then(|_| {
+                    let declared = rvs_declared_caps_from_def_path(callee)?;
+                    // Names carry only BIMPST; a bodyless declaration still
+                    // has a signature, so merge its A/C/M/U facts into the
+                    // contract view.
+                    let mut caps = declared;
+                    if let Some(signature_caps) = self.inferred.get(callee) {
+                        let _ = caps.rvs_extend_filtered_M(signature_caps, |cap| {
+                            !CapabilityPolicy::rvs_is_propagated_cap(cap)
+                        });
+                    }
+                    Some(caps)
+                }),
             CalleeCapsSource::Inferred => self
                 .graph
                 .rvs_get(callee.rvs_as_str())
@@ -1194,7 +1234,11 @@ pub(crate) fn rvs_contract_diff_for_expected_caps(
 ) -> FnContractDiff {
     let actual_name = def_path.rvs_fn_name();
     let declared_public_caps = rvs_parse_function(actual_name.rvs_as_str()).map(|(_, caps)| caps);
+    // The name carries only suffix-letter capabilities; signature-only caps
+    // (A/C/U) are measured from the signature and never enter the contract
+    // name.
     let mut naming_caps = expected_public_caps.clone();
+    naming_caps.rvs_retain_naming_M();
     if incomplete && let Some(declared_caps) = &declared_public_caps {
         let _ = naming_caps.rvs_extend_filtered_M(declared_caps, |capability| {
             CapabilityPolicy::rvs_is_propagated_cap(capability)
@@ -1681,7 +1725,7 @@ fn rvs_combine_capability_info(
     }
 }
 
-fn rvs_least_complete_knowledge(
+const fn rvs_least_complete_knowledge(
     left: CapabilityCompleteness,
     right: CapabilityCompleteness,
 ) -> CapabilityCompleteness {
@@ -2450,9 +2494,9 @@ mod tests {
     #[test]
     fn test_20260728_bodyless_trait_alias_preserves_signature_lower_bound() {
         let mut graph = FnGraph::rvs_new();
-        let dispatch_path = DefPath::from("dep::Transformer::rvs_transform_AMU");
+        let dispatch_path = DefPath::from("dep::Transformer::rvs_transform");
         let implementation_path =
-            DefPath::from("dep::MemoryTransformer::rvs_transform_AMU@dep::Transformer");
+            DefPath::from("dep::MemoryTransformer::rvs_transform@dep::Transformer");
 
         let mut caller = rvs_make_behavior();
         caller.calls.insert(
@@ -2827,7 +2871,7 @@ mod tests {
         caller.calls.insert(
             FunctionIdentity {
                 crate_id: 1,
-                def_path: DefPath::from("demo::Fetcher::rvs_fetch_A"),
+                def_path: DefPath::from("demo::Fetcher::rvs_fetch"),
             },
             CallEdgeType::Strong,
         );
@@ -2836,9 +2880,9 @@ mod tests {
         let mut trait_decl = rvs_make_behavior();
         trait_decl.has_body = false;
         trait_decl.facts.has_async = true;
-        graph.rvs_insert_M(DefPath::from("demo::Fetcher::rvs_fetch_A"), trait_decl);
+        graph.rvs_insert_M(DefPath::from("demo::Fetcher::rvs_fetch"), trait_decl);
         graph.rvs_insert_M(
-            DefPath::from("demo::MemoryFetcher::rvs_fetch_A@demo::Fetcher"),
+            DefPath::from("demo::MemoryFetcher::rvs_fetch@demo::Fetcher"),
             rvs_make_behavior(),
         );
 
@@ -2847,7 +2891,7 @@ mod tests {
             .get("demo::rvs_run")
             .expect("caller should be inferred");
         let decl_caps = inferred
-            .get("demo::Fetcher::rvs_fetch_A")
+            .get("demo::Fetcher::rvs_fetch")
             .expect("bodyless declaration should be inferred");
         rvs_snapshot_BIS(
             "test_20260706_bodyless_trait_decl_keeps_signature_caps_with_impl_vote",
@@ -3051,9 +3095,12 @@ mod tests {
 
         let mut bodyless = rvs_make_behavior();
         bodyless.has_body = false;
-        graph.rvs_insert_M(DefPath::from("demo::Fetcher::rvs_fetch_A"), bodyless);
+        bodyless.facts.has_async = true;
+        bodyless.facts.has_mut_param = true;
+        bodyless.facts.is_unsafe_fn = true;
+        graph.rvs_insert_M(DefPath::from("demo::Fetcher::rvs_fetch"), bodyless);
         graph.rvs_insert_M(
-            DefPath::from("demo::DiskFetcher::rvs_fetch_A@demo::Fetcher"),
+            DefPath::from("demo::DiskFetcher::rvs_fetch@demo::Fetcher"),
             rvs_make_behavior(),
         );
 
@@ -3085,11 +3132,11 @@ mod tests {
                 CapabilitySet::rvs_from_validated("T"),
             ),
             (
-                DefPath::from("demo::Fetcher::rvs_fetch_A"),
+                DefPath::from("demo::Fetcher::rvs_fetch"),
                 CapabilitySet::rvs_from_validated("AMU"),
             ),
             (
-                DefPath::from("demo::DiskFetcher::rvs_fetch_A@demo::Fetcher"),
+                DefPath::from("demo::DiskFetcher::rvs_fetch@demo::Fetcher"),
                 CapabilitySet::rvs_from_validated("BI"),
             ),
             (
@@ -3126,7 +3173,7 @@ mod tests {
                 name: "mixed_unknown_declared_suffix",
                 callee: "demo::rvs_mixed_AEIS",
                 propagation: Some("T"),
-                contract: Some("AIS"),
+                contract: Some("IS"),
                 explanation: Some("T"),
             },
             Case {
@@ -3138,9 +3185,9 @@ mod tests {
             },
             Case {
                 name: "bodyless_impl_merges_signature",
-                callee: "demo::Fetcher::rvs_fetch_A",
+                callee: "demo::Fetcher::rvs_fetch",
                 propagation: Some("ABIMU"),
-                contract: Some("A"),
+                contract: Some("ABIMU"),
                 explanation: Some("AMU"),
             },
             Case {
@@ -3464,7 +3511,7 @@ mod tests {
     fn test_20260703_collect_local_contract_diffs_updates_existing_rvs_suffix() {
         let mut graph = FnGraph::rvs_new();
         graph.rvs_insert_M(
-            DefPath::from("demo::rvs_fetch_ABI"),
+            DefPath::from("demo::rvs_fetch_BI"),
             FnNode {
                 facts: CapabilityFacts {
                     is_port_method: true,
@@ -3489,7 +3536,7 @@ mod tests {
             "test_20260703_collect_local_contract_diffs_updates_existing_rvs_suffix",
             &format!(
                 "diff={diff:?}\nnode={:?}\n",
-                graph.rvs_get("demo::rvs_fetch_ABI")
+                graph.rvs_get("demo::rvs_fetch_BI")
             ),
         );
 
@@ -3545,7 +3592,7 @@ mod tests {
 
     #[test]
     fn test_20260703_collect_contract_diffs_reports_name_and_caps_mismatch() {
-        let path = DefPath::from("demo::rvs_fetch_ABI");
+        let path = DefPath::from("demo::rvs_fetch_BI");
         let inferred = BTreeMap::from([(path.clone(), CapabilitySet::rvs_from_validated("P"))]);
         let mut graph = FnGraph::rvs_new();
         graph.rvs_insert_M(path, rvs_make_behavior());
@@ -3560,7 +3607,7 @@ mod tests {
             &format!("diff={diff:?}\n"),
         );
 
-        assert_eq!(diff.actual_name.rvs_as_str(), "rvs_fetch_ABI");
+        assert_eq!(diff.actual_name.rvs_as_str(), "rvs_fetch_BI");
         assert!(diff.rvs_has_name_mismatch());
         assert_eq!(
             diff.expected_public_caps,
@@ -3568,7 +3615,7 @@ mod tests {
         );
         assert_eq!(
             diff.declared_public_caps.as_ref(),
-            Some(&CapabilitySet::rvs_from_validated("ABI"))
+            Some(&CapabilitySet::rvs_from_validated("BI"))
         );
     }
 
@@ -3755,6 +3802,102 @@ mod tests {
     }
 
     #[test]
+    fn test_20260816_name_mismatch_suppressed_for_non_suffix_only_names() {
+        // The only name defect is a stray A: dropping it yields the expected
+        // name, so the dedicated NonSuffixCapInSuffix diagnostic owns the
+        // report and NameMismatch stays silent.
+        let suppressed = FnContractDiff {
+            def_path: DefPath::from("demo::rvs_fetch_AI"),
+            actual_name: FnName::from("rvs_fetch_AI"),
+            expected_name: FnName::from("rvs_fetch_I"),
+            declared_public_caps: Some(CapabilitySet::rvs_from_validated("I")),
+            expected_public_caps: CapabilitySet::rvs_from_validated("I"),
+        };
+        // A genuine mismatch keeps NameMismatch.
+        let genuine = FnContractDiff {
+            def_path: DefPath::from("demo::rvs_fetch_S"),
+            actual_name: FnName::from("rvs_fetch_S"),
+            expected_name: FnName::from("rvs_fetch_P"),
+            declared_public_caps: Some(CapabilitySet::rvs_from_validated("S")),
+            expected_public_caps: CapabilitySet::rvs_from_validated("P"),
+        };
+        // An ordering defect without any A/C/U keeps NameMismatch: the
+        // suppression only covers names whose sole defect is stray
+        // non-suffix letters.
+        let ordering = FnContractDiff {
+            def_path: DefPath::from("demo::rvs_fetch_MI"),
+            actual_name: FnName::from("rvs_fetch_MI"),
+            expected_name: FnName::from("rvs_fetch_IM"),
+            declared_public_caps: Some(CapabilitySet::rvs_from_validated("MI")),
+            expected_public_caps: CapabilitySet::rvs_from_validated("IM"),
+        };
+        // Stripping A must not normalize other defects away: ordering,
+        // duplicates, and unknown letters survive the rebuild, so these
+        // names keep NameMismatch alongside their suffix warnings.
+        let stray_a_with_ordering = FnContractDiff {
+            def_path: DefPath::from("demo::rvs_fetch_MAI"),
+            actual_name: FnName::from("rvs_fetch_MAI"),
+            expected_name: FnName::from("rvs_fetch_IM"),
+            declared_public_caps: Some(CapabilitySet::rvs_from_validated("MI")),
+            expected_public_caps: CapabilitySet::rvs_from_validated("IM"),
+        };
+        let stray_a_with_duplicate = FnContractDiff {
+            def_path: DefPath::from("demo::rvs_fetch_AII"),
+            actual_name: FnName::from("rvs_fetch_AII"),
+            expected_name: FnName::from("rvs_fetch_I"),
+            declared_public_caps: Some(CapabilitySet::rvs_from_validated("I")),
+            expected_public_caps: CapabilitySet::rvs_from_validated("I"),
+        };
+        let stray_a_with_unknown = FnContractDiff {
+            def_path: DefPath::from("demo::rvs_fetch_AIX"),
+            actual_name: FnName::from("rvs_fetch_AIX"),
+            expected_name: FnName::from("rvs_fetch_I"),
+            declared_public_caps: Some(CapabilitySet::rvs_from_validated("I")),
+            expected_public_caps: CapabilitySet::rvs_from_validated("I"),
+        };
+        let output = format!(
+            "suppressed={:?}\ngenuine={:?}\nordering={:?}\nstray_a_with_ordering={:?}\nstray_a_with_duplicate={:?}\nstray_a_with_unknown={:?}\n",
+            suppressed.rvs_mismatch_kinds(),
+            genuine.rvs_mismatch_kinds(),
+            ordering.rvs_mismatch_kinds(),
+            stray_a_with_ordering.rvs_mismatch_kinds(),
+            stray_a_with_duplicate.rvs_mismatch_kinds(),
+            stray_a_with_unknown.rvs_mismatch_kinds(),
+        );
+        rvs_snapshot_BIS(
+            "test_20260816_name_mismatch_suppressed_for_non_suffix_only_names",
+            &output,
+        );
+
+        assert!(suppressed.rvs_mismatch_kinds().is_empty());
+        assert!(
+            genuine
+                .rvs_mismatch_kinds()
+                .contains(&FnContractMismatchKind::NameMismatch)
+        );
+        assert!(
+            ordering
+                .rvs_mismatch_kinds()
+                .contains(&FnContractMismatchKind::NameMismatch)
+        );
+        assert!(
+            stray_a_with_ordering
+                .rvs_mismatch_kinds()
+                .contains(&FnContractMismatchKind::NameMismatch)
+        );
+        assert!(
+            stray_a_with_duplicate
+                .rvs_mismatch_kinds()
+                .contains(&FnContractMismatchKind::NameMismatch)
+        );
+        assert!(
+            stray_a_with_unknown
+                .rvs_mismatch_kinds()
+                .contains(&FnContractMismatchKind::NameMismatch)
+        );
+    }
+
+    #[test]
     fn test_20260703_collect_contract_mismatch_items() {
         let diffs = vec![FnContractDiff {
             def_path: DefPath::from("demo::rvs_fetch_BI"),
@@ -3769,10 +3912,9 @@ mod tests {
             &format!("items={items:?}\n"),
         );
 
-        assert_eq!(items.len(), 3);
+        assert_eq!(items.len(), 2);
         assert_eq!(items[0].kind, FnContractMismatchKind::NameMismatch);
-        assert_eq!(items[1].kind, FnContractMismatchKind::MissingAsync);
-        assert_eq!(items[2].kind, FnContractMismatchKind::MissingPort);
+        assert_eq!(items[1].kind, FnContractMismatchKind::MissingPort);
     }
 
     #[test]
@@ -3794,16 +3936,23 @@ mod tests {
 
     #[test]
     fn test_20260703_contract_diff_mismatch_kinds() {
+        // The full capability alphabet is ABCIMPSTU; a name suffix can only
+        // carry BIMPST, so the expected contract name for "everything" is
+        // the sorted suffix-letter projection.
         let missing_all = FnContractDiff {
             def_path: DefPath::from("demo::rvs_fetch"),
             actual_name: FnName::from("rvs_fetch"),
-            expected_name: FnName::from("rvs_fetch_ABIMPSTU"),
+            expected_name: FnName::from("rvs_fetch_BIMPST"),
             declared_public_caps: Some(CapabilitySet::rvs_new()),
-            expected_public_caps: CapabilitySet::rvs_from_validated("ABIMPSTU"),
+            expected_public_caps: CapabilitySet::rvs_from_validated("ABCIMPSTU"),
         };
         let declared_all = FnContractDiff {
-            actual_name: FnName::from("rvs_fetch_ABIMPSTU"),
-            declared_public_caps: Some(missing_all.expected_public_caps.clone()),
+            actual_name: FnName::from("rvs_fetch_BIMPST"),
+            declared_public_caps: Some(
+                ParsedFunctionName::rvs_parse("rvs_fetch_BIMPST")
+                    .rvs_known_caps()
+                    .clone(),
+            ),
             ..missing_all.clone()
         };
         let mismatches = missing_all.rvs_mismatch_kinds();
@@ -3813,24 +3962,24 @@ mod tests {
             &format!("mismatches={mismatches:?}\ndeclared_all={no_mismatches:?}\n"),
         );
 
+        // Signature-only caps (A/C/U) never require name declarations; only
+        // suffix-letter capabilities produce mismatch kinds.
         assert_eq!(
             mismatches,
             vec![
                 FnContractMismatchKind::NameMismatch,
-                FnContractMismatchKind::MissingAsync,
                 FnContractMismatchKind::MissingBlocking,
                 FnContractMismatchKind::MissingIo,
                 FnContractMismatchKind::MissingMutable,
                 FnContractMismatchKind::MissingPort,
                 FnContractMismatchKind::MissingSideEffect,
                 FnContractMismatchKind::MissingThreadLocal,
-                FnContractMismatchKind::MissingUnsafe,
             ]
         );
         assert!(no_mismatches.is_empty());
         assert_eq!(
-            FnContractMismatchKind::MissingAsync.rvs_as_str(),
-            "missing_async"
+            FnContractMismatchKind::MissingBlocking.rvs_as_str(),
+            "missing_blocking"
         );
     }
 
@@ -4105,10 +4254,12 @@ mod tests {
                 "BI",
             ),
             (
-                "suffix_from_name",
-                vec![("my_crate::rvs_write_db_ABM", suffix_name)],
+                // Initial inference reads only the facts (async + &mut);
+                // the name suffix does not feed initial caps.
+                "signature_facts_only",
+                vec![("my_crate::rvs_write_db_BM", suffix_name)],
                 &[],
-                "my_crate::rvs_write_db_ABM",
+                "my_crate::rvs_write_db_BM",
                 "AM",
             ),
         ];
@@ -5321,7 +5472,7 @@ mod tests {
         let mut graph = FnGraph::rvs_new();
         graph.rvs_insert_M(DefPath::from("app::ApiClient::fetch"), port);
         graph.rvs_insert_M(DefPath::from("app::rvs_seeded_S"), seeded);
-        graph.rvs_insert_M(DefPath::from("app::rvs_signature_AM"), signature);
+        graph.rvs_insert_M(DefPath::from("app::rvs_signature_M"), signature);
         let seed = rvs_make_capsmap(&[("app::ApiClient::fetch", "BI"), ("app::rvs_seeded_S", "S")]);
 
         let initial = rvs_initial_caps(&graph, &seed);

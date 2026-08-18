@@ -3,4 +3,4 @@ single_panic:
 single_static_ref: S
 single_unsafe_block: 
 seed_override: BI
-suffix_from_name: AM
+signature_facts_only: AM

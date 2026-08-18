@@ -1,16 +1,16 @@
 error: empty function body
   --> $DIR/tests/ui/222_private_unsafe_method.rs:6:5
    |
-LL |     unsafe fn rvs_run_U(&self) {}
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+LL |     unsafe fn rvs_run(&self) {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
    = note: `#[deny(rivus::rvs_empty_fn)]` on by default
 
 error: unsafe fn missing /// # Safety
   --> $DIR/tests/ui/222_private_unsafe_method.rs:6:5
    |
-LL |     unsafe fn rvs_run_U(&self) {}
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+LL |     unsafe fn rvs_run(&self) {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
    = note: `-D rivus::rvs-missing-safety-doc` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_safety_doc)]`
@@ -18,19 +18,19 @@ LL |     unsafe fn rvs_run_U(&self) {}
 error: unsafe fn missing /// # Safety
   --> $DIR/tests/ui/222_private_unsafe_method.rs:10:5
    |
-LL |     unsafe fn rvs_required_U(&self);
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+LL |     unsafe fn rvs_required(&self);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 error: empty function body
   --> $DIR/tests/ui/222_private_unsafe_method.rs:12:5
    |
-LL |     unsafe fn rvs_provided_U(&self) {}
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+LL |     unsafe fn rvs_provided(&self) {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 error: unsafe fn missing /// # Safety
   --> $DIR/tests/ui/222_private_unsafe_method.rs:12:5
    |
-LL |     unsafe fn rvs_provided_U(&self) {}
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+LL |     unsafe fn rvs_provided(&self) {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 error: aborting due to 5 previous errors

@@ -1,4 +1,5 @@
 has_async: rejected=true
+has_const: rejected=true
 is_unsafe_fn: rejected=true
 has_mut_param: rejected=true
 has_static_ref: rejected=true

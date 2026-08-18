@@ -1,13 +1,13 @@
 // compile-flags: --test
 #![allow(non_snake_case)]
 
-fn rvs_inner_ABI() {
+fn rvs_inner_BI() {
     let _ = 42;
 }
 
 fn rvs_outer() {
     let _ = async {
-        rvs_inner_ABI();
+        rvs_inner_BI();
     };
 }
 

@@ -8,12 +8,13 @@ use rustc_hir::{self, Safety};
 use serde::{Deserialize, Serialize};
 use snafu::Snafu;
 
-/// 能力之八德：异步、阻塞、读写、可变、端口、副作用、线程、不安。
-/// 八德既立，函数之名即为契约，调用之际便有章法。
+/// 能力之九德：异步、阻塞、常量、读写、可变、端口、副作用、线程、不安。
+/// 九德既立，函数之名即为契约，调用之际便有章法。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Capability {
     A,
     B,
+    C,
     I,
     M,
     P,
@@ -24,10 +25,11 @@ pub enum Capability {
 
 impl Capability {
     /// 从后缀字母解析出对应的 Capability。未知字符返回 None。
-    pub fn rvs_from_char(c: char) -> Option<Self> {
+    pub const fn rvs_from_char(c: char) -> Option<Self> {
         match c {
             'A' => Some(Self::A),
             'B' => Some(Self::B),
+            'C' => Some(Self::C),
             'I' => Some(Self::I),
             'M' => Some(Self::M),
             'P' => Some(Self::P),
@@ -39,10 +41,11 @@ impl Capability {
     }
 
     /// 返回能力对应的大写后缀字母。
-    pub fn rvs_as_char(self) -> char {
+    pub const fn rvs_as_char(self) -> char {
         match self {
             Self::A => 'A',
             Self::B => 'B',
+            Self::C => 'C',
             Self::I => 'I',
             Self::M => 'M',
             Self::P => 'P',
@@ -53,10 +56,11 @@ impl Capability {
     }
 
     /// 返回能力的英文语义名（用于报告显示）。
-    pub fn rvs_description(self) -> &'static str {
+    pub const fn rvs_description(self) -> &'static str {
         match self {
             Self::A => "Async",
             Self::B => "Blocking",
+            Self::C => "Const",
             Self::I => "IO",
             Self::M => "Mutable",
             Self::P => "Port",
@@ -65,6 +69,26 @@ impl Capability {
             Self::U => "Unsafe",
         }
     }
+
+    /// Whether a suffix letter denotes a non-suffix capability. A/C/U are
+    /// measured from the signature and body facts and never appear in names.
+    pub const fn rvs_is_non_suffix_cap_char(c: char) -> bool {
+        matches!(c, 'A' | 'C' | 'U')
+    }
+
+    /// Whether this capability is measured from the signature/body instead of
+    /// the function name.
+    pub const fn rvs_is_non_suffix_cap(self) -> bool {
+        matches!(self, Self::A | Self::C | Self::U)
+    }
+}
+
+/// Strip non-suffix capability letters (A/C/U) from a raw suffix.
+pub(crate) fn rvs_suffix_without_non_suffix_caps(suffix: &str) -> String {
+    suffix
+        .chars()
+        .filter(|c| !Capability::rvs_is_non_suffix_cap_char(*c))
+        .collect()
 }
 
 impl fmt::Display for Capability {
@@ -74,7 +98,7 @@ impl fmt::Display for Capability {
 }
 
 #[cfg(test)]
-const VALID_SUFFIX_CHARS: &[char] = &['A', 'B', 'I', 'M', 'P', 'S', 'T', 'U'];
+const VALID_SUFFIX_CHARS: &[char] = &['A', 'B', 'C', 'I', 'M', 'P', 'S', 'T', 'U'];
 
 /// Canonical semantic view of a function name or def-path.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,6 +110,7 @@ pub(crate) struct ParsedFunctionName<'a> {
     known_caps: CapabilitySet,
     unknown_suffix_letters: Vec<char>,
     duplicate_suffix_letters: Vec<char>,
+    non_suffix_letters: Vec<char>,
     suffix_is_canonical: bool,
 }
 
@@ -102,6 +127,7 @@ impl<'a> ParsedFunctionName<'a> {
                 known_caps: CapabilitySet::rvs_new(),
                 unknown_suffix_letters: Vec::new(),
                 duplicate_suffix_letters: Vec::new(),
+                non_suffix_letters: Vec::new(),
                 suffix_is_canonical: true,
             };
         };
@@ -117,13 +143,19 @@ impl<'a> ParsedFunctionName<'a> {
             }
         });
         let known_caps = raw_suffix
-            .map(CapabilitySet::rvs_from_str_allow_unknown)
+            .map(|suffix| {
+                CapabilitySet::rvs_from_str_allow_unknown(&rvs_suffix_without_non_suffix_caps(
+                    suffix,
+                ))
+            })
             .unwrap_or_else(CapabilitySet::rvs_new);
         let mut seen = BTreeSet::new();
         let mut seen_unknown = BTreeSet::new();
         let mut seen_duplicates = BTreeSet::new();
+        let mut seen_signature = BTreeSet::new();
         let mut unknown_suffix_letters = Vec::new();
         let mut duplicate_suffix_letters = Vec::new();
+        let mut non_suffix_letters = Vec::new();
         for letter in raw_suffix.unwrap_or("").chars() {
             if !seen.insert(letter) && seen_duplicates.insert(letter) {
                 duplicate_suffix_letters.push(letter);
@@ -131,9 +163,16 @@ impl<'a> ParsedFunctionName<'a> {
             if Capability::rvs_from_char(letter).is_none() && seen_unknown.insert(letter) {
                 unknown_suffix_letters.push(letter);
             }
+            if Capability::rvs_is_non_suffix_cap_char(letter) && seen_signature.insert(letter) {
+                non_suffix_letters.push(letter);
+            }
         }
+        // Ordering is judged on the suffix with A/C/U already stripped: a
+        // name like rvs_foo_MA only needs the dedicated non-suffix-letter
+        // error, not an extra ordering warning.
         let suffix_is_canonical = raw_suffix.is_none_or(|suffix| {
-            suffix
+            let stripped = rvs_suffix_without_non_suffix_caps(suffix);
+            stripped
                 .as_bytes()
                 .windows(2)
                 .all(|letters| matches!(letters, [left, right] if left <= right))
@@ -147,23 +186,24 @@ impl<'a> ParsedFunctionName<'a> {
             known_caps,
             unknown_suffix_letters,
             duplicate_suffix_letters,
+            non_suffix_letters,
             suffix_is_canonical,
         }
     }
 
-    pub(crate) fn rvs_base_name(&self) -> &'a str {
+    pub(crate) const fn rvs_base_name(&self) -> &'a str {
         self.base_name
     }
 
-    pub(crate) fn rvs_has_rvs_prefix(&self) -> bool {
+    pub(crate) const fn rvs_has_rvs_prefix(&self) -> bool {
         self.has_rvs_prefix
     }
 
-    pub(crate) fn rvs_raw_suffix(&self) -> Option<&'a str> {
+    pub(crate) const fn rvs_raw_suffix(&self) -> Option<&'a str> {
         self.raw_suffix
     }
 
-    pub(crate) fn rvs_known_caps(&self) -> &CapabilitySet {
+    pub(crate) const fn rvs_known_caps(&self) -> &CapabilitySet {
         &self.known_caps
     }
 
@@ -175,13 +215,18 @@ impl<'a> ParsedFunctionName<'a> {
         &self.duplicate_suffix_letters
     }
 
-    pub(crate) fn rvs_suffix_is_canonical(&self) -> bool {
+    pub(crate) fn rvs_non_suffix_letters(&self) -> &[char] {
+        &self.non_suffix_letters
+    }
+
+    pub(crate) const fn rvs_suffix_is_canonical(&self) -> bool {
         self.suffix_is_canonical
     }
 
     pub(crate) fn rvs_canonical_suffix(&self) -> Option<String> {
         self.raw_suffix.map(|suffix| {
-            let mut letters: Vec<char> = suffix.chars().collect();
+            let mut letters: Vec<char> =
+                rvs_suffix_without_non_suffix_caps(suffix).chars().collect();
             letters.sort_unstable();
             letters.into_iter().collect()
         })
@@ -245,7 +290,7 @@ pub(crate) enum CapabilityBasis {
 }
 
 impl CapabilityBasis {
-    pub(crate) fn rvs_name(&self) -> &'static str {
+    pub(crate) const fn rvs_name(&self) -> &'static str {
         match self {
             Self::Explicit => "explicit",
             Self::Inferred => "inferred",
@@ -256,7 +301,7 @@ impl CapabilityBasis {
 }
 
 impl CapabilityCompleteness {
-    pub(crate) fn rvs_name(self) -> &'static str {
+    pub(crate) const fn rvs_name(self) -> &'static str {
         match self {
             Self::Complete => "complete",
             Self::Incomplete => "incomplete",
@@ -323,7 +368,7 @@ pub(crate) enum CapabilityKnowledgeError {
 pub(crate) struct ValidatedCapabilityKnowledge;
 
 impl CapabilityInfo {
-    pub(crate) fn rvs_new(
+    pub(crate) const fn rvs_new(
         caps: CapabilitySet,
         basis: CapabilityBasis,
         completeness: CapabilityCompleteness,
@@ -345,7 +390,7 @@ impl CapabilityInfo {
         )
     }
 
-    pub(crate) fn rvs_inferred(caps: CapabilitySet) -> Self {
+    pub(crate) const fn rvs_inferred(caps: CapabilitySet) -> Self {
         Self::rvs_new(
             caps,
             CapabilityBasis::Inferred,
@@ -377,19 +422,19 @@ impl CapabilityInfo {
         )
     }
 
-    pub(crate) fn rvs_caps(&self) -> &CapabilitySet {
+    pub(crate) const fn rvs_caps(&self) -> &CapabilitySet {
         &self.caps
     }
 
-    pub(crate) fn rvs_basis(&self) -> &CapabilityBasis {
+    pub(crate) const fn rvs_basis(&self) -> &CapabilityBasis {
         &self.basis
     }
 
-    pub(crate) fn rvs_completeness(&self) -> CapabilityCompleteness {
+    pub(crate) const fn rvs_completeness(&self) -> CapabilityCompleteness {
         self.completeness
     }
 
-    pub(crate) fn rvs_source(&self) -> Option<&CapabilitySource> {
+    pub(crate) const fn rvs_source(&self) -> Option<&CapabilitySource> {
         self.source.as_ref()
     }
 
@@ -485,6 +530,7 @@ impl CapabilityInfo {
 #[serde(deny_unknown_fields)]
 pub struct CapabilityFacts {
     pub has_async: bool,
+    pub has_const: bool,
     pub is_unsafe_fn: bool,
     pub has_mut_param: bool,
     pub has_static_ref: bool,
@@ -495,8 +541,9 @@ pub struct CapabilityFacts {
 
 impl CapabilityFacts {
     /// Merge observations from another compilation of the same function.
-    pub fn rvs_merge_M(&mut self, other: Self) {
+    pub const fn rvs_merge_M(&mut self, other: Self) {
         self.has_async |= other.has_async;
+        self.has_const |= other.has_const;
         self.is_unsafe_fn |= other.is_unsafe_fn;
         self.has_mut_param |= other.has_mut_param;
         self.has_static_ref |= other.has_static_ref;
@@ -513,6 +560,7 @@ impl CapabilityFacts {
     ) -> Self {
         Self {
             has_async: sig.header.asyncness.is_async(),
+            has_const: sig.header.constness == rustc_hir::Constness::Const,
             is_unsafe_fn: matches!(
                 sig.header.safety,
                 rustc_hir::HeaderSafety::Normal(Safety::Unsafe)
@@ -526,7 +574,7 @@ impl CapabilityFacts {
     }
 
     /// Attach static/thread-local observations collected from the function body.
-    pub fn rvs_with_static_refs(
+    pub const fn rvs_with_static_refs(
         mut self,
         has_static_ref: bool,
         has_static_mut_ref: bool,
@@ -571,6 +619,9 @@ impl CapabilityPolicy {
         if facts.has_async {
             caps.rvs_insert_M(Capability::A);
         }
+        if facts.has_const {
+            caps.rvs_insert_M(Capability::C);
+        }
         if facts.is_unsafe_fn {
             caps.rvs_insert_M(Capability::U);
         }
@@ -581,19 +632,33 @@ impl CapabilityPolicy {
         caps
     }
 
+    /// Merge non-suffix caps (A/C/U) from full facts into name-derived caps.
+    ///
+    /// Names carry only B/I/M/P/S/T; statistics and classification still
+    /// measure A/C/U from the signature and body facts (U also covers
+    /// `static mut` access inside a safe fn).
+    pub fn rvs_report_caps(facts: CapabilityFacts, mut caps: CapabilitySet) -> CapabilitySet {
+        let full = Self::rvs_signature_caps(facts);
+        let _ = caps.rvs_extend_filtered_M(&full, Capability::rvs_is_non_suffix_cap);
+        caps
+    }
+
     /// Infer the operation-owned portion of a World Port contract.
     ///
     /// Body observations are checked against the voted contract rather than
-    /// defining the contract they are meant to satisfy.
-    pub fn rvs_port_operation_signature_caps(mut facts: CapabilityFacts) -> CapabilitySet {
+    /// defining the contract they are meant to satisfy: static/thread-local
+    /// S and T belong to the vote. `static mut` access still infers U here
+    /// because U is a signature/body fact that the B/I/S/T vote never
+    /// covers.
+    pub fn rvs_port_operation_signature_caps(facts: CapabilityFacts) -> CapabilitySet {
         debug_assert!(
             facts.is_port_method,
             "operation must belong to a World Port"
         );
-        facts.has_static_ref = false;
-        facts.has_static_mut_ref = false;
-        facts.has_thread_local_ref = false;
-        Self::rvs_signature_caps(facts)
+        let mut caps = Self::rvs_signature_caps(facts);
+        caps.rvs_remove_M(Capability::S);
+        caps.rvs_remove_M(Capability::T);
+        caps
     }
 
     /// Return capabilities required by static and thread-local observations.
@@ -666,7 +731,7 @@ impl CapabilityPolicy {
     /// Return the capability set allowed for good functions.
     pub fn rvs_good_caps() -> CapabilitySet {
         CapabilitySet(
-            [Capability::A, Capability::B, Capability::M]
+            [Capability::A, Capability::B, Capability::C, Capability::M]
                 .into_iter()
                 .collect(),
         )
@@ -675,9 +740,15 @@ impl CapabilityPolicy {
     /// Return the capability set allowed for ok functions.
     pub fn rvs_ok_caps() -> CapabilitySet {
         CapabilitySet(
-            [Capability::A, Capability::B, Capability::M, Capability::P]
-                .into_iter()
-                .collect(),
+            [
+                Capability::A,
+                Capability::B,
+                Capability::C,
+                Capability::M,
+                Capability::P,
+            ]
+            .into_iter()
+            .collect(),
         )
     }
 
@@ -711,7 +782,7 @@ impl CapabilityPolicy {
 
 impl CapabilitySet {
     /// 构造一个空的能力集。
-    pub fn rvs_new() -> Self {
+    pub const fn rvs_new() -> Self {
         Self(BTreeSet::new())
     }
 
@@ -733,19 +804,9 @@ impl CapabilitySet {
     pub fn rvs_from_validated(s: &str) -> Self {
         let mut set = BTreeSet::new();
         for c in s.chars() {
-            let cap = match c {
-                'A' => Capability::A,
-                'B' => Capability::B,
-                'I' => Capability::I,
-                'M' => Capability::M,
-                'P' => Capability::P,
-                'S' => Capability::S,
-                'T' => Capability::T,
-                'U' => Capability::U,
-                _ => {
-                    debug_assert!(false, "后缀已验，字符必合法");
-                    continue;
-                }
+            let Some(cap) = Capability::rvs_from_char(c) else {
+                debug_assert!(false, "后缀已验，字符必合法");
+                continue;
             };
             set.insert(cap);
         }
@@ -828,6 +889,17 @@ impl CapabilitySet {
     pub fn rvs_insert_M(&mut self, cap: Capability) {
         self.0.insert(cap);
     }
+
+    /// Remove one capability from the set.
+    pub fn rvs_remove_M(&mut self, cap: Capability) {
+        self.0.remove(&cap);
+    }
+
+    /// Keep only capabilities allowed in function-name suffixes (B/I/M/P/S/T).
+    pub fn rvs_retain_naming_M(&mut self) {
+        self.0
+            .retain(|cap| !matches!(cap, Capability::A | Capability::C | Capability::U));
+    }
 }
 
 impl fmt::Display for CapabilitySet {
@@ -853,7 +925,7 @@ pub enum CapabilityParseError {
 /// 亦能处理路径限定之名，如 `CapsMap::rvs_parse`，
 /// 取末段路径片段而拆之。
 ///
-/// 例：rvs_write_db_AIS     → 基名 write_db，能力 {A, I, S}
+/// 例：rvs_write_db_BIS     → 基名 write_db，能力 {B, I, S}
 /// 例：rvs_add               → 基名 add，能力 {}
 /// 例：CapsMap::rvs_parse  → 基名 parse，能力 {}
 pub fn rvs_parse_function(name: &str) -> Option<(&str, CapabilitySet)> {
@@ -999,6 +1071,7 @@ mod tests {
         let valid = [
             ('A', Capability::A, "Async"),
             ('B', Capability::B, "Blocking"),
+            ('C', Capability::C, "Const"),
             ('I', Capability::I, "IO"),
             ('M', Capability::M, "Mutable"),
             ('P', Capability::P, "Port"),
@@ -1080,6 +1153,7 @@ mod tests {
             ("empty_callee", "A", "", true, ""),
             ("signature_m_ignored", "B", "BM", true, ""),
             ("signature_a_ignored", "B", "BA", true, ""),
+            ("signature_c_ignored", "B", "BC", true, ""),
             ("signature_u_ignored", "B", "BU", true, ""),
             ("port_propagates", "B", "BP", false, "P"),
             ("port_hides_effects", "P", "BIPST", true, ""),
@@ -1106,12 +1180,14 @@ mod tests {
     fn test_20260702_capability_policy_signature_caps() {
         let mut facts = CapabilityFacts::default();
         facts.has_async = true;
+        facts.has_const = true;
         facts.has_mut_param = true;
         facts.has_static_mut_ref = true;
         facts.has_thread_local_ref = true;
 
         let caps = CapabilityPolicy::rvs_signature_caps(facts);
         assert!(caps.rvs_contains(Capability::A));
+        assert!(caps.rvs_contains(Capability::C));
         assert!(caps.rvs_contains(Capability::M));
         assert!(caps.rvs_contains(Capability::S));
         assert!(caps.rvs_contains(Capability::T));
@@ -1119,6 +1195,10 @@ mod tests {
         assert!(CapabilityPolicy::rvs_requires_signature_cap(
             facts,
             Capability::A
+        ));
+        assert!(CapabilityPolicy::rvs_requires_signature_cap(
+            facts,
+            Capability::C
         ));
         assert!(!CapabilityPolicy::rvs_requires_signature_cap(
             facts,
@@ -1132,9 +1212,10 @@ mod tests {
         let mut port_facts = facts;
         port_facts.is_port_method = true;
         let port_caps = CapabilityPolicy::rvs_signature_caps(port_facts);
-        assert_eq!(port_caps.rvs_letters(), "AMPSTU");
+        assert_eq!(port_caps.rvs_letters(), "ACMPSTU");
         assert!(CapabilityPolicy::rvs_is_propagated_cap(Capability::P));
         assert!(!CapabilityPolicy::rvs_is_propagated_cap(Capability::A));
+        assert!(!CapabilityPolicy::rvs_is_propagated_cap(Capability::C));
         assert!(!CapabilityPolicy::rvs_is_propagated_cap(Capability::M));
         assert!(!CapabilityPolicy::rvs_is_propagated_cap(Capability::U));
 
@@ -1146,9 +1227,10 @@ mod tests {
     #[test]
     fn test_20260709_capability_set_classification_table() {
         let subset_cases = [
-            ("subset_true", "AB", "ABIM", true, true, true),
-            ("subset_false", "ABT", "ABM", false, false, false),
-            ("empty_subset", "", "ABM", true, true, true),
+            ("subset_true", "AB", "ABCM", true, true, true),
+            ("subset_false", "ABT", "ABCM", false, false, false),
+            ("empty_subset", "", "ABCM", true, true, true),
+            ("const_good", "C", "ABCM", true, true, true),
         ];
         let mut output = String::new();
         for (name, set, allowed, is_subset, is_good, is_ok) in subset_cases {
@@ -1167,8 +1249,8 @@ mod tests {
 
         let good = CapabilityPolicy::rvs_good_caps();
         let ok = CapabilityPolicy::rvs_ok_caps();
-        assert_eq!(rvs_caps_letters(&good), "ABM");
-        assert_eq!(rvs_caps_letters(&ok), "ABMP");
+        assert_eq!(rvs_caps_letters(&good), "ABCM");
+        assert_eq!(rvs_caps_letters(&ok), "ABCMP");
         output.push_str(&format!(
             "policy: good={} ok={}\n",
             rvs_caps_letters(&good),
@@ -1215,7 +1297,7 @@ mod tests {
     #[test]
     fn test_20260709_parse_function_table() {
         let valid_cases = [
-            ("suffix", "rvs_write_db_ABI", "write_db", "ABI"),
+            ("suffix", "rvs_write_db_ABI", "write_db", "BI"),
             ("no_suffix", "rvs_add", "add", ""),
             ("bare_rvs", "rvs_", "", ""),
             ("qualified", "CapsMap::rvs_parse", "parse", ""),
@@ -1223,7 +1305,7 @@ mod tests {
                 "qualified_caps",
                 "MyMod::rvs_do_thing_ABIM",
                 "do_thing",
-                "ABIM",
+                "BIM",
             ),
             (
                 "trait_impl",
@@ -1238,7 +1320,7 @@ mod tests {
                 "BIMS",
             ),
             ("unknown_only", "rvs_render_art_E", "render_art", ""),
-            ("unknown_aeis", "rvs_render_msg_AEIS", "render_msg", "AIS"),
+            ("unknown_aeis", "rvs_render_msg_AEIS", "render_msg", "IS"),
         ];
         let mut output = String::new();
         for (name, input, expected_base, expected_caps) in valid_cases {
@@ -1290,6 +1372,23 @@ mod tests {
         for (input, expected) in raw_cases {
             let actual = ParsedFunctionName::rvs_parse(input).rvs_raw_suffix();
             output.push_str(&format!("{input}: {actual:?}\n"));
+            assert_eq!(actual, expected, "{input}");
+        }
+        // Canonical suffix suggestions drop non-suffix letters (A/C/U)
+        // before sorting, so a name like rvs_foo_MA yields a single
+        // consistent suggestion `M` instead of a conflicting `AM`.
+        let canonical_cases = [
+            ("rvs_foo_MA", "M"),
+            ("rvs_fetch_AI", "I"),
+            ("rvs_raw_U", ""),
+            ("rvs_const_BC", "B"),
+            ("rvs_plain_MI", "IM"),
+        ];
+        for (input, expected) in canonical_cases {
+            let actual = ParsedFunctionName::rvs_parse(input)
+                .rvs_canonical_suffix()
+                .expect("never: raw suffix has a canonical form");
+            output.push_str(&format!("{input}: canonical={actual:?}\n"));
             assert_eq!(actual, expected, "{input}");
         }
         rvs_snapshot_BIS("test_20260709_split_and_suffix_table", &output);
@@ -1389,6 +1488,53 @@ mod tests {
 
         assert_eq!(selected.rvs_letters(), "BS");
         assert_eq!(threshold, 2);
+    }
+
+    #[test]
+    fn test_20260816_port_operation_keeps_static_mut_unsafe_cap() {
+        // A World Port default body touching `static mut` keeps U in its
+        // operation-owned contract: U is a body fact the B/I/S/T vote never
+        // covers, while S/T from static/thread-local observations belong to
+        // the vote and stay out of the signature-derived portion.
+        let static_mut_facts = CapabilityFacts {
+            is_port_method: true,
+            has_static_mut_ref: true,
+            ..CapabilityFacts::default()
+        };
+        let thread_local_facts = CapabilityFacts {
+            is_port_method: true,
+            has_thread_local_ref: true,
+            ..CapabilityFacts::default()
+        };
+        let unsafe_async_facts = CapabilityFacts {
+            is_port_method: true,
+            has_async: true,
+            is_unsafe_fn: true,
+            ..CapabilityFacts::default()
+        };
+        let output = format!(
+            "static_mut={}\nthread_local={}\nunsafe_async={}\n",
+            CapabilityPolicy::rvs_port_operation_signature_caps(static_mut_facts).rvs_letters(),
+            CapabilityPolicy::rvs_port_operation_signature_caps(thread_local_facts).rvs_letters(),
+            CapabilityPolicy::rvs_port_operation_signature_caps(unsafe_async_facts).rvs_letters(),
+        );
+        rvs_snapshot_BIS(
+            "test_20260816_port_operation_keeps_static_mut_unsafe_cap",
+            &output,
+        );
+
+        assert_eq!(
+            CapabilityPolicy::rvs_port_operation_signature_caps(static_mut_facts).rvs_letters(),
+            "PU"
+        );
+        assert_eq!(
+            CapabilityPolicy::rvs_port_operation_signature_caps(thread_local_facts).rvs_letters(),
+            "P"
+        );
+        assert_eq!(
+            CapabilityPolicy::rvs_port_operation_signature_caps(unsafe_async_facts).rvs_letters(),
+            "APU"
+        );
     }
 
     #[test]

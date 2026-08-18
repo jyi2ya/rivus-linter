@@ -30,6 +30,7 @@ pub(crate) enum OfflineCapsKind {
     DuplicateSuffix,
     IncompleteCapsKnowledge,
     NonAlphabeticalSuffix,
+    NonSuffixCapInSuffix,
     StaticRefRequiresCaps,
     TraitImplOutlier,
     UnknownCallee,
@@ -37,13 +38,14 @@ pub(crate) enum OfflineCapsKind {
 }
 
 impl OfflineCapsKind {
-    pub(crate) fn rvs_as_str(self) -> &'static str {
+    pub(crate) const fn rvs_as_str(self) -> &'static str {
         match self {
             Self::CallViolation => "call_violation",
             Self::Contract(kind) => kind.rvs_as_str(),
             Self::DuplicateSuffix => "duplicate_suffix",
             Self::IncompleteCapsKnowledge => "incomplete_caps_knowledge",
             Self::NonAlphabeticalSuffix => "non_alphabetical_suffix",
+            Self::NonSuffixCapInSuffix => "non_suffix_cap_in_suffix",
             Self::StaticRefRequiresCaps => "static_ref_requires_caps",
             Self::TraitImplOutlier => "trait_impl_outlier",
             Self::UnknownCallee => "unknown_callee",
@@ -59,13 +61,12 @@ pub(crate) enum OfflineCapsLint {
     ContractMismatch,
     DuplicateSuffix,
     IncompleteCapsKnowledge,
-    MissingAsync,
     MissingMutable,
     MissingRvsPrefix,
     MissingSideEffect,
     MissingThreadLocal,
-    MissingUnsafe,
     NonAlphabeticalSuffix,
+    NonSuffixCapInSuffix,
     StaticRef,
     TraitImplOutlier,
     UnknownCallee,
@@ -102,7 +103,7 @@ struct TargetCallUsage {
 type UnknownCalleeGroups = BTreeMap<String, BTreeSet<TargetCallUsage>>;
 
 impl OfflineCapsSeverity {
-    fn rvs_as_str(self) -> &'static str {
+    const fn rvs_as_str(self) -> &'static str {
         match self {
             Self::Error => "error",
             Self::Warning => "warning",
@@ -291,11 +292,10 @@ pub(crate) fn rvs_emission_ack_name(emission_index: usize, anchor_index: usize) 
     format!("emission-{emission_index}-anchor-{anchor_index}.ack")
 }
 
-fn rvs_lint_for_kind(kind: OfflineCapsKind) -> OfflineCapsLint {
+const fn rvs_lint_for_kind(kind: OfflineCapsKind) -> OfflineCapsLint {
     match kind {
         OfflineCapsKind::CallViolation => OfflineCapsLint::CallViolation,
         OfflineCapsKind::Contract(kind) => match kind {
-            FnContractMismatchKind::MissingAsync => OfflineCapsLint::MissingAsync,
             FnContractMismatchKind::MissingBlocking
             | FnContractMismatchKind::MissingIo
             | FnContractMismatchKind::MissingPort
@@ -304,11 +304,11 @@ fn rvs_lint_for_kind(kind: OfflineCapsKind) -> OfflineCapsLint {
             FnContractMismatchKind::MissingRvsPrefix => OfflineCapsLint::MissingRvsPrefix,
             FnContractMismatchKind::MissingSideEffect => OfflineCapsLint::MissingSideEffect,
             FnContractMismatchKind::MissingThreadLocal => OfflineCapsLint::MissingThreadLocal,
-            FnContractMismatchKind::MissingUnsafe => OfflineCapsLint::MissingUnsafe,
         },
         OfflineCapsKind::DuplicateSuffix => OfflineCapsLint::DuplicateSuffix,
         OfflineCapsKind::IncompleteCapsKnowledge => OfflineCapsLint::IncompleteCapsKnowledge,
         OfflineCapsKind::NonAlphabeticalSuffix => OfflineCapsLint::NonAlphabeticalSuffix,
+        OfflineCapsKind::NonSuffixCapInSuffix => OfflineCapsLint::NonSuffixCapInSuffix,
         OfflineCapsKind::StaticRefRequiresCaps => OfflineCapsLint::StaticRef,
         OfflineCapsKind::TraitImplOutlier => OfflineCapsLint::TraitImplOutlier,
         OfflineCapsKind::UnknownCallee => OfflineCapsLint::UnknownCallee,
@@ -377,7 +377,7 @@ struct BorrowedFunctionIdentity<'a> {
 }
 
 impl<'a> BorrowedFunctionIdentity<'a> {
-    fn rvs_from_identity(identity: &'a FunctionIdentity) -> Self {
+    const fn rvs_from_identity(identity: &'a FunctionIdentity) -> Self {
         Self {
             crate_id: identity.crate_id,
             def_path: &identity.def_path,
@@ -1012,6 +1012,8 @@ pub(crate) fn rvs_uncovered_test_functions(
         if node.facts.is_port_method {
             caps.rvs_insert_M(Capability::P);
         }
+        // A/C/U come from the collected signature/body facts, not the name.
+        caps = crate::capability::CapabilityPolicy::rvs_report_caps(node.facts, caps);
         if CapabilityPolicy::rvs_is_ok(&caps) {
             candidates.push(identity);
         }
@@ -1075,8 +1077,38 @@ fn rvs_collect_suffix_diagnostics_M(
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
-            vec!["known letters are A, B, I, M, P, S, T, U".to_string()],
+            vec!["known suffix letters are B, I, M, P, S, T".to_string()],
         ));
+    }
+    let non_suffix_letters = context.parsed_name.rvs_non_suffix_letters();
+    if !non_suffix_letters.is_empty() {
+        report.diagnostics.push(context.rvs_diagnostic(
+            OfflineCapsSeverity::Error,
+            OfflineCapsKind::NonSuffixCapInSuffix,
+            format!(
+                "suffix '{raw_suffix}' contains non-suffix letters: {}; A/C/U are measured from the signature or body facts, remove them from the name",
+                non_suffix_letters
+                    .iter()
+                    .map(char::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            vec![format!(
+                "expected name: {}",
+                rvs_expected_name_without_non_suffix_caps(context)
+            )],
+        ));
+    }
+}
+
+fn rvs_expected_name_without_non_suffix_caps(context: &OfflineFnContext<'_>) -> String {
+    let base = context.parsed_name.rvs_base_name();
+    let caps = context.parsed_name.rvs_known_caps();
+    let letters = caps.rvs_letters();
+    if letters.is_empty() {
+        format!("rvs_{base}")
+    } else {
+        format!("rvs_{base}_{letters}")
     }
 }
 
@@ -1102,8 +1134,14 @@ fn rvs_collect_static_ref_diagnostics_M(
             declared.clone()
         };
         let facts = record.node.facts;
-        let required = CapabilityPolicy::rvs_static_caps(facts);
-        let missing: Vec<_> = [Capability::S, Capability::T, Capability::U]
+        // U from `static mut` access is a non-suffix capability measured
+        // from the body; the name can only carry S/T for this diagnostic.
+        let required = {
+            let mut caps = CapabilityPolicy::rvs_static_caps(facts);
+            caps.rvs_retain_naming_M();
+            caps
+        };
+        let missing: Vec<_> = [Capability::S, Capability::T]
             .into_iter()
             .filter(|capability| {
                 required.rvs_contains(*capability) && !allowed.rvs_contains(*capability)
@@ -1344,15 +1382,34 @@ fn rvs_target_contract_caps(
                 .unwrap_or(callee_id);
             return Some(inference.rvs_caps(contract_target_id).clone());
         }
+        // A bodyless declaration with vote inputs resolves to the vote
+        // contract (plus its signature lower bound); its declared name is
+        // only a fallback when nothing can be aggregated. Reading the name
+        // first would collapse `rvs_x` with no suffix to an empty contract
+        // and drop deny-level call violations. Authoritative exact caps
+        // still win over the vote, and an incomplete empty lower bound
+        // stays unresolved so callers keep the unknown/incomplete
+        // diagnostics instead of treating it as a pure contract.
+        if !target.node.has_body {
+            if let Some(exact) = resolver.rvs_exact_caps(&call.callee.def_path) {
+                return Some(exact.clone());
+            }
+            if !rvs_node_slot(&index.vote_inputs, callee_id).is_empty() {
+                let caps = inference.rvs_caps(callee_id).clone();
+                if !(inference.rvs_is_incomplete(callee_id) && caps.rvs_is_empty()) {
+                    return Some(caps);
+                }
+                return None;
+            }
+            return ParsedFunctionName::rvs_parse(call.callee.def_path.rvs_as_str())
+                .rvs_declared_caps();
+        }
         return resolver
             .rvs_exact_caps(&call.callee.def_path)
             .or_else(|| {
                 ParsedFunctionName::rvs_parse(call.callee.def_path.rvs_as_str()).rvs_declared_caps()
             })
-            .or_else(|| {
-                (target.node.has_body || !rvs_node_slot(&index.vote_inputs, callee_id).is_empty())
-                    .then(|| inference.rvs_caps(callee_id).clone())
-            });
+            .or_else(|| Some(inference.rvs_caps(callee_id).clone()));
     }
     resolver.rvs_exact_caps(&call.callee.def_path).or_else(|| {
         ParsedFunctionName::rvs_parse(call.callee.def_path.rvs_as_str()).rvs_declared_caps()
@@ -1386,6 +1443,7 @@ fn rvs_capability_key(caps: &CapabilitySet) -> CapabilityKey {
         bits |= match capability {
             Capability::A => 1 << 0,
             Capability::B => 1 << 1,
+            Capability::C => 1 << 8,
             Capability::I => 1 << 2,
             Capability::M => 1 << 3,
             Capability::P => 1 << 4,
@@ -1730,6 +1788,160 @@ mod tests {
                 && diagnostic.function
                     == DefPath::from("demo::EnvValue::rvs_parse@demo::FromString")
         }));
+    }
+
+    #[test]
+    fn test_20260816_bodyless_trait_vote_caps_enforced_at_call_sites() {
+        // A bodyless trait declaration with no suffix must expose its vote
+        // result (S) to callers: a pure caller then violates the call edge.
+        // Reading the declared name first would collapse the contract to the
+        // empty set and silently drop the deny-level violation.
+        let mut graph = FnGraph::rvs_new();
+        graph.rvs_insert_M(
+            DefPath::from("demo::rvs_dispatch"),
+            rvs_node(&["demo::Parser::rvs_parse"]),
+        );
+        let mut declaration = rvs_node(&[]);
+        declaration.has_body = false;
+        graph.rvs_insert_M(DefPath::from("demo::Parser::rvs_parse"), declaration);
+        for implementation in ["demo::Alpha", "demo::Beta"] {
+            let mut node = rvs_node(&[]);
+            node.is_trait_impl = true;
+            node.facts.has_static_ref = true;
+            node.calls.insert(
+                FunctionIdentity {
+                    crate_id: 1,
+                    def_path: DefPath::from("dep::read_env"),
+                },
+                CallEdgeType::Strong,
+            );
+            graph.rvs_insert_M(
+                DefPath::from(format!("{implementation}::rvs_parse@demo::Parser")),
+                node,
+            );
+        }
+        let caps = rvs_make_capsmap(&[("dep::read_env", "S")]);
+
+        let report =
+            rvs_check_offline_caps(&graph, &caps, &BTreeSet::from([CrateName::from("demo")]));
+        let output = report.to_string();
+        rvs_snapshot_BIS(
+            "test_20260816_bodyless_trait_vote_caps_enforced_at_call_sites",
+            &output,
+        );
+
+        assert!(report.diagnostics.iter().any(|diagnostic| {
+            diagnostic.kind == OfflineCapsKind::CallViolation
+                && diagnostic.function == DefPath::from("demo::rvs_dispatch")
+        }));
+    }
+
+    #[test]
+    fn test_20260816_bodyless_trait_exact_caps_override_vote() {
+        // An authoritative capsmap entry beats the vote for a bodyless
+        // trait declaration: callers are checked against BI, not the S the
+        // implementations would vote for.
+        let mut graph = FnGraph::rvs_new();
+        graph.rvs_insert_M(
+            DefPath::from("demo::rvs_dispatch"),
+            rvs_node(&["demo::Parser::rvs_parse"]),
+        );
+        let mut declaration = rvs_node(&[]);
+        declaration.has_body = false;
+        graph.rvs_insert_M(DefPath::from("demo::Parser::rvs_parse"), declaration);
+        for implementation in ["demo::Alpha", "demo::Beta"] {
+            let mut node = rvs_node(&[]);
+            node.is_trait_impl = true;
+            node.facts.has_static_ref = true;
+            node.calls.insert(
+                FunctionIdentity {
+                    crate_id: 1,
+                    def_path: DefPath::from("dep::read_env"),
+                },
+                CallEdgeType::Strong,
+            );
+            graph.rvs_insert_M(
+                DefPath::from(format!("{implementation}::rvs_parse@demo::Parser")),
+                node,
+            );
+        }
+        let caps = rvs_make_capsmap(&[("dep::read_env", "S"), ("demo::Parser::rvs_parse", "BI")]);
+
+        let report =
+            rvs_check_offline_caps(&graph, &caps, &BTreeSet::from([CrateName::from("demo")]));
+        let output = report.to_string();
+        rvs_snapshot_BIS(
+            "test_20260816_bodyless_trait_exact_caps_override_vote",
+            &output,
+        );
+
+        let violation = report.diagnostics.iter().find(|diagnostic| {
+            diagnostic.kind == OfflineCapsKind::CallViolation
+                && diagnostic.function == DefPath::from("demo::rvs_dispatch")
+        });
+        let violation = violation.expect("never: exact caps enforce the call edge");
+        assert!(
+            violation
+                .details
+                .iter()
+                .any(|detail| detail.contains("callee caps: BI")),
+            "callee contract must come from the exact entry, not the vote"
+        );
+    }
+
+    #[test]
+    fn test_20260816_bodyless_trait_incomplete_empty_vote_stays_unknown() {
+        // A bodyless declaration whose only knowledge is an incomplete,
+        // empty lower bound must not resolve to a pure contract: callers
+        // keep the unknown-callee diagnostic instead of a false clean pass.
+        let mut graph = FnGraph::rvs_new();
+        graph.rvs_insert_M(
+            DefPath::from("demo::rvs_dispatch"),
+            rvs_node(&["demo::Parser::rvs_parse"]),
+        );
+        let mut declaration = rvs_node(&[]);
+        declaration.has_body = false;
+        graph.rvs_insert_M(DefPath::from("demo::Parser::rvs_parse"), declaration);
+        // One impl calling an unknown callee makes the vote incomplete with
+        // an empty known lower bound.
+        let mut implementation = rvs_node(&[]);
+        implementation.is_trait_impl = true;
+        implementation.calls.insert(
+            FunctionIdentity {
+                crate_id: 1,
+                def_path: DefPath::from("dep::opaque"),
+            },
+            CallEdgeType::Strong,
+        );
+        graph.rvs_insert_M(
+            DefPath::from("demo::Alpha::rvs_parse@demo::Parser"),
+            implementation,
+        );
+
+        let report = rvs_check_offline_caps(
+            &graph,
+            &CapsMap::rvs_new(),
+            &BTreeSet::from([CrateName::from("demo")]),
+        );
+        let output = report.to_string();
+        rvs_snapshot_BIS(
+            "test_20260816_bodyless_trait_incomplete_empty_vote_stays_unknown",
+            &output,
+        );
+
+        assert!(!report.diagnostics.iter().any(|diagnostic| diagnostic.kind
+            == OfflineCapsKind::CallViolation
+            && diagnostic.function == DefPath::from("demo::rvs_dispatch")));
+        assert!(
+            report
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.kind == OfflineCapsKind::IncompleteCapsKnowledge)
+                || report
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.kind == OfflineCapsKind::UnknownCallee)
+        );
     }
 
     #[test]
@@ -2189,7 +2401,7 @@ mod tests {
     #[test]
     fn test_20260729_required_target_trait_vote_preserves_signature_caps() {
         let mut graph = FnGraph::rvs_new();
-        let declaration_path = DefPath::from("demo::Transformer::rvs_transform_AMU");
+        let declaration_path = DefPath::from("demo::Transformer::rvs_transform");
         let signature_facts = CapabilityFacts {
             has_async: true,
             has_mut_param: true,
@@ -2208,7 +2420,7 @@ mod tests {
         implementation.is_trait_impl = true;
         implementation.is_trait_impl = true;
         graph.rvs_insert_M(
-            DefPath::from("demo::MemoryTransformer::rvs_transform_AMU@demo::Transformer"),
+            DefPath::from("demo::MemoryTransformer::rvs_transform@demo::Transformer"),
             implementation,
         );
 
@@ -4199,7 +4411,7 @@ mod tests {
     }
 
     #[test]
-    fn test_20260801_world_port_impl_allows_environment_state_but_not_static_mut() {
+    fn test_20260801_world_port_impl_allows_environment_state_including_static_mut() {
         let mut graph = FnGraph::rvs_new();
         for (
             operation_path,
@@ -4253,19 +4465,21 @@ mod tests {
         );
         let output = report.to_string();
         rvs_snapshot_BIS(
-            "test_20260801_world_port_impl_allows_environment_state_but_not_static_mut",
+            "test_20260801_world_port_impl_allows_environment_state_including_static_mut",
             &output,
         );
 
-        assert_eq!(
+        // U comes from the body fact and stays in the operation contract:
+        // touching `static mut` inside a Port implementation no longer
+        // demands a name suffix. Static and thread-local reads produce no
+        // diagnostics here because the Port operation contract is defined
+        // by the vote, not the body.
+        assert!(
             report
                 .diagnostics
                 .iter()
-                .filter(|diagnostic| diagnostic.kind == OfflineCapsKind::StaticRefRequiresCaps)
-                .count(),
-            1
+                .all(|diagnostic| diagnostic.kind != OfflineCapsKind::StaticRefRequiresCaps)
         );
-        assert!(output.contains("missing: U"));
         assert!(!output.contains("rvs_read_PST"));
     }
 
@@ -4341,6 +4555,14 @@ mod tests {
         generated.sources.clear();
         graph.rvs_insert_M(DefPath::from("demo::rvs_generated"), generated);
         graph.rvs_insert_M(DefPath::from("demo::rvs_uncovered"), rvs_node(&[]));
+        // An unsafe fn without a U suffix still carries U from its signature
+        // facts, so it is not an untested good/ok function.
+        let mut unsafe_helper = rvs_node(&[]);
+        unsafe_helper.facts.is_unsafe_fn = true;
+        graph.rvs_insert_M(DefPath::from("demo::rvs_unsafe_helper"), unsafe_helper);
+        let mut async_helper = rvs_node(&[]);
+        async_helper.facts.has_async = true;
+        graph.rvs_insert_M(DefPath::from("demo::rvs_async_helper"), async_helper);
         let mut partially_allowed = rvs_node(&[]);
         partially_allowed.allows_dead_code = true;
         graph.rvs_insert_M(
@@ -4420,6 +4642,10 @@ mod tests {
                 },
                 FunctionIdentity {
                     crate_id: 1,
+                    def_path: DefPath::from("demo::rvs_async_helper"),
+                },
+                FunctionIdentity {
+                    crate_id: 1,
                     def_path: DefPath::from("demo::rvs_cfg_production_only"),
                 },
                 FunctionIdentity {
@@ -4435,6 +4661,11 @@ mod tests {
                     def_path: DefPath::from("demo::two::rvs_ambiguous"),
                 },
             ])
+        );
+        assert!(
+            !uncovered
+                .iter()
+                .any(|identity| identity.def_path.rvs_as_str().contains("unsafe_helper"))
         );
     }
 }

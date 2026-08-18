@@ -1,3 +1,3 @@
 file=rivus-v4-test-generation-demo-$PID-$SEQ.json
-content={"schema_version":17,"nodes":{"demo::rvs_run":{"calls":[],"call_sites":[],"has_async":false,"is_unsafe_fn":false,"has_mut_param":false,"has_static_ref":false,"has_static_mut_ref":false,"has_thread_local_ref":false,"is_port_method":false,"has_body":true,"is_trait_impl":false,"is_test":false,"sources":[],"is_production":true,"is_coverage_candidate":true,"crate_provenance":"primary_package","crate_id":1}}}
+content={"schema_version":18,"nodes":{"demo::rvs_run":{"calls":[],"call_sites":[],"has_async":false,"has_const":false,"is_unsafe_fn":false,"has_mut_param":false,"has_static_ref":false,"has_static_mut_ref":false,"has_thread_local_ref":false,"is_port_method":false,"has_body":true,"is_trait_impl":false,"is_test":false,"sources":[],"is_production":true,"is_coverage_candidate":true,"crate_provenance":"primary_package","crate_id":1}}}
 tmp_exists=false

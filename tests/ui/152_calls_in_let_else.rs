@@ -1,13 +1,13 @@
 // compile-flags: --test
 #![allow(non_snake_case)]
 
-fn rvs_handle_ABI() {
+fn rvs_handle_BI() {
     let _ = 42;
 }
 
 fn rvs_outer(x: Option<i32>) {
     let Some(_v) = x else {
-        rvs_handle_ABI();
+        rvs_handle_BI();
         return;
     };
 }

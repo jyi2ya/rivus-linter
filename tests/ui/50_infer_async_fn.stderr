@@ -1,14 +1,3 @@
-error: 'rvs_fetch' is missing capability marker missing_async; expected name: rvs_fetch_A; declared caps: pure; inferred caps: A
-  --> $DIR/tests/ui/50_infer_async_fn.rs:3:1
-   |
-LL | / async fn rvs_fetch() {
-LL | |     let _ = 42;
-LL | | }
-   | |_^
-   |
-   = note: `-D rivus::rvs-missing-async` implied by `-D warnings`
-   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_async)]`
-
 error: good fn 'rvs_fetch' not called by any test
   --> $DIR/tests/ui/50_infer_async_fn.rs:3:1
    |
@@ -20,4 +9,4 @@ LL | | }
    = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
 
-error: aborting due to 2 previous errors
+error: aborting due to 1 previous error

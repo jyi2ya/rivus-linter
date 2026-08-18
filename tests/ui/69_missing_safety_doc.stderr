@@ -1,16 +1,16 @@
 error: empty function body
   --> $DIR/tests/ui/69_missing_safety_doc.rs:4:1
    |
-LL | pub unsafe fn rvs_dangerous_U() {}
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+LL | pub unsafe fn rvs_dangerous() {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
    = note: `#[deny(rivus::rvs_empty_fn)]` on by default
 
 error: unsafe fn missing /// # Safety
   --> $DIR/tests/ui/69_missing_safety_doc.rs:4:1
    |
-LL | pub unsafe fn rvs_dangerous_U() {}
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+LL | pub unsafe fn rvs_dangerous() {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
    = note: `-D rivus::rvs-missing-safety-doc` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_safety_doc)]`

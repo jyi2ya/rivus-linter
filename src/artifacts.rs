@@ -12,7 +12,7 @@ use crate::capability::CapabilityFacts;
 use crate::function_classification::LocalScope;
 use crate::symbols::{CrateName, DefPath};
 
-pub(crate) const CALLGRAPH_SCHEMA_VERSION: u32 = 17;
+pub(crate) const CALLGRAPH_SCHEMA_VERSION: u32 = 18;
 
 #[derive(Debug, Snafu)]
 pub enum CallgraphArtifactError {
@@ -192,6 +192,7 @@ impl From<LegacyCapabilityFacts> for CapabilityFacts {
     fn from(facts: LegacyCapabilityFacts) -> Self {
         Self {
             has_async: facts.has_async,
+            has_const: false,
             is_unsafe_fn: facts.is_unsafe_fn,
             has_mut_param: facts.has_mut_param,
             has_static_ref: facts.has_static_ref,
@@ -639,11 +640,11 @@ fn rvs_merge_call_edge_M(
     }
 }
 
-fn rvs_is_false(value: &bool) -> bool {
+const fn rvs_is_false(value: &bool) -> bool {
     !*value
 }
 
-fn rvs_is_zero(value: &usize) -> bool {
+const fn rvs_is_zero(value: &usize) -> bool {
     *value == 0
 }
 
@@ -1529,6 +1530,7 @@ mod tests {
         let mut node = FnNode::default();
         node.crate_id = 7;
         node.crate_provenance = CrateProvenance::PrimaryPackage;
+        node.facts.has_const = true;
         node.calls.insert(
             FunctionIdentity {
                 crate_id: 9,
@@ -1555,9 +1557,17 @@ mod tests {
             1,
         );
         let previous_version_error = rvs_parse_callgraph_json_S(&previous_version).unwrap_err();
+        // Schema 17 predates CapabilityFacts.has_const and must be rejected
+        // with an explicit version error instead of a record parse failure.
+        let schema_17 = json.replacen(
+            &format!(r#""schema_version":{CALLGRAPH_SCHEMA_VERSION}"#),
+            r#""schema_version":17"#,
+            1,
+        );
+        let schema_17_error = rvs_parse_callgraph_json_S(&schema_17).unwrap_err();
         let version_marker = format!(r#""schema_version":{CALLGRAPH_SCHEMA_VERSION}"#);
         let output = format!(
-            "schema_version={CALLGRAPH_SCHEMA_VERSION}\ncontains_version={}\nnodes={}\nprevious_version_error={previous_version_error}\n",
+            "schema_version={CALLGRAPH_SCHEMA_VERSION}\ncontains_version={}\nnodes={}\nprevious_version_error={previous_version_error}\nschema_17_error={schema_17_error}\n",
             json.contains(&version_marker),
             parsed.rvs_len(),
         );
@@ -1568,10 +1578,20 @@ mod tests {
 
         assert!(json.contains(r#""nodes""#));
         assert!(parsed.rvs_get("demo::rvs_run").is_some());
+        // The const fact must survive a schema-18 serialize/parse roundtrip.
+        assert!(
+            parsed
+                .rvs_get("demo::rvs_run")
+                .is_some_and(|node| node.facts.has_const)
+        );
+        assert!(matches!(
+            schema_17_error,
+            CallgraphArtifactError::UnsupportedSchemaVersion { actual: 17, .. }
+        ));
     }
 
     #[test]
-    fn test_20260730_schema_12_requires_every_capability_fact() {
+    fn test_20260816_schema_18_requires_every_capability_fact() {
         let mut graph = FnGraph::rvs_new();
         let mut node = FnNode::default();
         node.crate_id = 7;
@@ -1582,6 +1602,7 @@ mod tests {
 
         let fact_fields = [
             "has_async",
+            "has_const",
             "is_unsafe_fn",
             "has_mut_param",
             "has_static_ref",
@@ -1621,7 +1642,7 @@ mod tests {
             legacy.is_ok(),
         ));
         rvs_snapshot_BIS(
-            "test_20260730_schema_12_requires_every_capability_fact",
+            "test_20260816_schema_18_requires_every_capability_fact",
             &output,
         );
 
