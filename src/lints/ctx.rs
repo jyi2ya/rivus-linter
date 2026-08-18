@@ -62,7 +62,7 @@ pub(crate) struct FnSubject<'facts, 'tcx> {
 }
 
 impl<'facts, 'tcx> FnSubject<'facts, 'tcx> {
-    pub(crate) fn rvs_body(
+    pub(crate) const fn rvs_body(
         ident: Ident,
         hir_id: HirId,
         span: Span,

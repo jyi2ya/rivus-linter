@@ -110,12 +110,12 @@ impl FunctionClassification {
         }
     }
 
-    pub(crate) fn rvs_with_port(mut self, is_port_method: bool) -> Self {
+    pub(crate) const fn rvs_with_port(mut self, is_port_method: bool) -> Self {
         self.is_port_method = is_port_method;
         self
     }
 
-    pub(crate) fn rvs_is_contract_enforced(self) -> bool {
+    pub(crate) const fn rvs_is_contract_enforced(self) -> bool {
         self.is_local
             && !self.is_entrypoint
             && !self.is_test
@@ -123,7 +123,7 @@ impl FunctionClassification {
             && self.has_source
     }
 
-    pub(crate) fn rvs_is_offline_checked(self) -> bool {
+    pub(crate) const fn rvs_is_offline_checked(self) -> bool {
         self.is_local
             && !self.is_entrypoint
             && !self.is_test
@@ -131,15 +131,15 @@ impl FunctionClassification {
             && self.has_source
     }
 
-    pub(crate) fn rvs_is_report_candidate(self) -> bool {
+    pub(crate) const fn rvs_is_report_candidate(self) -> bool {
         self.is_local && (!self.is_trait_impl || self.is_port_method)
     }
 
-    pub(crate) fn rvs_is_trait_vote_outlier_candidate(self) -> bool {
+    pub(crate) const fn rvs_is_trait_vote_outlier_candidate(self) -> bool {
         self.is_local && self.is_trait_impl && !self.is_port_method && self.has_source
     }
 
-    pub(crate) fn rvs_is_strip_candidate(self) -> bool {
+    pub(crate) const fn rvs_is_strip_candidate(self) -> bool {
         self.is_local && !self.is_trait_impl
     }
 }

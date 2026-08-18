@@ -232,7 +232,7 @@ fn rvs_record_static_facts_M(
     }
 }
 
-fn rvs_direct_callee_hir_id(expr: &rustc_hir::Expr<'_>) -> Option<HirId> {
+const fn rvs_direct_callee_hir_id(expr: &rustc_hir::Expr<'_>) -> Option<HirId> {
     if let ExprKind::Call(func, _) = expr.kind {
         let mut callee = func;
         loop {

@@ -216,7 +216,7 @@ enum RunGenerationMode {
 }
 
 impl RunGenerationMode {
-    fn rvs_name(&self) -> &'static str {
+    const fn rvs_name(&self) -> &'static str {
         match self {
             Self::Analysis { .. } => "analysis",
             Self::Collection {
@@ -234,7 +234,7 @@ impl RunGenerationMode {
         }
     }
 
-    fn rvs_target_name(&self) -> &'static str {
+    const fn rvs_target_name(&self) -> &'static str {
         let target_scope = match self {
             Self::Analysis { target_scope, .. } | Self::Collection { target_scope, .. } => {
                 target_scope
@@ -404,7 +404,7 @@ impl DriverProtocolEnvironment {
         }
     }
 
-    fn rvs_contains_rivus_authority(&self) -> bool {
+    const fn rvs_contains_rivus_authority(&self) -> bool {
         self.wrapper.is_some()
             || self.generation_id.is_some()
             || self.generation_root.is_some()
@@ -468,7 +468,7 @@ fn rvs_require_driver_path(
         .ok_or(DriverProtocolError::MissingVariable { name })
 }
 
-fn rvs_reject_driver_variable(
+const fn rvs_reject_driver_variable(
     value: Option<&OsString>,
     name: &'static str,
 ) -> Result<(), DriverProtocolError> {
@@ -964,7 +964,7 @@ impl Drop for RivusRunGeneration {
 }
 
 impl CargoCheckError {
-    pub(crate) fn rvs_exit_code(&self) -> i32 {
+    pub(crate) const fn rvs_exit_code(&self) -> i32 {
         match self {
             Self::Message(_) => 1,
             Self::ExitCode(code) => *code,
@@ -1936,7 +1936,7 @@ fn rvs_cleanup_run_generation_BIMS(generation: &mut RivusRunGeneration) -> Resul
         .map_err(|error| error.to_string())
 }
 
-fn rvs_callgraph_failure_exit_code(error: &CallgraphCollectionError) -> Option<i32> {
+const fn rvs_callgraph_failure_exit_code(error: &CallgraphCollectionError) -> Option<i32> {
     match error {
         CallgraphCollectionError::Cargo(error) => Some(error.rvs_exit_code()),
         CallgraphCollectionError::Artifact(_) => None,

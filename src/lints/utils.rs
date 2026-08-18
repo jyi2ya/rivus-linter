@@ -66,7 +66,7 @@ struct ImplNominalIdentityVisitor<'tcx> {
 }
 
 impl<'tcx> ImplNominalIdentityVisitor<'tcx> {
-    fn rvs_new(tcx: TyCtxt<'tcx>, impl_crate: CrateNum) -> Self {
+    const fn rvs_new(tcx: TyCtxt<'tcx>, impl_crate: CrateNum) -> Self {
         Self {
             tcx,
             impl_crate,

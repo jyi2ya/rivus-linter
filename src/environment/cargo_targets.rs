@@ -10,11 +10,11 @@ pub(crate) enum CargoTargetScope {
 }
 
 impl CargoTargetScope {
-    fn rvs_includes_test_example_bench(self) -> bool {
+    const fn rvs_includes_test_example_bench(self) -> bool {
         matches!(self, Self::WithTestExampleBench)
     }
 
-    pub(crate) fn rvs_cargo_check_arg(self) -> Option<&'static str> {
+    pub(crate) const fn rvs_cargo_check_arg(self) -> Option<&'static str> {
         match self {
             Self::Production => None,
             Self::WithTestExampleBench => Some("--all-targets"),

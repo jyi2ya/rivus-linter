@@ -182,7 +182,7 @@ enum CapLintsRewrite {
     ForceWarn,
 }
 
-fn rvs_callgraph_lint_mode(
+const fn rvs_callgraph_lint_mode(
     wrapper_mode: bool,
     rivus_enabled: bool,
     collection_requested: bool,

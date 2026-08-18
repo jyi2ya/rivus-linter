@@ -158,7 +158,7 @@ impl<'a> TraitMethodIdentity<'a> {
     }
 
     /// Return the bare implementation method name.
-    pub(crate) fn rvs_method_name(self) -> &'a str {
+    pub(crate) const fn rvs_method_name(self) -> &'a str {
         self.method_name
     }
 
@@ -178,7 +178,7 @@ impl<'a> TraitMethodIdentity<'a> {
 pub(crate) struct TraitMethodKey(String);
 
 impl TraitMethodKey {
-    fn rvs_new(key: String) -> Self {
+    const fn rvs_new(key: String) -> Self {
         Self(key)
     }
 
