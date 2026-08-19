@@ -16,4 +16,33 @@ LL |     _closure();
    = note: `-D rivus::rvs-unsupported-indirect-call` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_unsupported_indirect_call)]`
 
-error: aborting due to 2 previous errors
+error: 'rvs_nested_result_drop_S' should be named 'rvs_nested_result_drop'; declared caps: S; inferred caps: pure
+  --> $DIR/tests/ui/214_nested_result_drop.rs:8:1
+   |
+LL | / fn rvs_nested_result_drop_S() {
+LL | |     let _closure = || {
+LL | |         let result: Fallible = Err(Error);
+LL | |         drop(result);
+LL | |     };
+LL | |     _closure();
+LL | | }
+   | |_^
+   |
+   = note: `#[deny(rivus::rvs_contract_mismatch)]` on by default
+
+error: good fn 'rvs_nested_result_drop_S' not called by any test
+  --> $DIR/tests/ui/214_nested_result_drop.rs:8:1
+   |
+LL | / fn rvs_nested_result_drop_S() {
+LL | |     let _closure = || {
+LL | |         let result: Fallible = Err(Error);
+LL | |         drop(result);
+LL | |     };
+LL | |     _closure();
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
+
+error: aborting due to 4 previous errors

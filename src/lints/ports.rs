@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::marker::PhantomData;
 
@@ -26,7 +26,8 @@ pub(crate) trait LintEnvironment {
 #[derive(Debug)]
 pub(crate) struct RivusLintConfig<E: LintEnvironment> {
     pub(crate) capsmap: Result<Option<CapsMap>, String>,
-    pub(crate) untested_functions: Result<Option<BTreeSet<FunctionIdentity>>, String>,
+    pub(crate) untested_functions:
+        Result<Option<BTreeMap<FunctionIdentity, crate::artifacts::CoverageLabel>>, String>,
     pub(crate) offline_emissions: Result<Vec<OfflineCapsEmission>, String>,
     pub(crate) test_outputs: Option<BTreeSet<String>>,
     pub(crate) collect_callgraph: bool,

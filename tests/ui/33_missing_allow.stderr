@@ -15,6 +15,14 @@ LL | fn rvs_foo_BR() {}
    = note: `-D rivus::rvs-missing-allow` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_allow)]`
 
+error: 'rvs_foo_BR' should be named 'rvs_foo'; declared caps: B; inferred caps: pure
+  --> $DIR/tests/ui/33_missing_allow.rs:1:1
+   |
+LL | fn rvs_foo_BR() {}
+   | ^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(rivus::rvs_contract_mismatch)]` on by default
+
 error: suffix 'BR' contains unknown letters: R; known suffix letters are B, I, M, P, S, T
   --> $DIR/tests/ui/33_missing_allow.rs:1:1
    |
@@ -42,4 +50,4 @@ LL | fn rvs_foo_BR() {}
    = note: `-D non-snake-case` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(non_snake_case)]`
 
-error: aborting due to 5 previous errors
+error: aborting due to 6 previous errors

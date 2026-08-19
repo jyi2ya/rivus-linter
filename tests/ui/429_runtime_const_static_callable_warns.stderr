@@ -19,4 +19,14 @@ error: call through function pointer or generic callable — Rivus cannot resolv
 LL |     Hooks::ASSOCIATED_HOOK();
    |     ^^^^^^^^^^^^^^^^^^^^^^^^
 
-error: aborting due to 3 previous errors
+error: 'rvs_effect_B' should be named 'rvs_effect'; declared caps: B; inferred caps: pure
+  --> $DIR/tests/ui/429_runtime_const_static_callable_warns.rs:7:1
+   |
+LL | / fn rvs_effect_B() {
+LL | |     let _ = 1;
+LL | | }
+   | |_^
+   |
+   = note: `#[deny(rivus::rvs_contract_mismatch)]` on by default
+
+error: aborting due to 4 previous errors

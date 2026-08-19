@@ -882,18 +882,48 @@ pub(crate) fn rvs_serialize_callgraph_json_S(
         .map_err(|source| CallgraphArtifactError::SerializeCallgraph { source })
 }
 
-pub(crate) fn rvs_serialize_function_identities_json_S(
-    functions: &BTreeSet<FunctionIdentity>,
+/// Coverage class of an untested function, as classified by the offline
+/// engine's semantic caps. The emission compile trusts this label instead
+/// of reclassifying from signature facts, which cannot see propagated
+/// capabilities.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum CoverageLabel {
+    Good,
+    Ok,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UntestedSelectionEntry {
+    pub(crate) identity: FunctionIdentity,
+    pub(crate) label: CoverageLabel,
+}
+
+pub(crate) fn rvs_serialize_untested_selection_S(
+    selection: &BTreeMap<FunctionIdentity, CoverageLabel>,
 ) -> Result<String, CallgraphArtifactError> {
-    serde_json::to_string(functions)
+    let entries: Vec<UntestedSelectionEntry> = selection
+        .iter()
+        .map(|(identity, label)| UntestedSelectionEntry {
+            identity: identity.clone(),
+            label: *label,
+        })
+        .collect();
+    serde_json::to_string(&entries)
         .map_err(|source| CallgraphArtifactError::SerializeFunctionIdentities { source })
 }
 
-pub(crate) fn rvs_parse_function_identities_json_S(
+pub(crate) fn rvs_parse_untested_selection_S(
     json: &str,
-) -> Result<BTreeSet<FunctionIdentity>, CallgraphArtifactError> {
-    serde_json::from_str(json)
-        .map_err(|source| CallgraphArtifactError::ParseFunctionIdentities { source })
+) -> Result<BTreeMap<FunctionIdentity, CoverageLabel>, CallgraphArtifactError> {
+    let entries: Vec<UntestedSelectionEntry> = serde_json::from_str(json)
+        .map_err(|source| CallgraphArtifactError::ParseFunctionIdentities { source })?;
+    let mut selection = BTreeMap::new();
+    for entry in entries {
+        selection.insert(entry.identity, entry.label);
+    }
+    Ok(selection)
 }
 
 /// Parse versioned or legacy callgraph JSON into shared callgraph records.
@@ -1742,23 +1772,29 @@ mod tests {
 
     #[test]
     fn test_20260714_def_path_selection_roundtrip() {
-        let functions = BTreeSet::from([
-            FunctionIdentity {
-                crate_id: 7,
-                def_path: DefPath::from("demo::rvs_alpha"),
-            },
-            FunctionIdentity {
-                crate_id: 9,
-                def_path: DefPath::from("demo::Worker::rvs_run_P"),
-            },
+        let selection = BTreeMap::from([
+            (
+                FunctionIdentity {
+                    crate_id: 7,
+                    def_path: DefPath::from("demo::rvs_alpha"),
+                },
+                CoverageLabel::Good,
+            ),
+            (
+                FunctionIdentity {
+                    crate_id: 9,
+                    def_path: DefPath::from("demo::Worker::rvs_run_P"),
+                },
+                CoverageLabel::Ok,
+            ),
         ]);
 
-        let json = rvs_serialize_function_identities_json_S(&functions).unwrap();
-        let parsed = rvs_parse_function_identities_json_S(&json).unwrap();
+        let json = rvs_serialize_untested_selection_S(&selection).unwrap();
+        let parsed = rvs_parse_untested_selection_S(&json).unwrap();
         let output = format!("json={json}\nparsed={parsed:?}\n");
         rvs_snapshot_BIS("test_20260714_def_path_selection_roundtrip", &output);
 
-        assert_eq!(parsed, functions);
+        assert_eq!(parsed, selection);
         assert!(rvs_is_false(&false));
         assert!(!rvs_is_false(&true));
     }

@@ -511,7 +511,8 @@ mod tests {
     use super::*;
     use crate::artifacts::{CallEdgeType, FunctionIdentity};
     use crate::test_support::{
-        rvs_caps_v2, rvs_make_cargo_project_BIS, rvs_make_temp_dir_BIS, rvs_snapshot_BIS,
+        rvs_caps_v2, rvs_make_capsmap, rvs_make_cargo_project_BIS, rvs_make_temp_dir_BIS,
+        rvs_snapshot_BIS,
     };
 
     #[test]
@@ -1805,11 +1806,14 @@ mod tests {
 
         let local_scope = LocalScope::rvs_new(&BTreeSet::new());
         let impl_index = rvs_build_impl_index(&callgraph);
-        let inferred = rvs_infer_caps_with_index(&callgraph, &CapsMap::rvs_new(), &impl_index);
+        // The ffi boundary is known through the capsmap, not through its
+        // name: suffixes are views over semantic caps, never sources.
+        let seed = rvs_make_capsmap(&[("ffi_support::rvs_read_BI", "BI")]);
+        let inferred = rvs_infer_caps_with_index(&callgraph, &seed, &impl_index);
         let unknown = rvs_collect_std_unknown_callees(
             &callgraph,
             &inferred,
-            &CapsMap::rvs_new(),
+            &seed,
             &impl_index,
             &local_scope,
         );

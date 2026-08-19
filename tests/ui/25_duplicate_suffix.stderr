@@ -15,6 +15,14 @@ LL | pub fn rvs_add_MM() {}
    = note: `-D rivus::rvs-missing-doc` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_doc)]`
 
+error: 'rvs_add_MM' should be named 'rvs_add'; declared caps: M; inferred caps: pure
+  --> $DIR/tests/ui/25_duplicate_suffix.rs:3:1
+   |
+LL | pub fn rvs_add_MM() {}
+   | ^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(rivus::rvs_contract_mismatch)]` on by default
+
 error: suffix 'MM' repeats 'M'; remove duplicate capability letters
   --> $DIR/tests/ui/25_duplicate_suffix.rs:3:1
    |
@@ -33,4 +41,4 @@ LL | pub fn rvs_add_MM() {}
    = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
 
-error: aborting due to 4 previous errors
+error: aborting due to 5 previous errors

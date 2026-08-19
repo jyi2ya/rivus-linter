@@ -11,9 +11,9 @@ use crate::capability::{
 use crate::capsmap::CapsMap;
 use crate::function_classification::{FunctionClassification, LocalScope};
 use crate::inference::{
-    CallContractMismatchKind, CalleeCapsResolver, FnContractDiff, FnContractMismatchKind,
-    PreparedLocalAnalysis, TraitImplOutlier, rvs_collect_call_contract_mismatch,
-    rvs_contract_diff_for_expected_caps,
+    CallContractMismatch, CallContractMismatchKind, CalleeCapsResolver, FnContractDiff,
+    FnContractMismatchKind, PreparedLocalAnalysis, TraitImplOutlier,
+    rvs_collect_call_contract_mismatch, rvs_contract_diff_for_expected_caps,
 };
 use crate::symbols::{CrateName, DefPath, FnName};
 
@@ -25,8 +25,8 @@ pub(crate) enum OfflineCapsSeverity {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum OfflineCapsKind {
-    CallViolation,
     Contract(FnContractMismatchKind),
+    PortEffectViolation,
     DuplicateSuffix,
     IncompleteCapsKnowledge,
     NonAlphabeticalSuffix,
@@ -40,8 +40,8 @@ pub(crate) enum OfflineCapsKind {
 impl OfflineCapsKind {
     pub(crate) const fn rvs_as_str(self) -> &'static str {
         match self {
-            Self::CallViolation => "call_violation",
             Self::Contract(kind) => kind.rvs_as_str(),
+            Self::PortEffectViolation => "port_effect_violation",
             Self::DuplicateSuffix => "duplicate_suffix",
             Self::IncompleteCapsKnowledge => "incomplete_caps_knowledge",
             Self::NonAlphabeticalSuffix => "non_alphabetical_suffix",
@@ -57,14 +57,11 @@ impl OfflineCapsKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum OfflineCapsLint {
-    CallViolation,
     ContractMismatch,
+    PortEffectViolation,
     DuplicateSuffix,
     IncompleteCapsKnowledge,
-    MissingMutable,
     MissingRvsPrefix,
-    MissingSideEffect,
-    MissingThreadLocal,
     NonAlphabeticalSuffix,
     NonSuffixCapInSuffix,
     StaticRef,
@@ -294,17 +291,16 @@ pub(crate) fn rvs_emission_ack_name(emission_index: usize, anchor_index: usize) 
 
 const fn rvs_lint_for_kind(kind: OfflineCapsKind) -> OfflineCapsLint {
     match kind {
-        OfflineCapsKind::CallViolation => OfflineCapsLint::CallViolation,
-        OfflineCapsKind::Contract(kind) => match kind {
-            FnContractMismatchKind::MissingBlocking
-            | FnContractMismatchKind::MissingIo
-            | FnContractMismatchKind::MissingPort
-            | FnContractMismatchKind::NameMismatch => OfflineCapsLint::ContractMismatch,
-            FnContractMismatchKind::MissingMutable => OfflineCapsLint::MissingMutable,
-            FnContractMismatchKind::MissingRvsPrefix => OfflineCapsLint::MissingRvsPrefix,
-            FnContractMismatchKind::MissingSideEffect => OfflineCapsLint::MissingSideEffect,
-            FnContractMismatchKind::MissingThreadLocal => OfflineCapsLint::MissingThreadLocal,
-        },
+        OfflineCapsKind::PortEffectViolation => OfflineCapsLint::PortEffectViolation,
+        // Capability-letter contract kinds carry error-level enforcement
+        // under one Deny lint; the specific kind stays visible in the
+        // message and the offline report's diagnostic code. The missing
+        // rvs_ prefix is a naming convention, not a capability lie: it
+        // stays a suppressible warning.
+        OfflineCapsKind::Contract(FnContractMismatchKind::MissingRvsPrefix) => {
+            OfflineCapsLint::MissingRvsPrefix
+        }
+        OfflineCapsKind::Contract(_) => OfflineCapsLint::ContractMismatch,
         OfflineCapsKind::DuplicateSuffix => OfflineCapsLint::DuplicateSuffix,
         OfflineCapsKind::IncompleteCapsKnowledge => OfflineCapsLint::IncompleteCapsKnowledge,
         OfflineCapsKind::NonAlphabeticalSuffix => OfflineCapsLint::NonAlphabeticalSuffix,
@@ -327,7 +323,6 @@ struct OfflineFnContext<'a> {
     def_path: &'a DefPath,
     node: &'a FnNode,
     parsed_name: ParsedFunctionName<'a>,
-    declared_caps: Option<CapabilitySet>,
     diagnostic_crate_ids: BTreeSet<u64>,
 }
 
@@ -642,12 +637,7 @@ impl NodeInference {
         if let Some(caps) = inferred.get(record.def_path) {
             return caps.clone();
         }
-        resolver
-            .rvs_exact_caps(record.def_path)
-            .or_else(|| {
-                ParsedFunctionName::rvs_parse(record.def_path.rvs_as_str()).rvs_declared_caps()
-            })
-            .unwrap_or_default()
+        resolver.rvs_exact_caps(record.def_path).unwrap_or_default()
     }
 
     fn rvs_is_incomplete_for_node(
@@ -714,23 +704,14 @@ type ContractDiagnosticGroups = BTreeMap<
     ),
     (FnContractDiff, BTreeSet<u64>),
 >;
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-struct CapabilityKey(u16);
 
-type CallCapabilityMismatchGroups = BTreeMap<
-    (DefPath, CapabilityKey, CapabilityKey),
-    (
-        CapabilitySet,
-        CapabilitySet,
-        Vec<Capability>,
-        BTreeSet<u64>,
-        BTreeSet<OfflineCapsCallAnchor>,
-    ),
->;
 type StaticRefDiagnosticGroups = BTreeMap<
     (CapabilityKey, CapabilityKey, CapabilityKey, bool),
     (CapabilitySet, Vec<Capability>, CapabilitySet, BTreeSet<u64>),
 >;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct CapabilityKey(u16);
 
 impl OfflineFnContext<'_> {
     fn rvs_diagnostic(
@@ -760,12 +741,24 @@ pub(crate) fn rvs_check_offline_caps(
     caps: &CapsMap,
     local_crate_names: &BTreeSet<CrateName>,
 ) -> OfflineCapsReport {
+    let analysis = PreparedLocalAnalysis::rvs_prepare(graph, caps, local_crate_names);
+    rvs_check_offline_caps_with_analysis(graph, &analysis, caps, local_crate_names)
+}
+
+/// Check a graph against an already-prepared analysis. Callers that need
+/// both coverage selection and diagnostics share one fixed-point pass
+/// instead of repeating the inference.
+pub(crate) fn rvs_check_offline_caps_with_analysis(
+    graph: &FnGraph,
+    analysis: &PreparedLocalAnalysis,
+    caps: &CapsMap,
+    local_crate_names: &BTreeSet<CrateName>,
+) -> OfflineCapsReport {
     let mut report = OfflineCapsReport::default();
     let local_scope = LocalScope::rvs_for_graph(local_crate_names, graph);
-    let analysis = PreparedLocalAnalysis::rvs_prepare(graph, caps, local_crate_names);
     let resolver = analysis.rvs_resolver(graph, caps);
     let target_index = TargetAnalysisIndex::rvs_build(graph, &local_scope);
-    let target_caps = NodeInference::rvs_from_prepared(&target_index, &analysis, graph, caps);
+    let target_caps = NodeInference::rvs_from_prepared(&target_index, analysis, graph, caps);
     let mut unknown_callees = UnknownCalleeGroups::new();
     let mut incomplete_caps: BTreeMap<String, IncompleteCapsUsage> = BTreeMap::new();
     for (def_path, node) in graph.rvs_iter() {
@@ -783,12 +776,10 @@ pub(crate) fn rvs_check_offline_caps(
             continue;
         }
         let parsed_name = ParsedFunctionName::rvs_parse(def_path.rvs_as_str());
-        let declared_caps = parsed_name.rvs_declared_caps();
         let context = OfflineFnContext {
             def_path,
             node,
             parsed_name,
-            declared_caps,
             diagnostic_crate_ids: BTreeSet::from([node.crate_id]),
         };
         rvs_collect_contract_diagnostics_M(&mut report, &context, &target_index, &target_caps);
@@ -909,7 +900,7 @@ fn rvs_collect_contract_diagnostics_M(
             inference.rvs_caps(contract_target_id).clone(),
             inference.rvs_is_incomplete(contract_target_id),
         );
-        for kind in rvs_selected_contract_mismatch_kinds(&diff) {
+        for kind in diff.rvs_selected_mismatch_kinds() {
             let key = (
                 kind,
                 diff.expected_name.clone(),
@@ -953,37 +944,28 @@ fn rvs_collect_contract_diagnostics_M(
                 kind.rvs_as_str()
             ),
         };
-        let mut diagnostic = context.rvs_diagnostic(
-            OfflineCapsSeverity::Warning,
-            OfflineCapsKind::Contract(kind),
-            message,
-            details,
-        );
+        // Capability-letter mismatches carry the enforcement weight the
+        // old call-violation diagnostic had: capability semantics come
+        // from the callgraph, and a name that disagrees with the measured
+        // semantic caps is an error, not a style warning. The missing
+        // rvs_ prefix is a convention reminder and stays a warning.
+        let severity = if kind == FnContractMismatchKind::MissingRvsPrefix {
+            OfflineCapsSeverity::Warning
+        } else {
+            OfflineCapsSeverity::Error
+        };
+        let mut diagnostic =
+            context.rvs_diagnostic(severity, OfflineCapsKind::Contract(kind), message, details);
         diagnostic.span_anchors = BTreeMap::from([(context.def_path.clone(), crate_ids)]);
         report.diagnostics.push(diagnostic);
     }
 }
 
-fn rvs_selected_contract_mismatch_kinds(diff: &FnContractDiff) -> Vec<FnContractMismatchKind> {
-    let mismatch_kinds = diff.rvs_mismatch_kinds();
-    if mismatch_kinds.contains(&FnContractMismatchKind::MissingRvsPrefix) {
-        vec![FnContractMismatchKind::MissingRvsPrefix]
-    } else if mismatch_kinds.contains(&FnContractMismatchKind::NameMismatch)
-        && diff.expected_public_caps.rvs_contains(Capability::P)
-    {
-        vec![FnContractMismatchKind::NameMismatch]
-    } else {
-        mismatch_kinds
-            .into_iter()
-            .filter(|kind| *kind != FnContractMismatchKind::NameMismatch)
-            .collect()
-    }
-}
-
 pub(crate) fn rvs_uncovered_test_functions(
     graph: &FnGraph,
+    analysis: &PreparedLocalAnalysis,
     local_crate_names: &BTreeSet<CrateName>,
-) -> BTreeSet<FunctionIdentity> {
+) -> BTreeMap<FunctionIdentity, crate::artifacts::CoverageLabel> {
     let local_scope = LocalScope::rvs_for_graph(local_crate_names, graph);
     let unresolved_test_calls: BTreeSet<&str> = graph
         .rvs_iter()
@@ -991,10 +973,24 @@ pub(crate) fn rvs_uncovered_test_functions(
         .flat_map(|(_, node)| node.unresolved_test_calls.iter().map(String::as_str))
         .collect();
     let covered: BTreeSet<FunctionIdentity> = graph.rvs_test_reachable_identities();
+    // Coverage classification reads semantic caps from the callgraph
+    // inference; the name suffix is a view and never participates. An
+    // incomplete lower bound is not proof of a class: functions whose
+    // inference depends on unknown callees are skipped instead of being
+    // forced into the good/ok test requirement.
+    let inferred = analysis.rvs_inferred();
+    let incomplete_paths = analysis.rvs_incomplete_paths();
 
     let mut candidates = Vec::new();
     for (def_path, node) in graph.rvs_iter() {
         if !node.has_body || !node.is_coverage_candidate {
+            continue;
+        }
+        // The emission compile only registers good/ok candidates whose name
+        // carries the rvs_ prefix; the selection must apply the same filter
+        // so unreportable entries never enter it or the name-coverage
+        // counting.
+        if !ParsedFunctionName::rvs_parse(def_path.rvs_as_str()).rvs_has_rvs_prefix() {
             continue;
         }
         let identity = FunctionIdentity {
@@ -1004,34 +1000,32 @@ pub(crate) fn rvs_uncovered_test_functions(
         if !local_scope.rvs_contains_identity(&identity) {
             continue;
         }
-        let parsed = ParsedFunctionName::rvs_parse(def_path.rvs_as_str());
-        if !parsed.rvs_has_rvs_prefix() {
+        if incomplete_paths.contains(def_path) {
             continue;
         }
-        let mut caps = parsed.rvs_known_caps().clone();
-        if node.facts.is_port_method {
-            caps.rvs_insert_M(Capability::P);
-        }
-        // A/C/U come from the collected signature/body facts, not the name.
-        caps = crate::capability::CapabilityPolicy::rvs_report_caps(node.facts, caps);
-        if CapabilityPolicy::rvs_is_ok(&caps) {
-            candidates.push(identity);
+        let Some(caps) = inferred.get(def_path) else {
+            continue;
+        };
+        if CapabilityPolicy::rvs_is_good(caps) {
+            candidates.push((identity, crate::artifacts::CoverageLabel::Good));
+        } else if CapabilityPolicy::rvs_is_ok(caps) {
+            candidates.push((identity, crate::artifacts::CoverageLabel::Ok));
         }
     }
     let mut candidate_name_counts = HashMap::new();
-    for identity in &candidates {
+    for (identity, _) in &candidates {
         *candidate_name_counts
             .entry(identity.def_path.rvs_fn_name_str().to_string())
             .or_insert(0usize) += 1;
     }
-    let mut uncovered = BTreeSet::new();
+    let mut uncovered = BTreeMap::new();
 
-    for identity in candidates {
+    for (identity, label) in candidates {
         let name = identity.def_path.rvs_fn_name_str();
         let uniquely_covered_by_name = unresolved_test_calls.contains(name)
             && candidate_name_counts.get(name).copied() == Some(1);
         if !covered.contains(&identity) && !uniquely_covered_by_name {
-            uncovered.insert(identity);
+            uncovered.insert(identity, label);
         }
     }
     uncovered
@@ -1124,14 +1118,18 @@ fn rvs_collect_static_ref_diagnostics_M(
             .rvs_find_target(context.def_path, crate_id)
             .expect("never: selected diagnostic target belongs to the target index");
         let record = index.rvs_target(target_id);
-        let is_port_body = record.is_local_port;
+        // Only World Port bodies are checked here against their voted
+        // contract: for ordinary functions the naming-view Contract
+        // diagnostics already report a missing S/T, and reporting both
+        // would duplicate the same defect on one anchor.
+        if !record.is_local_port {
+            continue;
+        }
+        let is_port_body = true;
         let allowed = if let Some(contract_target_id) = index.rvs_port_operation_target(target_id) {
             inference.rvs_caps(contract_target_id).clone()
         } else {
-            let Some(declared) = context.declared_caps.as_ref() else {
-                continue;
-            };
-            declared.clone()
+            inference.rvs_caps(target_id).clone()
         };
         let facts = record.node.facts;
         // U from `static mut` access is a non-suffix capability measured
@@ -1205,7 +1203,6 @@ fn rvs_collect_call_diagnostics_M(
     unknown_callees: &mut UnknownCalleeGroups,
     incomplete_caps: &mut BTreeMap<String, IncompleteCapsUsage>,
 ) {
-    let mut missing_groups = CallCapabilityMismatchGroups::new();
     for crate_id in context.diagnostic_crate_ids.iter().copied() {
         let target_id = index
             .rvs_find_target(context.def_path, crate_id)
@@ -1215,13 +1212,13 @@ fn rvs_collect_call_diagnostics_M(
             continue;
         }
         let port_contract_target = index.rvs_port_operation_target(target_id);
+        // Caller capabilities are measured by the callgraph inference; the
+        // name suffix is a view and must not silence or create call
+        // violations.
         let caller_caps = if let Some(contract_target_id) = port_contract_target {
             inference.rvs_caps(contract_target_id).clone()
         } else {
-            context
-                .declared_caps
-                .clone()
-                .unwrap_or_else(|| inference.rvs_caps(target_id).clone())
+            inference.rvs_caps(target_id).clone()
         };
         let caller = record.rvs_identity();
         for call in rvs_node_slot(&index.calls, target_id) {
@@ -1289,83 +1286,110 @@ fn rvs_collect_call_diagnostics_M(
                 );
             }
 
+            // Ordinary callers measure capabilities as the propagated
+            // closure from the callgraph, so a resolvable call edge is
+            // self-consistent by construction and the old call-violation
+            // diagnostic is replaced by error-level naming-view Contract
+            // diagnostics. World Port implementations are the exception:
+            // their bodies are checked against the voted contract, so a
+            // call the contract does not allow is an error.
             let callee_caps = rvs_target_contract_caps(call, index, inference, resolver);
-            let Some(mismatch) = rvs_collect_call_contract_mismatch(
-                call.callee.def_path.rvs_as_str(),
-                &caller_caps,
-                callee_caps.as_ref(),
-            ) else {
-                continue;
-            };
-            match mismatch.kind {
-                CallContractMismatchKind::UnknownCallee => {
+            if let Some(contract_target_id) = port_contract_target {
+                let callee_caps = callee_caps.clone();
+                let mismatch = callee_caps
+                    .as_ref()
+                    .and_then(|caps| {
+                        rvs_collect_call_contract_mismatch(
+                            call.callee.def_path.rvs_as_str(),
+                            &caller_caps,
+                            Some(caps),
+                        )
+                    })
+                    .filter(|mismatch| {
+                        mismatch.kind == CallContractMismatchKind::MissingCapabilities
+                            && !inference.rvs_is_incomplete(contract_target_id)
+                    });
+                if let Some(mismatch) = mismatch {
+                    rvs_report_port_effect_violation_M(
+                        report,
+                        context,
+                        call,
+                        &caller_caps,
+                        &mismatch,
+                        &usages,
+                        crate_id,
+                    );
+                } else if callee_caps.is_none() {
+                    // Unresolvable callees inside a Port implementation must
+                    // surface as unknown-callee diagnostics: skipping them
+                    // would let unchecked effects hide behind the Port
+                    // branch.
                     unknown_callees
                         .entry(call.callee.def_path.to_string())
                         .or_default()
-                        .extend(usages);
+                        .extend(usages.iter().cloned());
                 }
-                CallContractMismatchKind::MissingCapabilities => {
-                    if port_contract_target
-                        .is_some_and(|contract_id| inference.rvs_is_incomplete(contract_id))
-                    {
-                        continue;
-                    }
-                    let callee_caps = mismatch
-                        .callee_caps
-                        .expect("never: missing-capability mismatch carries callee caps");
-                    let missing: Vec<_> = mismatch.missing_caps.iter().copied().collect();
-                    let key = (
-                        call.callee.def_path.clone(),
-                        rvs_capability_key(&caller_caps),
-                        rvs_capability_key(&callee_caps),
-                    );
-                    let group = missing_groups.entry(key).or_insert_with(|| {
-                        (
-                            caller_caps.clone(),
-                            callee_caps,
-                            missing,
-                            BTreeSet::new(),
-                            BTreeSet::new(),
-                        )
-                    });
-                    group.3.insert(crate_id);
-                    for usage in usages {
-                        if let Some(call_site) = usage.call_site {
-                            group.4.insert(OfflineCapsCallAnchor {
-                                caller: usage.caller,
-                                call_site,
-                            });
-                        }
-                    }
-                }
+                continue;
+            }
+            if callee_caps.is_none()
+                && rvs_collect_call_contract_mismatch(
+                    call.callee.def_path.rvs_as_str(),
+                    &caller_caps,
+                    None,
+                )
+                .is_some_and(|mismatch| mismatch.kind == CallContractMismatchKind::UnknownCallee)
+            {
+                unknown_callees
+                    .entry(call.callee.def_path.to_string())
+                    .or_default()
+                    .extend(usages);
             }
         }
     }
-    for ((callee, _, _), (caller_caps, callee_caps, missing, crate_ids, call_site_anchors)) in
-        missing_groups
-    {
-        if crate_ids.is_empty() {
-            continue;
+}
+
+fn rvs_report_port_effect_violation_M(
+    report: &mut OfflineCapsReport,
+    context: &OfflineFnContext<'_>,
+    call: &IndexedCall<'_>,
+    contract_caps: &CapabilitySet,
+    mismatch: &CallContractMismatch,
+    usages: &[TargetCallUsage],
+    crate_id: u64,
+) {
+    let mut call_site_anchors = BTreeSet::new();
+    for usage in usages {
+        if let Some(call_site) = &usage.call_site {
+            call_site_anchors.insert(OfflineCapsCallAnchor {
+                caller: usage.caller.clone(),
+                call_site: call_site.clone(),
+            });
         }
-        report.diagnostics.push(OfflineCapsDiagnostic {
-            severity: OfflineCapsSeverity::Error,
-            kind: OfflineCapsKind::CallViolation,
-            function: context.def_path.clone(),
-            span_anchors: if call_site_anchors.is_empty() {
-                BTreeMap::from([(context.def_path.clone(), crate_ids)])
-            } else {
-                BTreeMap::new()
-            },
-            call_site_anchors,
-            message: "caller lacks propagated capabilities required by callee".to_string(),
-            details: vec![
-                format!("callee: {callee}"),
-                format!("caller declared caps: {}", rvs_format_caps(&caller_caps)),
-                format!("callee caps: {}", rvs_format_caps(&callee_caps)),
-                format!("missing propagated caps: {}", rvs_format_cap_list(&missing)),
-            ],
-        });
     }
+    let mut span_anchors = BTreeMap::new();
+    if call_site_anchors.is_empty() {
+        span_anchors.insert(context.def_path.clone(), BTreeSet::from([crate_id]));
+    }
+    let callee_caps = mismatch
+        .callee_caps
+        .as_ref()
+        .expect("never: missing-capability mismatch carries callee caps");
+    let missing: Vec<_> = mismatch.missing_caps.iter().copied().collect();
+    report.diagnostics.push(OfflineCapsDiagnostic {
+        severity: OfflineCapsSeverity::Error,
+        kind: OfflineCapsKind::PortEffectViolation,
+        function: context.def_path.clone(),
+        span_anchors,
+        call_site_anchors,
+        message: "World Port implementation executes an effect its contract does not allow"
+            .to_string(),
+        details: vec![
+            format!("callee: {}", call.callee.def_path),
+            format!("contract caps: {}", rvs_format_caps(contract_caps)),
+            format!("callee caps: {}", rvs_format_caps(callee_caps)),
+            format!("unallowed caps: {}", rvs_format_cap_list(&missing)),
+        ],
+    });
 }
 
 fn rvs_target_contract_caps(
@@ -1382,14 +1406,11 @@ fn rvs_target_contract_caps(
                 .unwrap_or(callee_id);
             return Some(inference.rvs_caps(contract_target_id).clone());
         }
-        // A bodyless declaration with vote inputs resolves to the vote
-        // contract (plus its signature lower bound); its declared name is
-        // only a fallback when nothing can be aggregated. Reading the name
-        // first would collapse `rvs_x` with no suffix to an empty contract
-        // and drop deny-level call violations. Authoritative exact caps
-        // still win over the vote, and an incomplete empty lower bound
-        // stays unresolved so callers keep the unknown/incomplete
-        // diagnostics instead of treating it as a pure contract.
+        // A bodyless declaration resolves to authoritative exact caps or
+        // the impl vote contract; with neither it stays unknown — the name
+        // suffix is a view and never supplies caps. An incomplete empty
+        // lower bound also stays unresolved so callers keep the
+        // unknown/incomplete diagnostics instead of a pure contract.
         if !target.node.has_body {
             if let Some(exact) = resolver.rvs_exact_caps(&call.callee.def_path) {
                 return Some(exact.clone());
@@ -1399,21 +1420,14 @@ fn rvs_target_contract_caps(
                 if !(inference.rvs_is_incomplete(callee_id) && caps.rvs_is_empty()) {
                     return Some(caps);
                 }
-                return None;
             }
-            return ParsedFunctionName::rvs_parse(call.callee.def_path.rvs_as_str())
-                .rvs_declared_caps();
+            return None;
         }
         return resolver
             .rvs_exact_caps(&call.callee.def_path)
-            .or_else(|| {
-                ParsedFunctionName::rvs_parse(call.callee.def_path.rvs_as_str()).rvs_declared_caps()
-            })
             .or_else(|| Some(inference.rvs_caps(callee_id).clone()));
     }
-    resolver.rvs_exact_caps(&call.callee.def_path).or_else(|| {
-        ParsedFunctionName::rvs_parse(call.callee.def_path.rvs_as_str()).rvs_declared_caps()
-    })
+    resolver.rvs_exact_caps(&call.callee.def_path)
 }
 
 fn rvs_target_call_usages(
@@ -1739,12 +1753,8 @@ mod tests {
                 .rvs_render_with_title("Custom Caps Check")
                 .starts_with("Custom Caps Check:")
         );
-        assert_eq!(
-            OfflineCapsKind::CallViolation.rvs_as_str(),
-            "call_violation"
-        );
         assert_eq!(OfflineCapsSeverity::Warning.rvs_as_str(), "warning");
-        assert!(output.contains("error[call_violation]"));
+        assert!(output.contains("error[missing_blocking]"));
         assert!(output.contains("warning[unknown_callee]"));
         assert!(output.contains("cargo rivus infer-capsmap -o caps/deps"));
     }
@@ -1791,6 +1801,98 @@ mod tests {
     }
 
     #[test]
+    fn test_20260816_call_violations_are_invariant_under_renaming() {
+        // In the callgraph-authoritative model, propagated capabilities
+        // flow from callees into the caller, so a resolvable call chain is
+        // self-consistent and produces no call violation. The violation
+        // semantics only fire where knowledge breaks (Port projection,
+        // unknown boundaries). Naming can never change them either way.
+        let build = |caller_name: &str| {
+            let mut graph = FnGraph::rvs_new();
+            graph.rvs_insert_M(
+                DefPath::from(caller_name),
+                rvs_node(&["std::fs::read_to_string", "dep::plain"]),
+            );
+            let caps = rvs_make_capsmap(&[("std::fs::read_to_string", "BI")]);
+            rvs_check_offline_caps(&graph, &caps, &BTreeSet::from([CrateName::from("demo")]))
+        };
+        let plain = build("demo::rvs_handle");
+        // Forging BI in the name must not change semantic outcomes; an
+        // unrelated S must not either.
+        let forged = build("demo::rvs_handle_BI");
+        let wrong = build("demo::rvs_handle_S");
+        // Semantic diagnostic kinds (call violations, unknown callees,
+        // incomplete knowledge) are identical across renames.
+        let semantic = |report: &OfflineCapsReport| {
+            report
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| {
+                    matches!(
+                        diagnostic.kind,
+                        OfflineCapsKind::UnknownCallee | OfflineCapsKind::IncompleteCapsKnowledge
+                    )
+                })
+                .map(|diagnostic| diagnostic.kind.rvs_as_str())
+                .collect::<Vec<_>>()
+        };
+        // Naming view diagnostics follow the name; their expected-view
+        // text is derived from semantic caps and stays stable per name.
+        let naming = |report: &OfflineCapsReport| {
+            report
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| {
+                    matches!(
+                        diagnostic.kind,
+                        OfflineCapsKind::Contract(_)
+                            | OfflineCapsKind::NonSuffixCapInSuffix
+                            | OfflineCapsKind::NonAlphabeticalSuffix
+                            | OfflineCapsKind::DuplicateSuffix
+                            | OfflineCapsKind::UnknownSuffixLetter
+                    )
+                })
+                .map(|diagnostic| {
+                    diagnostic
+                        .details
+                        .iter()
+                        .find(|detail| detail.starts_with("expected name"))
+                        .cloned()
+                        .unwrap_or_default()
+                })
+                .collect::<Vec<_>>()
+        };
+        let output = format!(
+            "plain={:?}\nforged={:?}\nwrong={:?}\n",
+            semantic(&plain),
+            semantic(&forged),
+            semantic(&wrong)
+        );
+        rvs_snapshot_BIS(
+            "test_20260816_call_violations_are_invariant_under_renaming",
+            &output,
+        );
+
+        assert_eq!(semantic(&plain), semantic(&forged));
+        assert_eq!(semantic(&plain), semantic(&wrong));
+        // Where naming diagnostics exist, their expected (semantic-derived)
+        // name is identical across renames.
+        assert!(!naming(&plain).is_empty());
+        for detail in naming(&plain) {
+            assert!(detail.contains("rvs_handle_BI"));
+        }
+        for detail in naming(&wrong) {
+            assert!(detail.contains("rvs_handle_BI"));
+        }
+        assert!(naming(&forged).is_empty());
+        assert!(
+            semantic(&plain)
+                .iter()
+                .any(|kind| *kind == "unknown_callee")
+        );
+    }
+
+    #[test]
     fn test_20260816_bodyless_trait_vote_caps_enforced_at_call_sites() {
         // A bodyless trait declaration with no suffix must expose its vote
         // result (S) to callers: a pure caller then violates the call edge.
@@ -1830,9 +1932,20 @@ mod tests {
             &output,
         );
 
+        // The vote result flows into the caller through propagation, and
+        // the caller's naming view must show it (error-level Contract
+        // diagnostic, expected name rvs_dispatch_S).
         assert!(report.diagnostics.iter().any(|diagnostic| {
-            diagnostic.kind == OfflineCapsKind::CallViolation
+            diagnostic.kind
+                == OfflineCapsKind::Contract(
+                    crate::inference::FnContractMismatchKind::MissingSideEffect,
+                )
+                && diagnostic.severity == OfflineCapsSeverity::Error
                 && diagnostic.function == DefPath::from("demo::rvs_dispatch")
+                && diagnostic
+                    .details
+                    .iter()
+                    .any(|detail| detail.contains("expected name: rvs_dispatch_S"))
         }));
     }
 
@@ -1875,17 +1988,22 @@ mod tests {
             &output,
         );
 
-        let violation = report.diagnostics.iter().find(|diagnostic| {
-            diagnostic.kind == OfflineCapsKind::CallViolation
-                && diagnostic.function == DefPath::from("demo::rvs_dispatch")
+        // Exact caps beat the vote for propagation: the caller absorbs
+        // B/I (not the voted S), so its expected name is rvs_dispatch_BI.
+        let contract = report.diagnostics.iter().find(|diagnostic| {
+            diagnostic.function == DefPath::from("demo::rvs_dispatch")
+                && diagnostic
+                    .details
+                    .iter()
+                    .any(|detail| detail.contains("expected name"))
         });
-        let violation = violation.expect("never: exact caps enforce the call edge");
+        let contract = contract.expect("never: caller shows a naming contract");
         assert!(
-            violation
+            contract
                 .details
                 .iter()
-                .any(|detail| detail.contains("callee caps: BI")),
-            "callee contract must come from the exact entry, not the vote"
+                .any(|detail| detail.contains("expected name: rvs_dispatch_BI")),
+            "propagation must come from the exact entry, not the vote: {contract:?}"
         );
     }
 
@@ -1929,9 +2047,18 @@ mod tests {
             &output,
         );
 
-        assert!(!report.diagnostics.iter().any(|diagnostic| diagnostic.kind
-            == OfflineCapsKind::CallViolation
-            && diagnostic.function == DefPath::from("demo::rvs_dispatch")));
+        // No error-level naming contract may claim knowledge the vote
+        // could not prove: the incomplete empty bound must not fabricate a
+        // complete expected view for the caller.
+        assert!(
+            !report
+                .diagnostics
+                .iter()
+                .any(
+                    |diagnostic| diagnostic.severity == OfflineCapsSeverity::Error
+                        && diagnostic.function == DefPath::from("demo::rvs_dispatch")
+                )
+        );
         assert!(
             report
                 .diagnostics
@@ -2099,8 +2226,11 @@ mod tests {
         let emission = report
             .rvs_emissions(&graph)
             .into_iter()
-            .find(|emission| emission.lint == OfflineCapsLint::CallViolation)
-            .expect("never: call violation produces an emission");
+            .find(|emission| {
+                emission.lint == OfflineCapsLint::ContractMismatch
+                    && emission.message.contains("missing_side_effect")
+            })
+            .expect("never: propagated S produces a naming emission");
         let output = format!(
             "anchors={}\n",
             emission
@@ -2124,14 +2254,7 @@ mod tests {
                     crate_id: 10,
                     def_path: DefPath::from("demo::rvs_call"),
                 },
-                call_site: Some(CallSiteIdentity {
-                    callee: FunctionIdentity {
-                        crate_id: 50,
-                        def_path: DefPath::from("dependency::effect"),
-                    },
-                    occurrence: 0,
-                    source: None,
-                }),
+                call_site: None,
             }])
         );
     }
@@ -2155,10 +2278,9 @@ mod tests {
         );
         let emissions = report.rvs_emissions(&graph);
         let mut output = String::new();
-        for lint in [
-            OfflineCapsLint::MissingSideEffect,
-            OfflineCapsLint::StaticRef,
-        ] {
+        // StaticRef itself is a World Port body check now; for ordinary
+        // functions the same defect surfaces as the Contract emission.
+        for lint in [OfflineCapsLint::ContractMismatch] {
             let emission = emissions
                 .iter()
                 .find(|emission| emission.lint == lint)
@@ -2175,6 +2297,11 @@ mod tests {
                 }])
             );
         }
+        assert!(
+            !emissions
+                .iter()
+                .any(|emission| emission.lint == OfflineCapsLint::StaticRef)
+        );
         rvs_snapshot_BIS(
             "test_20260715_non_call_emissions_are_scoped_to_violating_crate_identity",
             &output,
@@ -2219,8 +2346,11 @@ mod tests {
         let emission = report
             .rvs_emissions(&graph)
             .into_iter()
-            .find(|emission| emission.lint == OfflineCapsLint::CallViolation)
-            .expect("never: static-using callee violates the pure caller contract");
+            .find(|emission| {
+                emission.lint == OfflineCapsLint::ContractMismatch
+                    && emission.message.contains("missing_side_effect")
+            })
+            .expect("never: static-using callee propagates S to the caller view");
         let output = format!("anchors={:?}\n", emission.span_anchors);
         rvs_snapshot_BIS(
             "test_20260715_local_callee_caps_are_scoped_to_target_identity",
@@ -2234,14 +2364,7 @@ mod tests {
                     crate_id: 10,
                     def_path: DefPath::from("demo::rvs_call"),
                 },
-                call_site: Some(CallSiteIdentity {
-                    callee: FunctionIdentity {
-                        crate_id: 10,
-                        def_path: DefPath::from("demo::effect"),
-                    },
-                    occurrence: 0,
-                    source: None,
-                }),
+                call_site: None,
             }])
         );
     }
@@ -2378,7 +2501,10 @@ mod tests {
         let emission = report
             .rvs_emissions(&graph)
             .into_iter()
-            .find(|emission| emission.lint == OfflineCapsLint::MissingSideEffect)
+            .find(|emission| {
+                emission.lint == OfflineCapsLint::ContractMismatch
+                    && emission.message.contains("missing_side_effect")
+            })
             .expect("never: effectful trait-vote target requires an S marker");
         let output = format!("anchors={:?}\n", emission.span_anchors);
         rvs_snapshot_BIS(
@@ -2595,7 +2721,10 @@ mod tests {
         let emission = report
             .rvs_emissions(&graph)
             .into_iter()
-            .find(|emission| emission.lint == OfflineCapsLint::StaticRef)
+            .find(|emission| {
+                emission.lint == OfflineCapsLint::ContractMismatch
+                    && emission.message.contains("missing_side_effect")
+            })
             .expect("never: distinct cfg(test) body retains its own diagnostic");
         let output = format!("anchors={:?}\n", emission.span_anchors);
         rvs_snapshot_BIS(
@@ -2635,24 +2764,27 @@ mod tests {
             &BTreeSet::from([CrateName::from("demo")]),
         );
         let emissions = report.rvs_emissions(&graph);
-        let static_emissions = emissions
+        let contract_emissions = emissions
             .iter()
-            .filter(|emission| emission.lint == OfflineCapsLint::StaticRef)
+            .filter(|emission| {
+                emission.lint == OfflineCapsLint::ContractMismatch
+                    && emission.message.contains("missing_side_effect")
+            })
             .collect::<Vec<_>>();
-        let anchors = static_emissions
+        let anchors = contract_emissions
             .iter()
             .flat_map(|emission| emission.span_anchors.iter().cloned())
             .collect::<BTreeSet<_>>();
         let output = format!(
-            "static_emissions={}\nanchors={anchors:?}\n",
-            static_emissions.len(),
+            "contract_emissions={}\nanchors={anchors:?}\n",
+            contract_emissions.len(),
         );
         rvs_snapshot_BIS(
             "test_20260729_offline_diagnostic_roles_are_target_scoped",
             &output,
         );
 
-        assert_eq!(static_emissions.len(), 1);
+        assert_eq!(contract_emissions.len(), 1);
         assert_eq!(
             anchors,
             BTreeSet::from([OfflineCapsEmissionAnchor {
@@ -2709,17 +2841,12 @@ mod tests {
         );
         let emissions = report.rvs_emissions(&graph);
         let mut output = String::new();
-        for lint in [OfflineCapsLint::CallViolation, OfflineCapsLint::StaticRef] {
+        for lint in [OfflineCapsLint::ContractMismatch] {
             let emission = emissions
                 .iter()
                 .find(|emission| emission.lint == lint)
                 .expect("never: test-only behavior remains represented after artifact merge");
             output.push_str(&format!("{lint:?}={:?}\n", emission.span_anchors));
-            let call_site = (lint == OfflineCapsLint::CallViolation).then(|| CallSiteIdentity {
-                callee: dependency_call.clone(),
-                occurrence: 0,
-                source: None,
-            });
             assert_eq!(
                 emission.span_anchors,
                 BTreeSet::from([OfflineCapsEmissionAnchor {
@@ -2727,10 +2854,15 @@ mod tests {
                         crate_id: merged_crate_id,
                         def_path: path.clone(),
                     },
-                    call_site,
+                    call_site: None,
                 }])
             );
         }
+        assert!(
+            !emissions
+                .iter()
+                .any(|emission| emission.lint == OfflineCapsLint::StaticRef)
+        );
         rvs_snapshot_BIS(
             "test_20260715_same_source_test_only_behavior_keeps_diagnostic_anchors",
             &output,
@@ -2955,10 +3087,22 @@ mod tests {
             &CapsMap::rvs_new(),
             &BTreeSet::from([CrateName::from("demo")]),
         );
+        // Static-ref diagnostics are the World Port body check; ordinary
+        // functions surface the same facts as Contract diagnostics, one
+        // per violating target identity.
         let diagnostics: Vec<_> = report
             .diagnostics
             .iter()
-            .filter(|diagnostic| diagnostic.kind == OfflineCapsKind::StaticRefRequiresCaps)
+            .filter(|diagnostic| {
+                diagnostic.kind
+                    == OfflineCapsKind::Contract(
+                        crate::inference::FnContractMismatchKind::MissingSideEffect,
+                    )
+                    || diagnostic.kind
+                        == OfflineCapsKind::Contract(
+                            crate::inference::FnContractMismatchKind::MissingThreadLocal,
+                        )
+            })
             .collect();
         let output = diagnostics
             .iter()
@@ -2975,20 +3119,29 @@ mod tests {
             &output,
         );
 
-        assert_eq!(diagnostics.len(), 2);
+        // Thread-local access is also a side effect, so the thread-local
+        // target reports both kinds.
+        assert_eq!(diagnostics.len(), 3);
         assert!(diagnostics.iter().any(|diagnostic| {
             diagnostic.span_anchors.values().flatten().copied().eq([10])
-                && diagnostic
-                    .details
-                    .iter()
-                    .any(|detail| detail == "missing: S")
+                && diagnostic.kind
+                    == OfflineCapsKind::Contract(
+                        crate::inference::FnContractMismatchKind::MissingSideEffect,
+                    )
         }));
         assert!(diagnostics.iter().any(|diagnostic| {
             diagnostic.span_anchors.values().flatten().copied().eq([20])
-                && diagnostic
-                    .details
-                    .iter()
-                    .any(|detail| detail == "missing: S, T")
+                && diagnostic.kind
+                    == OfflineCapsKind::Contract(
+                        crate::inference::FnContractMismatchKind::MissingThreadLocal,
+                    )
+        }));
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.span_anchors.values().flatten().copied().eq([20])
+                && diagnostic.kind
+                    == OfflineCapsKind::Contract(
+                        crate::inference::FnContractMismatchKind::MissingSideEffect,
+                    )
         }));
     }
 
@@ -3009,14 +3162,14 @@ mod tests {
         graph.rvs_insert_M(DefPath::from("demo::rvs_call"), node);
         let report = rvs_check_offline_caps(
             &graph,
-            &rvs_make_capsmap(&[("dependency::effect", "S")]),
+            &CapsMap::rvs_new(),
             &BTreeSet::from([CrateName::from("demo")]),
         );
         let emission = report
             .rvs_emissions(&graph)
             .into_iter()
-            .find(|emission| emission.lint == OfflineCapsLint::CallViolation)
-            .expect("never: pure caller violates the effectful callee contract");
+            .find(|emission| emission.lint == OfflineCapsLint::UnknownCallee)
+            .expect("never: unknown callee anchors at the call site");
         let output = format!("anchors={:?}\n", emission.span_anchors);
         rvs_snapshot_BIS("test_20260716_call_emission_uses_call_site_anchor", &output);
 
@@ -3030,15 +3183,10 @@ mod tests {
 
     #[test]
     fn test_20260716_call_site_diagnostic_matches_full_callee_identity() {
+        // The callee lives in crate 50 and has no local target and no
+        // capsmap entry: the call edge is unknown, and the anchor must
+        // carry the full callee identity (crate id included).
         let callee_path = DefPath::from("dependency::effect");
-        let effectful_facts = CapabilityFacts {
-            has_static_ref: true,
-            ..CapabilityFacts::default()
-        };
-        let mut callee = rvs_node(&[]);
-        callee.facts = effectful_facts;
-        callee.crate_id = 50;
-        callee.crate_provenance = CrateProvenance::Dependency;
 
         let mut caller = rvs_node(&[]);
         let callee_identity_50 = FunctionIdentity {
@@ -3053,7 +3201,6 @@ mod tests {
         }]);
 
         let mut graph = FnGraph::rvs_new();
-        graph.rvs_insert_M(callee_path, callee);
         graph.rvs_insert_M(DefPath::from("demo::rvs_call"), caller);
         let report = rvs_check_offline_caps(
             &graph,
@@ -3063,8 +3210,8 @@ mod tests {
         let emission = report
             .rvs_emissions(&graph)
             .into_iter()
-            .find(|emission| emission.lint == OfflineCapsLint::CallViolation)
-            .expect("never: the effectful callee identity violates the pure caller contract");
+            .find(|emission| emission.lint == OfflineCapsLint::UnknownCallee)
+            .expect("never: the unknown dependency callee anchors its identity");
         let callee_ids = emission
             .span_anchors
             .iter()
@@ -3138,13 +3285,13 @@ mod tests {
     #[test]
     fn test_20260716_offline_emissions_reject_empty_anchor_sets() {
         let emissions = vec![OfflineCapsEmission {
-            lint: OfflineCapsLint::CallViolation,
+            lint: OfflineCapsLint::ContractMismatch,
             span_anchors: BTreeSet::new(),
             message: "unanchored".to_string(),
         }];
         let serialize_error = rvs_serialize_emissions(&emissions).unwrap_err();
         let parse_error = rvs_parse_emissions(
-            r#"[{"lint":"call_violation","span_anchors":[],"message":"unanchored"}]"#,
+            r#"[{"lint":"contract_mismatch","span_anchors":[],"message":"unanchored"}]"#,
         )
         .unwrap_err();
         let output = format!("serialize={serialize_error}\nparse={parse_error}\n");
@@ -3491,14 +3638,14 @@ mod tests {
         let selected = emissions
             .iter()
             .filter(|emission| {
-                matches!(
-                    emission.lint,
-                    OfflineCapsLint::CallViolation
-                        | OfflineCapsLint::UnknownCallee
-                        | OfflineCapsLint::IncompleteCapsKnowledge
-                        | OfflineCapsLint::MissingSideEffect
-                        | OfflineCapsLint::StaticRef
-                )
+                (emission.lint == OfflineCapsLint::ContractMismatch
+                    && emission.message.contains("missing_side_effect"))
+                    || matches!(
+                        emission.lint,
+                        OfflineCapsLint::UnknownCallee
+                            | OfflineCapsLint::IncompleteCapsKnowledge
+                            | OfflineCapsLint::StaticRef
+                    )
             })
             .collect::<Vec<_>>();
         let anchors = selected
@@ -3508,14 +3655,19 @@ mod tests {
         let call_violation = report
             .diagnostics
             .iter()
-            .find(|diagnostic| diagnostic.kind == OfflineCapsKind::CallViolation)
-            .expect("never: caller lacks the effect callee's S capability");
+            .find(|diagnostic| {
+                diagnostic.kind
+                    == OfflineCapsKind::Contract(
+                        crate::inference::FnContractMismatchKind::MissingSideEffect,
+                    )
+            })
+            .expect("never: caller view shows the effect callee's S capability");
         let has_missing_side_effect = report.diagnostics.iter().any(|diagnostic| {
             diagnostic.kind == OfflineCapsKind::Contract(FnContractMismatchKind::MissingSideEffect)
                 && diagnostic.span_anchors.values().flatten().copied().eq([10])
         });
         let output = format!(
-            "selected_anchors={}\nall_caller={}\nall_caller_sources={}\ncall_caps_s={}\nmissing_side_effect={has_missing_side_effect}\n",
+            "selected_anchors={}\nall_caller={}\nall_caller_sources={}\ncontract_s={}\nmissing_side_effect={has_missing_side_effect}\n",
             anchors.len(),
             anchors.iter().all(|anchor| anchor.identity.crate_id == 10),
             anchors.iter().all(|anchor| {
@@ -3529,7 +3681,7 @@ mod tests {
             call_violation
                 .details
                 .iter()
-                .any(|detail| detail == "callee caps: S"),
+                .any(|detail| detail.contains("expected name: rvs_run_S")),
         );
         rvs_snapshot_BIS(
             "test_20260729_target_filtering_precedes_diagnostic_grouping",
@@ -3549,7 +3701,7 @@ mod tests {
             call_violation
                 .details
                 .iter()
-                .any(|detail| detail == "callee caps: S")
+                .any(|detail| detail.contains("expected name: rvs_run_S"))
         );
         assert!(has_missing_side_effect);
     }
@@ -3672,10 +3824,12 @@ mod tests {
             .rvs_find_target(&caller_path, 1)
             .expect("never: caller target belongs to the index");
         let report = rvs_check_offline_caps(&graph, &caps, &local);
-        let has_call_violation = report
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.kind == OfflineCapsKind::CallViolation);
+        let has_call_violation = report.diagnostics.iter().any(|diagnostic| {
+            diagnostic.kind
+                == OfflineCapsKind::Contract(
+                    crate::inference::FnContractMismatchKind::MissingSideEffect,
+                )
+        });
         let has_unknown = report
             .diagnostics
             .iter()
@@ -3936,7 +4090,7 @@ mod tests {
     #[test]
     fn test_20260715_offline_caps_emissions_round_trip() {
         let emissions = vec![OfflineCapsEmission {
-            lint: OfflineCapsLint::CallViolation,
+            lint: OfflineCapsLint::ContractMismatch,
             span_anchors: BTreeSet::from([OfflineCapsEmissionAnchor {
                 identity: FunctionIdentity {
                     crate_id: 1,
@@ -4278,12 +4432,6 @@ mod tests {
             !report
                 .diagnostics
                 .iter()
-                .any(|diagnostic| diagnostic.kind == OfflineCapsKind::CallViolation)
-        );
-        assert!(
-            !report
-                .diagnostics
-                .iter()
                 .any(|diagnostic| matches!(diagnostic.kind, OfflineCapsKind::Contract(_)))
         );
     }
@@ -4350,11 +4498,54 @@ mod tests {
         assert_eq!(port_caps, "BIPS");
         assert_eq!(caller_caps, "P");
         assert_eq!(contract_mismatches, 0);
+    }
+
+    #[test]
+    fn test_20260819_world_port_unknown_callee_is_not_silenced() {
+        // A Port implementation calling a callee that resolves to nothing
+        // must surface the unknown-callee diagnostic: the Port branch owns
+        // effect enforcement and cannot swallow knowledge gaps.
+        let mut graph = FnGraph::rvs_new();
+        let mut declaration = rvs_node(&[]);
+        declaration.has_body = false;
+        declaration.facts.is_port_method = true;
+        graph.rvs_insert_M(DefPath::from("demo::Transport::rvs_fetch_P"), declaration);
+
+        let mut implementation = rvs_node(&["dep::absent_effect"]);
+        implementation.is_trait_impl = true;
+        let absent_identity = FunctionIdentity {
+            crate_id: 40,
+            def_path: DefPath::from("dep::absent_effect"),
+        };
+        implementation.calls = BTreeMap::from([(absent_identity.clone(), CallEdgeType::Strong)]);
+        implementation.call_sites = BTreeSet::from([CallSiteIdentity {
+            callee: absent_identity,
+            occurrence: 0,
+            source: None,
+        }]);
+        graph.rvs_insert_M(
+            DefPath::from("demo::Adapter::rvs_fetch_P@demo::Transport"),
+            implementation,
+        );
+
+        let report = rvs_check_offline_caps(
+            &graph,
+            &CapsMap::rvs_new(),
+            &BTreeSet::from([CrateName::from("demo")]),
+        );
+        let output = report.to_string();
+        rvs_snapshot_BIS(
+            "test_20260819_world_port_unknown_callee_is_not_silenced",
+            &output,
+        );
+
+        assert!(output.contains("warning[unknown_callee]"));
+        assert!(output.contains("dep::absent_effect"));
         assert!(
             !report
                 .diagnostics
                 .iter()
-                .any(|diagnostic| diagnostic.kind == OfflineCapsKind::CallViolation)
+                .any(|diagnostic| diagnostic.kind == OfflineCapsKind::PortEffectViolation)
         );
     }
 
@@ -4398,7 +4589,7 @@ mod tests {
             report
                 .diagnostics
                 .iter()
-                .filter(|diagnostic| diagnostic.kind == OfflineCapsKind::CallViolation)
+                .filter(|diagnostic| diagnostic.kind == OfflineCapsKind::PortEffectViolation)
                 .count(),
             1
         );
@@ -4503,11 +4694,9 @@ mod tests {
         );
 
         for kind in [
-            OfflineCapsKind::CallViolation,
             OfflineCapsKind::Contract(FnContractMismatchKind::MissingSideEffect),
             OfflineCapsKind::DuplicateSuffix,
             OfflineCapsKind::NonAlphabeticalSuffix,
-            OfflineCapsKind::StaticRefRequiresCaps,
             OfflineCapsKind::UnknownSuffixLetter,
         ] {
             assert!(
@@ -4624,17 +4813,19 @@ mod tests {
         );
         let local = BTreeSet::from([CrateName::from("demo"), CrateName::from("integration_test")]);
 
-        let uncovered = rvs_uncovered_test_functions(&graph, &local);
+        let analysis = PreparedLocalAnalysis::rvs_prepare(&graph, &CapsMap::rvs_new(), &local);
+        let uncovered = rvs_uncovered_test_functions(&graph, &analysis, &local);
         let output = uncovered
-            .iter()
+            .keys()
             .map(|identity| identity.def_path.rvs_as_str())
             .collect::<Vec<_>>()
             .join("\n")
             + "\n";
         rvs_snapshot_BIS("test_20260714_test_coverage_uses_merged_targets", &output);
 
+        let uncovered_identities: BTreeSet<_> = uncovered.keys().cloned().collect();
         assert_eq!(
-            uncovered,
+            uncovered_identities,
             BTreeSet::from([
                 FunctionIdentity {
                     crate_id: 1,
@@ -4664,8 +4855,44 @@ mod tests {
         );
         assert!(
             !uncovered
-                .iter()
+                .keys()
                 .any(|identity| identity.def_path.rvs_as_str().contains("unsafe_helper"))
+        );
+    }
+
+    #[test]
+    fn test_20260819_uncovered_selection_skips_non_rvs_functions() {
+        // The emission compile only registers good/ok candidates whose name
+        // carries the rvs_ prefix, so the offline selection must apply the
+        // same filter: a plain helper in the selection can never be emitted
+        // and would silently distort same-name coverage counting.
+        let mut graph = FnGraph::rvs_new();
+        graph.rvs_insert_M(DefPath::from("demo::plain_helper"), rvs_node(&[]));
+        graph.rvs_insert_M(DefPath::from("demo::rvs_uncovered"), rvs_node(&[]));
+        let local = BTreeSet::from([CrateName::from("demo")]);
+
+        let analysis = PreparedLocalAnalysis::rvs_prepare(&graph, &CapsMap::rvs_new(), &local);
+        let uncovered = rvs_uncovered_test_functions(&graph, &analysis, &local);
+        let output = uncovered
+            .keys()
+            .map(|identity| identity.def_path.rvs_as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        rvs_snapshot_BIS(
+            "test_20260819_uncovered_selection_skips_non_rvs_functions",
+            &output,
+        );
+
+        assert!(
+            !uncovered
+                .keys()
+                .any(|identity| identity.def_path.rvs_as_str() == "demo::plain_helper")
+        );
+        assert!(
+            uncovered
+                .keys()
+                .any(|identity| identity.def_path.rvs_as_str() == "demo::rvs_uncovered")
         );
     }
 }

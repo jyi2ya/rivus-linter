@@ -43,6 +43,8 @@ good 和 ok 的统计集合可以重叠，但未测试诊断采用互斥分类�
 - 后缀含 A/C/U、未知字母、重复字母或乱序是**视图结构错误**
 - 缺失或多出 B/I/M/P/S/T 是**视图与语义不一致**
 
+执法位置：普通调用边不再产生 call violation——caller 的能力就是传播闭包，resolved 调用链自洽。能力执法由 error 级 naming 诊断承接：缺失字母报对应 Missing\* contract 错误；多出字母或名不副实报 NameMismatch 错误（actual 后缀字母超出期望视图时必须报告，仅缺失字母时由 Missing\* 承接、NameMismatch 沉默；乱序、重复、未知字母等结构缺陷交给各自的专门诊断）。rustc 输出层把所有字母类 contract kind 统一映射到 `rvs_contract_mismatch`（Deny），具体 kind 保留在消息与离线报告 code 中；offline Error 严重级一律对应 Deny lint，Warn 对应 Warn lint。唯一例外是缺 `rvs_` 前缀：它是命名约定而非能力谎言，保持 Warning 并可按 crate 豁免。唯一保留调用边执法的是 World Port 实现体：impl body 与默认 trait body 按 voted 契约向下检查，执行契约未声明的能力报 `port_effect_violation` 错误；Port 实现内的 unknown callee 同样必须浮出，不得被 Port 分支吞掉。
+
 例：
 - `rvs_add` → 期望视图为空（semantic caps 为空集时）
 - `rvs_write_db_BIS` → semantic caps 含 B/I/S 时期望视图为 `BIS`（A/C/U 由签名与函数体测量，永不进入名字）
@@ -83,7 +85,9 @@ P 参与调用规则并向上传播：只要被调用方的完整能力包含 P�
 5. 使用同一个离线能力引擎检查调用关系、静态状态和视图一致性
 6. 直接 rustc/UI 模式把当前 crate 的诊断映射为 rustc lint；`cargo rivus check` 输出全项目诊断
 
-命名契约不一致只有一套语义分类。离线报告直接携带推断阶段产生的 contract kind，并由输出层分别映射为稳定诊断 code 或 rustc lint；输出层不得复制另一套 `MissingBlocking`、`MissingIo` 等分类枚举。
+推断与消费的每一层都不读名字：resolver 的能力来源只有 Port 结构、capsmap 精确条目、bodyless 签名+投票、有 body 节点的推断结果和 trait 多数投票；固定点 seed 只来自 capsmap。direct rustc 模式的覆盖分类使用签名/函数体事实加结构性 P（传播闭包属于离线引擎）；静态状态检查只对 World Port 实现体与默认 trait body 对照 voted 契约执行——普通函数的同类缺陷由 naming view 的 Contract 诊断唯一承接，不再重复报告。未测试诊断的分类标签（good/ok）由离线引擎按 semantic caps 判定并随 selection 传递，发射编译不再从签名事实重分类；incomplete lower bound 不构成分类证明，其覆盖候选被跳过。
+
+命名契约不一致只有一套语义分类。离线报告直接携带推断阶段产生的 contract kind，并由输出层分别映射为稳定诊断 code 或 rustc lint；输出层不得复制另一套 `MissingBlocking`、`MissingIo` 等分类枚举。诊断与报告统计共用同一个 kind 选择规则：仅缺字母时由 Missing\* 承接、NameMismatch 沉默；期望视图含 P 或 actual 后缀带多余字母时 NameMismatch 参与。
 
 不完整知识下的视图比较规则：known lower bound 中存在而视图缺失的能力可以报 missing；视图中存在而 lower bound 未证明的能力不能报 extra——它可能来自尚未证明的传播。A/C/U、未知字母、重复、乱序不依赖 completeness，始终可报。bodyless 函数没有函数体、impl 投票或 capsmap 条目时保持 unknown，即使名字写了 `_BI` 也不从名字补全。
 

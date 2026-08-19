@@ -15,6 +15,14 @@ LL |     pub fn rvs_run_M(&self) {}
    = note: `-D rivus::rvs-missing-doc` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_doc)]`
 
+error: 'rvs_run_M' should be named 'rvs_run'; declared caps: M; inferred caps: pure
+  --> $DIR/tests/ui/89_missing_doc_method.rs:5:5
+   |
+LL |     pub fn rvs_run_M(&self) {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(rivus::rvs_contract_mismatch)]` on by default
+
 error: good fn 'rvs_run_M' not called by any test
   --> $DIR/tests/ui/89_missing_doc_method.rs:5:5
    |
@@ -24,4 +32,4 @@ LL |     pub fn rvs_run_M(&self) {}
    = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
 
-error: aborting due to 3 previous errors
+error: aborting due to 4 previous errors

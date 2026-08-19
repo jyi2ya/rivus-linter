@@ -21,6 +21,14 @@ LL | pub fn rvs_non_good_untested_BIS() {}
    = note: `-D rivus::rvs-missing-doc` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_doc)]`
 
+error: 'rvs_non_good_untested_BIS' should be named 'rvs_non_good_untested'; declared caps: BIS; inferred caps: pure
+  --> $DIR/tests/ui/16_non_rvs_fn.rs:7:1
+   |
+LL | pub fn rvs_non_good_untested_BIS() {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(rivus::rvs_contract_mismatch)]` on by default
+
 error: 'helper_function' is missing the rvs_ prefix; expected name: rvs_helper_function; declared caps: unknown; inferred caps: pure
   --> $DIR/tests/ui/16_non_rvs_fn.rs:3:1
    |
@@ -39,4 +47,10 @@ LL | fn rvs_add() {}
    = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
 
-error: aborting due to 5 previous errors
+error: good fn 'rvs_non_good_untested_BIS' not called by any test
+  --> $DIR/tests/ui/16_non_rvs_fn.rs:7:1
+   |
+LL | pub fn rvs_non_good_untested_BIS() {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: aborting due to 7 previous errors

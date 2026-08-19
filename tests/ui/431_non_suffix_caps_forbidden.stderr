@@ -1,3 +1,19 @@
+error: 'rvs_fetch_AI' should be named 'rvs_fetch'; declared caps: I; inferred caps: A
+  --> $DIR/tests/ui/431_non_suffix_caps_forbidden.rs:14:1
+   |
+LL | / async fn rvs_fetch_AI(x: i32) -> i32 {
+LL | |     x
+LL | | }
+   | |_^
+   |
+   = note: `#[deny(rivus::rvs_contract_mismatch)]` on by default
+
+error: 'rvs_mixed_ACUB' should be named 'rvs_mixed'; declared caps: B; inferred caps: pure
+  --> $DIR/tests/ui/431_non_suffix_caps_forbidden.rs:24:1
+   |
+LL | fn rvs_mixed_ACUB() {}
+   | ^^^^^^^^^^^^^^^^^^^^^^
+
 error: suffix 'U' contains non-suffix letters: U; A/C/U are measured from the signature or body facts, remove them from the name; expected name: rvs_dangerous
   --> $DIR/tests/ui/431_non_suffix_caps_forbidden.rs:22:1
    |
@@ -28,4 +44,4 @@ error: suffix 'ACUB' contains non-suffix letters: A, C, U; A/C/U are measured fr
 LL | fn rvs_mixed_ACUB() {}
    | ^^^^^^^^^^^^^^^^^^^^^^
 
-error: aborting due to 4 previous errors
+error: aborting due to 6 previous errors

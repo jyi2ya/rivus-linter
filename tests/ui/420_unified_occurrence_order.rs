@@ -14,7 +14,7 @@ fn rvs_call_second() {
     let _ = 0;
 }
 
-fn rvs_order_BI() {
+fn rvs_order() {
     let _pointer: fn() = rvs_ref_first; // source order: 1st, should be occurrence 0
     rvs_call_second();                   // source order: 2nd, should be occurrence 1
 }

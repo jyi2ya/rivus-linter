@@ -2,11 +2,11 @@
 // compile-flags: --test
 #![allow(non_snake_case)]
 
-fn rvs_good_BIS() {
-    let _ = 42;
+fn rvs_env_BS() {
+    let _ = std::env::var("HOME");
 }
 
 #[test]
 fn test_20260612_spawn_no_spawn_ok() {
-    rvs_good_BIS();
+    rvs_env_BS();
 }

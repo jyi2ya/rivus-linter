@@ -1,10 +1,9 @@
-error: 'rvs_fetch_BI' should be named 'rvs_fetch_BIP'; declared caps: BI; inferred caps: BIP
+error: 'rvs_fetch_BI' should be named 'rvs_fetch_P'; declared caps: BI; inferred caps: P
   --> $DIR/tests/ui/165_contract_mismatch_required_port.rs:8:5
    |
 LL |     fn rvs_fetch_BI(world: &Self::World) -> i32;
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
-   = note: `-D rivus::rvs-contract-mismatch` implied by `-D warnings`
-   = help: to override `-D warnings` add `#[allow(rivus::rvs_contract_mismatch)]`
+   = note: `#[deny(rivus::rvs_contract_mismatch)]` on by default
 
 error: aborting due to 1 previous error

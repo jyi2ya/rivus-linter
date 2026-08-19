@@ -4,8 +4,10 @@ trait FromString {
     fn rvs_parse(input: &str) -> usize;
 }
 
-unsafe extern "Rust" {
-    fn rvs_environment_effect_S();
+static ENV_FLAG: u8 = 0;
+
+unsafe fn rvs_environment_effect_S() -> u8 {
+    ENV_FLAG
 }
 
 struct Alpha;

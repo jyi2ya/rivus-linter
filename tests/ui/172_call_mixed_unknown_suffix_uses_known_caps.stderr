@@ -1,9 +1,0 @@
-error: caller lacks propagated capabilities required by callee; callee: 172_call_mixed_unknown_suffix_uses_known_caps::rvs_send_EIS; caller declared caps: pure; callee caps: IS; missing propagated caps: I, S
-  --> $DIR/tests/ui/172_call_mixed_unknown_suffix_uses_known_caps.rs:12:5
-   |
-LL |     rvs_send_EIS();
-   |     ^^^^^^^^^^^^^^
-   |
-   = note: `#[deny(rivus::rvs_call_violation)]` on by default
-
-error: aborting due to 1 previous error

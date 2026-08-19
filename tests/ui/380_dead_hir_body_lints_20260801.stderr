@@ -70,32 +70,6 @@ error: drop(Result) discards a Result without handling it
 LL |         drop(Result::<String, u8>::Err(4));
    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-error: caller lacks propagated capabilities required by callee; callee: std::panic::catch_unwind; caller declared caps: pure; callee caps: ST; missing propagated caps: S, T
-  --> $DIR/tests/ui/380_dead_hir_body_lints_20260801.rs:10:17
-   |
-LL |         let _ = std::panic::catch_unwind(|| {});
-   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   |
-   = note: `#[deny(rivus::rvs_call_violation)]` on by default
-
-error: caller lacks propagated capabilities required by callee; callee: std::thread::functions::spawn; caller declared caps: pure; callee caps: BST; missing propagated caps: B, S, T
-  --> $DIR/tests/ui/380_dead_hir_body_lints_20260801.rs:8:17
-   |
-LL |         let _ = std::thread::spawn(|| {});
-   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^
-
-error: caller lacks propagated capabilities required by callee; callee: std::panic::catch_unwind; caller declared caps: pure; callee caps: ST; missing propagated caps: S, T
-  --> $DIR/tests/ui/380_dead_hir_body_lints_20260801.rs:20:17
-   |
-LL |         let _ = std::panic::catch_unwind(|| {});
-   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-error: caller lacks propagated capabilities required by callee; callee: std::thread::functions::spawn; caller declared caps: pure; callee caps: BST; missing propagated caps: B, S, T
-  --> $DIR/tests/ui/380_dead_hir_body_lints_20260801.rs:18:17
-   |
-LL |         let _ = std::thread::spawn(|| {});
-   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^
-
 error: 'rvs_dead_branch_body_lints' is missing capability marker missing_blocking; expected name: rvs_dead_branch_body_lints_BST; declared caps: pure; inferred caps: BST
   --> $DIR/tests/ui/380_dead_hir_body_lints_20260801.rs:6:1
    |
@@ -107,8 +81,7 @@ LL | |         let _ = std::any::type_name::<u8>();
 LL | | }
    | |_^
    |
-   = note: `-D rivus::rvs-contract-mismatch` implied by `-D warnings`
-   = help: to override `-D warnings` add `#[allow(rivus::rvs_contract_mismatch)]`
+   = note: `#[deny(rivus::rvs_contract_mismatch)]` on by default
 
 error: 'rvs_uninvoked_closure_body_lints' is missing capability marker missing_blocking; expected name: rvs_uninvoked_closure_body_lints_BST; declared caps: pure; inferred caps: BST
   --> $DIR/tests/ui/380_dead_hir_body_lints_20260801.rs:16:1
@@ -132,9 +105,6 @@ LL | |         let _ = std::any::type_name::<u8>();
 ...  |
 LL | | }
    | |_^
-   |
-   = note: `-D rivus::rvs-missing-side-effect` implied by `-D warnings`
-   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_side_effect)]`
 
 error: 'rvs_uninvoked_closure_body_lints' is missing capability marker missing_side_effect; expected name: rvs_uninvoked_closure_body_lints_BST; declared caps: pure; inferred caps: BST
   --> $DIR/tests/ui/380_dead_hir_body_lints_20260801.rs:16:1
@@ -158,9 +128,6 @@ LL | |         let _ = std::any::type_name::<u8>();
 ...  |
 LL | | }
    | |_^
-   |
-   = note: `-D rivus::rvs-missing-thread-local` implied by `-D warnings`
-   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_thread_local)]`
 
 error: 'rvs_uninvoked_closure_body_lints' is missing capability marker missing_thread_local; expected name: rvs_uninvoked_closure_body_lints_BST; declared caps: pure; inferred caps: BST
   --> $DIR/tests/ui/380_dead_hir_body_lints_20260801.rs:16:1
@@ -174,4 +141,4 @@ LL | |     };
 LL | | }
    | |_^
 
-error: aborting due to 20 previous errors
+error: aborting due to 16 previous errors

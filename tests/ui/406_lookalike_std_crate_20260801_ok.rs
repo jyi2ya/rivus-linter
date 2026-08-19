@@ -27,17 +27,17 @@ mod panic {
     }
 }
 
-fn rvs_deferred_effect_BI() {
-    let _ = 1;
+fn rvs_deferred_effect_BS() {
+    let _ = std::env::var("HOME");
 }
 
-fn rvs_use_lookalike_std_BIST() {
-    let _ = thread::functions::spawn(|| rvs_deferred_effect_BI());
+fn rvs_use_lookalike_std_BST() {
+    let _ = thread::functions::spawn(|| rvs_deferred_effect_BS());
     let _ = any::type_name::<u8>();
-    let _ = panic::catch_unwind(|| rvs_deferred_effect_BI());
+    let _ = panic::catch_unwind(|| rvs_deferred_effect_BS());
 }
 
 #[test]
 fn test_20260801_lookalike_std_crate() {
-    rvs_use_lookalike_std_BIST();
+    rvs_use_lookalike_std_BST();
 }

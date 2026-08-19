@@ -276,7 +276,7 @@ fn rvs_format_incomplete_inference_summary(count: usize) -> String {
     }
     debug_assert!(count > 0);
     format!(
-        "\nInference Status\n------------------------------\n{count} local function(s) depend on unknown callee capability data. Capability totals reflect name suffixes merged with measured signature/body facts; rename suggestions may omit unknown capabilities.\n"
+        "\nInference Status\n------------------------------\n{count} local function(s) depend on unknown callee capability data. Capability totals reflect measured signature/body facts and callgraph propagation from known caps only; rename suggestions may omit unknown capabilities.\n"
     )
 }
 
@@ -399,7 +399,7 @@ mod tests {
 
         assert!(output.contains("3 local function(s)"));
         assert!(output.contains(
-            "Capability totals reflect name suffixes merged with measured signature/body facts"
+            "Capability totals reflect measured signature/body facts and callgraph propagation from known caps only"
         ));
         assert!(output.contains("rename suggestions may omit unknown capabilities"));
         assert!(!output.contains("lower bounds"));

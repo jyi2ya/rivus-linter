@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -139,7 +139,7 @@ pub(crate) fn rvs_load_capsmap_path_BIS(path: Option<&Path>) -> Result<CapsMap, 
 
 fn rvs_load_untested_functions_BIS(
     input: Option<&RivusOfflineDriverInput>,
-) -> Result<Option<BTreeSet<FunctionIdentity>>, String> {
+) -> Result<Option<BTreeMap<FunctionIdentity, crate::artifacts::CoverageLabel>>, String> {
     let Some(path) = input.and_then(|input| input.untested_paths.as_deref()) else {
         return Ok(None);
     };
@@ -149,7 +149,7 @@ fn rvs_load_untested_functions_BIS(
             path.display()
         )
     })?;
-    crate::artifacts::rvs_parse_function_identities_json_S(&json)
+    crate::artifacts::rvs_parse_untested_selection_S(&json)
         .map(Some)
         .map_err(|error| format!("{}: {error}", path.display()))
 }

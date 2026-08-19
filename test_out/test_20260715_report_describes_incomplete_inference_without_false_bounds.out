@@ -2,4 +2,4 @@ zero=""
 nonzero=
 Inference Status
 ------------------------------
-3 local function(s) depend on unknown callee capability data. Capability totals reflect name suffixes merged with measured signature/body facts; rename suggestions may omit unknown capabilities.
+3 local function(s) depend on unknown callee capability data. Capability totals reflect measured signature/body facts and callgraph propagation from known caps only; rename suggestions may omit unknown capabilities.

@@ -1,27 +1,21 @@
-Offline Caps Check: 1 error(s), 4 warning(s)
+Offline Caps Check: 4 error(s), 0 warning(s)
 ------------------------------------------------------------
-error[call_violation]: demo::rvs_dispatch
-  caller lacks propagated capabilities required by callee
-  callee: demo::Parser::rvs_parse
-  caller declared caps: pure
-  callee caps: BI
-  missing propagated caps: B, I
-warning[missing_blocking]: demo::Parser::rvs_parse
+error[missing_blocking]: demo::Parser::rvs_parse
   'rvs_parse' is missing capability marker missing_blocking
   expected name: rvs_parse_BI
   declared caps: pure
   inferred caps: BI
-warning[missing_blocking]: demo::rvs_dispatch
+error[missing_blocking]: demo::rvs_dispatch
   'rvs_dispatch' is missing capability marker missing_blocking
   expected name: rvs_dispatch_BI
   declared caps: pure
   inferred caps: BI
-warning[missing_io]: demo::Parser::rvs_parse
+error[missing_io]: demo::Parser::rvs_parse
   'rvs_parse' is missing capability marker missing_io
   expected name: rvs_parse_BI
   declared caps: pure
   inferred caps: BI
-warning[missing_io]: demo::rvs_dispatch
+error[missing_io]: demo::rvs_dispatch
   'rvs_dispatch' is missing capability marker missing_io
   expected name: rvs_dispatch_BI
   declared caps: pure

@@ -6,6 +6,14 @@ LL | fn rvs_foo_M() {}
    |
    = note: `#[deny(rivus::rvs_empty_fn)]` on by default
 
+error: 'rvs_foo_M' should be named 'rvs_foo'; declared caps: M; inferred caps: pure
+  --> $DIR/tests/ui/93_method_call_violation.rs:3:1
+   |
+LL | fn rvs_foo_M() {}
+   | ^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(rivus::rvs_contract_mismatch)]` on by default
+
 error: good fn 'rvs_foo_M' not called by any test
   --> $DIR/tests/ui/93_method_call_violation.rs:3:1
    |
@@ -23,4 +31,4 @@ LL | |     rvs_foo_M();
 LL | | }
    | |_^
 
-error: aborting due to 3 previous errors
+error: aborting due to 4 previous errors

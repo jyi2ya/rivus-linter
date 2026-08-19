@@ -1,8 +1,8 @@
 Offline Caps Check: 1 error(s), 0 warning(s)
 ------------------------------------------------------------
-error[call_violation]: demo::EffectAdapter::rvs_fetch_P@demo::Transport
-  caller lacks propagated capabilities required by callee
+error[port_effect_violation]: demo::EffectAdapter::rvs_fetch_P@demo::Transport
+  World Port implementation executes an effect its contract does not allow
   callee: dep::effect
-  caller declared caps: P
+  contract caps: P
   callee caps: S
-  missing propagated caps: S
+  unallowed caps: S

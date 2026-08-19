@@ -1,1 +1,1 @@
-items=[FnContractMismatch { def_path: DefPath("demo::rvs_fetch_BI"), actual_name: FnName("rvs_fetch_BI"), kind: NameMismatch }, FnContractMismatch { def_path: DefPath("demo::rvs_fetch_BI"), actual_name: FnName("rvs_fetch_BI"), kind: MissingPort }]
+items=[FnContractMismatch { def_path: DefPath("demo::rvs_fetch_BI"), actual_name: FnName("rvs_fetch_BI"), kind: NameMismatch }]

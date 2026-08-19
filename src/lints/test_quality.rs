@@ -18,7 +18,9 @@ pub(crate) fn rvs_check_crate_post_MPS<'tcx, E: LintEnvironment>(
     good_fns: &[CoverageFn],
     ok_fns: &[CoverageFn],
     test_calls: &HashSet<TestCallTarget>,
-    selected_untested_functions: Option<&BTreeSet<FunctionIdentity>>,
+    selected_untested_functions: Option<
+        &BTreeMap<FunctionIdentity, crate::artifacts::CoverageLabel>,
+    >,
     callgraph: &FnGraph,
     test_outputs: Option<&BTreeSet<String>>,
     world: &mut E::World,
@@ -53,33 +55,28 @@ fn rvs_check_selected_untested_fns_S<'tcx>(
     cx: &LateContext<'tcx>,
     good_fns: &[CoverageFn],
     ok_fns: &[CoverageFn],
-    selected: &BTreeSet<FunctionIdentity>,
+    selected: &BTreeMap<FunctionIdentity, crate::artifacts::CoverageLabel>,
 ) {
-    for (candidates, lint, label) in [
-        (good_fns, RVS_UNTESTED_GOOD_FN, "good"),
-        (ok_fns, RVS_UNTESTED_OK_FN, "ok"),
-    ] {
-        for candidate in candidates {
-            if rvs_should_emit_selected(cx, candidate, selected, lint) {
-                rvs_emit_node_span_lint_S(
-                    cx,
-                    lint,
-                    candidate.hir_id,
-                    candidate.span,
-                    format!("{label} fn '{}' not called by any test", candidate.name),
-                );
-            }
-        }
+    // The selection carries the coverage class computed by the offline
+    // engine from semantic caps; the emission compile only resolves spans
+    // and must not reclassify from signature facts, which cannot see
+    // propagated capabilities.
+    for candidate in good_fns.iter().chain(ok_fns) {
+        let Some(label) = selected.get(&candidate.identity) else {
+            continue;
+        };
+        let (lint, label) = match label {
+            crate::artifacts::CoverageLabel::Good => (RVS_UNTESTED_GOOD_FN, "good"),
+            crate::artifacts::CoverageLabel::Ok => (RVS_UNTESTED_OK_FN, "ok"),
+        };
+        rvs_emit_node_span_lint_S(
+            cx,
+            lint,
+            candidate.hir_id,
+            candidate.span,
+            format!("{label} fn '{}' not called by any test", candidate.name),
+        );
     }
-}
-
-fn rvs_should_emit_selected(
-    _cx: &LateContext<'_>,
-    candidate: &CoverageFn,
-    selected: &BTreeSet<FunctionIdentity>,
-    _lint: &'static rustc_lint::Lint,
-) -> bool {
-    selected.contains(&candidate.identity)
 }
 
 fn rvs_check_duplicate_tests_S<'tcx>(
@@ -191,7 +188,7 @@ mod tests {
     use super::*;
     use crate::artifacts::{CallEdgeType, FnNode};
     use crate::symbols::DefPath;
-    use crate::test_support::{rvs_register_test_coverage, rvs_snapshot_BIS};
+    use crate::test_support::rvs_snapshot_BIS;
 
     #[test]
     fn test_20260714_test_call_target_matching() {
@@ -270,7 +267,5 @@ mod tests {
         assert!(!ambiguous_unresolved);
         assert!(!missing);
         assert!(transitive_covered.contains(&target_identity));
-
-        rvs_register_test_coverage(rvs_should_emit_selected);
     }
 }

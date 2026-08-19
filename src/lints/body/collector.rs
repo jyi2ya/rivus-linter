@@ -10,7 +10,7 @@ use rustc_span::{Span, Symbol, sym};
 use super::super::utils::{
     CallObservation, CallSyntax, CallTarget, ObservationKind, rvs_collect_local_bindings_M,
     rvs_def_id_is_fn_trait_operation, rvs_def_path, rvs_resolve_call, rvs_root_body_expr,
-    rvs_static_is_thread_local, rvs_visit_body_exprs_M,
+    rvs_static_is_thread_local, rvs_visit_body_exprs,
 };
 use super::macro_expansion::rvs_span_has_bang_macro;
 use crate::lints::ctx::TestCallTarget;
@@ -42,7 +42,7 @@ pub(crate) struct BodyFacts {
     pub(crate) unsupported_implicit_execution: Vec<ImplicitExecutionSite>,
 }
 
-pub(crate) fn rvs_collect_body_facts_M<'tcx>(
+pub(crate) fn rvs_collect_body_facts<'tcx>(
     cx: &LateContext<'tcx>,
     body: &Body<'tcx>,
     collect_lint_facts: bool,
@@ -63,7 +63,7 @@ pub(crate) fn rvs_collect_body_facts_M<'tcx>(
     let mut direct_callee_hir_ids: HashSet<HirId> = HashSet::new();
     let mut coverage_registered_hir_ids: HashSet<HirId> = HashSet::new();
 
-    rvs_visit_body_exprs_M(cx.tcx, root_expr, |expr, body_owner| {
+    rvs_visit_body_exprs(cx.tcx, root_expr, |expr, body_owner| {
         rvs_collect_static_facts_M(cx, expr, &mut facts);
 
         if collect_lint_facts && let Some(kind) = rvs_implicit_execution_kind(cx, expr) {
@@ -562,6 +562,6 @@ mod tests {
         assert!(!plain);
         assert_eq!(calls.len(), 2);
 
-        rvs_register_test_coverage((rvs_collect_body_facts_M, rvs_expr_is_stub));
+        rvs_register_test_coverage((rvs_collect_body_facts, rvs_expr_is_stub));
     }
 }

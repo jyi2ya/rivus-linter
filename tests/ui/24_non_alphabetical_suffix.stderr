@@ -31,6 +31,24 @@ LL | |     rvs_add();
 LL | | }
    | |_^
 
+error: 'rvs_foo_MA' should be named 'rvs_foo'; declared caps: M; inferred caps: pure
+  --> $DIR/tests/ui/24_non_alphabetical_suffix.rs:9:1
+   |
+LL | / pub fn rvs_foo_MA() {
+LL | |     rvs_add();
+LL | | }
+   | |_^
+   |
+   = note: `#[deny(rivus::rvs_contract_mismatch)]` on by default
+
+error: 'rvs_foo_MI' should be named 'rvs_foo'; declared caps: IM; inferred caps: pure
+  --> $DIR/tests/ui/24_non_alphabetical_suffix.rs:5:1
+   |
+LL | / pub fn rvs_foo_MI() {
+LL | |     rvs_add();
+LL | | }
+   | |_^
+
 error: suffix 'MA' contains non-suffix letters: A; A/C/U are measured from the signature or body facts, remove them from the name; expected name: rvs_foo_M
   --> $DIR/tests/ui/24_non_alphabetical_suffix.rs:9:1
    |
@@ -61,6 +79,14 @@ LL | pub fn rvs_add() {}
    = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
 
+error: good fn 'rvs_foo_MI' not called by any test
+  --> $DIR/tests/ui/24_non_alphabetical_suffix.rs:5:1
+   |
+LL | / pub fn rvs_foo_MI() {
+LL | |     rvs_add();
+LL | | }
+   | |_^
+
 error: good fn 'rvs_foo_MA' not called by any test
   --> $DIR/tests/ui/24_non_alphabetical_suffix.rs:9:1
    |
@@ -69,4 +95,4 @@ LL | |     rvs_add();
 LL | | }
    | |_^
 
-error: aborting due to 8 previous errors
+error: aborting due to 11 previous errors

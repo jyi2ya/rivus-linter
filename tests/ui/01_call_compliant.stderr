@@ -13,6 +13,24 @@ error: param 'b' missing debug_assert!
 LL | fn rvs_add(a: i32, b: i32) -> i32 {
    |                    ^
 
+error: 'rvs_read_BI' should be named 'rvs_read'; declared caps: BI; inferred caps: pure
+  --> $DIR/tests/ui/01_call_compliant.rs:11:1
+   |
+LL | / fn rvs_read_BI() -> i32 {
+LL | |     rvs_add(3, 4)
+LL | | }
+   | |_^
+   |
+   = note: `#[deny(rivus::rvs_contract_mismatch)]` on by default
+
+error: 'rvs_write_BI' should be named 'rvs_write'; declared caps: BI; inferred caps: pure
+  --> $DIR/tests/ui/01_call_compliant.rs:7:1
+   |
+LL | / fn rvs_write_BI() {
+LL | |     rvs_add(1, 2);
+LL | | }
+   | |_^
+
 error: good fn 'rvs_add' not called by any test
   --> $DIR/tests/ui/01_call_compliant.rs:3:1
    |
@@ -24,4 +42,20 @@ LL | | }
    = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
 
-error: aborting due to 3 previous errors
+error: good fn 'rvs_write_BI' not called by any test
+  --> $DIR/tests/ui/01_call_compliant.rs:7:1
+   |
+LL | / fn rvs_write_BI() {
+LL | |     rvs_add(1, 2);
+LL | | }
+   | |_^
+
+error: good fn 'rvs_read_BI' not called by any test
+  --> $DIR/tests/ui/01_call_compliant.rs:11:1
+   |
+LL | / fn rvs_read_BI() -> i32 {
+LL | |     rvs_add(3, 4)
+LL | | }
+   | |_^
+
+error: aborting due to 7 previous errors

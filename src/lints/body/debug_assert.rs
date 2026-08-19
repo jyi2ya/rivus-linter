@@ -7,7 +7,7 @@ use super::BodyFacts;
 
 /// Check that primitive numeric parameters have corresponding `debug_assert!`
 /// calls referencing them.
-pub(crate) fn rvs_check_fn_MS<'tcx>(cx: &LateContext<'tcx>, body: &Body<'tcx>, facts: &BodyFacts) {
+pub(crate) fn rvs_check_fn_S<'tcx>(cx: &LateContext<'tcx>, body: &Body<'tcx>, facts: &BodyFacts) {
     let owner = body.value.hir_id.owner;
     let tck = cx.tcx.typeck(owner.def_id);
     let mut prims = Vec::new();

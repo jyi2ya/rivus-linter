@@ -7,7 +7,7 @@ use rustc_span::{FileName, Ident, Span};
 
 use super::super::ctx::FnSubject;
 use super::super::utils::{
-    CallTarget, rvs_count_effective_lines_M, rvs_def_path, rvs_has_allow, rvs_has_mutable_params,
+    CallTarget, rvs_count_body_effective_lines, rvs_def_path, rvs_has_allow, rvs_has_mutable_params,
 };
 use crate::artifacts::{
     CallEdgeType, CallSiteIdentity, CallSiteSource, CrateProvenance, FnGraph, FnNode, FnSource,
@@ -141,7 +141,7 @@ pub(crate) fn rvs_collect_callgraph_for_item_BMS<'tcx>(
         || ParsedFunctionName::rvs_parse(subject.rvs_name()).rvs_has_rvs_prefix();
     let report_line_count =
         if is_reportable && !subject.is_test && !is_in_test_module && !allows_dead_code {
-            Some(rvs_count_effective_lines_M(cx, subject.body))
+            Some(rvs_count_body_effective_lines(cx, subject.body))
         } else {
             None
         };

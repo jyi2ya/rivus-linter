@@ -7,12 +7,12 @@ struct Svc;
 
 #[allow(non_snake_case)]
 impl Svc {
-    fn rvs_run_I(&self) {
-        let _ = 42;
+    fn rvs_run_BS(&self) {
+        let _ = std::env::var("HOME");
     }
 }
 
 #[test]
 fn test_20260612_allow_on_impl_block_ok() {
-    Svc.rvs_run_I();
+    Svc.rvs_run_BS();
 }

@@ -1,11 +1,3 @@
-error: caller lacks propagated capabilities required by callee; callee: std::thread::local::LocalKey::with; caller declared caps: pure; callee caps: ST; missing propagated caps: S, T
-  --> $DIR/tests/ui/32_missing_thread_local.rs:13:5
-   |
-LL |     COUNTER.with(|c| *c.borrow())
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   |
-   = note: `#[deny(rivus::rvs_call_violation)]` on by default
-
 error: 'rvs_get_tls' is missing capability marker missing_side_effect; expected name: rvs_get_tls_ST; declared caps: pure; inferred caps: ST
   --> $DIR/tests/ui/32_missing_thread_local.rs:12:1
    |
@@ -14,8 +6,7 @@ LL | |     COUNTER.with(|c| *c.borrow())
 LL | | }
    | |_^
    |
-   = note: `-D rivus::rvs-missing-side-effect` implied by `-D warnings`
-   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_side_effect)]`
+   = note: `#[deny(rivus::rvs_contract_mismatch)]` on by default
 
 error: 'rvs_get_tls' is missing capability marker missing_thread_local; expected name: rvs_get_tls_ST; declared caps: pure; inferred caps: ST
   --> $DIR/tests/ui/32_missing_thread_local.rs:12:1
@@ -24,9 +15,6 @@ LL | / fn rvs_get_tls() -> u32 {
 LL | |     COUNTER.with(|c| *c.borrow())
 LL | | }
    | |_^
-   |
-   = note: `-D rivus::rvs-missing-thread-local` implied by `-D warnings`
-   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_thread_local)]`
 
 error: good fn 'rvs_get_tls' not called by any test
   --> $DIR/tests/ui/32_missing_thread_local.rs:12:1
@@ -39,4 +27,4 @@ LL | | }
    = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
 
-error: aborting due to 4 previous errors
+error: aborting due to 3 previous errors

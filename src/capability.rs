@@ -75,12 +75,6 @@ impl Capability {
     pub const fn rvs_is_non_suffix_cap_char(c: char) -> bool {
         matches!(c, 'A' | 'C' | 'U')
     }
-
-    /// Whether this capability is measured from the signature/body instead of
-    /// the function name.
-    pub const fn rvs_is_non_suffix_cap(self) -> bool {
-        matches!(self, Self::A | Self::C | Self::U)
-    }
 }
 
 /// Strip non-suffix capability letters (A/C/U) from a raw suffix.
@@ -230,16 +224,6 @@ impl<'a> ParsedFunctionName<'a> {
             letters.sort_unstable();
             letters.into_iter().collect()
         })
-    }
-
-    /// Preserve the historical rule that an unknown-only suffix is undeclared.
-    pub(crate) fn rvs_declared_caps(&self) -> Option<CapabilitySet> {
-        if !self.has_rvs_prefix
-            || (!self.unknown_suffix_letters.is_empty() && self.known_caps.rvs_is_empty())
-        {
-            return None;
-        }
-        Some(self.known_caps.clone())
     }
 }
 
@@ -629,17 +613,6 @@ impl CapabilityPolicy {
             caps.rvs_insert_M(Capability::M);
         }
         let _ = caps.rvs_extend_filtered_M(&Self::rvs_static_caps(facts), |_| true);
-        caps
-    }
-
-    /// Merge non-suffix caps (A/C/U) from full facts into name-derived caps.
-    ///
-    /// Names carry only B/I/M/P/S/T; statistics and classification still
-    /// measure A/C/U from the signature and body facts (U also covers
-    /// `static mut` access inside a safe fn).
-    pub fn rvs_report_caps(facts: CapabilityFacts, mut caps: CapabilitySet) -> CapabilitySet {
-        let full = Self::rvs_signature_caps(facts);
-        let _ = caps.rvs_extend_filtered_M(&full, Capability::rvs_is_non_suffix_cap);
         caps
     }
 
@@ -1413,13 +1386,8 @@ mod tests {
             let known = rvs_caps_letters(parsed.rvs_known_caps());
             let unknown: String = parsed.rvs_unknown_suffix_letters().iter().collect();
             let duplicates: String = parsed.rvs_duplicate_suffix_letters().iter().collect();
-            let declared = parsed
-                .rvs_declared_caps()
-                .as_ref()
-                .map(rvs_caps_letters)
-                .unwrap_or_else(|| "none".to_string());
             output.push_str(&format!(
-                "{label}: segment={} base={} prefix={} raw={} known={known} unknown={unknown} duplicates={duplicates} canonical={} sorted={} declared={declared}\n",
+                "{label}: segment={} base={} prefix={} raw={} known={known} unknown={unknown} duplicates={duplicates} canonical={} sorted={}\n",
                 parsed.segment,
                 parsed.rvs_base_name(),
                 parsed.rvs_has_rvs_prefix(),

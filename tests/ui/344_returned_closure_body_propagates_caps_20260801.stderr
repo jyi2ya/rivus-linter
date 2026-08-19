@@ -1,9 +1,0 @@
-error: caller lacks propagated capabilities required by callee; callee: 344_returned_closure_body_propagates_caps_20260801::rvs_inner_BI; caller declared caps: pure; callee caps: BI; missing propagated caps: B, I
-  --> $DIR/tests/ui/344_returned_closure_body_propagates_caps_20260801.rs:11:13
-   |
-LL |     move || rvs_inner_BI()
-   |             ^^^^^^^^^^^^^^
-   |
-   = note: `#[deny(rivus::rvs_call_violation)]` on by default
-
-error: aborting due to 1 previous error

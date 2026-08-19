@@ -7,4 +7,27 @@ LL |     drop(result);
    = note: `-D rivus::rvs-error-swallow` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_error_swallow)]`
 
-error: aborting due to 1 previous error
+error: 'rvs_drop_result_swallow_S' should be named 'rvs_drop_result_swallow'; declared caps: S; inferred caps: pure
+  --> $DIR/tests/ui/212_drop_result_swallow.rs:6:1
+   |
+LL | / fn rvs_drop_result_swallow_S() {
+LL | |     let result: Result<(), Error> = Err(Error);
+LL | |     drop(result);
+LL | | }
+   | |_^
+   |
+   = note: `#[deny(rivus::rvs_contract_mismatch)]` on by default
+
+error: good fn 'rvs_drop_result_swallow_S' not called by any test
+  --> $DIR/tests/ui/212_drop_result_swallow.rs:6:1
+   |
+LL | / fn rvs_drop_result_swallow_S() {
+LL | |     let result: Result<(), Error> = Err(Error);
+LL | |     drop(result);
+LL | | }
+   | |_^
+   |
+   = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
+
+error: aborting due to 3 previous errors

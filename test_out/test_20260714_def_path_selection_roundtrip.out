@@ -1,2 +1,2 @@
-json=[{"crate_id":7,"def_path":"demo::rvs_alpha"},{"crate_id":9,"def_path":"demo::Worker::rvs_run_P"}]
-parsed={FunctionIdentity { crate_id: 7, def_path: DefPath("demo::rvs_alpha") }, FunctionIdentity { crate_id: 9, def_path: DefPath("demo::Worker::rvs_run_P") }}
+json=[{"identity":{"crate_id":7,"def_path":"demo::rvs_alpha"},"label":"good"},{"identity":{"crate_id":9,"def_path":"demo::Worker::rvs_run_P"},"label":"ok"}]
+parsed={FunctionIdentity { crate_id: 7, def_path: DefPath("demo::rvs_alpha") }: Good, FunctionIdentity { crate_id: 9, def_path: DefPath("demo::Worker::rvs_run_P") }: Ok}

@@ -8,4 +8,14 @@ LL | | }
    |
    = note: `#[deny(rivus::rvs_empty_fn)]` on by default
 
-error: aborting due to 1 previous error
+error: 'rvs_check_M' should be named 'rvs_check'; declared caps: M; inferred caps: pure
+  --> $DIR/tests/ui/73_empty_fn_debug_assert_only.rs:7:1
+   |
+LL | / fn rvs_check_M(n: i32) {
+LL | |     debug_assert!(n > 0);
+LL | | }
+   | |_^
+   |
+   = note: `#[deny(rivus::rvs_contract_mismatch)]` on by default
+
+error: aborting due to 2 previous errors

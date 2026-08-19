@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::ffi::OsString;
 use std::fmt;
@@ -1107,10 +1107,10 @@ fn rvs_write_primary_package_targets_BIST(
 /// # Panics
 ///
 /// Panics if the current executable path is invalid or cargo cannot be spawned.
-pub(crate) fn rvs_run_cargo_check_impl_BIMST(
+pub(crate) fn rvs_run_cargo_check_impl_BIST(
     config: &CargoCheckConfig,
 ) -> Result<(), CargoCheckError> {
-    let mut cmd = rvs_prepare_cargo_check_command_BIMST(config)?;
+    let mut cmd = rvs_prepare_cargo_check_command_BIST(config)?;
     let exit_status = cmd
         .spawn()
         .map_err(|e| CargoCheckError::Message(format!("could not run cargo: {e}")))?
@@ -1122,7 +1122,7 @@ pub(crate) fn rvs_run_cargo_check_impl_BIMST(
     Ok(())
 }
 
-fn rvs_prepare_cargo_check_command_BIMST(
+fn rvs_prepare_cargo_check_command_BIST(
     config: &CargoCheckConfig,
 ) -> Result<Command, CargoCheckError> {
     let self_path = rvs_current_wrapper_exe_BIS()
@@ -1322,9 +1322,20 @@ pub(crate) fn rvs_run_cargo_check_BIST(extra_args: &[String]) -> Result<(), i32>
             return Err(1);
         }
     };
-    let uncovered =
-        crate::offline_caps::rvs_uncovered_test_functions(&callgraph, &local_crate_names);
-    let report = crate::offline_caps::rvs_check_offline_caps(&callgraph, &caps, &local_crate_names);
+    // One fixed-point pass feeds both coverage selection and diagnostics.
+    let analysis =
+        crate::inference::PreparedLocalAnalysis::rvs_prepare(&callgraph, &caps, &local_crate_names);
+    let uncovered = crate::offline_caps::rvs_uncovered_test_functions(
+        &callgraph,
+        &analysis,
+        &local_crate_names,
+    );
+    let report = crate::offline_caps::rvs_check_offline_caps_with_analysis(
+        &callgraph,
+        &analysis,
+        &caps,
+        &local_crate_names,
+    );
     let offline_emissions = report.rvs_emissions(&callgraph);
     let lint_result = rvs_run_project_lints_BIST(
         project_path,
@@ -1345,7 +1356,9 @@ fn rvs_run_project_lints_BIST(
     project_path: &Path,
     target_scope: &CargoTargetScope,
     extra_args: &[&str],
-    uncovered: &Option<&BTreeSet<crate::artifacts::FunctionIdentity>>,
+    uncovered: &Option<
+        &BTreeMap<crate::artifacts::FunctionIdentity, crate::artifacts::CoverageLabel>,
+    >,
     offline_emissions: Option<&[crate::offline_caps::OfflineCapsEmission]>,
 ) -> Result<(), CargoCheckError> {
     let analysis = if uncovered.is_none() && offline_emissions.is_none() {
@@ -1391,7 +1404,7 @@ fn rvs_run_project_lints_BIST(
         } else {
             CargoLintInput::Offline(input)
         };
-        let cargo_result = rvs_run_cargo_check_impl_BIMST(&CargoCheckConfig {
+        let cargo_result = rvs_run_cargo_check_impl_BIST(&CargoCheckConfig {
             project_path,
             generation: &generation,
             mode: CargoCheckMode::Lint(lint_input),
@@ -1469,10 +1482,10 @@ fn rvs_verify_offline_emission_acks_BIS(
 
 fn rvs_write_untested_selection_BIST(
     generation_root: &Path,
-    functions: &BTreeSet<crate::artifacts::FunctionIdentity>,
+    functions: &BTreeMap<crate::artifacts::FunctionIdentity, crate::artifacts::CoverageLabel>,
 ) -> Result<PathBuf, String> {
     let path = generation_root.join("untested-functions.json");
-    let json = crate::artifacts::rvs_serialize_function_identities_json_S(functions)
+    let json = crate::artifacts::rvs_serialize_untested_selection_S(functions)
         .map_err(|error| error.to_string())?;
     super::fs_guard::rvs_atomic_write_BIST(&path, json.as_bytes())
         .map_err(|error| format!("cannot write {}: {error}", path.display()))?;
@@ -1700,7 +1713,7 @@ fn rvs_collect_callgraph_with_args_detailed_BIST(
                 path.to_path_buf()
             }
         };
-        rvs_run_cargo_check_impl_BIMST(&CargoCheckConfig {
+        rvs_run_cargo_check_impl_BIST(&CargoCheckConfig {
             project_path: &cargo_project,
             generation: &generation,
             mode: CargoCheckMode::Callgraph {
@@ -2505,7 +2518,7 @@ mod tests {
         .unwrap();
         std::fs::write(
             dir.join("src/lib.rs"),
-            "#![feature(register_tool)]\n#![register_tool(rivus)]\n#![allow(non_snake_case)]\n#![allow(rivus::rvs_untested_good_fn)]\n#![cfg_attr(not(test), allow(rivus::rvs_call_violation))]\n#![cfg_attr(test, deny(rivus::rvs_call_violation))]\n\nstatic VALUE: u8 = 1;\nfn rvs_effect_S() -> u8 { VALUE }\n\n#[cfg(not(test))]\npub fn rvs_variant() -> u8 { rvs_effect_S() }\n\n#[cfg(test)]\npub fn rvs_variant() -> u8 { 0 }\n",
+            "#![feature(register_tool)]\n#![register_tool(rivus)]\n#![allow(non_snake_case)]\n#![allow(rivus::rvs_untested_good_fn)]\n#![cfg_attr(not(test), allow(rivus::rvs_contract_mismatch))]\n#![cfg_attr(test, deny(rivus::rvs_contract_mismatch))]\n\nstatic VALUE: u8 = 1;\nfn rvs_effect_S() -> u8 { VALUE }\n\n#[cfg(not(test))]\npub fn rvs_variant() -> u8 { rvs_effect_S() }\n\n#[cfg(test)]\npub fn rvs_variant() -> u8 { 0 }\n",
         )
         .unwrap();
 
@@ -2516,9 +2529,9 @@ mod tests {
             .unwrap();
         let stderr = String::from_utf8_lossy(&output.stderr);
         let summary = format!(
-            "success={}\ncall_violation={}\nunmatched_emission={}\n",
+            "success={}\nmissing_side_effect={}\nunmatched_emission={}\n",
             output.status.success(),
-            stderr.contains("caller lacks propagated capabilities required by callee"),
+            stderr.contains("is missing capability marker missing_side_effect"),
             stderr.contains("diagnostic was not matched by the final compilation"),
         );
         rvs_snapshot_BIS(
@@ -2583,7 +2596,7 @@ mod tests {
         .unwrap();
         std::fs::write(
             dir.join("src/lib.rs"),
-            "#![feature(register_tool)]\n#![register_tool(rivus)]\n#![allow(non_snake_case)]\n#![allow(rivus::rvs_untested_good_fn)]\n#![cfg_attr(not(test), allow(rivus::rvs_call_violation))]\n#![cfg_attr(test, deny(rivus::rvs_call_violation))]\n\nstatic VALUE: u8 = 1;\nfn rvs_effect_S() -> u8 { VALUE }\npub fn rvs_variant() -> u8 {\n    #[cfg(not(test))]\n    { return rvs_effect_S(); }\n    #[cfg(test)]\n    { 0 }\n}\n",
+            "#![feature(register_tool)]\n#![register_tool(rivus)]\n#![allow(non_snake_case)]\n#![allow(rivus::rvs_untested_good_fn)]\n#![cfg_attr(not(test), allow(rivus::rvs_contract_mismatch))]\n#![cfg_attr(test, deny(rivus::rvs_contract_mismatch))]\n\nstatic VALUE: u8 = 1;\nfn rvs_effect_S() -> u8 { VALUE }\npub fn rvs_variant() -> u8 {\n    #[cfg(not(test))]\n    { return rvs_effect_S(); }\n    #[cfg(test)]\n    { 0 }\n}\n",
         )
         .unwrap();
 
@@ -2594,9 +2607,9 @@ mod tests {
             .unwrap();
         let stderr = String::from_utf8_lossy(&output.stderr);
         let summary = format!(
-            "success={}\ncall_violation={}\nunmatched_emission={}\n",
+            "success={}\nmissing_side_effect={}\nunmatched_emission={}\n",
             output.status.success(),
-            stderr.contains("caller lacks propagated capabilities required by callee"),
+            stderr.contains("is missing capability marker missing_side_effect"),
             stderr.contains("diagnostic was not matched by the final compilation"),
         );
         rvs_snapshot_BIS(
@@ -2614,7 +2627,7 @@ mod tests {
         let ack_dir = generation.join("offline-emission-acks");
         std::fs::create_dir(&ack_dir).unwrap();
         let emissions = vec![crate::offline_caps::OfflineCapsEmission {
-            lint: crate::offline_caps::OfflineCapsLint::CallViolation,
+            lint: crate::offline_caps::OfflineCapsLint::StaticRef,
             span_anchors: BTreeSet::from([crate::offline_caps::OfflineCapsEmissionAnchor {
                 identity: crate::artifacts::FunctionIdentity {
                     crate_id: 7,
@@ -2799,7 +2812,7 @@ mod tests {
             extra_args: vec![],
             target_subdir: Some("direct-driver-coverage"),
         };
-        let output = rvs_prepare_cargo_check_command_BIMST(&config)
+        let output = rvs_prepare_cargo_check_command_BIST(&config)
             .unwrap()
             .output()
             .unwrap();
@@ -3568,7 +3581,7 @@ name = "throughput-bench"
                 extra_args: vec![],
                 target_subdir: None,
             };
-            let cmd = rvs_prepare_cargo_check_command_BIMST(&config).unwrap();
+            let cmd = rvs_prepare_cargo_check_command_BIST(&config).unwrap();
             let args = cmd
                 .get_args()
                 .map(|arg| arg.to_string_lossy().into_owned())
@@ -3607,7 +3620,7 @@ name = "throughput-bench"
             target_subdir: None,
         };
 
-        let cmd = rvs_prepare_cargo_check_command_BIMST(&config).unwrap();
+        let cmd = rvs_prepare_cargo_check_command_BIST(&config).unwrap();
         let capsmap_state = match rvs_command_env_value(&cmd, "RIVUS_CAPSMAP") {
             Some(None) => "removed",
             Some(Some(path)) if Path::new(&path).is_absolute() => "absolute",
@@ -3730,7 +3743,7 @@ name = "throughput-bench"
                 extra_args: vec![],
                 target_subdir: None,
             };
-            let cmd = rvs_prepare_cargo_check_command_BIMST(&config).unwrap();
+            let cmd = rvs_prepare_cargo_check_command_BIST(&config).unwrap();
             let args = cmd
                 .get_args()
                 .map(|arg| arg.to_string_lossy().into_owned())
@@ -3791,7 +3804,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
             target_subdir: None,
         };
 
-        let result = rvs_prepare_cargo_check_command_BIMST(&config);
+        let result = rvs_prepare_cargo_check_command_BIST(&config);
         let output = format!("{result:?}\n").replace(&dir.to_string_lossy().into_owned(), "$TMP");
         rvs_snapshot_BIS(
             "test_20260706_prepare_cargo_check_rejects_caps_file",
@@ -3823,7 +3836,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
             target_subdir: None,
         };
 
-        let result = rvs_prepare_cargo_check_command_BIMST(&config);
+        let result = rvs_prepare_cargo_check_command_BIST(&config);
         let capsmap_env = result
             .as_ref()
             .ok()
@@ -3862,7 +3875,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
             CargoTargetScope::WithTestExampleBench,
         );
 
-        let result = rvs_prepare_cargo_check_command_BIMST(&CargoCheckConfig {
+        let result = rvs_prepare_cargo_check_command_BIST(&CargoCheckConfig {
             project_path: &dir,
             generation: &generation,
             mode,
@@ -4552,7 +4565,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
             target_subdir: None,
         };
 
-        let result = rvs_prepare_cargo_check_command_BIMST(&config);
+        let result = rvs_prepare_cargo_check_command_BIST(&config);
         let output = format!("{result:?}\n").replace(&dir.to_string_lossy().into_owned(), "$TMP");
         rvs_snapshot_BIS(
             "test_20260706_prepare_cargo_check_validates_project_caps_without_std_cache",
@@ -4593,7 +4606,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
             target_subdir: Some("rivus-custom-build"),
         };
 
-        let cmd = rvs_prepare_cargo_check_command_BIMST(&config).unwrap();
+        let cmd = rvs_prepare_cargo_check_command_BIST(&config).unwrap();
         let current_dir = cmd.get_current_dir().expect("command should set cwd");
         let args: Vec<_> = cmd
             .get_args()
@@ -4850,10 +4863,18 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
         let call_u16 = callgraph
             .rvs_get("specialized_impl_identity::rvs_call_u16")
             .unwrap();
-        let uncovered =
-            crate::offline_caps::rvs_uncovered_test_functions(&callgraph, &local_crate_names);
+        let analysis = crate::inference::PreparedLocalAnalysis::rvs_prepare(
+            &callgraph,
+            &capsmap::CapsMap::rvs_new(),
+            &local_crate_names,
+        );
+        let uncovered = crate::offline_caps::rvs_uncovered_test_functions(
+            &callgraph,
+            &analysis,
+            &local_crate_names,
+        );
         let uncovered_methods = uncovered
-            .iter()
+            .keys()
             .filter(|identity| identity.def_path.rvs_fn_name_str() == "rvs_run")
             .map(|identity| &identity.def_path)
             .collect::<BTreeSet<_>>()
@@ -5184,6 +5205,14 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
         let published = rvs_support_inference_test_graph();
         crate::environment::callgraph_cache::rvs_publish_std_callgraph_cache_BIST(&dir, &published)
             .unwrap();
+        // The ffi boundary is known through caps knowledge, not through its
+        // name: suffixes are views over semantic caps, never sources.
+        std::fs::create_dir_all(dir.join("caps")).unwrap();
+        std::fs::write(
+            dir.join("caps/ext"),
+            rvs_caps_v2(&[("ffi_support::rvs_read_BI", "BI")]),
+        )
+        .unwrap();
 
         let (mut loaded, caps) = rvs_load_callgraph_and_caps_for_function_BIST(
             &dir,

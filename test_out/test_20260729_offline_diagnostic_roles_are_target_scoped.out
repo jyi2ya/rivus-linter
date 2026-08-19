@@ -1,2 +1,2 @@
-static_emissions=1
+contract_emissions=1
 anchors={OfflineCapsEmissionAnchor { identity: FunctionIdentity { crate_id: 10, def_path: DefPath("demo::rvs_shared") }, call_site: None }}

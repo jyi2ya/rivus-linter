@@ -6,8 +6,7 @@ LL | |         let _ = 42;
 LL | |     }
    | |_____^
    |
-   = note: `-D rivus::rvs-missing-mutable` implied by `-D warnings`
-   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_mutable)]`
+   = note: `#[deny(rivus::rvs_contract_mismatch)]` on by default
 
 error: good fn 'rvs_modify' not called by any test
   --> $DIR/tests/ui/51_infer_mut_self.rs:5:5

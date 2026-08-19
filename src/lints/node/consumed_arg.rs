@@ -9,7 +9,7 @@ use super::result_return::rvs_result_return;
 
 /// Check that owned (non-ref) parameters are preserved in the error type when
 /// the function returns `Result<(), E>`.
-pub(crate) fn rvs_check_fn_MS<'tcx>(
+pub(crate) fn rvs_check_fn_S<'tcx>(
     cx: &LateContext<'tcx>,
     sig: &'tcx rustc_hir::FnSig<'tcx>,
     params: &'tcx [rustc_hir::Param<'tcx>],

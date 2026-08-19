@@ -1,17 +1,11 @@
-Offline Caps Check: 1 error(s), 3 warning(s)
+Offline Caps Check: 2 error(s), 1 warning(s)
 ------------------------------------------------------------
-error[call_violation]: demo::rvs_handle
-  caller lacks propagated capabilities required by callee
-  callee: std::fs::read_to_string
-  caller declared caps: pure
-  callee caps: BI
-  missing propagated caps: B, I
-warning[missing_blocking]: demo::rvs_handle
+error[missing_blocking]: demo::rvs_handle
   'rvs_handle' is missing capability marker missing_blocking
   expected name: rvs_handle_BI
   declared caps: pure
   inferred caps: BI
-warning[missing_io]: demo::rvs_handle
+error[missing_io]: demo::rvs_handle
   'rvs_handle' is missing capability marker missing_io
   expected name: rvs_handle_BI
   declared caps: pure

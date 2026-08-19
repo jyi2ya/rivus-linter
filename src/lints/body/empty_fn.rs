@@ -7,7 +7,7 @@ use super::super::msg::rvs_emit_span_lint_S;
 use super::super::utils::rvs_is_empty_body;
 
 /// Check for empty function bodies (optionally containing only debug_assert!).
-pub(crate) fn rvs_check_fn_MS<'tcx>(
+pub(crate) fn rvs_check_fn_S<'tcx>(
     cx: &LateContext<'tcx>,
     body: &Body<'tcx>,
     span: Span,

@@ -1,2 +1,2 @@
-caps=BI
-unknown={}
+known={}
+unknown={DefPath("dep::Fetcher::rvs_fetch_BI"): {DefPath("my_crate::rvs_run")}}

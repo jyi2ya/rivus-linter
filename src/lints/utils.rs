@@ -463,7 +463,7 @@ pub(crate) fn rvs_is_sysroot_crate_id(
     marker.is_some_and(|def_id| cx.tcx.stable_crate_id(def_id.krate).as_u64() == crate_id)
 }
 
-pub(crate) fn rvs_count_effective_lines_M<'tcx>(
+pub(crate) fn rvs_count_body_effective_lines<'tcx>(
     cx: &LateContext<'tcx>,
     body: &Body<'tcx>,
 ) -> usize {
@@ -645,7 +645,7 @@ where
     }
 }
 
-pub(crate) fn rvs_visit_body_exprs_M<'tcx, F>(
+pub(crate) fn rvs_visit_body_exprs<'tcx, F>(
     tcx: TyCtxt<'tcx>,
     expr: &'tcx Expr<'tcx>,
     mut callback: F,
@@ -1554,7 +1554,7 @@ mod tests {
             rvs_is_empty_body,
             rvs_collect_local_bindings_M,
             rvs_static_is_thread_local,
-            rvs_count_effective_lines_M,
+            rvs_count_effective_lines,
             rvs_root_body_expr,
             rvs_qp,
             rvs_tys,

@@ -1,3 +1,4 @@
+// check-pass
 // compile-flags: --test
 #![allow(non_snake_case)]
 
@@ -7,11 +8,11 @@ fn rvs_index_S() -> usize {
     INDEX
 }
 
-fn rvs_read(values: &[usize]) -> usize {
+fn rvs_read_S(values: &[usize]) -> usize {
     values[rvs_index_S()]
 }
 
 #[test]
 fn test_20260714_calls_in_index_expr() {
-    assert_eq!(rvs_read(&[7]), 7);
+    assert_eq!(rvs_read_S(&[7]), 7);
 }

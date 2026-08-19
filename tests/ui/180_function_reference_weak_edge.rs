@@ -7,14 +7,14 @@
 #![allow(rivus::rvs_untested_good_fn, rivus::rvs_untested_ok_fn, rivus::rvs_missing_doc)]
 #![allow(rivus::rvs_unsupported_indirect_call)]
 
-fn rvs_callback_BI() {
-    let _ = 1;
+fn rvs_callback_BS() {
+    let _ = std::env::var("HOME");
 }
 
 fn rvs_run_callback<F: Fn()>(f: F) {
     f();
 }
 
-fn rvs_caller_BI() {
-    rvs_run_callback(rvs_callback_BI);
+fn rvs_caller_BS() {
+    rvs_run_callback(rvs_callback_BS);
 }

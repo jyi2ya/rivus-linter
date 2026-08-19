@@ -14,9 +14,7 @@ use rustc_session::declare_tool_lint;
 use rustc_span::Span;
 
 use crate::artifacts::{CallSiteIdentity, CrateProvenance, FunctionIdentity};
-use crate::capability::{
-    Capability, CapabilityFacts, CapabilityPolicy, CapabilitySet, ParsedFunctionName,
-};
+use crate::capability::{Capability, CapabilityFacts, CapabilityPolicy, ParsedFunctionName};
 use crate::capsmap::CapsMap;
 use crate::symbols::{CrateName, DefPath};
 
@@ -48,11 +46,21 @@ macro_rules! rvs_declare_lints {
         $(declare_tool_lint! { pub rivus::$name, $level, $desc })+
 
         pub static RIVUS_LINTS: &[&rustc_lint::Lint] = &[$($name),+];
+
+        /// Default levels parallel to `RIVUS_LINTS`, so tests can assert
+        /// that offline diagnostic severity maps onto the lint level.
+        #[cfg(test)]
+        pub static RIVUS_LINT_LEVELS: &[rustc_lint::Level] =
+            &[$(rustc_lint::Level::$level),+];
     };
 }
 
 rvs_declare_lints!(
-    (RVS_CALL_VIOLATION, Deny, "capability call chain violation"),
+    (
+        RVS_PORT_EFFECT_VIOLATION,
+        Deny,
+        "World Port implementation executes an unvoted effect"
+    ),
     (
         RVS_STATIC_REF,
         Deny,
@@ -73,7 +81,7 @@ rvs_declare_lints!(
     (RVS_NON_RVS_FN, Warn, "function missing rvs_ prefix"),
     (
         RVS_CONTRACT_MISMATCH,
-        Warn,
+        Deny,
         "function name does not match inferred public contract"
     ),
     (
@@ -92,24 +100,9 @@ rvs_declare_lints!(
         "trait implementation has capabilities outside the aggregate vote"
     ),
     (
-        RVS_MISSING_MUTABLE,
-        Warn,
-        "function has &mut param but suffix lacks M"
-    ),
-    (
         RVS_NON_SUFFIX_CAP_IN_SUFFIX,
         Deny,
         "suffix contains non-suffix capability A/C/U; those are measured from the signature or body facts"
-    ),
-    (
-        RVS_MISSING_SIDE_EFFECT,
-        Warn,
-        "reads static but suffix lacks S"
-    ),
-    (
-        RVS_MISSING_THREAD_LOCAL,
-        Warn,
-        "reads thread_local! but suffix lacks T"
     ),
     (
         RVS_NON_ALPHABETICAL_SUFFIX,
@@ -268,7 +261,8 @@ pub struct RivusLintPass<E: LintEnvironment> {
     should_emit_caps_report: bool,
     test_fn_names: HashSet<String>,
     banned_import_statements: HashSet<(rustc_span::StableSourceFileId, u32, String)>,
-    untested_functions: Option<BTreeSet<crate::artifacts::FunctionIdentity>>,
+    untested_functions:
+        Option<BTreeMap<crate::artifacts::FunctionIdentity, crate::artifacts::CoverageLabel>>,
     untested_functions_error: Option<String>,
     offline_emissions: Vec<crate::offline_caps::OfflineCapsEmission>,
     offline_emissions_error: Option<String>,
@@ -632,14 +626,11 @@ fn rvs_offline_caps_lint_S(
     use crate::offline_caps::OfflineCapsLint;
 
     match lint {
-        OfflineCapsLint::CallViolation => RVS_CALL_VIOLATION,
         OfflineCapsLint::ContractMismatch => RVS_CONTRACT_MISMATCH,
+        OfflineCapsLint::PortEffectViolation => RVS_PORT_EFFECT_VIOLATION,
         OfflineCapsLint::DuplicateSuffix => RVS_DUPLICATE_SUFFIX,
         OfflineCapsLint::IncompleteCapsKnowledge => RVS_INCOMPLETE_CAPS_KNOWLEDGE,
-        OfflineCapsLint::MissingMutable => RVS_MISSING_MUTABLE,
         OfflineCapsLint::MissingRvsPrefix => RVS_NON_RVS_FN,
-        OfflineCapsLint::MissingSideEffect => RVS_MISSING_SIDE_EFFECT,
-        OfflineCapsLint::MissingThreadLocal => RVS_MISSING_THREAD_LOCAL,
         OfflineCapsLint::NonAlphabeticalSuffix => RVS_NON_ALPHABETICAL_SUFFIX,
         OfflineCapsLint::NonSuffixCapInSuffix => RVS_NON_SUFFIX_CAP_IN_SUFFIX,
         OfflineCapsLint::StaticRef => RVS_STATIC_REF,
@@ -701,15 +692,10 @@ fn rvs_run_fn_checks_MS<'tcx>(
     let parsed_name = ParsedFunctionName::rvs_parse(name);
     let has_rvs_prefix = parsed_name.rvs_has_rvs_prefix();
     if has_rvs_prefix || subject.is_port_method {
-        let mut effective_caps = if has_rvs_prefix {
-            parsed_name.rvs_known_caps().clone()
-        } else {
-            CapabilitySet::rvs_new()
-        };
-        if subject.is_port_method {
-            effective_caps.rvs_insert_M(Capability::P);
-        }
-        // A/C/U are measured from the signature/body, never from the name.
+        // Semantic caps in direct mode are the signature/body facts plus
+        // the structural Port marker; the name suffix is a read-only view
+        // and contributes nothing. Propagated capabilities only appear in
+        // the offline engine, which owns call-edge closure.
         let facts = CapabilityFacts::rvs_from_signature(
             subject.sig,
             utils::rvs_has_mutable_params(subject.sig),
@@ -720,10 +706,13 @@ fn rvs_run_fn_checks_MS<'tcx>(
             subject.body_facts.has_static_mut_ref,
             subject.body_facts.has_thread_local_ref,
         );
-        effective_caps = CapabilityPolicy::rvs_report_caps(facts, effective_caps);
+        let mut effective_caps = CapabilityPolicy::rvs_signature_caps(facts);
+        if subject.is_port_method {
+            effective_caps.rvs_insert_M(Capability::P);
+        }
 
         let is_stub = stub_macro::rvs_check_fn_S(cx, subject.body_facts, subject.span);
-        empty_fn::rvs_check_fn_MS(cx, subject.body, subject.span, subject.has_body, is_stub);
+        empty_fn::rvs_check_fn_S(cx, subject.body, subject.span, subject.has_body, is_stub);
         if has_rvs_prefix {
             missing_allow::rvs_check_fn_S(
                 cx,
@@ -741,9 +730,9 @@ fn rvs_run_fn_checks_MS<'tcx>(
         error_swallow::rvs_check_fn_S(cx, subject.body_facts);
 
         if subject.has_body && !is_stub {
-            debug_assert::rvs_check_fn_MS(cx, subject.body, subject.body_facts);
+            debug_assert::rvs_check_fn_S(cx, subject.body, subject.body_facts);
             borrowed_param::rvs_check_fn_params_S(cx, subject.sig, subject.body.params);
-            consumed_arg::rvs_check_fn_MS(cx, subject.sig, subject.body.params, name);
+            consumed_arg::rvs_check_fn_S(cx, subject.sig, subject.body.params, name);
             validate::rvs_check_fn_S(cx, name, subject.sig, &effective_caps);
         }
 
@@ -840,7 +829,7 @@ fn rvs_check_item_BMS<'tcx>(
         } => {
             let name = ident.name.as_str();
             let body = cx.tcx.hir_body(*body);
-            let body_facts = body::rvs_collect_body_facts_M(cx, body, data.should_emit_lints);
+            let body_facts = body::rvs_collect_body_facts(cx, body, data.should_emit_lints);
             let attrs = cx.tcx.hir_attrs(item.hir_id());
             let is_test = utils::rvs_has_attr(attrs, "test") || test_fn_names.contains(name);
             let subject = FnSubject::rvs_body(
@@ -956,7 +945,7 @@ fn rvs_check_impl_item_BMS<'tcx>(
         // Port trait methods are checked (with P capability auto-assigned),
         // even though other trait impl methods are skipped.
         let should_check_fn = data.should_emit_lints && (!is_trait_impl || is_port_method);
-        let body_facts = body::rvs_collect_body_facts_M(cx, body, data.should_emit_lints);
+        let body_facts = body::rvs_collect_body_facts(cx, body, data.should_emit_lints);
         let subject = FnSubject::rvs_body(
             impl_item.ident,
             impl_item.hir_id(),
@@ -1013,7 +1002,7 @@ fn rvs_check_trait_item_BMS<'tcx>(
     match &trait_item.kind {
         TraitItemKind::Fn(sig, TraitFn::Provided(body_id)) => {
             let body = cx.tcx.hir_body(*body_id);
-            let body_facts = body::rvs_collect_body_facts_M(cx, body, data.should_emit_lints);
+            let body_facts = body::rvs_collect_body_facts(cx, body, data.should_emit_lints);
             let subject = FnSubject::rvs_body(
                 trait_item.ident,
                 trait_item.hir_id(),
@@ -1054,10 +1043,6 @@ fn rvs_check_trait_item_BMS<'tcx>(
                         parsed_name.rvs_raw_suffix().unwrap_or(""),
                     );
                 }
-                let mut effective_caps = parsed_name.rvs_known_caps().clone();
-                if is_port_trait {
-                    effective_caps.rvs_insert_M(Capability::P);
-                }
                 // A/C/U are measured from the signature/body, never from the
                 // name; required methods still have a signature to read.
                 let facts = CapabilityFacts::rvs_from_signature(
@@ -1065,7 +1050,10 @@ fn rvs_check_trait_item_BMS<'tcx>(
                     utils::rvs_has_mutable_params(sig),
                     is_port_trait,
                 );
-                effective_caps = CapabilityPolicy::rvs_report_caps(facts, effective_caps);
+                let mut effective_caps = CapabilityPolicy::rvs_signature_caps(facts);
+                if is_port_trait {
+                    effective_caps.rvs_insert_M(Capability::P);
+                }
                 validate::rvs_check_fn_S(cx, name, sig, &effective_caps);
                 missing_doc::rvs_check_fn_S(cx, name, trait_item.span, attrs, is_pub);
                 missing_safety_doc::rvs_check_fn_S(
@@ -1107,6 +1095,43 @@ fn rvs_check_trait_item_BMS<'tcx>(
 mod tests {
     use super::*;
     use crate::test_support::rvs_snapshot_BIS;
+
+    #[test]
+    fn test_20260819_offline_severity_matches_lint_level() {
+        // Error-severity offline diagnostics must map to Deny lints and
+        // warnings to Warn lints, so enforcement survives the rustc
+        // emission path without `-D warnings`.
+        let level_for = |lint: crate::offline_caps::OfflineCapsLint| {
+            let rustc_lint = rvs_offline_caps_lint_S(lint);
+            RIVUS_LINTS
+                .iter()
+                .zip(RIVUS_LINT_LEVELS.iter())
+                .find(|(candidate, _)| std::ptr::eq(**candidate, rustc_lint))
+                .map(|(_, level)| *level)
+                .expect("never: every offline lint maps to a declared rustc lint")
+        };
+        use crate::offline_caps::OfflineCapsLint;
+        use rustc_lint::Level;
+        for lint in [
+            OfflineCapsLint::ContractMismatch,
+            OfflineCapsLint::PortEffectViolation,
+            OfflineCapsLint::NonSuffixCapInSuffix,
+            OfflineCapsLint::StaticRef,
+        ] {
+            assert_eq!(level_for(lint), Level::Deny, "{lint:?} must be Deny");
+        }
+        for lint in [
+            OfflineCapsLint::MissingRvsPrefix,
+            OfflineCapsLint::DuplicateSuffix,
+            OfflineCapsLint::IncompleteCapsKnowledge,
+            OfflineCapsLint::NonAlphabeticalSuffix,
+            OfflineCapsLint::TraitImplOutlier,
+            OfflineCapsLint::UnknownCallee,
+            OfflineCapsLint::UnknownSuffixLetter,
+        ] {
+            assert_eq!(level_for(lint), Level::Warn, "{lint:?} must be Warn");
+        }
+    }
 
     #[test]
     fn test_20260716_missing_call_site_does_not_fall_back_to_function_span() {
