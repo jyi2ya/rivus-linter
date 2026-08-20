@@ -76,6 +76,21 @@ P 参与调用规则并向上传播：只要被调用方的完整能力包含 P�
 
 `Result` 和 `Option` 在类型系统中表达错误或缺失流程；返回、匹配或用 `?` 传播它们都不会增加能力字母。
 
+## 纯数据与对象
+
+结构体按字段可见性分类。**纯数据**是非空 struct 且每个字段至少 crate 可见（`pub` 或 `pub(crate)`）：字段访问和构造已是公开接口的一部分，行为应放入自由函数。
+
+- 纯数据类型的 inherent `&mut self` 方法是缺陷：要么改字段可见性把类型变成对象，要么用自由函数表达变换（`rvs_sort_inplace_M(list: &mut List)`）
+- 纯数据类型上仅返回/借用自身字段的方法是冗余访问器：调用者本来就能直接读字段，两套等价接口徒增维护面。删除访问器或隐藏字段
+- trait impl、关联函数（`Type::load_from` 构造 idiom）、私有字段的访问器不受影响
+- 零字段 struct（无状态对象）永不按纯数据处理，避免空集真值误报
+
+纯数据的字段可见性按**源码标注语法**判定：只有显式 `pub`、`pub(crate)` 或 `pub(in crate)` 算纯数据字段。`pub(self)`、`pub(super)`、`pub(in path)`（path 非 crate）即使解析后可见范围覆盖整个 crate，也按对象处理——ty 层 `Visibility` 会把它们与 `pub(crate)` 归一化，无法区分意图，因此判定读 HIR 的 `vis_span` 标注文本。隐式私有字段（无标注）永远属于对象。
+
+冗余访问器还要求字段可见性支配方法的 **effective visibility**（`field_vis.is_at_least(effective_method_vis)`）：effective visibility 把方法声明可见性与所在 struct、父模块链及 `pub use` re-export 取交集（`Level::Reexported`）。因此 `pub(crate)` 字段配（经 `pub mod` 或 `pub use` 可导出的）`pub` 方法是在为 crate 外调用者扩宽访问，不是冗余；而私有、未 re-export 模块里的 `pub` 方法有效可见性仍是模块内，访问器对其全部调用者冗余。
+
+receiver 分类覆盖显式写法：`self: &Self` 等价 `&self`，`self: &mut Self` 等价 `&mut self`；按值 `self`/`mut self` 是消费语义，不属于 `&mut self` 禁令。
+
 ## 处理流程
 
 1. rustc lint pass 从 HIR 收集函数签名、静态状态、源码位置和直接调用边

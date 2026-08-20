@@ -1,0 +1,126 @@
+error: method 'rvs_title' only returns field 'title' of pure-data struct 'Report', which is already visible to every caller — remove the accessor or make the field private
+  --> $DIR/tests/ui/434_data_struct_field_accessor.rs:9:5
+   |
+LL |     pub fn rvs_title(&self) -> &String {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-redundant-field-accessor` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_redundant_field_accessor)]`
+
+error: pub fn 'rvs_title' missing /// doc comment
+  --> $DIR/tests/ui/434_data_struct_field_accessor.rs:9:5
+   |
+LL | /     pub fn rvs_title(&self) -> &String {
+LL | |         &self.title
+LL | |     }
+   | |_____^
+   |
+   = note: `-D rivus::rvs-missing-doc` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_doc)]`
+
+error: pub fn 'rvs_line_count' missing /// doc comment
+  --> $DIR/tests/ui/434_data_struct_field_accessor.rs:13:5
+   |
+LL | /     pub fn rvs_line_count(&self) -> usize {
+LL | |         self.title.len()
+LL | |     }
+   | |_____^
+
+error: method 'rvs_body' only returns field 'body' of pure-data struct 'Note', which is already visible to every caller — remove the accessor or make the field private
+  --> $DIR/tests/ui/434_data_struct_field_accessor.rs:25:5
+   |
+LL |     pub(crate) fn rvs_body(&self) -> &String {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: method 'rvs_body_tail' only returns field 'body' of pure-data struct 'Note', which is already visible to every caller — remove the accessor or make the field private
+  --> $DIR/tests/ui/434_data_struct_field_accessor.rs:30:5
+   |
+LL |     pub(crate) fn rvs_body_tail(&self) -> &String {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: method 'rvs_body_explicit' only returns field 'body' of pure-data struct 'Note', which is already visible to every caller — remove the accessor or make the field private
+  --> $DIR/tests/ui/434_data_struct_field_accessor.rs:35:5
+   |
+LL |     pub(crate) fn rvs_body_explicit(self: &Self) -> &String {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: method 'rvs_value' only returns field 'value' of pure-data struct 'Inner', which is already visible to every caller — remove the accessor or make the field private
+  --> $DIR/tests/ui/434_data_struct_field_accessor.rs:50:9
+   |
+LL |         pub fn rvs_value(&self) -> u32 {
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: pub fn 'rvs_value' missing /// doc comment
+  --> $DIR/tests/ui/434_data_struct_field_accessor.rs:50:9
+   |
+LL | /         pub fn rvs_value(&self) -> u32 {
+LL | |             self.value
+LL | |         }
+   | |_________^
+
+error: method 'rvs_data' only returns field 'data' of pure-data struct 'Spaced', which is already visible to every caller — remove the accessor or make the field private
+  --> $DIR/tests/ui/434_data_struct_field_accessor.rs:65:5
+   |
+LL |     pub(crate) fn rvs_data(&self) -> u32 {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: good fn 'rvs_title' not called by any test
+  --> $DIR/tests/ui/434_data_struct_field_accessor.rs:9:5
+   |
+LL | /     pub fn rvs_title(&self) -> &String {
+LL | |         &self.title
+LL | |     }
+   | |_____^
+   |
+   = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
+
+error: good fn 'rvs_line_count' not called by any test
+  --> $DIR/tests/ui/434_data_struct_field_accessor.rs:13:5
+   |
+LL | /     pub fn rvs_line_count(&self) -> usize {
+LL | |         self.title.len()
+LL | |     }
+   | |_____^
+
+error: good fn 'rvs_body' not called by any test
+  --> $DIR/tests/ui/434_data_struct_field_accessor.rs:25:5
+   |
+LL | /     pub(crate) fn rvs_body(&self) -> &String {
+LL | |         return &self.body;
+LL | |     }
+   | |_____^
+
+error: good fn 'rvs_body_tail' not called by any test
+  --> $DIR/tests/ui/434_data_struct_field_accessor.rs:30:5
+   |
+LL | /     pub(crate) fn rvs_body_tail(&self) -> &String {
+LL | |         return &self.body
+LL | |     }
+   | |_____^
+
+error: good fn 'rvs_body_explicit' not called by any test
+  --> $DIR/tests/ui/434_data_struct_field_accessor.rs:35:5
+   |
+LL | /     pub(crate) fn rvs_body_explicit(self: &Self) -> &String {
+LL | |         &self.body
+LL | |     }
+   | |_____^
+
+error: good fn 'rvs_value' not called by any test
+  --> $DIR/tests/ui/434_data_struct_field_accessor.rs:50:9
+   |
+LL | /         pub fn rvs_value(&self) -> u32 {
+LL | |             self.value
+LL | |         }
+   | |_________^
+
+error: good fn 'rvs_data' not called by any test
+  --> $DIR/tests/ui/434_data_struct_field_accessor.rs:65:5
+   |
+LL | /     pub(crate) fn rvs_data(&self) -> u32 {
+LL | |         self.data
+LL | |     }
+   | |_____^
+
+error: aborting due to 16 previous errors

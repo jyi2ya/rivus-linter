@@ -1,0 +1,12 @@
+"pub"=true
+"pub(crate)"=true
+"pub(in crate)"=true
+"pub (crate)"=true
+"pub(\n    crate\n)"=true
+"pub(in /* crate root */ crate)"=true
+"  pub  "=true
+"pub(self)"=false
+"pub(super)"=false
+"pub(in crate::inner)"=false
+""=false
+"pub(in"=false

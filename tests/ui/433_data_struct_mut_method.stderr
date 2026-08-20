@@ -1,0 +1,73 @@
+error: Point is pure data (all fields visible); &mut self method 'rvs_shift_M' — mutate via free functions or hide the fields
+  --> $DIR/tests/ui/433_data_struct_mut_method.rs:10:5
+   |
+LL |     pub fn rvs_shift_M(&mut self, dx: i32, dy: i32) {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D rivus::rvs-data-struct-mut-method` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_data_struct_mut_method)]`
+
+error: param 'dx' missing debug_assert!
+  --> $DIR/tests/ui/433_data_struct_mut_method.rs:10:35
+   |
+LL |     pub fn rvs_shift_M(&mut self, dx: i32, dy: i32) {
+   |                                   ^^
+   |
+   = note: `-D rivus::rvs-missing-debug-assert` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_debug_assert)]`
+
+error: param 'dy' missing debug_assert!
+  --> $DIR/tests/ui/433_data_struct_mut_method.rs:10:44
+   |
+LL |     pub fn rvs_shift_M(&mut self, dx: i32, dy: i32) {
+   |                                            ^^
+
+error: pub fn 'rvs_shift_M' missing /// doc comment
+  --> $DIR/tests/ui/433_data_struct_mut_method.rs:10:5
+   |
+LL | /     pub fn rvs_shift_M(&mut self, dx: i32, dy: i32) {
+LL | |         self.x += dx;
+LL | |         self.y += dy;
+LL | |     }
+   | |_____^
+   |
+   = note: `-D rivus::rvs-missing-doc` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_missing_doc)]`
+
+error: Point is pure data (all fields visible); &mut self method 'rvs_reset_M' — mutate via free functions or hide the fields
+  --> $DIR/tests/ui/433_data_struct_mut_method.rs:16:5
+   |
+LL |     pub fn rvs_reset_M(self: &mut Self) {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: pub fn 'rvs_reset_M' missing /// doc comment
+  --> $DIR/tests/ui/433_data_struct_mut_method.rs:16:5
+   |
+LL | /     pub fn rvs_reset_M(self: &mut Self) {
+LL | |         self.x = 0;
+LL | |         self.y = 0;
+LL | |     }
+   | |_____^
+
+error: good fn 'rvs_shift_M' not called by any test
+  --> $DIR/tests/ui/433_data_struct_mut_method.rs:10:5
+   |
+LL | /     pub fn rvs_shift_M(&mut self, dx: i32, dy: i32) {
+LL | |         self.x += dx;
+LL | |         self.y += dy;
+LL | |     }
+   | |_____^
+   |
+   = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
+
+error: good fn 'rvs_reset_M' not called by any test
+  --> $DIR/tests/ui/433_data_struct_mut_method.rs:16:5
+   |
+LL | /     pub fn rvs_reset_M(self: &mut Self) {
+LL | |         self.x = 0;
+LL | |         self.y = 0;
+LL | |     }
+   | |_____^
+
+error: aborting due to 8 previous errors

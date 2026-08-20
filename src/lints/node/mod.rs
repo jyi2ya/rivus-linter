@@ -2,6 +2,7 @@ pub(crate) mod banned_import;
 pub(crate) mod borrowed_param;
 pub(crate) mod catch_all_error;
 pub(crate) mod consumed_arg;
+pub(crate) mod data_struct;
 pub(crate) mod dead_code;
 pub(crate) mod deny_warnings;
 pub(crate) mod deref_polymorphism;

@@ -34,9 +34,9 @@ use body::{catch_unwind, debug_assert, empty_fn, error_swallow, reflection, spaw
 use caps::callgraph;
 use ctx::{FnCheckData, FnSubject};
 use node::{
-    banned_import, borrowed_param, catch_all_error, consumed_arg, dead_code, deny_warnings,
-    deref_polymorphism, implicit_execution, missing_allow, missing_debug_derive, missing_doc,
-    missing_safety_doc, port_traits, test_name_format, todo_comment, validate,
+    banned_import, borrowed_param, catch_all_error, consumed_arg, data_struct, dead_code,
+    deny_warnings, deref_polymorphism, implicit_execution, missing_allow, missing_debug_derive,
+    missing_doc, missing_safety_doc, port_traits, test_name_format, todo_comment, validate,
 };
 
 // ─── Lint declarations ───────────────────────────────────────────────────
@@ -224,6 +224,16 @@ rvs_declare_lints!(
         RVS_UNSUPPORTED_IMPLICIT_EXECUTION,
         Deny,
         "implicit or opaque execution cannot be represented in the Rivus callgraph"
+    ),
+    (
+        RVS_DATA_STRUCT_MUT_METHOD,
+        Warn,
+        "&mut self method on a struct whose fields are all externally visible; it is pure data — use free functions or hide the fields"
+    ),
+    (
+        RVS_REDUNDANT_FIELD_ACCESSOR,
+        Warn,
+        "method only returning/borrowing a field that is already visible to every caller of the method"
     ),
 );
 
@@ -922,19 +932,23 @@ fn rvs_check_impl_item_BMS<'tcx>(
     if let rustc_hir::ImplItemKind::Fn(sig, body_id) = &impl_item.kind {
         let parent = cx.tcx.hir_get_parent_item(impl_item.hir_id());
         let parent_node = cx.tcx.hir_owner_node(parent);
+        let mut parent_impl = None;
         let (is_trait_impl, is_port_method) = match parent_node {
             rustc_hir::OwnerNode::Item(Item {
                 kind: ItemKind::Impl(imp),
                 ..
-            }) => match &imp.of_trait {
-                Some(trait_ref) => (
-                    true,
-                    trait_ref.trait_ref.trait_def_id().is_some_and(|trait_did| {
-                        port_traits::rvs_is_local_world_port_trait_S(cx, trait_did)
-                    }),
-                ),
-                None => (false, false),
-            },
+            }) => {
+                parent_impl = Some(imp);
+                match &imp.of_trait {
+                    Some(trait_ref) => (
+                        true,
+                        trait_ref.trait_ref.trait_def_id().is_some_and(|trait_did| {
+                            port_traits::rvs_is_local_world_port_trait_S(cx, trait_did)
+                        }),
+                    ),
+                    None => (false, false),
+                }
+            }
             _ => (false, false),
         };
         let name = impl_item.ident.name.as_str();
@@ -946,6 +960,24 @@ fn rvs_check_impl_item_BMS<'tcx>(
         // even though other trait impl methods are skipped.
         let should_check_fn = data.should_emit_lints && (!is_trait_impl || is_port_method);
         let body_facts = body::rvs_collect_body_facts(cx, body, data.should_emit_lints);
+        if data.should_emit_lints
+            && !is_trait_impl
+            && let Some(imp) = parent_impl
+            && let rustc_hir::OwnerNode::Item(parent_item) = parent_node
+            && let Some(adt_def_id) = data_struct::rvs_inherent_struct_def_id(cx, parent_item, imp)
+            && data_struct::rvs_is_public_fields_data_S(cx, adt_def_id)
+        {
+            let struct_name = cx.tcx.item_name(adt_def_id);
+            data_struct::rvs_check_data_method_S(
+                cx,
+                sig,
+                body,
+                impl_item.owner_id.def_id.to_def_id(),
+                struct_name.as_str(),
+                name,
+                adt_def_id,
+            );
+        }
         let subject = FnSubject::rvs_body(
             impl_item.ident,
             impl_item.hir_id(),
