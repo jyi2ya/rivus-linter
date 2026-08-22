@@ -160,11 +160,11 @@ impl<'tcx> TypeVisitor<TyCtxt<'tcx>> for ImplNominalIdentityVisitor<'tcx> {
     }
 }
 
-pub(crate) fn rvs_is_spawn_S(path: &str) -> bool {
+pub(crate) fn rvs_is_spawn(path: &str) -> bool {
     SPAWN_FUNCTIONS.iter().any(|sf| *sf == path)
 }
 
-pub(crate) fn rvs_is_reflection_S(path: &str) -> bool {
+pub(crate) fn rvs_is_reflection(path: &str) -> bool {
     REFLECTION_PATHS.iter().any(|rp| *rp == path)
 }
 
@@ -705,7 +705,7 @@ pub(crate) struct CallObservation {
     pub body_owner: LocalDefId,
 }
 
-pub(crate) fn rvs_resolve_call(cx: &LateContext<'_>, expr: &Expr<'_>) -> Option<CallObservation> {
+pub(crate) fn rvs_resolve_call_B(cx: &LateContext<'_>, expr: &Expr<'_>) -> Option<CallObservation> {
     match &expr.kind {
         ExprKind::Call(func, _) => {
             let mut callee = *func;
@@ -759,7 +759,7 @@ pub(crate) fn rvs_resolve_call(cx: &LateContext<'_>, expr: &Expr<'_>) -> Option<
                     });
                 }
                 rustc_hir::def::Res::Def(def_kind, def_id) => CallTarget::Resolved {
-                    def_path: DefPath::rvs_new(rvs_def_path(cx, def_id)),
+                    def_path: DefPath::rvs_new(rvs_def_path_B(cx, def_id)),
                     def_kind,
                     crate_id: cx.tcx.stable_crate_id(def_id.krate).as_u64(),
                 },
@@ -806,7 +806,7 @@ pub(crate) fn rvs_resolve_call(cx: &LateContext<'_>, expr: &Expr<'_>) -> Option<
             }
             let resolved = resolved_def_id.map(|def_id| {
                 (
-                    DefPath::rvs_new(rvs_def_path(cx, def_id)),
+                    DefPath::rvs_new(rvs_def_path_B(cx, def_id)),
                     cx.tcx.def_kind(def_id),
                     cx.tcx.stable_crate_id(def_id.krate).as_u64(),
                 )
@@ -882,17 +882,17 @@ pub(crate) fn rvs_tys(t: &rustc_hir::Ty<'_>) -> String {
     }
 }
 
-pub(crate) fn rvs_def_path(cx: &LateContext<'_>, did: DefId) -> String {
+pub(crate) fn rvs_def_path_B(cx: &LateContext<'_>, did: DefId) -> String {
     let tcx = cx.tcx;
     let dp = tcx.def_path(did);
     let impl_def_id = rvs_enclosing_impl_def_id(cx, did);
-    let impl_ty = impl_def_id.and_then(|impl_def_id| rvs_impl_type_identity(cx, impl_def_id));
+    let impl_ty = impl_def_id.and_then(|impl_def_id| rvs_impl_type_identity_B(cx, impl_def_id));
     let is_sourceless = tcx.def_span(did).is_dummy();
     let definition_marker = cx
         .tcx
         .opt_associated_item(did)
         .is_none()
-        .then(|| rvs_definition_identity(cx, did))
+        .then(|| rvs_definition_identity_B(cx, did))
         .flatten()
         .map(|identity| rvs_encode_identity_marker(&identity));
 
@@ -953,7 +953,7 @@ pub(crate) fn rvs_def_path(cx: &LateContext<'_>, did: DefId) -> String {
             if let rustc_hir::def::DefKind::Impl { of_trait: true } = cx.tcx.def_kind(impl_def_id) {
                 let trait_ref = cx.tcx.impl_trait_ref(impl_def_id);
                 let trait_def_id = trait_ref.skip_binder().def_id;
-                let trait_path = rvs_def_path(cx, trait_def_id);
+                let trait_path = rvs_def_path_B(cx, trait_def_id);
                 path.push('@');
                 path.push_str(&trait_path);
             }
@@ -963,10 +963,10 @@ pub(crate) fn rvs_def_path(cx: &LateContext<'_>, did: DefId) -> String {
     path
 }
 
-fn rvs_definition_identity(cx: &LateContext<'_>, did: DefId) -> Option<String> {
+fn rvs_definition_identity_B(cx: &LateContext<'_>, did: DefId) -> Option<String> {
     let definition_span = cx.tcx.def_span(did);
     if definition_span.from_expansion() {
-        return rvs_generated_definition_identity(cx, did);
+        return rvs_generated_definition_identity_B(cx, did);
     }
     if !rvs_is_body_nested_definition(cx, did) {
         return None;
@@ -993,16 +993,16 @@ fn rvs_is_body_nested_definition(cx: &LateContext<'_>, did: DefId) -> bool {
     )
 }
 
-fn rvs_generated_definition_identity(cx: &LateContext<'_>, did: DefId) -> Option<String> {
-    let mut identity = rvs_generated_definition_base_identity(cx, did)?;
-    if let Some(ordinal) = rvs_generated_definition_repetition_ordinal(cx, did, &identity) {
+fn rvs_generated_definition_identity_B(cx: &LateContext<'_>, did: DefId) -> Option<String> {
+    let mut identity = rvs_generated_definition_base_identity_B(cx, did)?;
+    if let Some(ordinal) = rvs_generated_definition_repetition_ordinal_B(cx, did, &identity) {
         identity.push_str("|same-source-ordinal=");
         identity.push_str(&ordinal.to_string());
     }
     Some(identity)
 }
 
-fn rvs_generated_definition_base_identity(cx: &LateContext<'_>, did: DefId) -> Option<String> {
+fn rvs_generated_definition_base_identity_B(cx: &LateContext<'_>, did: DefId) -> Option<String> {
     let definition_span = cx.tcx.def_span(did);
     if !definition_span.from_expansion() {
         return None;
@@ -1042,7 +1042,7 @@ fn rvs_generated_definition_base_identity(cx: &LateContext<'_>, did: DefId) -> O
     (!identity.is_empty()).then(|| identity.join("|"))
 }
 
-fn rvs_generated_definition_repetition_ordinal(
+fn rvs_generated_definition_repetition_ordinal_B(
     cx: &LateContext<'_>,
     did: DefId,
     base_identity: &str,
@@ -1058,7 +1058,7 @@ fn rvs_generated_definition_repetition_ordinal(
     for owner in cx.tcx.hir_crate_items(()).owners() {
         let candidate = owner.def_id.to_def_id();
         if cx.tcx.def_kind(candidate) != definition_kind
-            || rvs_generated_definition_base_identity(cx, candidate).as_deref()
+            || rvs_generated_definition_base_identity_B(cx, candidate).as_deref()
                 != Some(base_identity)
         {
             continue;
@@ -1146,7 +1146,7 @@ fn rvs_predicate_nominal_crate_identities<'tcx>(
     visitor.rvs_finish()
 }
 
-fn rvs_impl_type_identity(cx: &LateContext<'_>, impl_def_id: DefId) -> Option<ImplTypeIdentity> {
+fn rvs_impl_type_identity_B(cx: &LateContext<'_>, impl_def_id: DefId) -> Option<ImplTypeIdentity> {
     let self_ty = cx.tcx.type_of(impl_def_id).skip_binder();
     let self_type_text = rustc_middle::ty::print::with_resolve_crate_name!(
         rustc_middle::ty::print::with_no_visible_paths!(
@@ -1157,9 +1157,9 @@ fn rvs_impl_type_identity(cx: &LateContext<'_>, impl_def_id: DefId) -> Option<Im
         rvs_type_nominal_crate_identities(cx, impl_def_id.krate, self_ty);
     let (readable_path, is_nominal_path, generated_self_type_identity) = match self_ty.kind() {
         rustc_middle::ty::TyKind::Adt(adt_def, _) => (
-            rvs_def_path(cx, adt_def.did()),
+            rvs_def_path_B(cx, adt_def.did()),
             true,
-            rvs_generated_definition_identity(cx, adt_def.did()),
+            rvs_generated_definition_identity_B(cx, adt_def.did()),
         ),
         _ => (
             self_type_text.rsplit("::").next().map(str::to_string)?,
@@ -1201,7 +1201,7 @@ fn rvs_impl_type_identity(cx: &LateContext<'_>, impl_def_id: DefId) -> Option<Im
         } else {
             None
         };
-    let generated_impl_identity = rvs_generated_definition_identity(cx, impl_def_id);
+    let generated_impl_identity = rvs_generated_definition_identity_B(cx, impl_def_id);
     let generated_definition_identity = generated_impl_identity.or(generated_self_type_identity);
     let marker = rvs_impl_identity_marker(
         &self_type_text,
@@ -1375,14 +1375,14 @@ mod tests {
         ];
         let output = cases
             .iter()
-            .map(|(path, _)| format!("{path}={}", rvs_is_spawn_S(path)))
+            .map(|(path, _)| format!("{path}={}", rvs_is_spawn(path)))
             .collect::<Vec<_>>()
             .join("\n")
             + "\n";
         rvs_snapshot_BIS("test_20260714_spawn_paths_include_kovi_wrapper", &output);
 
         for (path, expected) in cases {
-            assert_eq!(rvs_is_spawn_S(path), expected, "{path}");
+            assert_eq!(rvs_is_spawn(path), expected, "{path}");
         }
     }
 
@@ -1558,8 +1558,8 @@ mod tests {
             rvs_root_body_expr,
             rvs_qp,
             rvs_tys,
-            rvs_def_path,
-            rvs_resolve_call,
+            rvs_def_path_B,
+            rvs_resolve_call_B,
             rvs_is_sysroot_crate_id,
         ));
     }

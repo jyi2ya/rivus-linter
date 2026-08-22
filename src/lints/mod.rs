@@ -56,16 +56,6 @@ macro_rules! rvs_declare_lints {
 }
 
 rvs_declare_lints!(
-    (
-        RVS_PORT_EFFECT_VIOLATION,
-        Deny,
-        "World Port implementation executes an unvoted effect"
-    ),
-    (
-        RVS_STATIC_REF,
-        Deny,
-        "static/thread_local reference without capability"
-    ),
     (RVS_STUB_MACRO, Deny, "todo!/unimplemented!() stub"),
     (RVS_EMPTY_FN, Deny, "empty function body"),
     (
@@ -463,7 +453,7 @@ impl<'tcx, E: LintEnvironment> LateLintPass<'tcx> for RivusLintPass<E> {
                 caps,
                 &local_crate_names,
             );
-            rvs_emit_offline_caps_diagnostics_MPS::<E>(
+            rvs_emit_offline_caps_diagnostics_MP::<E>(
                 cx,
                 &report,
                 &self.callgraph,
@@ -565,7 +555,7 @@ impl<'tcx, E: LintEnvironment> LateLintPass<'tcx> for RivusLintPass<E> {
 
 // ─── Dispatch functions ──────────────────────────────────────────────────
 
-fn rvs_emit_offline_caps_diagnostics_MPS<E: LintEnvironment>(
+fn rvs_emit_offline_caps_diagnostics_MP<E: LintEnvironment>(
     cx: &LateContext<'_>,
     report: &crate::offline_caps::OfflineCapsReport,
     graph: &FnGraph,
@@ -609,7 +599,7 @@ fn rvs_emit_offline_caps_emissions_MPS<E: LintEnvironment>(
             msg::rvs_emit_node_span_lint_S(cx, lint, hir_id, span, emission.message.clone());
             if acknowledge
                 && let Err(error) =
-                    E::rvs_acknowledge_offline_emission_BIMPS(world, emission_index, anchor_index)
+                    E::rvs_acknowledge_offline_emission_P(world, emission_index, anchor_index)
             {
                 cx.tcx.dcx().err(error);
             }
@@ -637,13 +627,11 @@ fn rvs_offline_caps_lint_S(
 
     match lint {
         OfflineCapsLint::ContractMismatch => RVS_CONTRACT_MISMATCH,
-        OfflineCapsLint::PortEffectViolation => RVS_PORT_EFFECT_VIOLATION,
         OfflineCapsLint::DuplicateSuffix => RVS_DUPLICATE_SUFFIX,
         OfflineCapsLint::IncompleteCapsKnowledge => RVS_INCOMPLETE_CAPS_KNOWLEDGE,
         OfflineCapsLint::MissingRvsPrefix => RVS_NON_RVS_FN,
         OfflineCapsLint::NonAlphabeticalSuffix => RVS_NON_ALPHABETICAL_SUFFIX,
         OfflineCapsLint::NonSuffixCapInSuffix => RVS_NON_SUFFIX_CAP_IN_SUFFIX,
-        OfflineCapsLint::StaticRef => RVS_STATIC_REF,
         OfflineCapsLint::TraitImplOutlier => RVS_TRAIT_IMPL_OUTLIER,
         OfflineCapsLint::UnknownCallee => RVS_UNKNOWN_CALLEE,
         OfflineCapsLint::UnknownSuffixLetter => RVS_UNKNOWN_SUFFIX_LETTER,
@@ -692,7 +680,7 @@ fn rvs_check_unsupported_implicit_execution_S(cx: &LateContext<'_>, facts: &body
 
 /// Dispatches to fn-level checks for free functions, inherent impl methods,
 /// and trait impl methods.
-fn rvs_run_fn_checks_MS<'tcx>(
+fn rvs_run_fn_checks_BMS<'tcx>(
     cx: &LateContext<'tcx>,
     subject: &FnSubject<'_, 'tcx>,
     data: &mut FnCheckData<'_>,
@@ -767,7 +755,7 @@ fn rvs_run_fn_checks_MS<'tcx>(
                         .tcx
                         .stable_crate_id(subject.hir_id.owner.def_id.to_def_id().krate)
                         .as_u64(),
-                    def_path: DefPath::rvs_new(utils::rvs_def_path(
+                    def_path: DefPath::rvs_new(utils::rvs_def_path_B(
                         cx,
                         subject.hir_id.owner.def_id.to_def_id(),
                     )),
@@ -791,7 +779,7 @@ fn rvs_run_body_fn_pipeline_BMS<'tcx, F>(
     F: FnOnce(),
 {
     if should_check_fn {
-        rvs_run_fn_checks_MS(cx, subject, data);
+        rvs_run_fn_checks_BMS(cx, subject, data);
         todo_comment::rvs_check_fn_S(cx, subject.span);
         after_checks();
     }
@@ -839,7 +827,7 @@ fn rvs_check_item_BMS<'tcx>(
         } => {
             let name = ident.name.as_str();
             let body = cx.tcx.hir_body(*body);
-            let body_facts = body::rvs_collect_body_facts(cx, body, data.should_emit_lints);
+            let body_facts = body::rvs_collect_body_facts_B(cx, body, data.should_emit_lints);
             let attrs = cx.tcx.hir_attrs(item.hir_id());
             let is_test = utils::rvs_has_attr(attrs, "test") || test_fn_names.contains(name);
             let subject = FnSubject::rvs_body(
@@ -855,7 +843,7 @@ fn rvs_check_item_BMS<'tcx>(
                 false,
             );
             rvs_run_body_fn_pipeline_BMS(cx, &subject, data, data.should_emit_lints, || {
-                ctx::rvs_record_test_site_MS(
+                ctx::rvs_record_test_site_M(
                     is_test,
                     name,
                     item.hir_id(),
@@ -877,7 +865,7 @@ fn rvs_check_item_BMS<'tcx>(
         }
         ItemKind::Use(path, use_kind) => {
             if data.should_emit_lints {
-                banned_import::rvs_check_item_MS(
+                banned_import::rvs_check_item_BMS(
                     cx,
                     item,
                     path,
@@ -943,7 +931,7 @@ fn rvs_check_impl_item_BMS<'tcx>(
                     Some(trait_ref) => (
                         true,
                         trait_ref.trait_ref.trait_def_id().is_some_and(|trait_did| {
-                            port_traits::rvs_is_local_world_port_trait_S(cx, trait_did)
+                            port_traits::rvs_is_local_world_port_trait(cx, trait_did)
                         }),
                     ),
                     None => (false, false),
@@ -959,13 +947,13 @@ fn rvs_check_impl_item_BMS<'tcx>(
         // Port trait methods are checked (with P capability auto-assigned),
         // even though other trait impl methods are skipped.
         let should_check_fn = data.should_emit_lints && (!is_trait_impl || is_port_method);
-        let body_facts = body::rvs_collect_body_facts(cx, body, data.should_emit_lints);
+        let body_facts = body::rvs_collect_body_facts_B(cx, body, data.should_emit_lints);
         if data.should_emit_lints
             && !is_trait_impl
             && let Some(imp) = parent_impl
             && let rustc_hir::OwnerNode::Item(parent_item) = parent_node
             && let Some(adt_def_id) = data_struct::rvs_inherent_struct_def_id(cx, parent_item, imp)
-            && data_struct::rvs_is_public_fields_data_S(cx, adt_def_id)
+            && data_struct::rvs_is_public_fields_data(cx, adt_def_id)
         {
             let struct_name = cx.tcx.item_name(adt_def_id);
             data_struct::rvs_check_data_method_S(
@@ -991,7 +979,7 @@ fn rvs_check_impl_item_BMS<'tcx>(
             is_port_method,
         );
         rvs_run_body_fn_pipeline_BMS(cx, &subject, data, should_check_fn, || {
-            ctx::rvs_record_test_site_MS(
+            ctx::rvs_record_test_site_M(
                 is_test,
                 name,
                 impl_item.hir_id(),
@@ -1027,14 +1015,14 @@ fn rvs_check_trait_item_BMS<'tcx>(
     // Determine if this trait item belongs to a Port trait.
     let parent = cx.tcx.hir_get_parent_item(trait_item.hir_id());
     let parent_def_id = parent.def_id.to_def_id();
-    let is_port_trait = port_traits::rvs_is_local_world_port_trait_S(cx, parent_def_id);
+    let is_port_trait = port_traits::rvs_is_local_world_port_trait(cx, parent_def_id);
     let is_pub = cx.tcx.visibility(parent_def_id).is_public();
     let attrs = cx.tcx.hir_attrs(trait_item.hir_id());
 
     match &trait_item.kind {
         TraitItemKind::Fn(sig, TraitFn::Provided(body_id)) => {
             let body = cx.tcx.hir_body(*body_id);
-            let body_facts = body::rvs_collect_body_facts(cx, body, data.should_emit_lints);
+            let body_facts = body::rvs_collect_body_facts_B(cx, body, data.should_emit_lints);
             let subject = FnSubject::rvs_body(
                 trait_item.ident,
                 trait_item.hir_id(),
@@ -1146,9 +1134,7 @@ mod tests {
         use rustc_lint::Level;
         for lint in [
             OfflineCapsLint::ContractMismatch,
-            OfflineCapsLint::PortEffectViolation,
             OfflineCapsLint::NonSuffixCapInSuffix,
-            OfflineCapsLint::StaticRef,
         ] {
             assert_eq!(level_for(lint), Level::Deny, "{lint:?} must be Deny");
         }

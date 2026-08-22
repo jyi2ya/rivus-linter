@@ -582,10 +582,10 @@ mod tests {
             ("std::env::var", Some("BS")),
             ("std::env::set_var", Some("BSTU")),
             ("std::env::remove_var", Some("BSTU")),
-            ("libc::unix::mkdir", Some("BI")),
-            ("libc::unix::rename", Some("BI")),
-            ("libc::unix::rmdir", Some("BI")),
-            ("libc::unix::unlink", Some("BI")),
+            ("libc::unix::mkdir", Some("BIS")),
+            ("libc::unix::rename", Some("BIS")),
+            ("libc::unix::rmdir", Some("BIS")),
+            ("libc::unix::unlink", Some("BIS")),
         ];
         let output = cases
             .into_iter()

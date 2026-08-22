@@ -22,7 +22,7 @@ pub(crate) struct TestSite {
 
 /// Shared test-site accounting for free-fn and impl-item handlers:
 /// registers the site by name and harvests direct `rvs_` calls from the body.
-pub(crate) fn rvs_record_test_site_MS(
+pub(crate) fn rvs_record_test_site_M(
     is_test: bool,
     name: &str,
     hir_id: HirId,

@@ -11,9 +11,9 @@ use crate::capability::{
 use crate::capsmap::CapsMap;
 use crate::function_classification::{FunctionClassification, LocalScope};
 use crate::inference::{
-    CallContractMismatch, CallContractMismatchKind, CalleeCapsResolver, FnContractDiff,
-    FnContractMismatchKind, PreparedLocalAnalysis, TraitImplOutlier,
-    rvs_collect_call_contract_mismatch, rvs_contract_diff_for_expected_caps,
+    CallContractMismatchKind, CalleeCapsResolver, FnContractDiff, FnContractMismatchKind,
+    PreparedLocalAnalysis, TraitImplOutlier, rvs_collect_call_contract_mismatch,
+    rvs_contract_diff_for_expected_caps,
 };
 use crate::symbols::{CrateName, DefPath, FnName};
 
@@ -26,12 +26,10 @@ pub(crate) enum OfflineCapsSeverity {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum OfflineCapsKind {
     Contract(FnContractMismatchKind),
-    PortEffectViolation,
     DuplicateSuffix,
     IncompleteCapsKnowledge,
     NonAlphabeticalSuffix,
     NonSuffixCapInSuffix,
-    StaticRefRequiresCaps,
     TraitImplOutlier,
     UnknownCallee,
     UnknownSuffixLetter,
@@ -41,12 +39,10 @@ impl OfflineCapsKind {
     pub(crate) const fn rvs_as_str(self) -> &'static str {
         match self {
             Self::Contract(kind) => kind.rvs_as_str(),
-            Self::PortEffectViolation => "port_effect_violation",
             Self::DuplicateSuffix => "duplicate_suffix",
             Self::IncompleteCapsKnowledge => "incomplete_caps_knowledge",
             Self::NonAlphabeticalSuffix => "non_alphabetical_suffix",
             Self::NonSuffixCapInSuffix => "non_suffix_cap_in_suffix",
-            Self::StaticRefRequiresCaps => "static_ref_requires_caps",
             Self::TraitImplOutlier => "trait_impl_outlier",
             Self::UnknownCallee => "unknown_callee",
             Self::UnknownSuffixLetter => "unknown_suffix_letter",
@@ -58,13 +54,11 @@ impl OfflineCapsKind {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum OfflineCapsLint {
     ContractMismatch,
-    PortEffectViolation,
     DuplicateSuffix,
     IncompleteCapsKnowledge,
     MissingRvsPrefix,
     NonAlphabeticalSuffix,
     NonSuffixCapInSuffix,
-    StaticRef,
     TraitImplOutlier,
     UnknownCallee,
     UnknownSuffixLetter,
@@ -291,7 +285,6 @@ pub(crate) fn rvs_emission_ack_name(emission_index: usize, anchor_index: usize) 
 
 const fn rvs_lint_for_kind(kind: OfflineCapsKind) -> OfflineCapsLint {
     match kind {
-        OfflineCapsKind::PortEffectViolation => OfflineCapsLint::PortEffectViolation,
         // Capability-letter contract kinds carry error-level enforcement
         // under one Deny lint; the specific kind stays visible in the
         // message and the offline report's diagnostic code. The missing
@@ -305,7 +298,6 @@ const fn rvs_lint_for_kind(kind: OfflineCapsKind) -> OfflineCapsLint {
         OfflineCapsKind::IncompleteCapsKnowledge => OfflineCapsLint::IncompleteCapsKnowledge,
         OfflineCapsKind::NonAlphabeticalSuffix => OfflineCapsLint::NonAlphabeticalSuffix,
         OfflineCapsKind::NonSuffixCapInSuffix => OfflineCapsLint::NonSuffixCapInSuffix,
-        OfflineCapsKind::StaticRefRequiresCaps => OfflineCapsLint::StaticRef,
         OfflineCapsKind::TraitImplOutlier => OfflineCapsLint::TraitImplOutlier,
         OfflineCapsKind::UnknownCallee => OfflineCapsLint::UnknownCallee,
         OfflineCapsKind::UnknownSuffixLetter => OfflineCapsLint::UnknownSuffixLetter,
@@ -421,26 +413,17 @@ struct TargetAnalysisIndex<'a> {
 
 impl<'a> TargetAnalysisIndex<'a> {
     fn rvs_build(graph: &'a FnGraph, local_scope: &LocalScope) -> Self {
-        let local_port_operations: BTreeSet<DefPath> = graph
-            .rvs_iter()
-            .filter(|(def_path, node)| {
-                local_scope.rvs_contains_target(def_path, node.crate_provenance)
-                    && node.facts.is_port_method
-            })
-            .map(|(def_path, _)| def_path.clone())
-            .collect();
+        // Shared aggregation: the same Port membership the inference and
+        // report views compute (declaration facts plus implementations of
+        // Port declarations via the trait-method identity).
+        let local_port_operations =
+            crate::inference::rvs_scoped_port_methods_with_scope(graph, local_scope);
         let mut nodes = Vec::new();
         let mut identities = HashMap::new();
         let mut nodes_by_path: HashMap<&DefPath, Vec<NodeId>> = HashMap::new();
         for (def_path, node) in graph.rvs_iter() {
             let node_id = NodeId(nodes.len());
-            let is_local_port = (local_scope.rvs_contains_target(def_path, node.crate_provenance)
-                && node.facts.is_port_method)
-                || def_path
-                    .rvs_trait_method_identity()
-                    .is_some_and(|identity| {
-                        local_port_operations.contains(&identity.rvs_trait_method_path())
-                    });
+            let is_local_port = local_port_operations.contains(def_path);
             identities.insert(
                 BorrowedFunctionIdentity {
                     crate_id: node.crate_id,
@@ -591,6 +574,7 @@ impl<'a> TargetAnalysisIndex<'a> {
 struct NodeInference {
     caps: Vec<CapabilitySet>,
     incomplete: Vec<bool>,
+    incomplete_roots: Vec<bool>,
 }
 
 impl NodeInference {
@@ -613,7 +597,16 @@ impl NodeInference {
             .iter()
             .map(|record| Self::rvs_is_incomplete_for_node(record, index, prepared))
             .collect();
-        NodeInference { caps, incomplete }
+        let incomplete_roots = index
+            .nodes
+            .iter()
+            .map(|record| Self::rvs_is_incomplete_root_for_node(record, index, prepared))
+            .collect();
+        NodeInference {
+            caps,
+            incomplete,
+            incomplete_roots,
+        }
     }
 
     fn rvs_caps_for_node(
@@ -661,12 +654,37 @@ impl NodeInference {
         incomplete_paths.contains(record.def_path)
     }
 
+    fn rvs_is_incomplete_root_for_node(
+        record: &IndexedNode<'_>,
+        index: &TargetAnalysisIndex<'_>,
+        prepared: &PreparedLocalAnalysis,
+    ) -> bool {
+        let incomplete_roots = prepared.rvs_incomplete_roots();
+        if record.is_local_port
+            && let Some(&node_id) = index.identities.get(&BorrowedFunctionIdentity {
+                crate_id: record.node.crate_id,
+                def_path: record.def_path,
+            })
+            && let Some(contract_id) = index.rvs_port_operation_target(node_id)
+        {
+            let contract_path = index.rvs_target(contract_id).def_path;
+            if incomplete_roots.contains(contract_path) {
+                return true;
+            }
+        }
+        incomplete_roots.contains(record.def_path)
+    }
+
     fn rvs_caps(&self, node_id: NodeId) -> &CapabilitySet {
         rvs_node_slot(&self.caps, node_id)
     }
 
     fn rvs_is_incomplete(&self, node_id: NodeId) -> bool {
         *rvs_node_slot(&self.incomplete, node_id)
+    }
+
+    fn rvs_is_incomplete_root(&self, node_id: NodeId) -> bool {
+        *rvs_node_slot(&self.incomplete_roots, node_id)
     }
 
     #[cfg(test)]
@@ -703,11 +721,6 @@ type ContractDiagnosticGroups = BTreeMap<
         CapabilityKey,
     ),
     (FnContractDiff, BTreeSet<u64>),
->;
-
-type StaticRefDiagnosticGroups = BTreeMap<
-    (CapabilityKey, CapabilityKey, CapabilityKey, bool),
-    (CapabilitySet, Vec<Capability>, CapabilitySet, BTreeSet<u64>),
 >;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -784,7 +797,6 @@ pub(crate) fn rvs_check_offline_caps_with_analysis(
         };
         rvs_collect_contract_diagnostics_M(&mut report, &context, &target_index, &target_caps);
         rvs_collect_suffix_diagnostics_M(&mut report, &context);
-        rvs_collect_static_ref_diagnostics_M(&mut report, &context, &target_index, &target_caps);
         rvs_collect_call_diagnostics_M(
             &mut report,
             &context,
@@ -895,11 +907,12 @@ fn rvs_collect_contract_diagnostics_M(
         let contract_target_id = index
             .rvs_port_operation_target(target_id)
             .unwrap_or(target_id);
-        let diff = rvs_contract_diff_for_expected_caps(
-            context.def_path,
-            inference.rvs_caps(contract_target_id).clone(),
-            inference.rvs_is_incomplete(contract_target_id),
+        let record = index.rvs_target(contract_target_id);
+        let expected_caps = crate::inference::rvs_public_naming_caps(
+            inference.rvs_caps(contract_target_id),
+            record.is_local_port,
         );
+        let diff = rvs_contract_diff_for_expected_caps(context.def_path, expected_caps);
         for kind in diff.rvs_selected_mismatch_kinds() {
             let key = (
                 kind,
@@ -974,12 +987,13 @@ pub(crate) fn rvs_uncovered_test_functions(
         .collect();
     let covered: BTreeSet<FunctionIdentity> = graph.rvs_test_reachable_identities();
     // Coverage classification reads semantic caps from the callgraph
-    // inference; the name suffix is a view and never participates. An
-    // incomplete lower bound is not proof of a class: functions whose
-    // inference depends on unknown callees are skipped instead of being
-    // forced into the good/ok test requirement.
+    // inference; the name suffix is a view and never participates. Export
+    // taint is not a user-visible property: only a root knowledge gap
+    // (no usable lower bound of its own) skips the good/ok test
+    // requirement. Transitively tainted functions keep their measured
+    // lower bound and are classified normally.
     let inferred = analysis.rvs_inferred();
-    let incomplete_paths = analysis.rvs_incomplete_paths();
+    let incomplete_roots = analysis.rvs_incomplete_roots();
 
     let mut candidates = Vec::new();
     for (def_path, node) in graph.rvs_iter() {
@@ -1000,7 +1014,7 @@ pub(crate) fn rvs_uncovered_test_functions(
         if !local_scope.rvs_contains_identity(&identity) {
             continue;
         }
-        if incomplete_paths.contains(def_path) {
+        if incomplete_roots.contains(def_path) {
             continue;
         }
         let Some(caps) = inferred.get(def_path) else {
@@ -1106,96 +1120,8 @@ fn rvs_expected_name_without_non_suffix_caps(context: &OfflineFnContext<'_>) -> 
     }
 }
 
-fn rvs_collect_static_ref_diagnostics_M(
-    report: &mut OfflineCapsReport,
-    context: &OfflineFnContext<'_>,
-    index: &TargetAnalysisIndex<'_>,
-    inference: &NodeInference,
-) {
-    let mut groups: StaticRefDiagnosticGroups = BTreeMap::new();
-    for crate_id in context.diagnostic_crate_ids.iter().copied() {
-        let target_id = index
-            .rvs_find_target(context.def_path, crate_id)
-            .expect("never: selected diagnostic target belongs to the target index");
-        let record = index.rvs_target(target_id);
-        // Only World Port bodies are checked here against their voted
-        // contract: for ordinary functions the naming-view Contract
-        // diagnostics already report a missing S/T, and reporting both
-        // would duplicate the same defect on one anchor.
-        if !record.is_local_port {
-            continue;
-        }
-        let is_port_body = true;
-        let allowed = if let Some(contract_target_id) = index.rvs_port_operation_target(target_id) {
-            inference.rvs_caps(contract_target_id).clone()
-        } else {
-            inference.rvs_caps(target_id).clone()
-        };
-        let facts = record.node.facts;
-        // U from `static mut` access is a non-suffix capability measured
-        // from the body; the name can only carry S/T for this diagnostic.
-        let required = {
-            let mut caps = CapabilityPolicy::rvs_static_caps(facts);
-            caps.rvs_retain_naming_M();
-            caps
-        };
-        let missing: Vec<_> = [Capability::S, Capability::T]
-            .into_iter()
-            .filter(|capability| {
-                required.rvs_contains(*capability) && !allowed.rvs_contains(*capability)
-            })
-            .collect();
-        if !missing.is_empty() {
-            let mut missing_caps = CapabilitySet::rvs_new();
-            for capability in &missing {
-                missing_caps.rvs_insert_M(*capability);
-            }
-            let key = (
-                rvs_capability_key(&required),
-                rvs_capability_key(&missing_caps),
-                rvs_capability_key(&allowed),
-                is_port_body,
-            );
-            groups
-                .entry(key)
-                .or_insert_with(|| (required, missing, allowed, BTreeSet::new()))
-                .3
-                .insert(crate_id);
-        }
-    }
-    for ((_, _, _, is_port_body), (required, missing, allowed, crate_ids)) in groups {
-        if crate_ids.is_empty() {
-            continue;
-        }
-        let mut diagnostic = context.rvs_diagnostic(
-            OfflineCapsSeverity::Error,
-            OfflineCapsKind::StaticRefRequiresCaps,
-            "function touches static/thread-local state without declaring required caps"
-                .to_string(),
-            vec![
-                format!(
-                    "{}: {}",
-                    if is_port_body {
-                        "World Port operation contract"
-                    } else {
-                        "declared caps"
-                    },
-                    rvs_format_caps(&allowed)
-                ),
-                format!(
-                    "required caps from body facts: {}",
-                    rvs_format_caps(&required)
-                ),
-                format!("missing: {}", rvs_format_cap_list(&missing)),
-            ],
-        );
-        diagnostic.span_anchors = BTreeMap::from([(context.def_path.clone(), crate_ids)]);
-        report.diagnostics.push(diagnostic);
-    }
-}
-
 fn rvs_collect_call_diagnostics_M(
-    report: &mut OfflineCapsReport,
+    _report: &mut OfflineCapsReport,
     context: &OfflineFnContext<'_>,
     resolver: &CalleeCapsResolver<'_>,
     index: &TargetAnalysisIndex<'_>,
@@ -1261,10 +1187,22 @@ fn rvs_collect_call_diagnostics_M(
                     ),
                 );
             } else if call.local_target.is_some_and(|callee_id| {
-                !index.rvs_target(callee_id).is_local_port && inference.rvs_is_incomplete(callee_id)
+                !index.rvs_target(callee_id).is_local_port
+                    // Only root knowledge gaps warn here. Callers transitively
+                    // tainted by a root keep their export-confidence flag but
+                    // are not themselves diagnostics: `why` shows the path.
+                    && inference.rvs_is_incomplete_root(callee_id)
+                    && inference.rvs_is_incomplete(callee_id)
             }) {
+                // One diagnostic per root callee: each knowledge gap gets
+                // its own warning with root-specific remediation, so the
+                // warning count matches the root count.
+                let key = format!(
+                    "<inference>\0<callgraph>\0incomplete\0{}",
+                    call.callee.def_path.rvs_as_str()
+                );
                 let usage = incomplete_caps
-                    .entry("<inference>\0<callgraph>\0incomplete".to_string())
+                    .entry(key)
                     .or_insert_with(|| IncompleteCapsUsage {
                         layer: "<inference>".to_string(),
                         file: "<callgraph>".to_string(),
@@ -1288,42 +1226,16 @@ fn rvs_collect_call_diagnostics_M(
 
             // Ordinary callers measure capabilities as the propagated
             // closure from the callgraph, so a resolvable call edge is
-            // self-consistent by construction and the old call-violation
-            // diagnostic is replaced by error-level naming-view Contract
-            // diagnostics. World Port implementations are the exception:
-            // their bodies are checked against the voted contract, so a
-            // call the contract does not allow is an error.
+            // self-consistent by construction. World Port implementations
+            // are not checked against the fixed-P contract: implementation
+            // effects are audit information, surfaced through report and
+            // `cargo rivus why` rather than as violations. Unresolvable
+            // callees inside a Port implementation still surface as
+            // unknown-callee diagnostics: skipping them would let
+            // unchecked effects hide behind the Port branch.
             let callee_caps = rvs_target_contract_caps(call, index, inference, resolver);
-            if let Some(contract_target_id) = port_contract_target {
-                let callee_caps = callee_caps.clone();
-                let mismatch = callee_caps
-                    .as_ref()
-                    .and_then(|caps| {
-                        rvs_collect_call_contract_mismatch(
-                            call.callee.def_path.rvs_as_str(),
-                            &caller_caps,
-                            Some(caps),
-                        )
-                    })
-                    .filter(|mismatch| {
-                        mismatch.kind == CallContractMismatchKind::MissingCapabilities
-                            && !inference.rvs_is_incomplete(contract_target_id)
-                    });
-                if let Some(mismatch) = mismatch {
-                    rvs_report_port_effect_violation_M(
-                        report,
-                        context,
-                        call,
-                        &caller_caps,
-                        &mismatch,
-                        &usages,
-                        crate_id,
-                    );
-                } else if callee_caps.is_none() {
-                    // Unresolvable callees inside a Port implementation must
-                    // surface as unknown-callee diagnostics: skipping them
-                    // would let unchecked effects hide behind the Port
-                    // branch.
+            if port_contract_target.is_some() {
+                if callee_caps.is_none() {
                     unknown_callees
                         .entry(call.callee.def_path.to_string())
                         .or_default()
@@ -1346,50 +1258,6 @@ fn rvs_collect_call_diagnostics_M(
             }
         }
     }
-}
-
-fn rvs_report_port_effect_violation_M(
-    report: &mut OfflineCapsReport,
-    context: &OfflineFnContext<'_>,
-    call: &IndexedCall<'_>,
-    contract_caps: &CapabilitySet,
-    mismatch: &CallContractMismatch,
-    usages: &[TargetCallUsage],
-    crate_id: u64,
-) {
-    let mut call_site_anchors = BTreeSet::new();
-    for usage in usages {
-        if let Some(call_site) = &usage.call_site {
-            call_site_anchors.insert(OfflineCapsCallAnchor {
-                caller: usage.caller.clone(),
-                call_site: call_site.clone(),
-            });
-        }
-    }
-    let mut span_anchors = BTreeMap::new();
-    if call_site_anchors.is_empty() {
-        span_anchors.insert(context.def_path.clone(), BTreeSet::from([crate_id]));
-    }
-    let callee_caps = mismatch
-        .callee_caps
-        .as_ref()
-        .expect("never: missing-capability mismatch carries callee caps");
-    let missing: Vec<_> = mismatch.missing_caps.iter().copied().collect();
-    report.diagnostics.push(OfflineCapsDiagnostic {
-        severity: OfflineCapsSeverity::Error,
-        kind: OfflineCapsKind::PortEffectViolation,
-        function: context.def_path.clone(),
-        span_anchors,
-        call_site_anchors,
-        message: "World Port implementation executes an effect its contract does not allow"
-            .to_string(),
-        details: vec![
-            format!("callee: {}", call.callee.def_path),
-            format!("contract caps: {}", rvs_format_caps(contract_caps)),
-            format!("callee caps: {}", rvs_format_caps(callee_caps)),
-            format!("unallowed caps: {}", rvs_format_cap_list(&missing)),
-        ],
-    });
 }
 
 fn rvs_target_contract_caps(
@@ -1681,20 +1549,12 @@ fn rvs_format_caps(caps: &CapabilitySet) -> String {
     caps.rvs_letters_or_pure()
 }
 
-fn rvs_format_cap_list(caps: &[Capability]) -> String {
-    if caps.is_empty() {
-        return "none".to_string();
-    }
-    caps.iter()
-        .map(|cap| cap.rvs_as_char().to_string())
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::artifacts::{CallEdgeType, CallSiteSource, CrateProvenance, FnNode, FnSource};
+    use crate::artifacts::{
+        CallEdgeType, CallSiteSource, CrateProvenance, FnNode, FnSource, rvs_test_target_of_M,
+    };
     use crate::capability::{CapabilityBasis, CapabilityFacts, CapabilityInfo, CapabilitySource};
     use crate::symbols::CapsMapKey;
     use crate::test_support::{rvs_make_capsmap, rvs_snapshot_BIS};
@@ -1852,13 +1712,12 @@ mod tests {
                             | OfflineCapsKind::UnknownSuffixLetter
                     )
                 })
-                .map(|diagnostic| {
+                .filter_map(|diagnostic| {
                     diagnostic
                         .details
                         .iter()
                         .find(|detail| detail.starts_with("expected name"))
                         .cloned()
-                        .unwrap_or_default()
                 })
                 .collect::<Vec<_>>()
         };
@@ -1882,9 +1741,9 @@ mod tests {
             assert!(detail.contains("rvs_handle_BI"));
         }
         for detail in naming(&wrong) {
-            assert!(detail.contains("rvs_handle_BI"));
+            assert!(detail.contains("rvs_handle_BI"), "wrong detail: {detail}");
         }
-        assert!(naming(&forged).is_empty());
+        assert!(naming(&forged).is_empty(), "forged detail: {forged:?}");
         assert!(
             semantic(&plain)
                 .iter()
@@ -2156,6 +2015,80 @@ mod tests {
     }
 
     #[test]
+    fn test_20260820_incomplete_warning_reports_root_only_not_callers() {
+        let mut graph = FnGraph::rvs_new();
+        graph.rvs_insert_M(
+            DefPath::from("dep::opaque"),
+            FnNode {
+                has_body: false,
+                crate_id: 2,
+                ..rvs_node(&[])
+            },
+        );
+        let mut wrapper = rvs_node(&[]);
+        wrapper.calls = BTreeMap::from([(
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: DefPath::from("dep::opaque"),
+            },
+            CallEdgeType::Strong,
+        )]);
+        graph.rvs_insert_M(DefPath::from("demo::rvs_wrapper"), wrapper);
+        let mut api = rvs_node(&[]);
+        api.calls = BTreeMap::from([(
+            FunctionIdentity {
+                crate_id: 1,
+                def_path: DefPath::from("demo::rvs_wrapper"),
+            },
+            CallEdgeType::Strong,
+        )]);
+        graph.rvs_insert_M(DefPath::from("demo::rvs_api"), api);
+
+        let report = rvs_check_offline_caps(
+            &graph,
+            &CapsMap::rvs_new(),
+            &BTreeSet::from([CrateName::from("demo")]),
+        );
+        let output = report.to_string();
+        rvs_snapshot_BIS(
+            "test_20260820_incomplete_warning_reports_root_only_not_callers",
+            &output,
+        );
+
+        // Only the root (`dep::opaque`, bodyless without exact caps) is a
+        // knowledge gap. The warning anchors on the one direct call edge
+        // (`rvs_wrapper -> dep::opaque`); `rvs_api` — a caller of the caller —
+        // must not appear anywhere, and the callee detail names only the
+        // root, never a transitively tainted wrapper.
+        let incomplete_warnings: Vec<_> = report
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.kind == OfflineCapsKind::IncompleteCapsKnowledge)
+            .collect();
+        assert_eq!(
+            incomplete_warnings.len(),
+            1,
+            "exactly one root warning, no cascade: {output}"
+        );
+        assert!(
+            !output.contains("rvs_api"),
+            "transitive callers must not be reported: {output}"
+        );
+        let callee_details = incomplete_warnings
+            .iter()
+            .flat_map(|diagnostic| diagnostic.details.iter())
+            .filter(|detail| detail.contains("callee:"))
+            .map(|detail| detail.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            callee_details.iter().all(|detail| {
+                !detail.contains("demo::rvs_api") && !detail.contains("demo::rvs_wrapper")
+            }),
+            "callee details must name roots only: {callee_details:?}"
+        );
+    }
+
+    #[test]
     fn test_20260715_in_memory_incomplete_trait_dispatch_is_reported() {
         let mut graph = FnGraph::rvs_new();
         let mut declaration = rvs_node(&[]);
@@ -2188,15 +2121,22 @@ mod tests {
             &output,
         );
 
+        // The unstable vote (threshold 1, one incomplete impl whose unknown
+        // remainder may carry any capability) makes the bodyless declaration
+        // a root knowledge gap: the root warning names the root callee on
+        // the caller's edge, and the unknown-callee diagnostic stays for
+        // the empty lower bound. No pass-through taint echo exists for
+        // `rvs_use_parser` beyond this root edge.
+        assert!(output.contains("warning[unknown_callee]"));
+        assert!(output.contains("demo::Parser::rvs_parse"));
         assert!(report.diagnostics.iter().any(|diagnostic| {
             diagnostic.kind == OfflineCapsKind::IncompleteCapsKnowledge
+                && diagnostic.function.rvs_as_str() == "demo::rvs_use_parser"
                 && diagnostic
                     .details
                     .iter()
                     .any(|detail| detail.contains("demo::Parser::rvs_parse"))
         }));
-        assert!(output.contains("`<inference>` is computed during check"));
-        assert!(output.contains("cargo rivus why 'demo::Parser::rvs_parse' ."));
         assert!(!output.contains("refresh generated layer '<inference>'"));
         assert!(!output.contains("add reviewed corrections to caps/ext"));
     }
@@ -2297,11 +2237,6 @@ mod tests {
                 }])
             );
         }
-        assert!(
-            !emissions
-                .iter()
-                .any(|emission| emission.lint == OfflineCapsLint::StaticRef)
-        );
         rvs_snapshot_BIS(
             "test_20260715_non_call_emissions_are_scoped_to_violating_crate_identity",
             &output,
@@ -2370,7 +2305,10 @@ mod tests {
     }
 
     #[test]
-    fn test_20260715_port_static_ref_emission_keeps_target_anchor() {
+    fn test_20260715_port_impl_static_access_is_audit_not_diagnostic() {
+        // Under the fixed-P contract, Port implementation bodies are not
+        // checked against the public contract: static access inside a Port
+        // impl is audit information and produces no diagnostic at all.
         let mut graph = FnGraph::rvs_new();
         let facts = CapabilityFacts {
             is_port_method: true,
@@ -2378,7 +2316,6 @@ mod tests {
             ..CapabilityFacts::default()
         };
         let mut node = rvs_node(&[]);
-        node.facts = facts;
         node.facts = facts;
         let path = DefPath::from("demo::ApiClient::rvs_fetch_P");
         graph.rvs_insert_M(path.clone(), node);
@@ -2388,26 +2325,26 @@ mod tests {
             &CapsMap::rvs_new(),
             &BTreeSet::from([CrateName::from("demo")]),
         );
-        let emission = report
-            .rvs_emissions(&graph)
-            .into_iter()
-            .find(|emission| emission.lint == OfflineCapsLint::StaticRef)
-            .expect("never: Port body static access still requires S");
-        let output = format!("anchors={:?}\n", emission.span_anchors);
+        let output = format!(
+            "diagnostics={}\n",
+            report
+                .diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.kind.rvs_as_str())
+                .collect::<Vec<_>>()
+                .join(",")
+        );
         rvs_snapshot_BIS(
-            "test_20260715_port_static_ref_emission_keeps_target_anchor",
+            "test_20260715_port_impl_static_access_is_audit_not_diagnostic",
             &output,
         );
 
-        assert_eq!(
-            emission.span_anchors,
-            BTreeSet::from([OfflineCapsEmissionAnchor {
-                identity: FunctionIdentity {
-                    crate_id: 1,
-                    def_path: path,
-                },
-                call_site: None,
-            }])
+        assert!(
+            !report
+                .diagnostics
+                .iter()
+                .any(|diagnostic| matches!(diagnostic.kind, OfflineCapsKind::Contract(_))),
+            "port body static access is audit info, not a contract violation"
         );
     }
 
@@ -2537,7 +2474,7 @@ mod tests {
         let mut declaration = rvs_node(&[]);
         declaration.facts = signature_facts;
         declaration.has_body = false;
-        let target = declaration.rvs_test_target_M(1);
+        let target = rvs_test_target_of_M(&mut declaration, 1);
         target.facts = signature_facts;
         target.has_body = false;
         graph.rvs_insert_M(declaration_path.clone(), declaration);
@@ -2605,7 +2542,7 @@ mod tests {
         let mut port_implementation = rvs_node(&["dependency::unknown"]);
         port_implementation.is_trait_impl = true;
         port_implementation.facts.is_port_method = true;
-        let target = port_implementation.rvs_test_target_M(1);
+        let target = rvs_test_target_of_M(&mut port_implementation, 1);
         target.is_trait_impl = true;
         target.facts.is_port_method = true;
         graph.rvs_insert_M(
@@ -2702,11 +2639,11 @@ mod tests {
         };
         let mut node = rvs_node(&[]);
         node.facts = static_facts;
-        let production = node.rvs_test_target_M(10);
+        let production = rvs_test_target_of_M(&mut node, 10);
         production.sources = BTreeSet::from([FnSource::rvs_new(PathBuf::from("src/lib.rs"), 1, 2)]);
         production.is_production = true;
         production.is_coverage_candidate = true;
-        let test = node.rvs_test_target_M(20);
+        let test = rvs_test_target_of_M(&mut node, 20);
         test.facts = static_facts;
         test.sources = BTreeSet::from([FnSource::rvs_new(PathBuf::from("src/lib.rs"), 3, 4)]);
         test.is_test_compilation = true;
@@ -2858,11 +2795,6 @@ mod tests {
                 }])
             );
         }
-        assert!(
-            !emissions
-                .iter()
-                .any(|emission| emission.lint == OfflineCapsLint::StaticRef)
-        );
         rvs_snapshot_BIS(
             "test_20260715_same_source_test_only_behavior_keeps_diagnostic_anchors",
             &output,
@@ -3642,9 +3574,7 @@ mod tests {
                     && emission.message.contains("missing_side_effect"))
                     || matches!(
                         emission.lint,
-                        OfflineCapsLint::UnknownCallee
-                            | OfflineCapsLint::IncompleteCapsKnowledge
-                            | OfflineCapsLint::StaticRef
+                        OfflineCapsLint::UnknownCallee | OfflineCapsLint::IncompleteCapsKnowledge
                     )
             })
             .collect::<Vec<_>>();
@@ -3793,7 +3723,7 @@ mod tests {
         let mut effect = rvs_node(&[]);
         effect.facts = effect_facts;
         rvs_set_target_crates_M(&mut effect, &[50]);
-        let effect_target = effect.rvs_test_target_M(50);
+        let effect_target = rvs_test_target_of_M(&mut effect, 50);
         effect_target.facts = effect_facts;
         effect_target.crate_provenance = CrateProvenance::Dependency;
 
@@ -3803,7 +3733,7 @@ mod tests {
             def_path: effect_path.clone(),
         };
         let mut caller = rvs_node(&[]);
-        let caller_target = caller.rvs_test_target_M(1);
+        let caller_target = rvs_test_target_of_M(&mut caller, 1);
         caller_target.calls = BTreeMap::from([(missing_effect.clone(), CallEdgeType::Strong)]);
         caller_target.call_sites = BTreeSet::from([CallSiteIdentity {
             callee: missing_effect,
@@ -3854,7 +3784,7 @@ mod tests {
         let mut opaque = rvs_node(&[]);
         opaque.has_body = false;
         rvs_set_target_crates_M(&mut opaque, &[50]);
-        let opaque_target = opaque.rvs_test_target_M(50);
+        let opaque_target = rvs_test_target_of_M(&mut opaque, 50);
         opaque_target.has_body = false;
         opaque_target.crate_provenance = CrateProvenance::Dependency;
 
@@ -3864,7 +3794,7 @@ mod tests {
             def_path: opaque_path.clone(),
         };
         let mut caller = rvs_node(&[]);
-        let caller_target = caller.rvs_test_target_M(1);
+        let caller_target = rvs_test_target_of_M(&mut caller, 1);
         caller_target.calls = BTreeMap::from([(opaque_identity.clone(), CallEdgeType::Strong)]);
         caller_target.call_sites = BTreeSet::from([CallSiteIdentity {
             callee: opaque_identity,
@@ -4171,7 +4101,7 @@ mod tests {
             (known.clone(), CallEdgeType::Strong),
             (unknown.clone(), CallEdgeType::Strong),
         ]);
-        let target = node.rvs_test_target_M(1);
+        let target = rvs_test_target_of_M(&mut node, 1);
         target.calls = BTreeMap::from([
             (known.clone(), CallEdgeType::Strong),
             (unknown.clone(), CallEdgeType::Strong),
@@ -4394,20 +4324,20 @@ mod tests {
         let mut declaration = rvs_node(&[]);
         declaration.has_body = false;
         declaration.facts.is_port_method = true;
-        let declaration_target = declaration.rvs_test_target_M(1);
+        let declaration_target = rvs_test_target_of_M(&mut declaration, 1);
         declaration_target.has_body = false;
         declaration_target.facts.is_port_method = true;
-        graph.rvs_insert_M(DefPath::from("demo::Transport::rvs_fetch_PS"), declaration);
+        graph.rvs_insert_M(DefPath::from("demo::Transport::rvs_fetch_P"), declaration);
 
         let mut node = rvs_node(&["dep::effect"]);
         node.is_trait_impl = true;
         node.facts.is_port_method = true;
         let facts = node.facts;
-        let target = node.rvs_test_target_M(1);
+        let target = rvs_test_target_of_M(&mut node, 1);
         target.is_trait_impl = true;
         target.facts = facts;
         graph.rvs_insert_M(
-            DefPath::from("demo::Adapter::rvs_fetch_PS@demo::Transport"),
+            DefPath::from("demo::Adapter::rvs_fetch_P@demo::Transport"),
             node,
         );
         let caps = rvs_make_capsmap(&[("dep::effect", "S")]);
@@ -4438,13 +4368,13 @@ mod tests {
 
     #[test]
     fn test_20260806_world_port_votes_effects_but_caller_requires_only_p() {
-        let port_path = DefPath::from("demo::Transport::rvs_fetch_BIPS");
+        let port_path = DefPath::from("demo::Transport::rvs_fetch_P");
         let mut graph = FnGraph::rvs_new();
 
         let mut declaration = rvs_node(&[]);
         declaration.has_body = false;
         declaration.facts.is_port_method = true;
-        let declaration_target = declaration.rvs_test_target_M(1);
+        let declaration_target = rvs_test_target_of_M(&mut declaration, 1);
         declaration_target.has_body = false;
         declaration_target.facts.is_port_method = true;
         graph.rvs_insert_M(port_path.clone(), declaration);
@@ -4452,17 +4382,17 @@ mod tests {
         let mut implementation = rvs_node(&["dep::effect"]);
         implementation.is_trait_impl = true;
         implementation.facts.is_port_method = true;
-        let implementation_target = implementation.rvs_test_target_M(1);
+        let implementation_target = rvs_test_target_of_M(&mut implementation, 1);
         implementation_target.is_trait_impl = true;
         implementation_target.facts.is_port_method = true;
         graph.rvs_insert_M(
-            DefPath::from("demo::Adapter::rvs_fetch_BIPS@demo::Transport"),
+            DefPath::from("demo::Adapter::rvs_fetch_P@demo::Transport"),
             implementation,
         );
 
         graph.rvs_insert_M(
             DefPath::from("demo::rvs_use_P"),
-            rvs_node(&["demo::Transport::rvs_fetch_BIPS"]),
+            rvs_node(&["demo::Transport::rvs_fetch_P"]),
         );
 
         let caps = rvs_make_capsmap(&[("dep::effect", "BIS")]);
@@ -4495,7 +4425,7 @@ mod tests {
             &output,
         );
 
-        assert_eq!(port_caps, "BIPS");
+        assert_eq!(port_caps, "P");
         assert_eq!(caller_caps, "P");
         assert_eq!(contract_mismatches, 0);
     }
@@ -4541,21 +4471,83 @@ mod tests {
 
         assert!(output.contains("warning[unknown_callee]"));
         assert!(output.contains("dep::absent_effect"));
-        assert!(
-            !report
-                .diagnostics
-                .iter()
-                .any(|diagnostic| diagnostic.kind == OfflineCapsKind::PortEffectViolation)
-        );
     }
 
     #[test]
-    fn test_20260806_world_port_rejects_unvoted_implementation_effect() {
+    fn test_20260820_port_impl_effects_are_audit_not_violation() {
         let mut graph = FnGraph::rvs_new();
         let mut declaration = rvs_node(&[]);
         declaration.has_body = false;
         declaration.facts.is_port_method = true;
-        let declaration_target = declaration.rvs_test_target_M(1);
+        graph.rvs_insert_M(DefPath::from("demo::Transport::rvs_fetch_P"), declaration);
+
+        // A single impl whose body performs an S effect: under the old voted
+        // contract this was a port-effect violation; under the fixed-P
+        // contract it is implementation audit information only.
+        let mut implementation = rvs_node(&["dep::effect"]);
+        implementation.is_trait_impl = true;
+        graph.rvs_insert_M(
+            DefPath::from("demo::EffectAdapter::rvs_fetch_P@demo::Transport"),
+            implementation,
+        );
+
+        // A domain caller through the port propagates P only.
+        let mut caller = rvs_node(&[]);
+        caller.calls = BTreeMap::from([(
+            FunctionIdentity {
+                crate_id: 1,
+                def_path: DefPath::from("demo::Transport::rvs_fetch_P"),
+            },
+            CallEdgeType::Strong,
+        )]);
+        graph.rvs_insert_M(DefPath::from("demo::rvs_use_transport_P"), caller);
+
+        let report = rvs_check_offline_caps(
+            &graph,
+            &rvs_make_capsmap(&[("dep::effect", "S")]),
+            &BTreeSet::from([CrateName::from("demo")]),
+        );
+        let output = report.to_string();
+        rvs_snapshot_BIS(
+            "test_20260820_port_impl_effects_are_audit_not_violation",
+            &output,
+        );
+
+        // The fixed-P contract forbids name_mismatch on Port operations and
+        // impls: the canonical suffix is always `_P` regardless of the
+        // implementation's inferred B/I/S/T caps.
+        assert!(
+            !report.diagnostics.iter().any(|diagnostic| {
+                matches!(diagnostic.kind, OfflineCapsKind::Contract(_))
+                    && (diagnostic.function.rvs_as_str() == "demo::Transport::rvs_fetch_P"
+                        || diagnostic.function.rvs_as_str()
+                            == "demo::EffectAdapter::rvs_fetch_P@demo::Transport")
+            }),
+            "port canonical suffix is fixed to _P, not the voted B/I/S/T projection"
+        );
+        let impl_diff = report
+            .diagnostics
+            .iter()
+            .flat_map(|diagnostic| &diagnostic.details)
+            .filter(|detail| detail.contains("EffectAdapter"))
+            .collect::<Vec<_>>();
+        assert!(
+            impl_diff.iter().all(|detail| !detail.contains("unallowed")),
+            "no unallowed-effects detail may reference the impl"
+        );
+    }
+
+    #[test]
+    fn test_20260806_world_port_allows_implementation_effect_as_audit() {
+        // Under the fixed-P contract an unvoted implementation effect is no
+        // longer a violation: the port contract stays P and the effect
+        // remains implementation audit information. The vote still records
+        // the contribution for report/why.
+        let mut graph = FnGraph::rvs_new();
+        let mut declaration = rvs_node(&[]);
+        declaration.has_body = false;
+        declaration.facts.is_port_method = true;
+        let declaration_target = rvs_test_target_of_M(&mut declaration, 1);
         declaration_target.has_body = false;
         declaration_target.facts.is_port_method = true;
         graph.rvs_insert_M(DefPath::from("demo::Transport::rvs_fetch_P"), declaration);
@@ -4566,7 +4558,6 @@ mod tests {
             ("PureAdapterB", &[][..]),
         ] {
             let mut implementation = rvs_node(calls);
-            implementation.is_trait_impl = true;
             implementation.is_trait_impl = true;
             graph.rvs_insert_M(
                 DefPath::from(format!("demo::{adapter}::rvs_fetch_P@demo::Transport")),
@@ -4581,17 +4572,16 @@ mod tests {
         );
         let output = report.to_string();
         rvs_snapshot_BIS(
-            "test_20260806_world_port_rejects_unvoted_implementation_effect",
+            "test_20260806_world_port_allows_implementation_effect_as_audit",
             &output,
         );
 
-        assert_eq!(
-            report
+        assert!(
+            !report
                 .diagnostics
                 .iter()
-                .filter(|diagnostic| diagnostic.kind == OfflineCapsKind::PortEffectViolation)
-                .count(),
-            1
+                .any(|diagnostic| matches!(diagnostic.kind, OfflineCapsKind::Contract(_))),
+            "port canonical suffix is fixed to _P; unvoted effects are audit info"
         );
         assert!(
             !report
@@ -4612,15 +4602,15 @@ mod tests {
             has_thread_local_ref,
         ) in [
             (
-                "demo::Transport::rvs_read_PST",
-                "demo::Adapter::rvs_read_PST@demo::Transport",
+                "demo::Transport::rvs_read_P",
+                "demo::Adapter::rvs_read_P@demo::Transport",
                 true,
                 false,
                 true,
             ),
             (
-                "demo::Transport::rvs_write_PS",
-                "demo::Adapter::rvs_write_PS@demo::Transport",
+                "demo::Transport::rvs_write_P",
+                "demo::Adapter::rvs_write_P@demo::Transport",
                 false,
                 true,
                 false,
@@ -4629,7 +4619,7 @@ mod tests {
             let mut declaration = rvs_node(&[]);
             declaration.has_body = false;
             declaration.facts.is_port_method = true;
-            let declaration_target = declaration.rvs_test_target_M(1);
+            let declaration_target = rvs_test_target_of_M(&mut declaration, 1);
             declaration_target.has_body = false;
             declaration_target.facts.is_port_method = true;
             graph.rvs_insert_M(DefPath::from(operation_path), declaration);
@@ -4644,7 +4634,7 @@ mod tests {
                 ..CapabilityFacts::default()
             };
             let facts = node.facts;
-            let target = node.rvs_test_target_M(1);
+            let target = rvs_test_target_of_M(&mut node, 1);
             target.is_trait_impl = true;
             target.facts = facts;
             graph.rvs_insert_M(DefPath::from(implementation_path), node);
@@ -4660,18 +4650,15 @@ mod tests {
             &output,
         );
 
-        // U comes from the body fact and stays in the operation contract:
-        // touching `static mut` inside a Port implementation no longer
-        // demands a name suffix. Static and thread-local reads produce no
-        // diagnostics here because the Port operation contract is defined
-        // by the vote, not the body.
+        // Under the fixed-P contract, environment state inside a Port
+        // implementation produces no diagnostics at all: it is
+        // implementation audit information.
         assert!(
             report
                 .diagnostics
                 .iter()
-                .all(|diagnostic| diagnostic.kind != OfflineCapsKind::StaticRefRequiresCaps)
+                .all(|diagnostic| !matches!(diagnostic.kind, OfflineCapsKind::Contract(_)))
         );
-        assert!(!output.contains("rvs_read_PST"));
     }
 
     #[test]
@@ -4858,6 +4845,76 @@ mod tests {
                 .keys()
                 .any(|identity| identity.def_path.rvs_as_str().contains("unsafe_helper"))
         );
+    }
+
+    #[test]
+    fn test_20260822_uncovered_selection_skips_only_incomplete_roots() {
+        // Only a root knowledge gap (no usable lower bound of its own)
+        // skips the good/ok test requirement. A function transitively
+        // tainted by such a root keeps its measured lower bound and must
+        // remain a coverage candidate: reverting to the old all-tainted
+        // filter would silently drop it from the uncovered set.
+        let mut graph = FnGraph::rvs_new();
+        // Root: its own caps record is unknown-completeness, so inference
+        // marks it as a knowledge root.
+        let mut root = rvs_node(&[]);
+        root.has_body = true;
+        graph.rvs_insert_M(DefPath::from("demo::rvs_root_gap"), root);
+        // Tainted caller: complete knowledge of its own, only inherits the
+        // root's taint through the call edge.
+        let tainted = rvs_node(&["demo::rvs_root_gap"]);
+        graph.rvs_insert_M(DefPath::from("demo::rvs_tainted_good"), tainted);
+        // Untainted good function with no test caller.
+        let orphan = rvs_node(&[]);
+        graph.rvs_insert_M(DefPath::from("demo::rvs_orphan_good"), orphan);
+
+        let mut info = CapabilityInfo::rvs_new(
+            CapabilitySet::rvs_new(),
+            CapabilityBasis::Inferred,
+            CapabilityCompleteness::Unknown,
+        );
+        info.rvs_with_source_M(CapabilitySource {
+            layer: "deps".to_string(),
+            file: PathBuf::from("caps/deps"),
+            line: 2,
+        });
+        let mut caps = CapsMap::rvs_new();
+        caps.rvs_insert_info_M(CapsMapKey::rvs_new("demo::rvs_root_gap"), info);
+
+        let local = BTreeSet::from([CrateName::from("demo")]);
+        let analysis = PreparedLocalAnalysis::rvs_prepare(&graph, &caps, &local);
+        assert!(
+            analysis
+                .rvs_incomplete_roots()
+                .contains(&DefPath::from("demo::rvs_root_gap"))
+        );
+        assert!(
+            !analysis
+                .rvs_incomplete_roots()
+                .contains(&DefPath::from("demo::rvs_tainted_good"))
+        );
+        assert!(
+            analysis
+                .rvs_incomplete_paths()
+                .contains(&DefPath::from("demo::rvs_tainted_good"))
+        );
+
+        let uncovered = rvs_uncovered_test_functions(&graph, &analysis, &local);
+        let uncovered_paths: Vec<&str> = uncovered
+            .keys()
+            .map(|identity| identity.def_path.rvs_as_str())
+            .collect();
+        let output = format!("{}\n", uncovered_paths.join("\n"));
+        rvs_snapshot_BIS(
+            "test_20260822_uncovered_selection_skips_only_incomplete_roots",
+            &output,
+        );
+
+        // The root gap is skipped; the tainted and orphan good functions
+        // stay uncovered candidates.
+        assert!(uncovered_paths.contains(&"demo::rvs_tainted_good"));
+        assert!(uncovered_paths.contains(&"demo::rvs_orphan_good"));
+        assert!(!uncovered_paths.contains(&"demo::rvs_root_gap"));
     }
 
     #[test]

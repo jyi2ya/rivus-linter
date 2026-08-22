@@ -100,13 +100,13 @@ impl Callbacks for DefaultCallbacks {}
 /// # Panics
 ///
 /// Panics if the current executable path is invalid or cargo cannot be spawned.
-fn rvs_run_driver_BIPST() -> ExitCode {
+fn rvs_run_driver_BIST() -> ExitCode {
     let raw_args: Vec<String> = env::args().collect();
     let direct_rustc = raw_args.get(1).is_some_and(|arg| arg == "--rustc");
     let driver_config = if direct_rustc {
         None
     } else {
-        match workspace::rvs_load_driver_protocol_BIST() {
+        match workspace::rvs_load_driver_protocol_BIS() {
             Ok(config) => config,
             Err(error) => {
                 eprintln!("invalid Rivus driver protocol: {error}");
@@ -804,7 +804,7 @@ fn main() -> ExitCode {
         &raw_args,
         rvs_env_flag_is_one_BS("RIVUS_WRAPPER"),
     ) {
-        return rvs_run_driver_BIPST();
+        return rvs_run_driver_BIST();
     }
 
     // Cargo subcommands: `cargo rivus check` invokes `cargo-rivus rivus check`.
@@ -832,20 +832,20 @@ fn main() -> ExitCode {
             }
             Ok(())
         }
-        Some(Commands::Report { path }) => report_commands::rvs_run_report_BIPST(&path),
+        Some(Commands::Report { path }) => report_commands::rvs_run_report_BIST(&path),
         Some(Commands::Setup { path }) => {
             setup::rvs_run_setup_BIST(&path).map_err(|error| error.to_string())
         }
         Some(Commands::InferCapsmap { path, output }) => {
-            infer_commands::rvs_run_infer_capsmap_BIPST(&path, &output)
+            infer_commands::rvs_run_infer_capsmap_BIST(&path, &output)
         }
         Some(Commands::InferStd { path, output }) => {
-            infer_commands::rvs_run_infer_std_BIPST(&path, &output)
+            infer_commands::rvs_run_infer_std_BIST(&path, &output)
         }
         Some(Commands::Strip { path }) => rename::rvs_strip_BIST(&path),
-        Some(Commands::Annotate { path }) => analysis_commands::rvs_run_annotate_BIPST(&path),
+        Some(Commands::Annotate { path }) => analysis_commands::rvs_run_annotate_BIST(&path),
         Some(Commands::Why { function, path }) => {
-            analysis_commands::rvs_run_why_BIPST(&function, &path)
+            analysis_commands::rvs_run_why_BIST(&function, &path)
         }
         Some(Commands::Usage) => {
             print!("{RIVUS_MANUAL}");

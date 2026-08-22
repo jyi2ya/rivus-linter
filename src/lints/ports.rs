@@ -10,13 +10,13 @@ use crate::symbols::CrateName;
 pub(crate) trait LintEnvironment {
     type World: Debug;
 
-    fn rvs_write_callgraph_BIMPST(
+    fn rvs_write_callgraph_P(
         world: &mut Self::World,
         crate_name: &CrateName,
         callgraph: &FnGraph,
     ) -> Result<(), String>;
 
-    fn rvs_acknowledge_offline_emission_BIMPS(
+    fn rvs_acknowledge_offline_emission_P(
         world: &mut Self::World,
         emission_index: usize,
         anchor_index: usize,

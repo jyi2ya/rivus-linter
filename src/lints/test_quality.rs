@@ -176,7 +176,7 @@ fn rvs_write_callgraph_MPS<'tcx, E: LintEnvironment>(
     let crate_name = CrateName::rvs_from_manifest_name(
         cx.tcx.crate_name(rustc_span::def_id::LOCAL_CRATE).as_str(),
     );
-    if let Err(error) = E::rvs_write_callgraph_BIMPST(world, &crate_name, callgraph) {
+    if let Err(error) = E::rvs_write_callgraph_P(world, &crate_name, callgraph) {
         cx.tcx
             .dcx()
             .err(format!("cannot write rivus callgraph artifact: {error}"));
@@ -231,7 +231,7 @@ mod tests {
             def_path: DefPath::from("demo::rvs_target"),
         };
         let mut test_node = FnNode::default();
-        let test_target = test_node.rvs_test_target_M(1);
+        let test_target = crate::artifacts::rvs_test_target_of_M(&mut test_node, 1);
         test_target.is_test = true;
         test_target.calls = BTreeMap::from([(helper_identity.clone(), CallEdgeType::Strong)]);
         graph.rvs_insert_M(DefPath::from("demo::test_calls_helper"), test_node);

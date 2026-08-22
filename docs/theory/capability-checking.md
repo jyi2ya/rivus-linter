@@ -4,7 +4,7 @@
 
 **函数**是基本实体。函数的**语义能力集合**（`ABCIMPSTU` 的子集）唯一来自调用图：函数签名与函数体事实、直接调用边、capsmap 精确条目、trait 实现投票和 Port 结构规则共同推断出每个节点的 semantic caps。函数**名字不是能力来源**。
 
-名字中的能力后缀只是 semantic caps 的**只读视图**：把 semantic caps 投影到 `B/I/M/P/S/T` 并按字母序排列，方便人类和大模型即时阅读。后缀与投影不一致时产生 naming view 诊断；后缀永不参与能力推断、传播、调用检查、报告统计或覆盖分类。修改函数名（含删除或伪造后缀）不会改变任何语义分析结果。
+名字中的能力后缀只是 semantic caps 的**只读视图**：把 semantic caps 投影到 `B/I/M/P/S/T` 并按字母序排列，方便人类和大模型即时阅读（World Port 操作与实现的视图例外，恒为 `P`，见下文）。后缀与投影不一致时产生 naming view 诊断；后缀永不参与能力推断、传播、调用检查、报告统计或覆盖分类。修改函数名（含删除或伪造后缀）不会改变任何语义分析结果。
 
 `A/C/U` 永不进入视图：A 来自 `async fn`、C 来自 `const fn`、U 来自 `unsafe fn` 或 `static mut` 访问，这些信息从签名与函数体直接可见。
 
@@ -38,12 +38,12 @@ good 和 ok 的统计集合可以重叠，但未测试诊断采用互斥分类�
 
 函数名以 `rvs_` 开头。名字的最后一节（以下划线分隔）若全由大写 ASCII 字母组成，则视为能力后缀视图：
 
-- 期望视图 = `project_BIMPST(semantic caps)`，按字母序排列
+- 期望视图 = `project_BIMPST(semantic caps)`，按字母序排列；World Port 操作与实现的期望视图固定为 `P`（实现的 `B/I/S/T` 是审计信息，`A/C/M/U` 从签名与函数体测量后仍不进入后缀）
 - 完整知识下，actual 后缀必须精确等于期望视图
 - 后缀含 A/C/U、未知字母、重复字母或乱序是**视图结构错误**
-- 缺失或多出 B/I/M/P/S/T 是**视图与语义不一致**
+- 缺失或多出 B/I/M/P/S/T 是**视图与语义不一致**（Port 操作除外：规范后缀恒为 `_P`）
 
-执法位置：普通调用边不再产生 call violation——caller 的能力就是传播闭包，resolved 调用链自洽。能力执法由 error 级 naming 诊断承接：缺失字母报对应 Missing\* contract 错误；多出字母或名不副实报 NameMismatch 错误（actual 后缀字母超出期望视图时必须报告，仅缺失字母时由 Missing\* 承接、NameMismatch 沉默；乱序、重复、未知字母等结构缺陷交给各自的专门诊断）。rustc 输出层把所有字母类 contract kind 统一映射到 `rvs_contract_mismatch`（Deny），具体 kind 保留在消息与离线报告 code 中；offline Error 严重级一律对应 Deny lint，Warn 对应 Warn lint。唯一例外是缺 `rvs_` 前缀：它是命名约定而非能力谎言，保持 Warning 并可按 crate 豁免。唯一保留调用边执法的是 World Port 实现体：impl body 与默认 trait body 按 voted 契约向下检查，执行契约未声明的能力报 `port_effect_violation` 错误；Port 实现内的 unknown callee 同样必须浮出，不得被 Port 分支吞掉。
+执法位置：普通调用边不再产生 call violation——caller 的能力就是传播闭包，resolved 调用链自洽。能力执法由 error 级 naming 诊断承接：缺失字母报对应 Missing\* contract 错误；多出字母或名不副实报 NameMismatch 错误（actual 后缀字母超出期望视图时必须报告，仅缺失字母时由 Missing\* 承接、NameMismatch 沉默；乱序、重复、未知字母等结构缺陷交给各自的专门诊断）。rustc 输出层把所有字母类 contract kind 统一映射到 `rvs_contract_mismatch`（Deny），具体 kind 保留在消息与离线报告 code 中；offline Error 严重级一律对应 Deny lint，Warn 对应 Warn lint。唯一例外是缺 `rvs_` 前缀：它是命名约定而非能力谎言，保持 Warning 并可按 crate 豁免。Port 实现不按名称或投票限制其效果——实现可以执行任何能力，具体效果通过 report 与 why 审计；Port 实现内的 unknown callee 仍必须浮出，不得被 Port 分支吞掉。
 
 例：
 - `rvs_add` → 期望视图为空（semantic caps 为空集时）
@@ -52,11 +52,13 @@ good 和 ok 的统计集合可以重叠，但未测试诊断采用互斥分类�
 
 ### P（Port）能力
 
-P 是特殊能力：普通函数可以通过 `_P` 视图声明自己依赖端口；World Port 的操作由 trait 结构获得 P，并通过实现投票获得完整的 `B/I/S/T` 契约。
+P 是特殊能力：普通函数可以通过 `_P` 视图声明自己依赖端口；World Port 操作的公开契约固定为 P。
 
 本地 trait 声明一个非泛型 associated type `World`，至少包含一个无 `self` receiver 的操作，并且每个操作都显式接收 `&Self::World` 或 `&mut Self::World` 时，该 trait 被标记为 **Port**。额外 associated type 表示长期资源；associated constant、generic World、receiver 方法或缺少 World 参数的操作都会使整个 trait 按普通 trait 处理。trait 名不参与判断。
 
-Port 操作自动获得 P；各 impl 的 `B/I/S/T` 能力按普通 trait 的至少半数规则投票，入选能力与操作自身的 `A/C/M/U` 一起构成完整契约，后缀只保留 BIMPST 字母。具体 impl body 与默认 trait body 都按完整契约向下检查，不能执行契约未声明的效果。
+Port 操作的公开传播能力固定为 P：trait 方法与 impl 方法的规范后缀都是 `_P`（Rust 要求 impl 方法名与 trait 一致）。P 是有意的信息隐藏——`rvs_save_P` 只表示"能力由 World 解释器负责"；实现是否阻塞、I/O 或有副作用属于适配器审计信息，通过 report 和 `cargo rivus why` 查看，不属于领域调用契约。Port impl 不比较实现体推断出的 `B/I/S/T` 与名称后缀；`A/C/M/U` 仍从签名与函数体测量，不进入后缀。
+
+impl 的实际能力仍被完整推断并用于 report 与统计——report 展示完整语义 caps（如 `AP` = 结构性 P + 签名测量的 A；`PST` = P + 审计到的 S/T），与公开传播契约"恒为 P"是两个不同视图；实现内部调用 opaque/incomplete 代码不会污染领域调用方——P 边是 incomplete 传播屏障。
 
 P 的语义：调用者通过类型级解释器和显式 World 使用一个可替换端口，而非依赖运行时 Client 对象或具体 adapter。实现可以替换为持有内存状态的 fake World。
 
@@ -100,11 +102,21 @@ receiver 分类覆盖显式写法：`self: &Self` 等价 `&self`，`self: &mut S
 5. 使用同一个离线能力引擎检查调用关系、静态状态和视图一致性
 6. 直接 rustc/UI 模式把当前 crate 的诊断映射为 rustc lint；`cargo rivus check` 输出全项目诊断
 
-推断与消费的每一层都不读名字：resolver 的能力来源只有 Port 结构、capsmap 精确条目、bodyless 签名+投票、有 body 节点的推断结果和 trait 多数投票；固定点 seed 只来自 capsmap。direct rustc 模式的覆盖分类使用签名/函数体事实加结构性 P（传播闭包属于离线引擎）；静态状态检查只对 World Port 实现体与默认 trait body 对照 voted 契约执行——普通函数的同类缺陷由 naming view 的 Contract 诊断唯一承接，不再重复报告。未测试诊断的分类标签（good/ok）由离线引擎按 semantic caps 判定并随 selection 传递，发射编译不再从签名事实重分类；incomplete lower bound 不构成分类证明，其覆盖候选被跳过。
+推断与消费的每一层都不读名字：resolver 的能力来源只有 Port 结构、capsmap 精确条目、bodyless 签名+投票、有 body 节点的推断结果和 trait 多数投票；固定点 seed 只来自 capsmap。direct rustc 模式的覆盖分类使用签名/函数体事实加结构性 P（传播闭包属于离线引擎）；未测试诊断的分类标签（good/ok）由离线引擎按 semantic caps 判定并随 selection 传递，发射编译不再从签名事实重分类。
+
+## incomplete 知识模型
+
+知识分为三层：
+
+- **root incomplete**：真正缺失知识的函数——callgraph artifact 不完整、caps 记录自身标 incomplete/unknown、bodyless 且无 exact contract、投票结果不稳定的普通 trait method。只有 root 产生 warning。
+- **export confidence**：沿普通调用边传播的传递可信度，仅供 `infer-std` / `infer-capsmap` 序列化 capsmap completeness 和 `cargo rivus why` 根因路径使用，不是用户可见函数属性。P 调用边是传播屏障。
+- **命名**：expected name 永远只由 semantic inferred caps 生成，不读取 completeness，也不读取当前名称的旧后缀。`check` 接受的规范名称必须等于 `annotate(strip(source))` 的产出。
+
+普通 trait vote 的完整性按"未知票能否改变结果"判定：对每个未入选的传播能力，若 `known_votes + unknown_votes >= threshold` 则投票不稳定（incomplete），其中 `unknown_votes` 只统计已知下界不含该能力的 incomplete impl——已为该能力投过票的 incomplete impl 已计入 `known_votes`，不得重复计数；否则即使补全未知 impl 的票也不会翻转结果，vote 视为 complete。threshold 使用全部已知 impl 数量；无推断结果的 impl 键不参与投票也不计入实现数（当前每个图节点都有初始推断，该情形不会出现），threshold 不得降低。
 
 命名契约不一致只有一套语义分类。离线报告直接携带推断阶段产生的 contract kind，并由输出层分别映射为稳定诊断 code 或 rustc lint；输出层不得复制另一套 `MissingBlocking`、`MissingIo` 等分类枚举。诊断与报告统计共用同一个 kind 选择规则：仅缺字母时由 Missing\* 承接、NameMismatch 沉默；期望视图含 P 或 actual 后缀带多余字母时 NameMismatch 参与。
 
-不完整知识下的视图比较规则：known lower bound 中存在而视图缺失的能力可以报 missing；视图中存在而 lower bound 未证明的能力不能报 extra——它可能来自尚未证明的传播。A/C/U、未知字母、重复、乱序不依赖 completeness，始终可报。bodyless 函数没有函数体、impl 投票或 capsmap 条目时保持 unknown，即使名字写了 `_BI` 也不从名字补全。
+视图比较规则：lower bound 是语义推断的结果，与当前名称后缀无关。known lower bound 中存在而视图缺失的能力可以报 missing；A/C/U、未知字母、重复、乱序始终可报。lower bound 未证明的能力不出现在 expected name 中，因此不会因推断不完整而要求删字母或保字母——名称是推断的纯函数。bodyless 函数没有函数体、impl 投票或 capsmap 条目时保持 unknown，即使名字写了 `_BI` 也不从名字补全。
 
 能力集合和能力知识是不同概念。调用检查消费能力集合；解释和设计反馈还消费能力来源、完整度与 trait 投票证据。旧记录迁移不得伪造已经丢失的证据。详见 `capability-knowledge.md`。
 

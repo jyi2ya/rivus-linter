@@ -1,8 +1,0 @@
-Offline Caps Check: 1 error(s), 0 warning(s)
-------------------------------------------------------------
-error[port_effect_violation]: demo::EffectAdapter::rvs_fetch_P@demo::Transport
-  World Port implementation executes an effect its contract does not allow
-  callee: dep::effect
-  contract caps: P
-  callee caps: S
-  unallowed caps: S

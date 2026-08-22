@@ -1,7 +1,9 @@
-// The default body is checked against the impl-voted contract: the pure
-// override votes no effects, so the default body's BIS call is a
-// port-effect violation. If default-body call collection regressed, this
-// fixture would compile clean and the test would fail.
+// check-pass
+// The default body calls a BIS helper. Under the fixed-P contract the Port
+// implementation is not checked against the public contract: implementation
+// effects are audit information, so this compiles clean. The default body's
+// call collection is asserted positively by
+// test_20260822_port_default_body_calls_reach_trait_votes in src/inference.rs.
 #![feature(register_tool)]
 #![register_tool(rivus)]
 #![allow(non_snake_case)]

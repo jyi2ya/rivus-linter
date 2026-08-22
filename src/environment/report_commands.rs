@@ -166,8 +166,22 @@ fn rvs_checked_report_sum(current: usize, delta: usize, label: &str) -> Result<u
 
 /// Whether a node contributes to the report at all (scope, test, and
 /// naming-prefix gates shared by capability rows and incomplete counts).
-fn rvs_is_report_function(scope: &LocalScope, def_path: &DefPath, node: &FnNode) -> bool {
-    if !FunctionClassification::rvs_new(scope, def_path, node).rvs_is_report_candidate() {
+///
+/// `port_methods` is the aggregated Port set from inference: it contains
+/// every implementation of a Port declaration via the trait-method
+/// identity, including implementations whose own node lacks the
+/// Port fact (e.g. collected before the declaration was recognized).
+fn rvs_is_report_function(
+    scope: &LocalScope,
+    def_path: &DefPath,
+    node: &FnNode,
+    port_methods: &BTreeSet<DefPath>,
+) -> bool {
+    let is_port_method = node.facts.is_port_method || port_methods.contains(def_path);
+    if !FunctionClassification::rvs_new(scope, def_path, node)
+        .rvs_with_port(is_port_method)
+        .rvs_is_report_candidate()
+    {
         return false;
     }
     let has_per_definition_metadata = node.report_function_count > 0;
@@ -180,8 +194,7 @@ fn rvs_is_report_function(scope: &LocalScope, def_path: &DefPath, node: &FnNode)
     // The rvs_ prefix gates ordinary functions; World Port impl methods
     // are reported through their structural P contract even when the impl
     // method itself carries no rvs_ prefix.
-    ParsedFunctionName::rvs_parse(def_path.rvs_as_str()).rvs_has_rvs_prefix()
-        || node.facts.is_port_method
+    ParsedFunctionName::rvs_parse(def_path.rvs_as_str()).rvs_has_rvs_prefix() || is_port_method
 }
 
 fn rvs_report_entry(
@@ -189,8 +202,9 @@ fn rvs_report_entry(
     def_path: &DefPath,
     node: &FnNode,
     semantic_caps: &CapabilitySet,
+    port_methods: &BTreeSet<DefPath>,
 ) -> Result<Option<FnEntry>, String> {
-    if !rvs_is_report_function(scope, def_path, node) {
+    if !rvs_is_report_function(scope, def_path, node, port_methods) {
         return Ok(None);
     }
     // Reports measure callgraph semantics only: semantic caps come from the
@@ -217,6 +231,7 @@ fn rvs_report_entries_from_callgraph(
     graph: &FnGraph,
     local_crate_names: &BTreeSet<CrateName>,
     semantic_caps: &BTreeMap<DefPath, CapabilitySet>,
+    port_methods: &BTreeSet<DefPath>,
 ) -> Result<Vec<FnEntry>, String> {
     let mut entries = Vec::new();
     let scope = LocalScope::rvs_for_graph(local_crate_names, graph);
@@ -224,7 +239,7 @@ fn rvs_report_entries_from_callgraph(
         let Some(caps) = semantic_caps.get(def_path) else {
             continue;
         };
-        if let Some(entry) = rvs_report_entry(&scope, def_path, node, caps)? {
+        if let Some(entry) = rvs_report_entry(&scope, def_path, node, caps, port_methods)? {
             entries.push(entry);
         }
     }
@@ -235,6 +250,7 @@ fn rvs_incomplete_report_function_count(
     graph: &FnGraph,
     local_crate_names: &BTreeSet<CrateName>,
     incomplete_paths: &BTreeSet<DefPath>,
+    port_methods: &BTreeSet<DefPath>,
 ) -> Result<usize, String> {
     let scope = LocalScope::rvs_for_graph(local_crate_names, graph);
     let mut count = 0usize;
@@ -242,7 +258,9 @@ fn rvs_incomplete_report_function_count(
         let Some(node) = graph.rvs_get(path.rvs_as_str()) else {
             continue;
         };
-        if !rvs_is_report_function(&scope, path, node) || node.report_line_count.is_none() {
+        if !rvs_is_report_function(&scope, path, node, port_methods)
+            || node.report_line_count.is_none()
+        {
             continue;
         }
         let function_count = node.report_function_count.max(1);
@@ -276,7 +294,7 @@ fn rvs_format_incomplete_inference_summary(count: usize) -> String {
     }
     debug_assert!(count > 0);
     format!(
-        "\nInference Status\n------------------------------\n{count} local function(s) depend on unknown callee capability data. Capability totals reflect measured signature/body facts and callgraph propagation from known caps only; rename suggestions may omit unknown capabilities.\n"
+        "\nInference Status\n------------------------------\n{count} local function(s) are root knowledge gaps (incomplete artifact, incomplete caps record, unresolvable bodyless declaration, or unstable trait vote). Capability totals reflect measured signature/body facts and callgraph propagation from known caps only; rename suggestions may omit unknown capabilities. Use `cargo rivus why` for root paths.\n"
     )
 }
 
@@ -314,7 +332,7 @@ fn rvs_format_trait_outlier_summary(
 /// # Panics
 ///
 /// Panics if the current executable path, current directory, or cargo cannot be resolved.
-pub(crate) fn rvs_run_report_BIPST(path: &Path) -> Result<(), String> {
+pub(crate) fn rvs_run_report_BIST(path: &Path) -> Result<(), String> {
     let project_path = rvs_canonical_cargo_project_BIS(path)?;
     let target_scope = CargoTargetScope::WithTestExampleBench;
     let local_crate_names = rvs_load_local_crate_prefixes_BIS(&project_path, target_scope)?;
@@ -326,13 +344,18 @@ pub(crate) fn rvs_run_report_BIPST(path: &Path) -> Result<(), String> {
         &local_crate_names,
         &analysis,
     );
-    let report_entries =
-        rvs_report_entries_from_callgraph(&callgraph, &local_crate_names, analysis.rvs_inferred())?;
+    let report_entries = rvs_report_entries_from_callgraph(
+        &callgraph,
+        &local_crate_names,
+        analysis.rvs_inferred(),
+        analysis.rvs_scoped_port_methods(),
+    )?;
     let report = rvs_build_report(&report_entries)?;
     let incomplete_count = rvs_incomplete_report_function_count(
         &callgraph,
         &local_crate_names,
-        analysis.rvs_incomplete_paths(),
+        analysis.rvs_incomplete_roots(),
+        analysis.rvs_scoped_port_methods(),
     )?;
     let incomplete_output = rvs_format_incomplete_inference_summary(incomplete_count);
     let outlier_output = rvs_format_trait_outlier_summary(&target_outliers);
@@ -534,15 +557,25 @@ mod tests {
             &crate::capsmap::CapsMap::rvs_new(),
             &local,
         );
-        let entries =
-            rvs_report_entries_from_callgraph(&graph, &local, analysis.rvs_inferred()).unwrap();
+        let entries = rvs_report_entries_from_callgraph(
+            &graph,
+            &local,
+            analysis.rvs_inferred(),
+            analysis.rvs_scoped_port_methods(),
+        )
+        .unwrap();
         let report = rvs_build_report(&entries).unwrap();
-        let incomplete_count =
-            rvs_incomplete_report_function_count(&graph, &local, analysis.rvs_incomplete_paths())
-                .unwrap();
+        let incomplete_count = rvs_incomplete_report_function_count(
+            &graph,
+            &local,
+            analysis.rvs_incomplete_roots(),
+            analysis.rvs_scoped_port_methods(),
+        )
+        .unwrap();
         let output = format!(
-            "all_incomplete_paths={}\nentries={}\nreported_functions={}\nincomplete_report_functions={}\n",
+            "all_incomplete_paths={}\nincomplete_roots={}\nentries={}\nreported_functions={}\nincomplete_report_functions={}\n",
             analysis.rvs_incomplete_paths().len(),
+            analysis.rvs_incomplete_roots().len(),
             entries.len(),
             report.total.fn_count,
             incomplete_count,
@@ -554,7 +587,111 @@ mod tests {
 
         assert_eq!(entries.len(), 1);
         assert_eq!(report.total.fn_count, 3);
-        assert_eq!(incomplete_count, 3);
+        // The only root is the absent `dep::unknown` callee itself, which is
+        // not a graph node and therefore not reportable: transitively
+        // tainted local functions keep their measured lower bounds and no
+        // longer count as incomplete report functions.
+        assert_eq!(incomplete_count, 0);
+    }
+
+    #[test]
+    fn test_20260822_report_incomplete_count_counts_local_root_metadata() {
+        // A local root whose own caps record is incomplete (unknown
+        // completeness in the knowledge layer) must contribute its
+        // per-definition report metadata to the incomplete count: the
+        // count cannot silently degenerate to zero when the root is a
+        // reportable graph node.
+        let mut graph = FnGraph::rvs_new();
+        let mut root = FnNode {
+            report_line_count: Some(7),
+            report_function_count: 2,
+            ..FnNode::default()
+        };
+        root.calls.insert(
+            FunctionIdentity {
+                crate_id: 1,
+                def_path: DefPath::from("dep::unknown"),
+            },
+            CallEdgeType::Strong,
+        );
+        graph.rvs_insert_M(DefPath::from("demo::rvs_incomplete_root"), root);
+
+        // A taint-only caller: its root knowledge is complete, so it must
+        // stay out of the count even though it is transitively tainted.
+        let mut tainted = FnNode {
+            report_line_count: Some(3),
+            report_function_count: 1,
+            ..FnNode::default()
+        };
+        tainted.calls.insert(
+            FunctionIdentity {
+                crate_id: 1,
+                def_path: DefPath::from("demo::rvs_incomplete_root"),
+            },
+            CallEdgeType::Strong,
+        );
+        graph.rvs_insert_M(DefPath::from("demo::rvs_tainted_caller"), tainted);
+
+        let mut caps = crate::capsmap::CapsMap::rvs_new();
+        let mut info = crate::capability::CapabilityInfo::rvs_new(
+            CapabilitySet::rvs_new(),
+            crate::capability::CapabilityBasis::Inferred,
+            crate::capability::CapabilityCompleteness::Unknown,
+        );
+        info.rvs_with_source_M(crate::capability::CapabilitySource {
+            layer: "deps".to_string(),
+            file: std::path::PathBuf::from("caps/deps"),
+            line: 2,
+        });
+        caps.rvs_insert_info_M(
+            crate::symbols::CapsMapKey::rvs_new("demo::rvs_incomplete_root"),
+            info,
+        );
+
+        let local = BTreeSet::from([CrateName::from("demo")]);
+        let analysis = PreparedLocalAnalysis::rvs_prepare_M(&mut graph, &caps, &local);
+        let entries = rvs_report_entries_from_callgraph(
+            &graph,
+            &local,
+            analysis.rvs_inferred(),
+            analysis.rvs_scoped_port_methods(),
+        )
+        .unwrap();
+        let report = rvs_build_report(&entries).unwrap();
+        let incomplete_count = rvs_incomplete_report_function_count(
+            &graph,
+            &local,
+            analysis.rvs_incomplete_roots(),
+            analysis.rvs_scoped_port_methods(),
+        )
+        .unwrap();
+        let output = format!(
+            "incomplete_roots={}\nentries={}\nreported_functions={}\nincomplete_report_functions={}\n",
+            analysis.rvs_incomplete_roots().len(),
+            entries.len(),
+            report.total.fn_count,
+            incomplete_count,
+        );
+        rvs_snapshot_BIS(
+            "test_20260822_report_incomplete_count_counts_local_root_metadata",
+            &output,
+        );
+
+        // Positive local-root case: the root's per-definition metadata (2)
+        // enters the count, while the taint-only caller stays excluded.
+        // Both functions are reportable (2 + 1 = 3 reported functions).
+        assert!(
+            analysis
+                .rvs_incomplete_roots()
+                .contains(&DefPath::from("demo::rvs_incomplete_root"))
+        );
+        assert!(
+            !analysis
+                .rvs_incomplete_roots()
+                .contains(&DefPath::from("demo::rvs_tainted_caller"))
+        );
+        assert_eq!(report.total.fn_count, 3);
+        assert_eq!(incomplete_count, 2);
     }
 
     #[test]
@@ -675,8 +812,13 @@ mod tests {
             &crate::capsmap::CapsMap::rvs_new(),
             &local,
         );
-        let entries =
-            rvs_report_entries_from_callgraph(&graph, &local, analysis.rvs_inferred()).unwrap();
+        let entries = rvs_report_entries_from_callgraph(
+            &graph,
+            &local,
+            analysis.rvs_inferred(),
+            analysis.rvs_scoped_port_methods(),
+        )
+        .unwrap();
         let report = rvs_build_report(&entries).unwrap();
         let output = report.to_string();
         rvs_snapshot_BIS(
@@ -691,7 +833,7 @@ mod tests {
     #[test]
     fn test_20260702_report_rejects_non_cargo_dir() {
         let dir = rvs_make_temp_dir_BIS("report-non-cargo");
-        let result = rvs_run_report_BIPST(&dir);
+        let result = rvs_run_report_BIST(&dir);
         let output = format!("{result:?}").replace(&dir.to_string_lossy().into_owned(), "$TMP");
         rvs_snapshot_BIS("test_20260702_report_rejects_non_cargo_dir", &output);
         assert!(result.is_err(), "report should fail for non-cargo dir");
@@ -797,6 +939,71 @@ mod tests {
                 .iter()
                 .any(|diff| diff.def_path.rvs_as_str() == "demo::parse")
         );
+    }
+
+    #[test]
+    fn test_20260822_port_default_body_call_is_collected_e2e() {
+        // End-to-end: the HIR collector must record the default trait
+        // body's call edge on the trait declaration node. The unit-level
+        // inference assertions live in src/inference.rs; this test guards
+        // the collection step itself with real compilation.
+        let dir = rvs_make_cargo_project_BIS(
+            "port-default-body-collection",
+            "port-default-body",
+            &[(
+                "src/lib.rs",
+                "#![allow(non_snake_case)]\n\
+                 #![allow(dead_code)]\n\n\
+                 fn rvs_read_BIS() -> i32 {\n    \
+                     let _ = std::fs::remove_file(\"fixture-marker\");\n    1\n\
+                 }\n\n\
+                 pub trait FetchApi {\n    \
+                     type World;\n\n    \
+                     fn rvs_fetch_P(_world: &Self::World) -> i32 {\n        rvs_read_BIS()\n    }\n\
+                 }\n\n\
+                 pub struct Api;\npub struct ApiWorld;\n\n\
+                 impl FetchApi for Api {\n    \
+                     type World = ApiWorld;\n\n    \
+                     fn rvs_fetch_P(_world: &ApiWorld) -> i32 {\n        0\n    }\n\
+                 }\n",
+            )],
+        );
+        let target_scope = CargoTargetScope::WithTestExampleBench;
+        let local_crate_names = rvs_load_local_crate_prefixes_BIS(&dir, target_scope).unwrap();
+        let (mut callgraph, caps) =
+            rvs_collect_callgraph_and_caps_BIST(&dir, target_scope, &local_crate_names).unwrap();
+        let analysis =
+            PreparedLocalAnalysis::rvs_prepare_M(&mut callgraph, &caps, &local_crate_names);
+        let declaration_path = "port_default_body::FetchApi::rvs_fetch_P";
+        let declaration = callgraph
+            .rvs_get(declaration_path)
+            .expect("never: port declaration is collected");
+        let calls_helper = declaration
+            .calls
+            .keys()
+            .any(|callee| callee.def_path.rvs_as_str().ends_with("rvs_read_BIS"));
+        let inferred = analysis
+            .rvs_inferred()
+            .get(&DefPath::from(declaration_path))
+            .expect("never: port declaration has inferred caps");
+        let output = format!(
+            "has_body={}\ncalls_helper={}\ninferred={}\n",
+            declaration.has_body,
+            calls_helper,
+            inferred.rvs_letters(),
+        );
+        rvs_snapshot_BIS(
+            "test_20260822_port_default_body_call_is_collected_e2e",
+            &output,
+        );
+
+        assert!(declaration.has_body);
+        assert!(calls_helper, "default-body call edge must be collected");
+        // Audit caps from the default body's callee propagation are
+        // retained while the structural P stays.
+        assert!(inferred.rvs_contains(Capability::P));
+
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -1110,6 +1317,159 @@ mod tests {
     }
 
     #[test]
+    fn test_20260822_report_includes_unmarked_impl_of_port_declaration() {
+        // Only the trait declaration carries the structural Port fact. The
+        // implementation is a member of the Port aggregate via the
+        // trait-method identity, so it must appear in report entries with
+        // its structural P instead of being dropped as an ordinary trait
+        // impl method.
+        let mut graph = FnGraph::rvs_new();
+        let mut declaration = FnNode {
+            has_body: false,
+            report_line_count: Some(2),
+            ..FnNode::default()
+        };
+        declaration.facts.is_port_method = true;
+        graph.rvs_insert_M(DefPath::from("demo::Transport::rvs_fetch_P"), declaration);
+
+        let mut implementation = FnNode {
+            is_trait_impl: true,
+            report_line_count: Some(3),
+            ..FnNode::default()
+        };
+        implementation.facts.has_static_ref = true;
+        graph.rvs_insert_M(
+            DefPath::from("demo::FastAdapter::rvs_fetch_P@demo::Transport"),
+            implementation,
+        );
+
+        let local = std::collections::BTreeSet::from([CrateName::from("demo")]);
+        let mut scoped_graph = graph.clone();
+        let analysis = PreparedLocalAnalysis::rvs_prepare_M(
+            &mut scoped_graph,
+            &crate::capsmap::CapsMap::rvs_new(),
+            &local,
+        );
+        let entries = rvs_report_entries_from_callgraph(
+            &graph,
+            &local,
+            analysis.rvs_inferred(),
+            analysis.rvs_scoped_port_methods(),
+        )
+        .unwrap();
+        let output = format!("{entries:?}\n");
+        rvs_snapshot_BIS(
+            "test_20260822_report_includes_unmarked_impl_of_port_declaration",
+            &output,
+        );
+
+        let impl_caps = analysis
+            .rvs_inferred()
+            .get(&DefPath::from(
+                "demo::FastAdapter::rvs_fetch_P@demo::Transport",
+            ))
+            .expect("never: unmarked impl of a port declaration is inferred");
+        assert!(impl_caps.rvs_contains(crate::capability::Capability::P));
+
+        let impl_entry = entries
+            .iter()
+            .find(|entry| entry.line_count == 3)
+            .expect("never: unmarked port implementation has a report entry");
+        assert!(
+            impl_entry
+                .capabilities
+                .rvs_contains(crate::capability::Capability::P)
+        );
+        assert!(
+            impl_entry
+                .capabilities
+                .rvs_contains(crate::capability::Capability::S)
+        );
+        let declaration_entry = entries
+            .iter()
+            .find(|entry| entry.line_count == 2)
+            .expect("never: port declaration has a report entry");
+        assert!(
+            declaration_entry
+                .capabilities
+                .rvs_contains(crate::capability::Capability::P)
+        );
+    }
+
+    #[test]
+    fn test_20260822_report_port_impl_keeps_full_audit_semantics() {
+        // Report shows full semantic caps: an async Port implementation
+        // whose body performs blocking I/O keeps A, B, I, P, and S in its
+        // report entry — the fixed public contract is P, but the report
+        // is the audit view and must not collapse the implementation to
+        // P.
+        let mut graph = FnGraph::rvs_new();
+        let mut declaration = FnNode {
+            has_body: false,
+            report_line_count: Some(2),
+            ..FnNode::default()
+        };
+        declaration.facts.is_port_method = true;
+        graph.rvs_insert_M(DefPath::from("demo::FetchApi::rvs_fetch_P"), declaration);
+
+        let mut implementation = FnNode {
+            is_trait_impl: true,
+            report_line_count: Some(4),
+            ..FnNode::default()
+        };
+        implementation.facts.is_port_method = true;
+        implementation.facts.has_async = true;
+        implementation.facts.has_static_ref = true;
+        implementation.calls.insert(
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: DefPath::from("dep::rvs_perform_io_BI"),
+            },
+            CallEdgeType::Strong,
+        );
+        graph.rvs_insert_M(
+            DefPath::from("demo::NetAdapter::rvs_fetch_P@demo::FetchApi"),
+            implementation,
+        );
+
+        let local = std::collections::BTreeSet::from([CrateName::from("demo")]);
+        let mut scoped_graph = graph.clone();
+        let analysis = PreparedLocalAnalysis::rvs_prepare_M(
+            &mut scoped_graph,
+            &rvs_make_capsmap(&[("dep::rvs_perform_io_BI", "BI")]),
+            &local,
+        );
+        let entries = rvs_report_entries_from_callgraph(
+            &graph,
+            &local,
+            analysis.rvs_inferred(),
+            analysis.rvs_scoped_port_methods(),
+        )
+        .unwrap();
+        let impl_entry = entries
+            .iter()
+            .find(|entry| entry.line_count == 4)
+            .expect("never: async port implementation has a report entry");
+        let caps_letters = impl_entry.capabilities.rvs_letters();
+        let output = format!("impl_caps={caps_letters}\n");
+        rvs_snapshot_BIS(
+            "test_20260822_report_port_impl_keeps_full_audit_semantics",
+            &output,
+        );
+
+        // The full audit semantics survive into the report: A (async
+        // signature), B and I (propagated from the blocking I/O helper),
+        // P (structural), S (static-ref body fact).
+        assert_eq!(caps_letters, "ABIPS");
+        // The declaration keeps the public contract view.
+        let declaration_caps = analysis
+            .rvs_inferred()
+            .get(&DefPath::from("demo::FetchApi::rvs_fetch_P"))
+            .expect("never: port declaration is inferred");
+        assert!(declaration_caps.rvs_contains(crate::capability::Capability::P));
+    }
+
+    #[test]
     fn test_20260709_report_entries_skip_non_port_trait_impl_methods() {
         let mut graph = FnGraph::rvs_new();
         graph.rvs_insert_M(
@@ -1142,8 +1502,13 @@ mod tests {
             &crate::capsmap::CapsMap::rvs_new(),
             &local,
         );
-        let entries =
-            rvs_report_entries_from_callgraph(&graph, &local, analysis.rvs_inferred()).unwrap();
+        let entries = rvs_report_entries_from_callgraph(
+            &graph,
+            &local,
+            analysis.rvs_inferred(),
+            analysis.rvs_scoped_port_methods(),
+        )
+        .unwrap();
         let output = format!("{entries:?}\n");
         rvs_snapshot_BIS(
             "test_20260709_report_entries_skip_non_port_trait_impl_methods",
@@ -1207,8 +1572,13 @@ mod tests {
             &crate::capsmap::CapsMap::rvs_new(),
             &local,
         );
-        let entries =
-            rvs_report_entries_from_callgraph(&graph, &local, analysis.rvs_inferred()).unwrap();
+        let entries = rvs_report_entries_from_callgraph(
+            &graph,
+            &local,
+            analysis.rvs_inferred(),
+            analysis.rvs_scoped_port_methods(),
+        )
+        .unwrap();
         let output = format!("{entries:?}\n");
         rvs_snapshot_BIS(
             "test_20260816_report_entries_derive_caps_from_callgraph_facts",
@@ -1265,8 +1635,13 @@ mod tests {
             &crate::capsmap::CapsMap::rvs_new(),
             &local,
         );
-        let entries =
-            rvs_report_entries_from_callgraph(&graph, &local, analysis.rvs_inferred()).unwrap();
+        let entries = rvs_report_entries_from_callgraph(
+            &graph,
+            &local,
+            analysis.rvs_inferred(),
+            analysis.rvs_scoped_port_methods(),
+        )
+        .unwrap();
         let output = format!("{entries:?}\n");
         rvs_snapshot_BIS(
             "test_20260816_report_merges_non_suffix_caps_from_facts",
@@ -1320,11 +1695,16 @@ mod tests {
                 &crate::capsmap::CapsMap::rvs_new(),
                 &local,
             );
-            rvs_report_entries_from_callgraph(&graph, &local, analysis.rvs_inferred())
-                .unwrap()
-                .into_iter()
-                .map(|entry| entry.capabilities.rvs_letters())
-                .collect::<Vec<_>>()
+            rvs_report_entries_from_callgraph(
+                &graph,
+                &local,
+                analysis.rvs_inferred(),
+                analysis.rvs_scoped_port_methods(),
+            )
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.capabilities.rvs_letters())
+            .collect::<Vec<_>>()
         };
         let plain = build(&["demo::rvs_handle", "demo::rvs_factorial"]);
         let forged = build(&["demo::rvs_handle_ST", "demo::rvs_factorial_M"]);
@@ -1397,7 +1777,7 @@ mod tests {
             )],
         );
 
-        let result = rvs_run_report_BIPST(&dir);
+        let result = rvs_run_report_BIST(&dir);
         let target_scope = CargoTargetScope::WithTestExampleBench;
         let local_crate_names = rvs_load_local_crate_prefixes_BIS(&dir, target_scope).unwrap();
         let (mut callgraph, caps) =
@@ -1413,6 +1793,7 @@ mod tests {
             &callgraph,
             &local_crate_names,
             analysis.rvs_inferred(),
+            analysis.rvs_scoped_port_methods(),
         );
         let async_lines = report_entries.as_ref().ok().and_then(|entries| {
             entries

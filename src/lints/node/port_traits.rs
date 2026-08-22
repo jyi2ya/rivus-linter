@@ -6,7 +6,7 @@ use rustc_span::def_id::DefId;
 /// `World`. Additional associated types represent implementation-specific
 /// resources; associated constants and receiver methods belong to ordinary
 /// traits instead.
-pub(crate) fn rvs_is_local_world_port_trait_S(cx: &LateContext<'_>, trait_def_id: DefId) -> bool {
+pub(crate) fn rvs_is_local_world_port_trait(cx: &LateContext<'_>, trait_def_id: DefId) -> bool {
     if !trait_def_id.is_local() {
         return false;
     }

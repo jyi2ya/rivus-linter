@@ -1,6 +1,6 @@
 #![allow(non_snake_case)]
 
-fn rvs_thread_builder_spawn_BIST() {
+fn rvs_thread_builder_spawn_BST() {
     let handle = std::thread::Builder::new().spawn(|| {}).unwrap();
     handle.join().unwrap();
 }

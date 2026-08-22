@@ -1,4 +1,4 @@
-port_caps=BIPS
+port_caps=P
 caller_caps=P
 contract_mismatches=0
 Offline Caps Check: ok

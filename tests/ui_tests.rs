@@ -144,7 +144,7 @@ fn rvs_collect_rs_files_BIS(dir: &Path) -> Vec<PathBuf> {
     files
 }
 
-fn rvs_normalize_stderr_S(raw: &str) -> String {
+fn rvs_normalize_stderr_BIS(raw: &str) -> String {
     let dir = std::env::current_dir().unwrap();
     let dir_str = dir.to_string_lossy().to_string();
     let mut out = raw.to_string();
@@ -371,7 +371,7 @@ fn rvs_run_one_test_BIS(
         .map_err(|e| format!("failed to run rivus-driver: {e}"))?;
 
     let raw_stderr = String::from_utf8_lossy(&output.stderr);
-    let actual = rvs_normalize_stderr_S(&raw_stderr);
+    let actual = rvs_normalize_stderr_BIS(&raw_stderr);
 
     if check_pass {
         if !output.status.success() || !actual.is_empty() {

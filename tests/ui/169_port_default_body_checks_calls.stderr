@@ -1,9 +1,0 @@
-error: World Port implementation executes an effect its contract does not allow; callee: 169_port_default_body_checks_calls::rvs_read_BIS; contract caps: P; callee caps: BIS; unallowed caps: B, I, S
-  --> $DIR/tests/ui/169_port_default_body_checks_calls.rs:21:9
-   |
-LL |         rvs_read_BIS()
-   |         ^^^^^^^^^^^^^^
-   |
-   = note: `#[deny(rivus::rvs_port_effect_violation)]` on by default
-
-error: aborting due to 1 previous error

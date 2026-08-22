@@ -87,7 +87,7 @@ fn rvs_annotation_tokens(snippet: &str) -> Option<Vec<&str>> {
 ///
 /// Such a type is classified as pure data: field access and construction are
 /// part of its public surface, so behavior belongs in free functions.
-pub(crate) fn rvs_is_public_fields_data_S(cx: &LateContext<'_>, adt_def_id: DefId) -> bool {
+pub(crate) fn rvs_is_public_fields_data(cx: &LateContext<'_>, adt_def_id: DefId) -> bool {
     let adt = cx.tcx.adt_def(adt_def_id);
     if !adt.is_struct() {
         return false;
@@ -185,7 +185,7 @@ pub(crate) fn rvs_receiver_kind(sig: &rustc_hir::FnSig<'_>, body: &Body<'_>) -> 
 /// the enclosing struct's and parent modules' visibilities, including
 /// `pub use` re-exports; a `pub` method in a private, non-re-exported module
 /// does not actually widen access.
-fn rvs_field_dominates_method_S(
+fn rvs_field_dominates_method(
     cx: &LateContext<'_>,
     field_def_id: DefId,
     method_def_id: DefId,
@@ -235,8 +235,8 @@ pub(crate) fn rvs_check_data_method_S<'tcx>(
         }
         ReceiverKind::Ref | ReceiverKind::Value => {
             if let Some((field_name, field_def_id)) =
-                rvs_direct_field_projection_S(cx, body, adt_def_id)
-                && rvs_field_dominates_method_S(cx, field_def_id, method_def_id)
+                rvs_direct_field_projection(cx, body, adt_def_id)
+                && rvs_field_dominates_method(cx, field_def_id, method_def_id)
             {
                 rvs_emit_span_lint_S(
                     cx,
@@ -258,12 +258,12 @@ pub(crate) fn rvs_check_data_method_S<'tcx>(
 /// a (possibly borrowed, block-wrapped, or early-returned) `self.field`
 /// projection naming a declared field of the struct; any other statement or
 /// computation disqualifies the method.
-pub(crate) fn rvs_direct_field_projection_S<'tcx>(
+pub(crate) fn rvs_direct_field_projection<'tcx>(
     cx: &LateContext<'tcx>,
     body: &'tcx Body<'tcx>,
     adt_def_id: DefId,
 ) -> Option<(&'tcx str, DefId)> {
-    let self_binding = rvs_self_binding_id_S(body)?;
+    let self_binding = rvs_self_binding_id(body)?;
     let mut current = rvs_root_body_expr(body);
     loop {
         match current.kind {
@@ -305,7 +305,7 @@ pub(crate) fn rvs_direct_field_projection_S<'tcx>(
 }
 
 /// Returns the `HirId` of the implicit `self` binding of a method body.
-fn rvs_self_binding_id_S(body: &Body<'_>) -> Option<rustc_hir::HirId> {
+fn rvs_self_binding_id(body: &Body<'_>) -> Option<rustc_hir::HirId> {
     let param = body.params.first()?;
     match param.pat.kind {
         rustc_hir::PatKind::Binding(_, hir_id, ident, _) if ident.name == kw::SelfLower => {
@@ -353,10 +353,10 @@ mod tests {
     #[test]
     fn test_20260819_data_struct_ui_coverage() {
         rvs_snapshot_BIS("test_20260819_data_struct_ui_coverage", "covered\n");
-        rvs_register_test_coverage(rvs_is_public_fields_data_S);
+        rvs_register_test_coverage(rvs_is_public_fields_data);
         rvs_register_test_coverage(rvs_inherent_struct_def_id);
         rvs_register_test_coverage(rvs_check_data_method_S);
-        rvs_register_test_coverage(rvs_direct_field_projection_S);
+        rvs_register_test_coverage(rvs_direct_field_projection);
         rvs_register_test_coverage(rvs_receiver_kind);
     }
 

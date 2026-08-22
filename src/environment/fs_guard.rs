@@ -20,7 +20,7 @@ pub(crate) struct RivusDirectoryLock {
 pub(crate) struct RivusDirectoryLock;
 
 #[cfg(any(target_os = "android", target_os = "linux", target_vendor = "apple"))]
-pub(crate) fn rvs_try_lock_directory_BIST(directory: &Path) -> std::io::Result<RivusDirectoryLock> {
+pub(crate) fn rvs_try_lock_directory_BIS(directory: &Path) -> std::io::Result<RivusDirectoryLock> {
     let directory = directory.canonicalize()?;
     {
         let mut locked = RVS_DIRECTORY_LOCKS.lock().map_err(|error| {
@@ -90,9 +90,7 @@ impl Drop for RivusDirectoryLock {
 }
 
 #[cfg(not(any(target_os = "android", target_os = "linux", target_vendor = "apple")))]
-pub(crate) fn rvs_try_lock_directory_BIST(
-    _directory: &Path,
-) -> std::io::Result<RivusDirectoryLock> {
+pub(crate) fn rvs_try_lock_directory_BIS(_directory: &Path) -> std::io::Result<RivusDirectoryLock> {
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,
         "directory locking is unsupported on this platform",
@@ -149,7 +147,7 @@ mod tests {
         use std::os::unix::process::CommandExt as _;
 
         let dir = rvs_make_temp_dir_BIS("directory-lock-fork-inheritance");
-        let lock = rvs_try_lock_directory_BIST(&dir).unwrap();
+        let lock = rvs_try_lock_directory_BIS(&dir).unwrap();
         let lock_path = dir.join(RVS_DIRECTORY_LOCK_FILE);
         let lock_file_regular = std::fs::symlink_metadata(&lock_path)
             .unwrap()
@@ -182,7 +180,7 @@ mod tests {
             let mut ready = [0u8; 1];
             parent_socket.read_exact(&mut ready).unwrap();
             drop(lock);
-            let retry = rvs_try_lock_directory_BIST(&dir);
+            let retry = rvs_try_lock_directory_BIS(&dir);
             parent_socket.write_all(&[1]).unwrap();
             let child_success = child
                 .join()
@@ -214,13 +212,13 @@ mod tests {
         const CHILD_DIRECTORY_ENV: &str = "RVS_TEST_DIRECTORY_LOCK_CHILD";
 
         if let Some(directory) = std::env::var_os(CHILD_DIRECTORY_ENV) {
-            let error = rvs_try_lock_directory_BIST(Path::new(&directory)).unwrap_err();
+            let error = rvs_try_lock_directory_BIS(Path::new(&directory)).unwrap_err();
             assert_eq!(error.kind(), std::io::ErrorKind::WouldBlock);
             return;
         }
 
         let dir = rvs_make_temp_dir_BIS("directory-lock-other-process");
-        let lock = rvs_try_lock_directory_BIST(&dir).unwrap();
+        let lock = rvs_try_lock_directory_BIS(&dir).unwrap();
         let child = std::process::Command::new(std::env::current_exe().unwrap())
             .arg("--exact")
             .arg(
@@ -231,7 +229,7 @@ mod tests {
             .status()
             .unwrap();
         drop(lock);
-        let retry = rvs_try_lock_directory_BIST(&dir);
+        let retry = rvs_try_lock_directory_BIS(&dir);
         let retry_is_ok = retry.is_ok();
         drop(retry);
         let output = format!(
@@ -257,14 +255,14 @@ mod tests {
         std::fs::write(&victim, "safe").unwrap();
         std::os::unix::fs::symlink(&victim, &lock_path).unwrap();
 
-        let result = rvs_try_lock_directory_BIST(&dir);
+        let result = rvs_try_lock_directory_BIS(&dir);
         let victim_content = std::fs::read_to_string(&victim).unwrap();
         let lock_is_symlink = std::fs::symlink_metadata(&lock_path)
             .unwrap()
             .file_type()
             .is_symlink();
         std::fs::remove_file(&lock_path).unwrap();
-        let retry = rvs_try_lock_directory_BIST(&dir);
+        let retry = rvs_try_lock_directory_BIS(&dir);
         let retry_is_ok = retry.is_ok();
         drop(retry);
         let output = format!(
@@ -283,7 +281,7 @@ mod tests {
     #[cfg(not(any(target_os = "android", target_os = "linux", target_vendor = "apple")))]
     #[test]
     fn test_20260716_unsupported_directory_lock_returns_unsupported() {
-        let error = rvs_try_lock_directory_BIST(Path::new(".")).unwrap_err();
+        let error = rvs_try_lock_directory_BIS(Path::new(".")).unwrap_err();
         let output = format!("kind={:?}\n", error.kind());
         rvs_snapshot_BIS(
             "test_20260716_unsupported_directory_lock_returns_unsupported",

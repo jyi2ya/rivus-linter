@@ -25,6 +25,7 @@ pub(crate) struct PreparedInference {
     scoped_port_methods: BTreeSet<DefPath>,
     synthetic_paths: BTreeSet<DefPath>,
     incomplete_paths: BTreeSet<DefPath>,
+    incomplete_roots: BTreeSet<DefPath>,
     trait_votes: BTreeMap<DefPath, TraitCapabilityVote>,
 }
 
@@ -46,10 +47,50 @@ pub(crate) struct TraitCapabilityVote {
 }
 
 impl TraitCapabilityVote {
+    /// A vote is complete when no unseen vote can flip any outcome.
+    ///
+    /// Selected capabilities are monotone lower bounds: extra knowledge can
+    /// only add capabilities, never remove them, so only unselected
+    /// capabilities matter. For each unselected propagated capability the
+    /// vote is unstable when `known_votes + unknown_votes < threshold` fails,
+    /// where `unknown_votes` counts only incomplete implementations whose
+    /// known lower bound does **not** already carry the capability — an
+    /// incomplete implementation that already votes for the capability is
+    /// counted in `counts` and cannot vote for it twice. Impl keys without
+    /// an inferred entry never join `implementations` (every graph node
+    /// currently receives an initial inference, so this cannot arise); the
+    /// threshold stays the full known impl count and is never lowered.
     pub(crate) fn rvs_is_complete(&self) -> bool {
-        self.implementations
+        let has_incomplete_impls = self
+            .implementations
             .iter()
-            .all(|implementation| !implementation.incomplete)
+            .any(|implementation| implementation.incomplete);
+        if !has_incomplete_impls {
+            return true;
+        }
+        // Every propagated capability must be checked, including ones with
+        // no observed votes at all: an incomplete impl may carry a capability
+        // that no implementation was ever seen to use. An incomplete
+        // implementation whose known lower bound already carries the
+        // capability is counted in `counts` and cannot vote for it twice,
+        // so only the remaining incomplete impls contribute unknown votes.
+        CapabilityPolicy::rvs_propagated_caps()
+            .iter()
+            .all(|capability| {
+                if self.selected_caps.rvs_contains(*capability) {
+                    return true;
+                }
+                let known_votes = self.counts.get(capability).copied().unwrap_or_default();
+                let unknown_votes = self
+                    .implementations
+                    .iter()
+                    .filter(|implementation| {
+                        implementation.incomplete
+                            && !implementation.propagated_caps.rvs_contains(*capability)
+                    })
+                    .count();
+                known_votes + unknown_votes < self.threshold
+            })
     }
 
     #[cfg(test)]
@@ -62,6 +103,20 @@ impl TraitCapabilityVote {
         lower_bound: &CapabilitySet,
         trait_method_incomplete: bool,
     ) -> CapabilityInfo {
+        if self.is_port {
+            // The Port public contract is structural, not voted: serialized
+            // caps are exactly P and the record is complete. Implementation
+            // B/I/S/T votes and signature-measured A/C/M/U are audit
+            // information surfaced through report/why and the naming
+            // projection (`rvs_public_naming_caps`); merging them here would
+            // produce a Port record the capsmap invariant rejects (Port
+            // knowledge must contain exactly P).
+            return CapabilityInfo::rvs_new(
+                CapabilityPolicy::rvs_port_method_caps(),
+                CapabilityBasis::Port,
+                CapabilityCompleteness::Complete,
+            );
+        }
         let mut combined = self.selected_caps.clone();
         let _ = combined.rvs_extend_filtered_M(lower_bound, |_| true);
         let completeness = if !trait_method_incomplete && self.rvs_is_complete() {
@@ -104,7 +159,7 @@ impl PreparedInference {
             .filter(|path| graph.rvs_get(path.rvs_as_str()).is_none())
             .cloned()
             .collect();
-        let incomplete_paths = rvs_incomplete_inference_paths_with_knowledge(
+        let incomplete_knowledge = rvs_incomplete_knowledge_with_knowledge(
             graph,
             CapabilityKnowledgeView::rvs_base(seed),
             &inferred,
@@ -112,6 +167,7 @@ impl PreparedInference {
             &scoped_port_methods,
             &dependents,
         );
+        let incomplete_paths = incomplete_knowledge.tainted;
         let trait_votes = rvs_collect_trait_votes_with_ports(
             graph,
             &impl_index,
@@ -125,6 +181,7 @@ impl PreparedInference {
             scoped_port_methods,
             synthetic_paths,
             incomplete_paths,
+            incomplete_roots: incomplete_knowledge.roots,
             trait_votes,
         }
     }
@@ -152,6 +209,17 @@ impl PreparedInference {
 
     pub(crate) const fn rvs_incomplete_paths(&self) -> &BTreeSet<DefPath> {
         &self.incomplete_paths
+    }
+
+    pub(crate) const fn rvs_scoped_port_methods(&self) -> &BTreeSet<DefPath> {
+        &self.scoped_port_methods
+    }
+
+    /// Root knowledge gaps only: nodes whose own knowledge is missing, not
+    /// callers transitively tainted by them. Diagnostics warn on roots;
+    /// `rvs_incomplete_paths` remains the export-confidence set.
+    pub(crate) const fn rvs_incomplete_roots(&self) -> &BTreeSet<DefPath> {
+        &self.incomplete_roots
     }
 
     pub(crate) const fn rvs_trait_votes(&self) -> &BTreeMap<DefPath, TraitCapabilityVote> {
@@ -256,7 +324,7 @@ impl PreparedLocalAnalysis {
             graph,
             inference.rvs_inferred(),
             local_crate_names,
-            inference.rvs_incomplete_paths(),
+            inference.rvs_scoped_port_methods(),
         );
         let trait_impl_outliers = rvs_collect_local_trait_vote_outliers(
             graph,
@@ -282,12 +350,20 @@ impl PreparedLocalAnalysis {
         self.inference.rvs_inferred()
     }
 
+    pub(crate) const fn rvs_scoped_port_methods(&self) -> &BTreeSet<DefPath> {
+        self.inference.rvs_scoped_port_methods()
+    }
+
     pub(crate) const fn rvs_synthetic_paths(&self) -> &BTreeSet<DefPath> {
         self.inference.rvs_synthetic_paths()
     }
 
     pub(crate) const fn rvs_incomplete_paths(&self) -> &BTreeSet<DefPath> {
         self.inference.rvs_incomplete_paths()
+    }
+
+    pub(crate) const fn rvs_incomplete_roots(&self) -> &BTreeSet<DefPath> {
+        self.inference.rvs_incomplete_roots()
     }
 
     pub(crate) const fn rvs_trait_votes(&self) -> &BTreeMap<DefPath, TraitCapabilityVote> {
@@ -315,6 +391,13 @@ fn rvs_collect_local_trait_vote_outliers(
             continue;
         }
         for implementation in &vote.implementations {
+            // The outlier warning is design feedback for complete, modifiable
+            // local implementations. An inference-incomplete implementation
+            // never produces it: its known lower bound may still grow, so
+            // "extra" caps are partial knowledge, not a design signal.
+            if implementation.incomplete {
+                continue;
+            }
             let Some(node) = graph.rvs_get(implementation.path.rvs_as_str()) else {
                 continue;
             };
@@ -558,11 +641,29 @@ fn rvs_aggregate_port_methods(graph: &FnGraph) -> BTreeSet<DefPath> {
     methods
 }
 
+/// Aggregated Port set for resolvers without a local-crate scope (std
+/// inference): declaration-derived membership plus every implementation of
+/// a Port declaration via the trait-method identity.
+pub(crate) fn rvs_aggregate_port_methods_for_resolver(graph: &FnGraph) -> BTreeSet<DefPath> {
+    rvs_aggregate_port_methods(graph)
+}
+
 fn rvs_scoped_port_methods(
     graph: &FnGraph,
     local_crate_names: &BTreeSet<CrateName>,
 ) -> BTreeSet<DefPath> {
     let scope = LocalScope::rvs_for_graph(local_crate_names, graph);
+    rvs_scoped_port_methods_with_scope(graph, &scope)
+}
+
+/// Aggregated Port set for a pre-built local scope: declaration-derived
+/// membership plus every implementation of a Port declaration via the
+/// trait-method identity. Shared by inference, report, and the offline
+/// engine so all views agree on Port membership.
+pub(crate) fn rvs_scoped_port_methods_with_scope(
+    graph: &FnGraph,
+    scope: &LocalScope,
+) -> BTreeSet<DefPath> {
     let mut methods: BTreeSet<DefPath> = graph
         .rvs_iter()
         .filter(|(path, node)| {
@@ -663,6 +764,13 @@ pub(crate) struct CalleeCapsResolver<'a> {
 }
 
 impl<'a> CalleeCapsResolver<'a> {
+    /// Build a resolver without the aggregated Port set.
+    ///
+    /// Test-only: production resolvers must pass the aggregated Port set
+    /// (`rvs_new_scoped` / `rvs_new_with_knowledge`) so implementations of
+    /// Port declarations resolve through the structural `PortMethod`
+    /// source even when their own nodes lack the Port fact.
+    #[cfg(test)]
     pub(crate) const fn rvs_new(
         graph: &'a FnGraph,
         caps: &'a capsmap::CapsMap,
@@ -678,7 +786,7 @@ impl<'a> CalleeCapsResolver<'a> {
         }
     }
 
-    const fn rvs_new_scoped(
+    pub(crate) const fn rvs_new_scoped(
         graph: &'a FnGraph,
         caps: &'a capsmap::CapsMap,
         inferred: &'a BTreeMap<DefPath, CapabilitySet>,
@@ -907,6 +1015,7 @@ pub(crate) fn rvs_generate_trait_alias_infos(
     graph: &FnGraph,
     incomplete_paths: &BTreeSet<DefPath>,
 ) -> BTreeMap<DefPath, CapabilityInfo> {
+    let port_methods = rvs_aggregate_port_methods(graph);
     let mut aliases = BTreeMap::new();
     let mut seen = HashSet::new();
     for key in inferred.keys() {
@@ -917,9 +1026,14 @@ pub(crate) fn rvs_generate_trait_alias_infos(
         if !seen.insert(alias.clone()) {
             continue;
         }
-        let Some(vote) =
-            rvs_resolve_impl_capability_vote(&alias, impl_index, inferred, graph, incomplete_paths)
-        else {
+        let Some(vote) = rvs_resolve_impl_capability_vote_with_ports(
+            &alias,
+            impl_index,
+            inferred,
+            graph,
+            incomplete_paths,
+            Some(&port_methods),
+        ) else {
             continue;
         };
         let lower_bound = inferred.get(&alias).unwrap_or(&vote.selected_caps);
@@ -1068,11 +1182,7 @@ fn rvs_infer_caps_with_knowledge_and_ports(
                 if graph.rvs_get(caller.rvs_as_str()).is_none() {
                     continue;
                 }
-                let caller_is_port_operation = port_methods.contains(caller)
-                    && graph.rvs_get(caller.rvs_as_str()).is_some_and(|node| {
-                        !node.is_trait_impl && caller.rvs_trait_method_identity().is_none()
-                    });
-                if knowledge.rvs_lookup_caps(caller).is_some() || caller_is_port_operation {
+                if knowledge.rvs_lookup_caps(caller).is_some() {
                     continue;
                 }
                 let call_edge_caps = CapabilityPolicy::rvs_call_edge_caps(&effective_caps);
@@ -1187,11 +1297,12 @@ fn rvs_initial_caps_with_knowledge(
             let caps = if port_methods.contains(func) {
                 let mut facts = behavior.facts;
                 facts.is_port_method = true;
-                if behavior.is_trait_impl || func.rvs_trait_method_identity().is_some() {
-                    CapabilityPolicy::rvs_signature_caps(facts)
-                } else {
-                    CapabilityPolicy::rvs_port_operation_signature_caps(facts)
-                }
+                // Signature caps keep static/thread-local body facts for the
+                // operation's own default body: implementation effects are
+                // audit information and must remain visible in report/why.
+                // The public contract stays P — the naming projection and the
+                // P call-edge barrier keep it out of callers and names.
+                CapabilityPolicy::rvs_signature_caps(facts)
             } else if let Some(caps) = knowledge.rvs_lookup_caps(func) {
                 caps.clone()
             } else {
@@ -1238,20 +1349,16 @@ fn rvs_expected_contract_name(name: &FnName, caps: &CapabilitySet) -> FnName {
 pub(crate) fn rvs_contract_diff_for_expected_caps(
     def_path: &DefPath,
     expected_public_caps: CapabilitySet,
-    incomplete: bool,
 ) -> FnContractDiff {
     let actual_name = def_path.rvs_fn_name();
     let declared_public_caps = rvs_parse_function(actual_name.rvs_as_str()).map(|(_, caps)| caps);
     // The name carries only suffix-letter capabilities; signature-only caps
     // (A/C/U) are measured from the signature and never enter the contract
-    // name.
+    // name. The declared suffix is a view compared against the expected name
+    // and never feeds it — completeness of the inference cannot change the
+    // canonical name either, or check/strip/annotate would diverge.
     let mut naming_caps = expected_public_caps.clone();
     naming_caps.rvs_retain_naming_M();
-    if incomplete && let Some(declared_caps) = &declared_public_caps {
-        let _ = naming_caps.rvs_extend_filtered_M(declared_caps, |capability| {
-            CapabilityPolicy::rvs_is_propagated_cap(capability)
-        });
-    }
     let expected_name = rvs_expected_contract_name(&actual_name, &naming_caps);
     FnContractDiff {
         def_path: def_path.clone(),
@@ -1284,14 +1391,45 @@ fn rvs_collect_contract_diffs(
     inferred: &BTreeMap<DefPath, CapabilitySet>,
     local_crate_names: &BTreeSet<CrateName>,
 ) -> Vec<FnContractDiff> {
-    rvs_collect_contract_diffs_with_incomplete(graph, inferred, local_crate_names, &BTreeSet::new())
+    rvs_collect_contract_diffs_with_incomplete(
+        graph,
+        inferred,
+        local_crate_names,
+        &rvs_aggregate_port_methods(graph),
+    )
+}
+
+/// Project a node's inferred caps onto its public naming view.
+///
+/// Port operations and implementations carry a structural contract: the
+/// propagated portion is exactly P; only signature-measured A/C/U join it
+/// (`&mut Self::World` M and body B/I/S/T stay audit facts that never
+/// enter the canonical suffix). Every consumer of the naming view — check,
+/// annotate, report — must derive the same canonical name, so the
+/// projection lives here instead of in each caller.
+pub(crate) fn rvs_public_naming_caps(
+    inferred_caps: &CapabilitySet,
+    is_port_method: bool,
+) -> CapabilitySet {
+    if !is_port_method {
+        return inferred_caps.clone();
+    }
+    // The Port public naming contract is exactly P plus the signature-measured
+    // A/C/U. Both propagated caps (B/I/P/S/T) and the signature-measured M
+    // from `&mut Self::World` are real effects that stay in the audit view
+    // but never enter the canonical suffix.
+    let mut projected = CapabilityPolicy::rvs_port_method_caps();
+    let _ = projected.rvs_extend_filtered_M(inferred_caps, |capability| {
+        !CapabilityPolicy::rvs_is_naming_suffix_cap(capability)
+    });
+    projected
 }
 
 fn rvs_collect_contract_diffs_with_incomplete(
     graph: &FnGraph,
     inferred: &BTreeMap<DefPath, CapabilitySet>,
     local_crate_names: &BTreeSet<CrateName>,
-    incomplete_paths: &BTreeSet<DefPath>,
+    port_methods: &BTreeSet<DefPath>,
 ) -> Vec<FnContractDiff> {
     let scope = LocalScope::rvs_for_graph(local_crate_names, graph);
     let mut diffs = Vec::new();
@@ -1302,10 +1440,11 @@ fn rvs_collect_contract_diffs_with_incomplete(
         let expected_public_caps = inferred
             .get(def_path)
             .expect("never: prepared inference covers every graph node");
+        let expected_public_caps =
+            rvs_public_naming_caps(expected_public_caps, port_methods.contains(def_path));
         diffs.push(rvs_contract_diff_for_expected_caps(
             def_path,
-            expected_public_caps.clone(),
-            incomplete_paths.contains(def_path),
+            expected_public_caps,
         ));
     }
     diffs
@@ -1357,6 +1496,127 @@ fn rvs_incomplete_inference_paths_with_knowledge(
     port_methods: &BTreeSet<DefPath>,
     dependents: &InferenceDependents,
 ) -> BTreeSet<DefPath> {
+    rvs_incomplete_knowledge_with_knowledge(
+        graph,
+        knowledge,
+        inferred,
+        impl_index,
+        port_methods,
+        dependents,
+    )
+    .tainted
+}
+
+/// Root and propagated incomplete knowledge for one inference pass.
+///
+/// `roots` are the nodes whose own knowledge is missing (artifact flags,
+/// caps records, bodyless declarations without a contract). `tainted` adds
+/// every caller and trait method that transitively depends on a root; it is
+/// export confidence for caps serialization and `why` paths, not a
+/// user-facing function property. P edges are propagation barriers.
+pub(crate) struct IncompleteKnowledge {
+    pub(crate) roots: BTreeSet<DefPath>,
+    pub(crate) tainted: BTreeSet<DefPath>,
+}
+
+fn rvs_incomplete_knowledge_with_knowledge(
+    graph: &FnGraph,
+    knowledge: CapabilityKnowledgeView<'_>,
+    inferred: &BTreeMap<DefPath, CapabilitySet>,
+    impl_index: &HashMap<TraitMethodKey, Vec<DefPath>>,
+    port_methods: &BTreeSet<DefPath>,
+    dependents: &InferenceDependents,
+) -> IncompleteKnowledge {
+    // Fixed-point refinement over the cut set of trait methods whose
+    // impl->trait taint edges are severed. Cutting an edge can only remove
+    // incomplete flags from impls, which can only stabilize more votes, so
+    // the cut set grows monotonically and the iteration terminates.
+    let mut cut: BTreeSet<DefPath> = BTreeSet::new();
+    loop {
+        let pass = rvs_propagate_incomplete_pass(
+            graph,
+            knowledge,
+            inferred,
+            impl_index,
+            port_methods,
+            dependents,
+            &cut,
+        );
+        let mut next_cut: BTreeSet<DefPath> = BTreeSet::new();
+        let mut unstable_votes: BTreeSet<DefPath> = BTreeSet::new();
+        for implementations in impl_index.values() {
+            let Some(trait_method) = implementations
+                .iter()
+                .find_map(|implementation| implementation.rvs_trait_method_identity())
+                .map(|identity| identity.rvs_trait_method_path())
+            else {
+                continue;
+            };
+            if port_methods.contains(&trait_method) {
+                // The Port contract is structural: implementation knowledge
+                // can never destabilize it, so the edge is always cut.
+                next_cut.insert(trait_method);
+                continue;
+            }
+            match rvs_resolve_impl_capability_vote_with_ports(
+                &trait_method,
+                impl_index,
+                inferred,
+                graph,
+                &pass.tainted,
+                Some(port_methods),
+            ) {
+                Some(vote) if vote.rvs_is_complete() => {
+                    next_cut.insert(trait_method);
+                }
+                Some(_) => {
+                    unstable_votes.insert(trait_method);
+                }
+                None => {}
+            }
+        }
+        if next_cut == cut {
+            // A bodyless declaration whose vote is unstable is a root
+            // knowledge gap: its resolved caps may change when the missing
+            // knowledge arrives. Declarations with an exact caps record are
+            // never vote roots (the record is authoritative).
+            let mut roots = pass.base_roots;
+            for trait_method in unstable_votes {
+                if port_methods.contains(&trait_method)
+                    || knowledge.rvs_lookup_info(&trait_method).is_some()
+                {
+                    continue;
+                }
+                if graph
+                    .rvs_get(trait_method.rvs_as_str())
+                    .is_some_and(|node| !node.has_body)
+                {
+                    roots.insert(trait_method);
+                }
+            }
+            return IncompleteKnowledge {
+                roots,
+                tainted: pass.tainted,
+            };
+        }
+        cut = next_cut;
+    }
+}
+
+struct IncompletePropagationPass {
+    base_roots: BTreeSet<DefPath>,
+    tainted: BTreeSet<DefPath>,
+}
+
+fn rvs_propagate_incomplete_pass(
+    graph: &FnGraph,
+    knowledge: CapabilityKnowledgeView<'_>,
+    inferred: &BTreeMap<DefPath, CapabilitySet>,
+    impl_index: &HashMap<TraitMethodKey, Vec<DefPath>>,
+    port_methods: &BTreeSet<DefPath>,
+    dependents: &InferenceDependents,
+    cut_trait_methods: &BTreeSet<DefPath>,
+) -> IncompletePropagationPass {
     let resolver = CalleeCapsResolver::rvs_new_with_knowledge(
         graph,
         knowledge,
@@ -1364,24 +1624,42 @@ fn rvs_incomplete_inference_paths_with_knowledge(
         impl_index,
         port_methods,
     );
-    let mut incomplete: BTreeSet<DefPath> = graph
-        .rvs_iter()
-        .filter(|(path, node)| {
-            if rvs_is_inference_taint_barrier(path, knowledge) {
-                return false;
-            }
-            if !node.complete || rvs_has_incomplete_capsmap_knowledge(path, knowledge, port_methods)
+    let base_roots: BTreeSet<DefPath> = {
+        let mut roots: BTreeSet<DefPath> = graph
+            .rvs_iter()
+            .filter(|(path, node)| {
+                if rvs_is_inference_taint_barrier(path, knowledge) {
+                    return false;
+                }
+                if !node.complete
+                    || rvs_has_incomplete_capsmap_knowledge(path, knowledge, port_methods)
+                {
+                    return true;
+                }
+                let has_exact = knowledge.rvs_lookup_info(path).is_some();
+                !node.has_body
+                    && !port_methods.contains(*path)
+                    && !has_exact
+                    && resolver.rvs_for_contract_check(path).is_none()
+            })
+            .map(|(path, _)| path.clone())
+            .collect();
+        // A callee referenced on a call edge but absent from the graph,
+        // every knowledge layer, and the inference output is itself a root
+        // knowledge gap: nothing can resolve it, so its callers' export
+        // confidence and `why` output point at this root.
+        for (callee, callers) in &dependents.callers {
+            if graph.rvs_get(callee.rvs_as_str()).is_none()
+                && knowledge.rvs_lookup_info(callee).is_none()
+                && !inferred.contains_key(callee)
+                && !callers.is_empty()
             {
-                return true;
+                roots.insert(callee.clone());
             }
-            let has_exact = knowledge.rvs_lookup_info(path).is_some();
-            !node.has_body
-                && !port_methods.contains(*path)
-                && !has_exact
-                && resolver.rvs_for_contract_check(path).is_none()
-        })
-        .map(|(path, _)| path.clone())
-        .collect();
+        }
+        roots
+    };
+    let mut incomplete = base_roots.clone();
 
     for (callee, callers) in &dependents.callers {
         if resolver.rvs_for_contract_check(callee).is_some()
@@ -1420,12 +1698,21 @@ fn rvs_incomplete_inference_paths_with_knowledge(
             if rvs_is_inference_taint_barrier(trait_method, knowledge) {
                 continue;
             }
+            // A stable vote (or a structural Port contract) proves the trait
+            // method's caps regardless of what the incomplete impl hides:
+            // the impl->trait taint edge is cut.
+            if cut_trait_methods.contains(trait_method) {
+                continue;
+            }
             if incomplete.insert(trait_method.clone()) {
                 pending.push_back(trait_method.clone());
             }
         }
     }
-    incomplete
+    IncompletePropagationPass {
+        base_roots,
+        tainted: incomplete,
+    }
 }
 
 fn rvs_is_inference_taint_barrier(path: &DefPath, knowledge: CapabilityKnowledgeView<'_>) -> bool {
@@ -1522,23 +1809,6 @@ fn rvs_propagated_caps(caps: &CapabilitySet) -> CapabilitySet {
     propagated
 }
 
-pub(crate) fn rvs_resolve_impl_capability_vote(
-    callee: &DefPath,
-    impl_index: &HashMap<TraitMethodKey, Vec<DefPath>>,
-    inferred: &BTreeMap<DefPath, CapabilitySet>,
-    graph: &FnGraph,
-    incomplete_paths: &BTreeSet<DefPath>,
-) -> Option<TraitCapabilityVote> {
-    rvs_resolve_impl_capability_vote_with_ports(
-        callee,
-        impl_index,
-        inferred,
-        graph,
-        incomplete_paths,
-        None,
-    )
-}
-
 fn rvs_resolve_impl_capability_vote_with_ports(
     callee: &DefPath,
     impl_index: &HashMap<TraitMethodKey, Vec<DefPath>>,
@@ -1579,7 +1849,11 @@ fn rvs_resolve_impl_capability_vote_with_ports(
     )?;
     let mut selected_caps = voted_caps;
     if is_port {
-        selected_caps.rvs_insert_M(Capability::P);
+        // A World Port's public contract is fixed to P: implementation
+        // effects are audit information (report/why), never part of the
+        // domain calling contract. The votes stay recorded in `counts` and
+        // `implementations` for reporting.
+        selected_caps = CapabilityPolicy::rvs_port_method_caps();
     }
     Some(TraitCapabilityVote {
         trait_method: callee.clone(),
@@ -1778,6 +2052,7 @@ pub(crate) fn rvs_collect_direct_external_deps(
             &scoped_port_methods,
         ),
         incomplete_paths,
+        incomplete_roots: BTreeSet::new(),
     };
     prepared.rvs_collect_direct_external_deps(graph, local_crate_names, seed)
 }
@@ -1785,7 +2060,7 @@ pub(crate) fn rvs_collect_direct_external_deps(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::artifacts::CallEdgeType;
+    use crate::artifacts::{CallEdgeType, rvs_test_target_of_M};
     use crate::capability::CapabilityFacts;
     use crate::test_support::{rvs_make_capsmap, rvs_snapshot_BIS};
 
@@ -1906,7 +2181,9 @@ mod tests {
         );
 
         assert!(first_incomplete);
-        assert_eq!(inference.rvs_incomplete_paths().len(), NODE_COUNT);
+        // NODE_COUNT chain nodes plus the absent `opaque::missing` root
+        // callee, which is itself a knowledge gap and joins the tainted set.
+        assert_eq!(inference.rvs_incomplete_paths().len(), NODE_COUNT + 1);
         assert!(
             elapsed < std::time::Duration::from_secs(2),
             "reverse-ordered incomplete propagation took {elapsed:?}"
@@ -1968,7 +2245,11 @@ mod tests {
     }
 
     #[test]
-    fn test_20260715_unknown_callees_suppress_provisional_name_mismatches() {
+    fn test_20260715_unproven_suffix_over_unknown_callee_reports_mismatch() {
+        // Unknown callees still make inference incomplete, but incomplete
+        // knowledge never changes the canonical name: the semantic lower
+        // bound alone decides. A `BIS` suffix on an unproven body is a
+        // capability lie the contract must surface, not absorb.
         let mut graph = FnGraph::rvs_new();
         let mut inner = rvs_make_behavior();
         inner.calls.insert(
@@ -2010,11 +2291,13 @@ mod tests {
             .join("\n")
             + "\n";
         rvs_snapshot_BIS(
-            "test_20260715_unknown_callees_suppress_provisional_name_mismatches",
+            "test_20260715_unproven_suffix_over_unknown_callee_reports_mismatch",
             &output,
         );
 
-        assert!(diffs.iter().all(|diff| !diff.rvs_has_name_mismatch()));
+        // Both carry unproven `BIS` suffixes over an empty lower bound, so
+        // both must report the mismatch instead of silently passing.
+        assert!(diffs.iter().all(|diff| diff.rvs_has_name_mismatch()));
     }
 
     #[test]
@@ -2131,6 +2414,477 @@ mod tests {
     }
 
     #[test]
+    fn test_20260820_incomplete_suffix_never_feeds_expected_name() {
+        let mut graph = FnGraph::rvs_new();
+        let mut work = rvs_make_behavior();
+        work.calls.insert(
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: DefPath::from("dep::opaque"),
+            },
+            CallEdgeType::Strong,
+        );
+        graph.rvs_insert_M(DefPath::from("demo::rvs_work_S"), work);
+        graph.rvs_insert_M(
+            DefPath::from("dep::opaque"),
+            FnNode {
+                has_body: false,
+                ..rvs_make_behavior()
+            },
+        );
+
+        let analysis = PreparedLocalAnalysis::rvs_prepare_M(
+            &mut graph,
+            &capsmap::CapsMap::rvs_new(),
+            &BTreeSet::from([CrateName::from("demo")]),
+        );
+        let diff = analysis
+            .diffs
+            .iter()
+            .find(|diff| diff.def_path.rvs_as_str() == "demo::rvs_work_S")
+            .expect("never: incomplete local function produces a contract diff");
+        let output = format!(
+            "expected={}\nmismatch={}\n",
+            diff.expected_name,
+            diff.rvs_has_name_mismatch()
+        );
+        rvs_snapshot_BIS(
+            "test_20260820_incomplete_suffix_never_feeds_expected_name",
+            &output,
+        );
+
+        // The declared `S` suffix is a view, never capability evidence: the
+        // semantic lower bound is empty, so the canonical name is `rvs_work`
+        // and `rvs_work_S` must be reported as a mismatch.
+        assert_eq!(diff.expected_name.rvs_as_str(), "rvs_work");
+        assert!(diff.rvs_has_name_mismatch());
+    }
+
+    #[test]
+    fn test_20260820_vote_stability_tolerates_unflippable_unknown_impls() {
+        let mut graph = FnGraph::rvs_new();
+        let mut declaration = rvs_make_behavior();
+        declaration.has_body = false;
+        graph.rvs_insert_M(DefPath::from("demo::FromString::rvs_parse"), declaration);
+
+        // 8 complete implementations: 2 vote S, the rest are pure.
+        for index in 0..2 {
+            let mut node = rvs_make_behavior();
+            node.is_trait_impl = true;
+            node.facts.has_static_ref = true;
+            graph.rvs_insert_M(
+                DefPath::from(format!("demo::Impl{index}::rvs_parse@demo::FromString")),
+                node,
+            );
+        }
+        for index in 2..8 {
+            let mut node = rvs_make_behavior();
+            node.is_trait_impl = true;
+            graph.rvs_insert_M(
+                DefPath::from(format!("demo::Impl{index}::rvs_parse@demo::FromString")),
+                node,
+            );
+        }
+        // 2 incomplete implementations calling an opaque callee.
+        for index in 8..10 {
+            let mut node = rvs_make_behavior();
+            node.is_trait_impl = true;
+            node.calls.insert(
+                FunctionIdentity {
+                    crate_id: 2,
+                    def_path: DefPath::from("dep::opaque"),
+                },
+                CallEdgeType::Strong,
+            );
+            graph.rvs_insert_M(
+                DefPath::from(format!("demo::Impl{index}::rvs_parse@demo::FromString")),
+                node,
+            );
+        }
+        graph.rvs_insert_M(
+            DefPath::from("dep::opaque"),
+            FnNode {
+                has_body: false,
+                ..rvs_make_behavior()
+            },
+        );
+
+        let analysis = PreparedLocalAnalysis::rvs_prepare_M(
+            &mut graph,
+            &capsmap::CapsMap::rvs_new(),
+            &BTreeSet::from([CrateName::from("demo")]),
+        );
+        let trait_path = DefPath::from("demo::FromString::rvs_parse");
+        let vote = analysis
+            .rvs_trait_votes()
+            .get(&trait_path)
+            .expect("never: trait with implementations produces a vote");
+        let output = format!(
+            "implementations={}\nthreshold={}\ncaps={}\ncomplete={}\n",
+            vote.implementations.len(),
+            vote.threshold,
+            rvs_caps_to_string(&vote.selected_caps),
+            vote.rvs_is_complete(),
+        );
+        rvs_snapshot_BIS(
+            "test_20260820_vote_stability_tolerates_unflippable_unknown_impls",
+            &output,
+        );
+
+        // threshold = ceil(10/2) = 5; known S votes = 2; incomplete impls = 2.
+        // 2 + 2 < 5, so S can never reach the threshold even if every unknown
+        // impl secretly has S: the vote result is stable and complete.
+        assert_eq!(vote.threshold, 5);
+        assert_eq!(rvs_caps_to_string(&vote.selected_caps), "");
+        assert!(vote.rvs_is_complete());
+
+        // A stable vote severs the impl->trait taint edge: the trait method
+        // stays complete for export. The incomplete impls keep their own
+        // export-confidence flags (they call the root directly).
+        assert!(
+            !analysis
+                .rvs_incomplete_paths()
+                .contains(&DefPath::from("demo::FromString::rvs_parse"))
+        );
+        assert!(
+            analysis
+                .rvs_incomplete_paths()
+                .contains(&DefPath::from("demo::Impl8::rvs_parse@demo::FromString"))
+        );
+        let alias_info = rvs_generate_trait_alias_infos(
+            analysis.rvs_inferred(),
+            &rvs_build_impl_index(&graph),
+            &graph,
+            analysis.rvs_incomplete_paths(),
+        )
+        .get(&DefPath::from("demo::FromString::rvs_parse"))
+        .cloned()
+        .expect("never: trait with implementations exports an alias record");
+        assert_eq!(
+            alias_info.rvs_completeness(),
+            crate::capability::CapabilityCompleteness::Complete
+        );
+    }
+
+    #[test]
+    fn test_20260821_effectful_port_export_uses_port_basis_and_roundtrips() {
+        let mut graph = FnGraph::rvs_new();
+        let mut declaration = rvs_make_behavior();
+        declaration.has_body = false;
+        declaration.facts.is_port_method = true;
+        graph.rvs_insert_M(DefPath::from("demo::Transport::rvs_fetch_P"), declaration);
+
+        // Two impls whose bodies perform B/I/S effects: the majority vote
+        // records B/I/S counts, but the public contract stays P.
+        for adapter in ["demo::FastAdapter", "demo::SlowAdapter"] {
+            let mut node = rvs_make_behavior();
+            node.is_trait_impl = true;
+            node.facts.is_port_method = true;
+            node.calls.insert(
+                FunctionIdentity {
+                    crate_id: 2,
+                    def_path: DefPath::from("dep::effect_bis"),
+                },
+                CallEdgeType::Strong,
+            );
+            graph.rvs_insert_M(
+                DefPath::from(format!("{adapter}::rvs_fetch_P@demo::Transport")),
+                node,
+            );
+        }
+
+        let analysis = PreparedLocalAnalysis::rvs_prepare_M(
+            &mut graph,
+            &rvs_make_capsmap(&[("dep::effect_bis", "BIS")]),
+            &BTreeSet::from([CrateName::from("demo")]),
+        );
+        let trait_method = DefPath::from("demo::Transport::rvs_fetch_P");
+        let aliases = rvs_generate_trait_alias_infos(
+            analysis.rvs_inferred(),
+            &rvs_build_impl_index(&graph),
+            &graph,
+            analysis.rvs_incomplete_paths(),
+        );
+        let info = aliases
+            .get(&trait_method)
+            .cloned()
+            .expect("never: port trait with implementations exports an alias record");
+        let output = format!(
+            "caps={}\nbasis={}\ncompleteness={}\n",
+            info.rvs_caps().rvs_letters(),
+            info.rvs_basis().rvs_name(),
+            info.rvs_completeness().rvs_name(),
+        );
+        rvs_snapshot_BIS(
+            "test_20260821_effectful_port_export_uses_port_basis_and_roundtrips",
+            &output,
+        );
+
+        // The exported record must use the structural Port basis (caps=P,
+        // complete) — a TraitVote record with majority B/I/S counts would be
+        // rejected by the capsmap invariant check on reload.
+        assert_eq!(info.rvs_caps().rvs_letters(), "P");
+        assert!(matches!(
+            info.rvs_basis(),
+            crate::capability::CapabilityBasis::Port
+        ));
+        assert_eq!(
+            info.rvs_completeness(),
+            crate::capability::CapabilityCompleteness::Complete
+        );
+        info.rvs_check_invariants()
+            .expect("never: port export record satisfies capsmap invariants");
+
+        // Render/reparse roundtrip keeps the record valid: the serialized
+        // text must parse back into a record with the same caps, basis, and
+        // invariants, proving the exporter and the capsmap parser agree.
+        let mut rendered = capsmap::CapsMap::rvs_new();
+        rendered.rvs_insert_info_M(
+            CapsMapKey::from("demo::Transport::rvs_fetch_P"),
+            info.clone(),
+        );
+        let text = rendered.rvs_render_v2();
+        let reparsed = capsmap::CapsMap::rvs_parse(&text)
+            .expect("never: exported port record reparses cleanly");
+        let roundtrip = reparsed
+            .rvs_lookup_info("demo::Transport::rvs_fetch_P")
+            .expect("never: reparsed capsmap contains the exported record");
+        assert_eq!(roundtrip.rvs_caps().rvs_letters(), "P");
+        assert!(matches!(
+            roundtrip.rvs_basis(),
+            crate::capability::CapabilityBasis::Port
+        ));
+        roundtrip
+            .rvs_check_invariants()
+            .expect("never: reparsed port record satisfies capsmap invariants");
+    }
+
+    #[test]
+    fn test_20260822_wrapper_export_serializes_incomplete_confidence() {
+        // Export confidence for the flat capsmap output: a dependency
+        // wrapper collected into the callgraph (reached by a local call)
+        // whose own body reaches a ghost callee (no node, no caps record,
+        // no inference) must be serialized as `completeness: incomplete` —
+        // its known caps stay a lower bound, never a promise. The infer
+        // path reuses exactly this collection when writing caps/deps.
+        let mut graph = FnGraph::rvs_new();
+        let mut wrapper = rvs_make_behavior();
+        wrapper.crate_id = 2;
+        wrapper.crate_provenance = crate::artifacts::CrateProvenance::Dependency;
+        wrapper.calls.insert(
+            FunctionIdentity {
+                crate_id: 9,
+                def_path: DefPath::from("ghost_dep::rvs_maybe_effectful"),
+            },
+            CallEdgeType::Strong,
+        );
+        graph.rvs_insert_M(DefPath::from("some_dep::wrapper"), wrapper);
+        let mut local_caller = rvs_make_behavior();
+        local_caller.calls.insert(
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: DefPath::from("some_dep::wrapper"),
+            },
+            CallEdgeType::Strong,
+        );
+        graph.rvs_insert_M(DefPath::from("demo::rvs_call_wrapper"), local_caller);
+
+        let local = BTreeSet::from([CrateName::from("demo")]);
+        let seed = capsmap::CapsMap::rvs_new();
+        let inference = PreparedInference::rvs_prepare_M(&mut graph, &seed, &local);
+        let (known, unknown) = inference.rvs_collect_direct_external_deps(&graph, &local, &seed);
+
+        // The wrapper is a direct external dep of the local caller. The
+        // ghost callee behind it is not a *direct* call of any local
+        // function, so it is not reported as a caps/ext gap in `unknown`;
+        // the gap is carried by the wrapper's own incomplete record.
+        assert!(unknown.is_empty());
+        // The ghost must not be exported either: only direct external
+        // callees of local functions enter the deps output.
+        assert_eq!(known.len(), 1);
+        assert!(known.contains_key("some_dep::wrapper"));
+        let wrapper_info = known
+            .get(&DefPath::from("some_dep::wrapper"))
+            .expect("never: collected dependency wrapper resolves for export");
+        let output = format!(
+            "caps={}\nbasis={}\ncompleteness={}\n",
+            wrapper_info.rvs_caps().rvs_letters(),
+            wrapper_info.rvs_basis().rvs_name(),
+            wrapper_info.rvs_completeness().rvs_name(),
+        );
+        rvs_snapshot_BIS(
+            "test_20260822_wrapper_export_serializes_incomplete_confidence",
+            &output,
+        );
+
+        // Export confidence: taint from the ghost callee must keep the
+        // wrapper's serialized record incomplete even though its own
+        // node-level knowledge looks complete.
+        assert_eq!(
+            wrapper_info.rvs_completeness(),
+            crate::capability::CapabilityCompleteness::Incomplete
+        );
+        assert!(matches!(
+            wrapper_info.rvs_basis(),
+            crate::capability::CapabilityBasis::Inferred
+        ));
+        // Serialization keeps the export confidence: the production
+        // renderer must emit a record that reparses with the same caps,
+        // basis, and completeness, or the written caps/deps layer would
+        // silently lose the incomplete flag.
+        let text = rvs_format_def_path_capability_info(&known);
+        let reparsed = capsmap::CapsMap::rvs_parse(&text)
+            .expect("never: exported wrapper record reparses cleanly");
+        let roundtrip = reparsed
+            .rvs_lookup_info("some_dep::wrapper")
+            .expect("never: reparsed capsmap contains the exported wrapper");
+        assert_eq!(roundtrip.rvs_caps().rvs_letters(), "");
+        assert!(matches!(
+            roundtrip.rvs_basis(),
+            crate::capability::CapabilityBasis::Inferred
+        ));
+        assert_eq!(
+            roundtrip.rvs_completeness(),
+            crate::capability::CapabilityCompleteness::Incomplete
+        );
+        // The rendered text carries the completeness marker verbatim.
+        assert!(text.contains("\"completeness\":\"incomplete\""));
+        roundtrip
+            .rvs_check_invariants()
+            .expect("never: reparsed wrapper record satisfies capsmap invariants");
+    }
+
+    #[test]
+    fn test_20260822_declaration_only_port_alias_exports_port_basis() {
+        // Only the trait declaration carries the structural Port fact; the
+        // implementation node does not. The alias record must still use the
+        // Port basis: `rvs_aggregate_port_methods` includes impls of port
+        // operations via the trait-method identity, and the alias exporter
+        // must honor the same aggregation.
+        let mut graph = FnGraph::rvs_new();
+        let mut declaration = rvs_make_behavior();
+        declaration.has_body = false;
+        declaration.facts.is_port_method = true;
+        graph.rvs_insert_M(DefPath::from("demo::Transport::rvs_fetch_P"), declaration);
+
+        let mut implementation = rvs_make_behavior();
+        implementation.is_trait_impl = true;
+        implementation.calls.insert(
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: DefPath::from("dep::effect_bis"),
+            },
+            CallEdgeType::Strong,
+        );
+        graph.rvs_insert_M(
+            DefPath::from("demo::FastAdapter::rvs_fetch_P@demo::Transport"),
+            implementation,
+        );
+
+        let analysis = PreparedLocalAnalysis::rvs_prepare_M(
+            &mut graph,
+            &rvs_make_capsmap(&[("dep::effect_bis", "BIS")]),
+            &BTreeSet::from([CrateName::from("demo")]),
+        );
+        let trait_method = DefPath::from("demo::Transport::rvs_fetch_P");
+        let aliases = rvs_generate_trait_alias_infos(
+            analysis.rvs_inferred(),
+            &rvs_build_impl_index(&graph),
+            &graph,
+            analysis.rvs_incomplete_paths(),
+        );
+        let info = aliases
+            .get(&trait_method)
+            .cloned()
+            .expect("never: declaration-only port trait exports an alias record");
+        let output = format!(
+            "caps={}\nbasis={}\ninvariants_ok={}\n",
+            info.rvs_caps().rvs_letters(),
+            info.rvs_basis().rvs_name(),
+            info.rvs_check_invariants().is_ok(),
+        );
+        rvs_snapshot_BIS(
+            "test_20260822_declaration_only_port_alias_exports_port_basis",
+            &output,
+        );
+
+        assert_eq!(info.rvs_caps().rvs_letters(), "P");
+        assert!(matches!(
+            info.rvs_basis(),
+            crate::capability::CapabilityBasis::Port
+        ));
+        info.rvs_check_invariants()
+            .expect("never: port alias record satisfies capsmap invariants");
+
+        // The unmarked implementation must itself enter the aggregated Port
+        // set via the trait-method identity: its inference carries the
+        // structural P and the callee's BIS stays in its audit caps.
+        let impl_path = DefPath::from("demo::FastAdapter::rvs_fetch_P@demo::Transport");
+        assert!(analysis.rvs_scoped_port_methods().contains(&impl_path));
+        let impl_caps = analysis
+            .rvs_inferred()
+            .get(&impl_path)
+            .expect("never: unmarked impl of a port declaration is inferred");
+        assert!(impl_caps.rvs_contains(Capability::P));
+        assert!(impl_caps.rvs_contains(Capability::B));
+        assert!(impl_caps.rvs_contains(Capability::I));
+        assert!(impl_caps.rvs_contains(Capability::S));
+    }
+
+    #[test]
+    fn test_20260822_async_port_export_caps_exactly_p() {
+        let mut graph = FnGraph::rvs_new();
+        let mut declaration = rvs_make_behavior();
+        declaration.has_body = false;
+        declaration.facts.is_port_method = true;
+        // An async operation over a mutable World measures A and M from the
+        // signature; the serialized Port knowledge must still be exactly P.
+        declaration.facts.has_async = true;
+        declaration.facts.has_mut_param = true;
+        graph.rvs_insert_M(DefPath::from("demo::Transport::rvs_fetch_P"), declaration);
+
+        let mut implementation = rvs_make_behavior();
+        implementation.is_trait_impl = true;
+        implementation.facts.is_port_method = true;
+        implementation.facts.has_async = true;
+        implementation.facts.has_mut_param = true;
+        graph.rvs_insert_M(
+            DefPath::from("demo::FastAdapter::rvs_fetch_P@demo::Transport"),
+            implementation,
+        );
+
+        let analysis = PreparedLocalAnalysis::rvs_prepare_M(
+            &mut graph,
+            &capsmap::CapsMap::rvs_new(),
+            &BTreeSet::from([CrateName::from("demo")]),
+        );
+        let trait_method = DefPath::from("demo::Transport::rvs_fetch_P");
+        let aliases = rvs_generate_trait_alias_infos(
+            analysis.rvs_inferred(),
+            &rvs_build_impl_index(&graph),
+            &graph,
+            analysis.rvs_incomplete_paths(),
+        );
+        let info = aliases
+            .get(&trait_method)
+            .cloned()
+            .expect("never: port trait with an implementation exports an alias record");
+        let output = format!(
+            "caps={}\nbasis={}\ninvariants_ok={}\n",
+            info.rvs_caps().rvs_letters(),
+            info.rvs_basis().rvs_name(),
+            info.rvs_check_invariants().is_ok(),
+        );
+        rvs_snapshot_BIS("test_20260822_async_port_export_caps_exactly_p", &output);
+
+        // Signature-measured A/M never enter the serialized Port record:
+        // the capsmap invariant rejects any Port record that is not P.
+        assert_eq!(info.rvs_caps().rvs_letters(), "P");
+        info.rvs_check_invariants()
+            .expect("never: port export record satisfies capsmap invariants");
+    }
+
+    #[test]
     fn test_20260715_incomplete_trait_dispatch_taints_declaration() {
         let mut graph = FnGraph::rvs_new();
         graph.rvs_insert_M(
@@ -2182,7 +2936,11 @@ mod tests {
         );
 
         assert!(analysis.rvs_incomplete_paths().contains(&trait_path));
-        assert!(!diff.rvs_has_name_mismatch());
+        // The `BIS` suffix is an unproven view over an empty lower bound:
+        // incomplete dispatch knowledge keeps the vote incomplete but no
+        // longer rescues the declared suffix — the canonical name is
+        // `rvs_fetch` and the mismatch must surface.
+        assert!(diff.rvs_has_name_mismatch());
     }
 
     #[test]
@@ -2307,7 +3065,7 @@ mod tests {
                 CallEdgeType::Strong,
             ),
         ]);
-        let local_target = caller.rvs_test_target_M(10);
+        let local_target = rvs_test_target_of_M(&mut caller, 10);
         local_target.crate_provenance = crate::artifacts::CrateProvenance::PrimaryPackage;
         local_target.calls.insert(
             crate::artifacts::FunctionIdentity {
@@ -2316,7 +3074,7 @@ mod tests {
             },
             CallEdgeType::Strong,
         );
-        let dependency_target = caller.rvs_test_target_M(20);
+        let dependency_target = rvs_test_target_of_M(&mut caller, 20);
         dependency_target.crate_provenance = crate::artifacts::CrateProvenance::Dependency;
         dependency_target.calls.insert(
             crate::artifacts::FunctionIdentity {
@@ -4138,6 +4896,208 @@ mod tests {
     }
 
     #[test]
+    fn test_20260822_port_default_body_calls_reach_trait_votes() {
+        // A Port operation with a default body that calls an effectful
+        // helper: the default body's calls must be collected (the trait
+        // declaration node carries them), its audit caps must stay in the
+        // inferred view, and the public naming contract stays `_P`.
+        let mut graph = FnGraph::rvs_new();
+        let mut declaration = rvs_make_behavior();
+        declaration.has_body = true;
+        declaration.facts.is_port_method = true;
+        declaration.calls.insert(
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: DefPath::from("dep::effect_bis"),
+            },
+            CallEdgeType::Strong,
+        );
+        graph.rvs_insert_M(DefPath::from("demo::FetchApi::rvs_fetch_P"), declaration);
+
+        let mut implementation = rvs_make_behavior();
+        implementation.is_trait_impl = true;
+        implementation.facts.is_port_method = true;
+        graph.rvs_insert_M(
+            DefPath::from("demo::Api::rvs_fetch_P@demo::FetchApi"),
+            implementation,
+        );
+
+        let analysis = PreparedLocalAnalysis::rvs_prepare_M(
+            &mut graph,
+            &rvs_make_capsmap(&[("dep::effect_bis", "BIS")]),
+            &BTreeSet::from([CrateName::from("demo")]),
+        );
+        let declaration_path = DefPath::from("demo::FetchApi::rvs_fetch_P");
+        let inferred = analysis
+            .rvs_inferred()
+            .get(&declaration_path)
+            .expect("never: port declaration has inferred caps");
+        let diff = rvs_contract_diff_for_expected_caps(
+            &declaration_path,
+            rvs_public_naming_caps(inferred, true),
+        );
+        let output = format!(
+            "inferred={}\nexpected_name={}\n",
+            inferred.rvs_letters(),
+            diff.expected_name.rvs_as_str(),
+        );
+        rvs_snapshot_BIS(
+            "test_20260822_port_default_body_calls_reach_trait_votes",
+            &output,
+        );
+
+        // Default-body call collection: the propagated B/I/S from the helper
+        // reach the declaration's audit caps...
+        assert!(inferred.rvs_contains(Capability::B));
+        assert!(inferred.rvs_contains(Capability::I));
+        assert!(inferred.rvs_contains(Capability::S));
+        assert!(inferred.rvs_contains(Capability::P));
+        // ...while the canonical public name stays `_P`.
+        assert_eq!(diff.expected_name.rvs_as_str(), "rvs_fetch_P");
+    }
+
+    #[test]
+    fn test_20260822_port_impl_audit_effects_reach_trait_votes() {
+        // The fixed-P contract keeps implementation effects out of the
+        // public name, but report/why consume `trait_votes`: the impl's
+        // measured S+U (static mut) and S+T (thread-local) must stay
+        // recorded as propagated caps on the implementation entry.
+        let mut graph = FnGraph::rvs_new();
+        let mut declaration = rvs_make_behavior();
+        declaration.has_body = false;
+        declaration.facts.is_port_method = true;
+        graph.rvs_insert_M(DefPath::from("demo::Transport::rvs_read_P"), declaration);
+
+        let mut implementation = rvs_make_behavior();
+        implementation.is_trait_impl = true;
+        implementation.facts.is_port_method = true;
+        implementation.facts.has_static_mut_ref = true;
+        implementation.facts.has_thread_local_ref = true;
+        graph.rvs_insert_M(
+            DefPath::from("demo::Adapter::rvs_read_P@demo::Transport"),
+            implementation,
+        );
+
+        let analysis = PreparedLocalAnalysis::rvs_prepare_M(
+            &mut graph,
+            &capsmap::CapsMap::rvs_new(),
+            &BTreeSet::from([CrateName::from("demo")]),
+        );
+        let vote = analysis
+            .rvs_trait_votes()
+            .get(&DefPath::from("demo::Transport::rvs_read_P"))
+            .expect("never: port trait with an implementation records a vote");
+        let impl_entry = vote
+            .implementations
+            .iter()
+            .find(|implementation| {
+                implementation.path.rvs_as_str() == "demo::Adapter::rvs_read_P@demo::Transport"
+            })
+            .expect("never: the adapter implementation appears in the vote");
+        let output = format!(
+            "selected={}\nimpl_caps={}\ncounts_S={}\ncounts_T={}\ncounts_U={}\n",
+            vote.selected_caps.rvs_letters(),
+            impl_entry.propagated_caps.rvs_letters(),
+            vote.counts.get(&Capability::S).copied().unwrap_or(0),
+            vote.counts.get(&Capability::T).copied().unwrap_or(0),
+            vote.counts.get(&Capability::U).copied().unwrap_or(0),
+        );
+        rvs_snapshot_BIS(
+            "test_20260822_port_impl_audit_effects_reach_trait_votes",
+            &output,
+        );
+
+        // Public contract stays P; the audit view keeps S/U/T.
+        assert_eq!(vote.selected_caps.rvs_letters(), "P");
+        assert!(impl_entry.propagated_caps.rvs_contains(Capability::S));
+        assert!(impl_entry.propagated_caps.rvs_contains(Capability::T));
+        // U is signature-measured, not propagated: it stays in the node's
+        // inferred caps rather than the vote's propagated view.
+        assert!(!impl_entry.propagated_caps.rvs_contains(Capability::U));
+        let inferred = analysis
+            .rvs_inferred()
+            .get(&DefPath::from("demo::Adapter::rvs_read_P@demo::Transport"))
+            .expect("never: port implementation has inferred caps");
+        assert!(inferred.rvs_contains(Capability::U));
+        assert!(inferred.rvs_contains(Capability::P));
+    }
+
+    #[test]
+    fn test_20260822_port_impl_audit_sources_are_independent() {
+        // Each audit source must independently attribute its caps:
+        // static-mut access contributes S (propagated) + U (inferred),
+        // thread-local access contributes S + T, and an `unsafe fn`
+        // signature contributes U alone. A lost S from any single source
+        // must be observable here.
+        let cases = [
+            (
+                "StaticMutAdapter",
+                CapabilityFacts {
+                    has_static_mut_ref: true,
+                    ..CapabilityFacts::default()
+                },
+                "SU",
+            ),
+            (
+                "ThreadLocalAdapter",
+                CapabilityFacts {
+                    has_thread_local_ref: true,
+                    ..CapabilityFacts::default()
+                },
+                "ST",
+            ),
+            (
+                "UnsafeFnAdapter",
+                CapabilityFacts {
+                    is_unsafe_fn: true,
+                    ..CapabilityFacts::default()
+                },
+                "U",
+            ),
+        ];
+        let local = BTreeSet::from([CrateName::from("demo")]);
+        let mut lines = Vec::new();
+        for (name, facts, expected_inferred) in cases {
+            let mut graph = FnGraph::rvs_new();
+            let mut declaration = rvs_make_behavior();
+            declaration.has_body = false;
+            declaration.facts.is_port_method = true;
+            graph.rvs_insert_M(DefPath::from("demo::Transport::rvs_read_P"), declaration);
+
+            let mut implementation = rvs_make_behavior();
+            implementation.is_trait_impl = true;
+            implementation.facts = facts;
+            graph.rvs_insert_M(
+                DefPath::from(format!("demo::{name}::rvs_read_P@demo::Transport")),
+                implementation,
+            );
+
+            let analysis = PreparedLocalAnalysis::rvs_prepare_M(
+                &mut graph,
+                &capsmap::CapsMap::rvs_new(),
+                &local,
+            );
+            let inferred = analysis
+                .rvs_inferred()
+                .get(&DefPath::from(format!(
+                    "demo::{name}::rvs_read_P@demo::Transport"
+                )))
+                .expect("never: port implementation has inferred caps")
+                .rvs_letters();
+            // The structural P joins the inferred view; the expected string
+            // lists only the audit letters, so P is filtered out here.
+            let mut audit = CapabilitySet::rvs_from_validated(expected_inferred);
+            audit.rvs_insert_M(Capability::P);
+            assert_eq!(inferred, audit.rvs_letters(), "{name}");
+            lines.push(format!("{name}={inferred}"));
+        }
+        rvs_snapshot_BIS(
+            "test_20260822_port_impl_audit_sources_are_independent",
+            &(lines.join("\n") + "\n"),
+        );
+    }
+
+    #[test]
     fn test_20260715_trait_alias_capsmap_preserves_incomplete_vote_knowledge() {
         let mut graph = FnGraph::rvs_new();
         let implementation_paths: Vec<_> = ["dep::A", "dep::B"]
@@ -4743,10 +5703,17 @@ mod tests {
             &output,
         );
 
-        assert!(!vote.rvs_is_complete());
+        // The uncertain impl's known lower bound already votes S (counted in
+        // `counts`); its unknown remainder cannot vote S twice, so the vote
+        // is stable: S tops out at 1 < threshold 2 regardless of what the
+        // unknown part hides. The impl itself stays export-tainted, and an
+        // inference-incomplete implementation never becomes an outlier: its
+        // caps are a partial lower bound, not a design signal.
+        assert!(vote.rvs_is_complete());
         assert!(vote.selected_caps.rvs_is_empty());
         assert_eq!(vote.counts.get(&Capability::S), Some(&1));
         assert!(analysis.rvs_incomplete_paths().contains(&uncertain_path));
+        assert!(!analysis.rvs_incomplete_roots().contains(&uncertain_path));
         assert!(analysis.trait_impl_outliers.is_empty());
     }
 
@@ -5331,7 +6298,7 @@ mod tests {
             CallEdgeType::Strong,
         );
         other.facts.has_async = true;
-        merged.rvs_merge_M(&other);
+        crate::artifacts::rvs_merge_fn_node_M(&mut merged, &other);
         assert!(
             merged
                 .calls
@@ -5436,7 +6403,7 @@ mod tests {
         local.facts = port_facts;
         let mut external = rvs_make_behavior();
         external.facts = port_facts;
-        let external_target = external.rvs_test_target_M(20);
+        let external_target = rvs_test_target_of_M(&mut external, 20);
         external_target.facts = port_facts;
         external_target.crate_provenance = crate::artifacts::CrateProvenance::Dependency;
         let mut graph = FnGraph::rvs_new();

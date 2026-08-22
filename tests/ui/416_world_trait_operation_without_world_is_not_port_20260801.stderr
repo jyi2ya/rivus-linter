@@ -1,3 +1,11 @@
+error: 'rvs_read_P' should be named 'rvs_read'; declared caps: P; inferred caps: pure
+  --> $DIR/tests/ui/416_world_trait_operation_without_world_is_not_port_20260801.rs:8:5
+   |
+LL |     fn rvs_read_P(world: &Self::World);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(rivus::rvs_contract_mismatch)]` on by default
+
 error: 'write' is missing the rvs_ prefix; expected name: rvs_write; declared caps: unknown; inferred caps: pure
   --> $DIR/tests/ui/416_world_trait_operation_without_world_is_not_port_20260801.rs:9:5
    |
@@ -7,4 +15,4 @@ LL |     fn write(bytes: &[u8]);
    = note: `-D rivus::rvs-non-rvs-fn` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_non_rvs_fn)]`
 
-error: aborting due to 1 previous error
+error: aborting due to 2 previous errors

@@ -13,10 +13,10 @@ error: spawn: std::thread::functions::spawn — use structured concurrency
 LL |     std::thread::spawn(|| {});
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^
 
-error: good fn 'rvs_orchestrate_BIST' not called by any test
+error: good fn 'rvs_orchestrate_BST' not called by any test
   --> $DIR/tests/ui/84_spawn_multiple.rs:3:1
    |
-LL | / fn rvs_orchestrate_BIST() {
+LL | / fn rvs_orchestrate_BST() {
 LL | |     std::thread::spawn(|| {});
 LL | |     std::thread::spawn(|| {});
 LL | | }

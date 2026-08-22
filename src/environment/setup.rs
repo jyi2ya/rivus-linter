@@ -641,6 +641,8 @@ mod tests {
         assert!(template.contains("`BIMPST`"));
         assert!(template.contains("World Port"));
         assert!(template.contains("type-level interpreter"));
+        assert!(template.contains("public contract of exactly `P`"));
+        assert!(!template.contains("vote on `B/I/S/T`"));
         assert!(!template.contains("name ends in `Repository`"));
         assert!(template.contains("Result/Option"));
         assert!(!template.contains("~/var/linter-issues/"));

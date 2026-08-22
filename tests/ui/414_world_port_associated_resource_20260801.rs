@@ -15,13 +15,13 @@ trait ByteTransport {
     type World;
     type Connection;
 
-    fn rvs_connect_MP(world: &mut Self::World) -> Result<Self::Connection, TransportError>;
-    fn rvs_write_MP(
+    fn rvs_connect_P(world: &mut Self::World) -> Result<Self::Connection, TransportError>;
+    fn rvs_write_P(
         world: &mut Self::World,
         connection: &mut Self::Connection,
         bytes: &[u8],
     ) -> Result<usize, TransportError>;
-    fn rvs_shutdown_MP(world: &mut Self::World, connection: Self::Connection);
+    fn rvs_shutdown_P(world: &mut Self::World, connection: Self::Connection);
 }
 
 #[derive(Debug, Default)]
@@ -41,11 +41,11 @@ impl ByteTransport for FakeTransport {
     type World = FakeWorld;
     type Connection = FakeConnection;
 
-    fn rvs_connect_MP(_world: &mut Self::World) -> Result<Self::Connection, TransportError> {
+    fn rvs_connect_P(_world: &mut Self::World) -> Result<Self::Connection, TransportError> {
         Ok(FakeConnection { open: true })
     }
 
-    fn rvs_write_MP(
+    fn rvs_write_P(
         world: &mut Self::World,
         connection: &mut Self::Connection,
         bytes: &[u8],
@@ -57,7 +57,7 @@ impl ByteTransport for FakeTransport {
         Ok(bytes.len())
     }
 
-    fn rvs_shutdown_MP(_world: &mut Self::World, mut connection: Self::Connection) {
+    fn rvs_shutdown_P(_world: &mut Self::World, mut connection: Self::Connection) {
         connection.open = false;
     }
 }
@@ -66,9 +66,9 @@ fn rvs_send_MP<T: ByteTransport>(
     world: &mut T::World,
     bytes: &[u8],
 ) -> Result<(), TransportError> {
-    let mut connection = T::rvs_connect_MP(world)?;
-    let _ = T::rvs_write_MP(world, &mut connection, bytes)?;
-    T::rvs_shutdown_MP(world, connection);
+    let mut connection = T::rvs_connect_P(world)?;
+    let _ = T::rvs_write_P(world, &mut connection, bytes)?;
+    T::rvs_shutdown_P(world, connection);
     Ok(())
 }
 

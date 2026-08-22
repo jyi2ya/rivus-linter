@@ -6,4 +6,4 @@ migrated=dep::migrated_empty (no known caps; completeness unknown)
     dep::cached_empty: (no known caps) [incomplete]
     dep::migrated_blocking: B (Blocking) [completeness unknown]
     dep::migrated_empty: (no known caps) [completeness unknown]
-    dep::opaque: (unknown)
+    dep::opaque: (unknown) [incomplete]

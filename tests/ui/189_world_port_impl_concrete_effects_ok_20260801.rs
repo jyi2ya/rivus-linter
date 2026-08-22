@@ -37,7 +37,7 @@ fn rvs_thread_local_ST() -> i32 {
 trait FetchApi {
     type World;
 
-    fn rvs_fetch_BIMPST(world: &mut Self::World) -> i32;
+    fn rvs_fetch_P(world: &mut Self::World) -> i32;
 }
 
 #[derive(Debug)]
@@ -49,11 +49,11 @@ struct ApiWorld;
 impl FetchApi for Api {
     type World = ApiWorld;
 
-    fn rvs_fetch_BIMPST(_world: &mut Self::World) -> i32 {
+    fn rvs_fetch_P(_world: &mut Self::World) -> i32 {
         rvs_block_B() + rvs_io_BIS() + rvs_effect_S() + rvs_thread_local_ST()
     }
 }
 
 fn rvs_fetch_through_port_MP<E: FetchApi>(world: &mut E::World) -> i32 {
-    E::rvs_fetch_BIMPST(world)
+    E::rvs_fetch_P(world)
 }

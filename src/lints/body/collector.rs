@@ -9,7 +9,7 @@ use rustc_span::{Span, Symbol, sym};
 
 use super::super::utils::{
     CallObservation, CallSyntax, CallTarget, ObservationKind, rvs_collect_local_bindings_M,
-    rvs_def_id_is_fn_trait_operation, rvs_def_path, rvs_resolve_call, rvs_root_body_expr,
+    rvs_def_id_is_fn_trait_operation, rvs_def_path_B, rvs_resolve_call_B, rvs_root_body_expr,
     rvs_static_is_thread_local, rvs_visit_body_exprs,
 };
 use super::macro_expansion::rvs_span_has_bang_macro;
@@ -42,7 +42,7 @@ pub(crate) struct BodyFacts {
     pub(crate) unsupported_implicit_execution: Vec<ImplicitExecutionSite>,
 }
 
-pub(crate) fn rvs_collect_body_facts<'tcx>(
+pub(crate) fn rvs_collect_body_facts_B<'tcx>(
     cx: &LateContext<'tcx>,
     body: &Body<'tcx>,
     collect_lint_facts: bool,
@@ -77,7 +77,7 @@ pub(crate) fn rvs_collect_body_facts<'tcx>(
         }
 
         if matches!(expr.kind, ExprKind::Call(..) | ExprKind::MethodCall(..)) {
-            if let Some(mut observation) = rvs_resolve_call(cx, expr) {
+            if let Some(mut observation) = rvs_resolve_call_B(cx, expr) {
                 observation.body_owner = body_owner;
                 if collect_lint_facts && observation.kind == ObservationKind::Direct {
                     if let Some(name) = rvs_result_swallow_name(cx, &observation.target) {
@@ -103,7 +103,7 @@ pub(crate) fn rvs_collect_body_facts<'tcx>(
                 facts.call_observations.push(CallObservation {
                     kind: ObservationKind::Direct,
                     syntax: CallSyntax::Function,
-                    target: rvs_resolved_target(cx, target),
+                    target: rvs_resolved_target_B(cx, target),
                     hir_id,
                     span,
                     body_owner,
@@ -111,7 +111,7 @@ pub(crate) fn rvs_collect_body_facts<'tcx>(
             }
         }
 
-        rvs_collect_function_ref_M(
+        rvs_collect_function_ref_BM(
             cx,
             expr,
             body_owner,
@@ -258,7 +258,7 @@ const fn rvs_direct_callee_hir_id(expr: &rustc_hir::Expr<'_>) -> Option<HirId> {
     None
 }
 
-fn rvs_collect_function_ref_M(
+fn rvs_collect_function_ref_BM(
     cx: &LateContext<'_>,
     expr: &rustc_hir::Expr<'_>,
     body_owner: rustc_hir::def_id::LocalDefId,
@@ -285,7 +285,7 @@ fn rvs_collect_function_ref_M(
         kind: ObservationKind::FunctionReference,
         syntax: CallSyntax::Function,
         target: CallTarget::Resolved {
-            def_path: DefPath::rvs_new(rvs_def_path(cx, def_id)),
+            def_path: DefPath::rvs_new(rvs_def_path_B(cx, def_id)),
             def_kind,
             crate_id,
         },
@@ -348,9 +348,9 @@ fn rvs_collect_direct_fn_paths_M(
     }
 }
 
-fn rvs_resolved_target(cx: &LateContext<'_>, def_id: DefId) -> CallTarget {
+fn rvs_resolved_target_B(cx: &LateContext<'_>, def_id: DefId) -> CallTarget {
     CallTarget::Resolved {
-        def_path: crate::symbols::DefPath::rvs_new(super::super::utils::rvs_def_path(cx, def_id)),
+        def_path: crate::symbols::DefPath::rvs_new(super::super::utils::rvs_def_path_B(cx, def_id)),
         def_kind: cx.tcx.def_kind(def_id),
         crate_id: cx.tcx.stable_crate_id(def_id.krate).as_u64(),
     }
@@ -562,6 +562,6 @@ mod tests {
         assert!(!plain);
         assert_eq!(calls.len(), 2);
 
-        rvs_register_test_coverage((rvs_collect_body_facts, rvs_expr_is_stub));
+        rvs_register_test_coverage((rvs_collect_body_facts_B, rvs_expr_is_stub));
     }
 }

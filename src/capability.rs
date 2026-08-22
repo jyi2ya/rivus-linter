@@ -523,19 +523,23 @@ pub struct CapabilityFacts {
     pub is_port_method: bool,
 }
 
-impl CapabilityFacts {
-    /// Merge observations from another compilation of the same function.
-    pub const fn rvs_merge_M(&mut self, other: Self) {
-        self.has_async |= other.has_async;
-        self.has_const |= other.has_const;
-        self.is_unsafe_fn |= other.is_unsafe_fn;
-        self.has_mut_param |= other.has_mut_param;
-        self.has_static_ref |= other.has_static_ref;
-        self.has_static_mut_ref |= other.has_static_mut_ref;
-        self.has_thread_local_ref |= other.has_thread_local_ref;
-        self.is_port_method |= other.is_port_method;
-    }
+/// Merge observations from another compilation of the same function.
+///
+/// A free function instead of an `&mut self` method: `CapabilityFacts` is
+/// pure data with all fields visible, and mutator methods on pure-data
+/// structs are rejected by the data-structure lint.
+pub const fn rvs_merge_capability_facts_M(target: &mut CapabilityFacts, other: CapabilityFacts) {
+    target.has_async |= other.has_async;
+    target.has_const |= other.has_const;
+    target.is_unsafe_fn |= other.is_unsafe_fn;
+    target.has_mut_param |= other.has_mut_param;
+    target.has_static_ref |= other.has_static_ref;
+    target.has_static_mut_ref |= other.has_static_mut_ref;
+    target.has_thread_local_ref |= other.has_thread_local_ref;
+    target.is_port_method |= other.is_port_method;
+}
 
+impl CapabilityFacts {
     /// Build capability facts from a function signature and precomputed mutability.
     pub fn rvs_from_signature(
         sig: &rustc_hir::FnSig<'_>,
@@ -616,24 +620,6 @@ impl CapabilityPolicy {
         caps
     }
 
-    /// Infer the operation-owned portion of a World Port contract.
-    ///
-    /// Body observations are checked against the voted contract rather than
-    /// defining the contract they are meant to satisfy: static/thread-local
-    /// S and T belong to the vote. `static mut` access still infers U here
-    /// because U is a signature/body fact that the B/I/S/T vote never
-    /// covers.
-    pub fn rvs_port_operation_signature_caps(facts: CapabilityFacts) -> CapabilitySet {
-        debug_assert!(
-            facts.is_port_method,
-            "operation must belong to a World Port"
-        );
-        let mut caps = Self::rvs_signature_caps(facts);
-        caps.rvs_remove_M(Capability::S);
-        caps.rvs_remove_M(Capability::T);
-        caps
-    }
-
     /// Return capabilities required by static and thread-local observations.
     pub fn rvs_static_caps(facts: CapabilityFacts) -> CapabilitySet {
         let mut caps = CapabilitySet::rvs_new();
@@ -680,6 +666,12 @@ impl CapabilityPolicy {
     /// Return whether a capability propagates from callees to callers.
     pub fn rvs_is_propagated_cap(cap: Capability) -> bool {
         Self::rvs_propagated_caps().contains(&cap)
+    }
+
+    /// Return whether a capability may appear in a function-name suffix
+    /// (B/I/M/P/S/T). A/C/U are signature-measured only.
+    pub const fn rvs_is_naming_suffix_cap(cap: Capability) -> bool {
+        !matches!(cap, Capability::A | Capability::C | Capability::U)
     }
 
     /// Return the capabilities required across a call edge.
@@ -861,11 +853,6 @@ impl CapabilitySet {
     /// 向能力集中插入一项能力。
     pub fn rvs_insert_M(&mut self, cap: Capability) {
         self.0.insert(cap);
-    }
-
-    /// Remove one capability from the set.
-    pub fn rvs_remove_M(&mut self, cap: Capability) {
-        self.0.remove(&cap);
     }
 
     /// Keep only capabilities allowed in function-name suffixes (B/I/M/P/S/T).
@@ -1423,12 +1410,15 @@ mod tests {
             has_async: true,
             ..CapabilityFacts::default()
         };
-        facts.rvs_merge_M(CapabilityFacts {
-            has_mut_param: true,
-            has_static_mut_ref: true,
-            has_thread_local_ref: true,
-            ..CapabilityFacts::default()
-        });
+        rvs_merge_capability_facts_M(
+            &mut facts,
+            CapabilityFacts {
+                has_mut_param: true,
+                has_static_mut_ref: true,
+                has_thread_local_ref: true,
+                ..CapabilityFacts::default()
+            },
+        );
         let static_caps = CapabilityPolicy::rvs_static_caps(facts);
         let implementations = [
             CapabilitySet::rvs_from_validated("BS"),
@@ -1456,53 +1446,6 @@ mod tests {
 
         assert_eq!(selected.rvs_letters(), "BS");
         assert_eq!(threshold, 2);
-    }
-
-    #[test]
-    fn test_20260816_port_operation_keeps_static_mut_unsafe_cap() {
-        // A World Port default body touching `static mut` keeps U in its
-        // operation-owned contract: U is a body fact the B/I/S/T vote never
-        // covers, while S/T from static/thread-local observations belong to
-        // the vote and stay out of the signature-derived portion.
-        let static_mut_facts = CapabilityFacts {
-            is_port_method: true,
-            has_static_mut_ref: true,
-            ..CapabilityFacts::default()
-        };
-        let thread_local_facts = CapabilityFacts {
-            is_port_method: true,
-            has_thread_local_ref: true,
-            ..CapabilityFacts::default()
-        };
-        let unsafe_async_facts = CapabilityFacts {
-            is_port_method: true,
-            has_async: true,
-            is_unsafe_fn: true,
-            ..CapabilityFacts::default()
-        };
-        let output = format!(
-            "static_mut={}\nthread_local={}\nunsafe_async={}\n",
-            CapabilityPolicy::rvs_port_operation_signature_caps(static_mut_facts).rvs_letters(),
-            CapabilityPolicy::rvs_port_operation_signature_caps(thread_local_facts).rvs_letters(),
-            CapabilityPolicy::rvs_port_operation_signature_caps(unsafe_async_facts).rvs_letters(),
-        );
-        rvs_snapshot_BIS(
-            "test_20260816_port_operation_keeps_static_mut_unsafe_cap",
-            &output,
-        );
-
-        assert_eq!(
-            CapabilityPolicy::rvs_port_operation_signature_caps(static_mut_facts).rvs_letters(),
-            "PU"
-        );
-        assert_eq!(
-            CapabilityPolicy::rvs_port_operation_signature_caps(thread_local_facts).rvs_letters(),
-            "P"
-        );
-        assert_eq!(
-            CapabilityPolicy::rvs_port_operation_signature_caps(unsafe_async_facts).rvs_letters(),
-            "APU"
-        );
     }
 
     #[test]

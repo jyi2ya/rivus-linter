@@ -604,7 +604,7 @@ fn rvs_driver_crate_provenance_BIS(
     Ok(CrateProvenance::Dependency)
 }
 
-fn rvs_require_active_driver_generation_BIST(
+fn rvs_require_active_driver_generation(
     root: &Path,
     marker: &RunGenerationMarker,
 ) -> Result<(), DriverProtocolError> {
@@ -625,7 +625,7 @@ fn rvs_require_active_driver_generation_BIST(
     Ok(())
 }
 
-pub(crate) fn rvs_load_driver_protocol_BIST()
+pub(crate) fn rvs_load_driver_protocol_BIS()
 -> Result<Option<RivusDriverConfig>, DriverProtocolError> {
     let environment = DriverProtocolEnvironment::rvs_from_current_BS();
     if environment.enabled.is_none() {
@@ -636,10 +636,10 @@ pub(crate) fn rvs_load_driver_protocol_BIST()
         }
         return Ok(None);
     }
-    rvs_parse_driver_protocol_environment_BIST(&environment).map(Some)
+    rvs_parse_driver_protocol_environment_BIS(&environment).map(Some)
 }
 
-fn rvs_parse_driver_protocol_environment_BIST(
+fn rvs_parse_driver_protocol_environment_BIS(
     environment: &DriverProtocolEnvironment,
 ) -> Result<RivusDriverConfig, DriverProtocolError> {
     rvs_require_driver_flag(environment.enabled.as_ref(), "RIVUS_ENABLED")?;
@@ -670,7 +670,7 @@ fn rvs_parse_driver_protocol_environment_BIST(
             expected: marker.generation_id,
         });
     }
-    rvs_require_active_driver_generation_BIST(&canonical_root, &marker)?;
+    rvs_require_active_driver_generation(&canonical_root, &marker)?;
     let generation_project_root = marker.project_root.clone();
 
     let mode = match marker.mode {
@@ -1485,7 +1485,7 @@ fn rvs_write_untested_selection_BIST(
     functions: &BTreeMap<crate::artifacts::FunctionIdentity, crate::artifacts::CoverageLabel>,
 ) -> Result<PathBuf, String> {
     let path = generation_root.join("untested-functions.json");
-    let json = crate::artifacts::rvs_serialize_untested_selection_S(functions)
+    let json = crate::artifacts::rvs_serialize_untested_selection(functions)
         .map_err(|error| error.to_string())?;
     super::fs_guard::rvs_atomic_write_BIST(&path, json.as_bytes())
         .map_err(|error| format!("cannot write {}: {error}", path.display()))?;
@@ -2627,7 +2627,7 @@ mod tests {
         let ack_dir = generation.join("offline-emission-acks");
         std::fs::create_dir(&ack_dir).unwrap();
         let emissions = vec![crate::offline_caps::OfflineCapsEmission {
-            lint: crate::offline_caps::OfflineCapsLint::StaticRef,
+            lint: crate::offline_caps::OfflineCapsLint::DuplicateSuffix,
             span_anchors: BTreeSet::from([crate::offline_caps::OfflineCapsEmissionAnchor {
                 identity: crate::artifacts::FunctionIdentity {
                     crate_id: 7,
@@ -5132,7 +5132,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
         );
         std::fs::write(
             legacy_dir.join("legacy.json"),
-            crate::artifacts::rvs_serialize_callgraph_json_S(&legacy).unwrap(),
+            crate::artifacts::rvs_serialize_callgraph_json(&legacy).unwrap(),
         )
         .unwrap();
         let mut published = FnGraph::rvs_new();
@@ -5590,7 +5590,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
 
     #[test]
     fn test_20260704_reject_stale_callgraph_without_has_body() {
-        let result = crate::artifacts::rvs_parse_callgraph_json_S(
+        let result = crate::artifacts::rvs_parse_callgraph_json(
             r#"{
   "demo::rvs_trait_method_P": {
     "calls": [],
@@ -5642,7 +5642,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
         let dir = rvs_make_workspace_temp_dir_BIS("empty-callgraph-json");
         let cg_dir = dir.join("target/rivus-callgraph");
         std::fs::create_dir_all(&cg_dir).unwrap();
-        let json = crate::artifacts::rvs_serialize_callgraph_json_S(&FnGraph::rvs_new()).unwrap();
+        let json = crate::artifacts::rvs_serialize_callgraph_json(&FnGraph::rvs_new()).unwrap();
         std::fs::write(cg_dir.join("demo-1.json"), json).unwrap();
 
         let result = rvs_merge_callgraph_dir_BIS(&cg_dir, &BTreeSet::new());

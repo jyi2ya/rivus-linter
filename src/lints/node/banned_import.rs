@@ -39,7 +39,7 @@ pub(crate) fn rvs_check_extern_crate_S(cx: &LateContext<'_>, item: &Item<'_>) {
 /// Check `use` items for banned crates (anyhow/eyre/color_eyre/thiserror),
 /// wildcard imports (`use xxx::*`), and imports of `tests`-module symbols
 /// from outside the `tests` module.
-pub(crate) fn rvs_check_item_MS<'tcx>(
+pub(crate) fn rvs_check_item_BMS<'tcx>(
     cx: &LateContext<'tcx>,
     item: &'tcx Item<'tcx>,
     path: &'tcx UsePath<'tcx>,

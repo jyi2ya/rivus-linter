@@ -46,7 +46,7 @@ pub(crate) struct RivusLintWorld {
 impl LintEnvironment for RivusLintEnvironment {
     type World = RivusLintWorld;
 
-    fn rvs_write_callgraph_BIMPST(
+    fn rvs_write_callgraph_P(
         world: &mut Self::World,
         crate_name: &CrateName,
         callgraph: &FnGraph,
@@ -59,7 +59,7 @@ impl LintEnvironment for RivusLintEnvironment {
             .map_err(|error| error.to_string())
     }
 
-    fn rvs_acknowledge_offline_emission_BIMPS(
+    fn rvs_acknowledge_offline_emission_P(
         world: &mut Self::World,
         emission_index: usize,
         anchor_index: usize,
@@ -149,7 +149,7 @@ fn rvs_load_untested_functions_BIS(
             path.display()
         )
     })?;
-    crate::artifacts::rvs_parse_untested_selection_S(&json)
+    crate::artifacts::rvs_parse_untested_selection(&json)
         .map(Some)
         .map_err(|error| format!("{}: {error}", path.display()))
 }
@@ -199,7 +199,7 @@ fn rvs_write_bound_callgraph_artifact_BIST(
     callgraph: &FnGraph,
 ) -> Result<PathBuf, CallgraphWriteError> {
     let generation_id = output.generation_id.as_str();
-    let json = rvs_serialize_callgraph_artifact_S(generation_id, crate_name, callgraph)?;
+    let json = rvs_serialize_callgraph_artifact(generation_id, crate_name, callgraph)?;
     for _ in 0..100usize {
         let sequence = RVS_CALLGRAPH_ARTIFACT_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let file_name = format!(
@@ -221,7 +221,7 @@ fn rvs_write_bound_callgraph_artifact_BIST(
     })
 }
 
-fn rvs_serialize_callgraph_artifact_S(
+fn rvs_serialize_callgraph_artifact(
     generation_id: &str,
     crate_name: &CrateName,
     callgraph: &FnGraph,
@@ -245,7 +245,7 @@ fn rvs_serialize_callgraph_artifact_S(
             crate_name: CrateName::from(crate_name),
         });
     }
-    crate::artifacts::rvs_serialize_callgraph_json_S(callgraph)
+    crate::artifacts::rvs_serialize_callgraph_json(callgraph)
         .map_err(|source| CallgraphWriteError::Serialize { source })
 }
 
@@ -489,13 +489,13 @@ mod tests {
             .expect("never: pathy crate fixture directory should be removable");
         let graph = rvs_test_callgraph();
 
-        let slash = rvs_serialize_callgraph_artifact_S(
+        let slash = rvs_serialize_callgraph_artifact(
             TEST_GENERATION_ID,
             &CrateName::from("bad/name"),
             &graph,
         );
         let empty =
-            rvs_serialize_callgraph_artifact_S(TEST_GENERATION_ID, &CrateName::from(""), &graph);
+            rvs_serialize_callgraph_artifact(TEST_GENERATION_ID, &CrateName::from(""), &graph);
         let dir_exists = directory.exists();
         let snapshot = format!(
             "slash_is_err={}\nempty_is_err={}\ndir_exists={dir_exists}\n",
@@ -517,7 +517,7 @@ mod tests {
         let directory = rvs_make_temp_dir_BIS("artifact-nul-crate");
         std::fs::remove_dir_all(&directory)
             .expect("never: nul crate fixture directory should be removable");
-        let result = rvs_serialize_callgraph_artifact_S(
+        let result = rvs_serialize_callgraph_artifact(
             TEST_GENERATION_ID,
             &CrateName::from("bad\0name"),
             &rvs_test_callgraph(),

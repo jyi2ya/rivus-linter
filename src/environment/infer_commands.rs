@@ -27,12 +27,12 @@ use crate::symbols::{DefPath, TraitMethodKey};
 /// # Panics
 ///
 /// Panics if the current executable path, current directory, or cargo cannot be resolved.
-pub(crate) fn rvs_run_infer_capsmap_BIPST(path: &Path, output: &Path) -> Result<(), String> {
+pub(crate) fn rvs_run_infer_capsmap_BIST(path: &Path, output: &Path) -> Result<(), String> {
     rvs_ensure_cargo_project_BIS(path)?;
     let project_path = path
         .canonicalize()
         .map_err(|e| format!("cannot canonicalize '{}': {e}", path.display()))?;
-    let _caps_lock = rvs_lock_caps_update_BIST(&project_path)?;
+    let _caps_lock = rvs_lock_caps_update_BIS(&project_path)?;
     let target_scope = CargoTargetScope::Production;
     let local_crate_names = rvs_detect_local_crate_prefixes_BIS(&project_path, target_scope)?;
 
@@ -68,12 +68,12 @@ pub(crate) fn rvs_run_infer_capsmap_BIPST(path: &Path, output: &Path) -> Result<
     rvs_write_pinned_capsmap_result_BIST(&deps_result, &publication, "deps capsmap")
 }
 
-pub(crate) fn rvs_run_infer_std_BIPST(path: &Path, output: &Path) -> Result<(), String> {
+pub(crate) fn rvs_run_infer_std_BIST(path: &Path, output: &Path) -> Result<(), String> {
     rvs_ensure_cargo_project_BIS(path)?;
     let project_path = path
         .canonicalize()
         .map_err(|e| format!("cannot canonicalize '{}': {e}", path.display()))?;
-    let _caps_lock = rvs_lock_caps_update_BIST(&project_path)?;
+    let _caps_lock = rvs_lock_caps_update_BIS(&project_path)?;
     let target_scope = CargoTargetScope::Production;
     let local_crate_names = rvs_detect_local_crate_prefixes_BIS(&project_path, target_scope)?;
     let local_scope = LocalScope::rvs_new(&local_crate_names);
@@ -141,10 +141,10 @@ fn rvs_load_std_inference_seed_BIS(caps_dir: &Path) -> Result<CapsMap, String> {
         .map_err(|e| format!("caps: {e}"))
 }
 
-fn rvs_lock_caps_update_BIST(
+fn rvs_lock_caps_update_BIS(
     project_path: &Path,
 ) -> Result<super::fs_guard::RivusDirectoryLock, String> {
-    super::fs_guard::rvs_try_lock_directory_BIST(project_path).map_err(|error| {
+    super::fs_guard::rvs_try_lock_directory_BIS(project_path).map_err(|error| {
         if error.kind() == std::io::ErrorKind::WouldBlock {
             format!(
                 "another caps inference command is already running for {}",
@@ -477,7 +477,17 @@ fn rvs_collect_std_unknown_callees(
     local_scope: &LocalScope,
 ) -> BTreeMap<DefPath, BTreeSet<DefPath>> {
     let mut unknown: BTreeMap<DefPath, BTreeSet<DefPath>> = BTreeMap::new();
-    let resolver = CalleeCapsResolver::rvs_new(callgraph, seed, inferred, impl_index);
+    // The aggregated Port set keeps declaration-derived membership (an
+    // implementation of a Port declaration resolves through the structural
+    // PortMethod source even when its own node lacks the Port fact).
+    let scoped_port_methods = crate::inference::rvs_aggregate_port_methods_for_resolver(callgraph);
+    let resolver = CalleeCapsResolver::rvs_new_scoped(
+        callgraph,
+        seed,
+        inferred,
+        impl_index,
+        &scoped_port_methods,
+    );
     for (func, behavior) in callgraph.rvs_iter() {
         let is_std = rvs_is_std_like_def_path(func.rvs_as_str());
         let is_local = local_scope.rvs_contains(func);
@@ -1014,9 +1024,9 @@ mod tests {
             "infer-concurrent-caps-update",
             &[("src/lib.rs", "pub fn rvs_value() -> u8 { 1 }\n")],
         );
-        let lock = crate::environment::fs_guard::rvs_try_lock_directory_BIST(&dir).unwrap();
+        let lock = crate::environment::fs_guard::rvs_try_lock_directory_BIS(&dir).unwrap();
 
-        let error = rvs_run_infer_capsmap_BIPST(&dir, Path::new("caps/deps")).unwrap_err();
+        let error = rvs_run_infer_capsmap_BIST(&dir, Path::new("caps/deps")).unwrap_err();
         let output = format!("{error}\n").replace(&dir.to_string_lossy().into_owned(), "$TMP");
         rvs_snapshot_BIS(
             "test_20260715_inference_rejects_concurrent_caps_update",
@@ -1038,7 +1048,7 @@ mod tests {
         .unwrap();
         std::fs::create_dir_all(dir.join("caps")).unwrap();
 
-        let result = rvs_run_infer_capsmap_BIPST(&dir, Path::new("caps/deps"));
+        let result = rvs_run_infer_capsmap_BIST(&dir, Path::new("caps/deps"));
         let output = format!("{result:?}").replace(&dir.to_string_lossy().into_owned(), "$TMP");
         rvs_snapshot_BIS(
             "test_20260702_infer_capsmap_rejects_workspace_root",
@@ -1060,7 +1070,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = rvs_run_infer_std_BIPST(&dir, Path::new("caps/std"));
+        let result = rvs_run_infer_std_BIST(&dir, Path::new("caps/std"));
         let output = format!("{result:?}").replace(&dir.to_string_lossy().into_owned(), "$TMP");
         rvs_snapshot_BIS("test_20260702_infer_std_rejects_workspace_root", &output);
 
@@ -1079,7 +1089,7 @@ mod tests {
         );
         std::fs::write(dir.join("caps"), "bad=Z\n").unwrap();
 
-        let result = rvs_run_infer_std_BIPST(&dir, Path::new("caps/std"));
+        let result = rvs_run_infer_std_BIST(&dir, Path::new("caps/std"));
         let output = format!("{result:?}").replace(&dir.to_string_lossy().into_owned(), "$TMP");
         rvs_snapshot_BIS("test_20260706_infer_std_rejects_caps_file", &output);
 
@@ -1146,7 +1156,7 @@ mod tests {
         );
         std::os::unix::fs::symlink(dir.join("missing-caps"), dir.join("caps")).unwrap();
 
-        let result = rvs_run_infer_std_BIPST(&dir, Path::new("caps/std"));
+        let result = rvs_run_infer_std_BIST(&dir, Path::new("caps/std"));
         let output = format!("{result:?}\n").replace(&dir.to_string_lossy().into_owned(), "$TMP");
         rvs_snapshot_BIS(
             "test_20260706_infer_std_rejects_broken_caps_symlink",
@@ -1173,7 +1183,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = rvs_run_infer_std_BIPST(&dir, Path::new("caps/std"));
+        let result = rvs_run_infer_std_BIST(&dir, Path::new("caps/std"));
         let callgraph_exists = dir.join("target/rivus-callgraph-std").exists();
         let output = format!("result={result:?}\ncallgraph_exists={callgraph_exists}\n",)
             .replace(&dir.to_string_lossy().into_owned(), "$TMP");
@@ -1198,7 +1208,7 @@ mod tests {
         let output_path = dir.join("std-output");
         std::fs::create_dir_all(&output_path).unwrap();
 
-        let result = rvs_run_infer_std_BIPST(&dir, &output_path);
+        let result = rvs_run_infer_std_BIST(&dir, &output_path);
         let callgraph_exists = dir.join("target/rivus-callgraph-std").exists();
         let output = format!("result={result:?}\ncallgraph_exists={callgraph_exists}\n",)
             .replace(&dir.to_string_lossy().into_owned(), "$TMP");
@@ -1223,7 +1233,7 @@ mod tests {
         let sentinel = "manual::entry=B\n";
         std::fs::write(dir.join("caps/seed"), sentinel).unwrap();
 
-        let result = rvs_run_infer_capsmap_BIPST(&dir, Path::new("caps/seed"));
+        let result = rvs_run_infer_capsmap_BIST(&dir, Path::new("caps/seed"));
         let callgraph_exists = dir.join("target/rivus-callgraph").exists();
         let seed_preserved = std::fs::read_to_string(dir.join("caps/seed")).unwrap() == sentinel;
         let output = format!(
@@ -1248,7 +1258,7 @@ mod tests {
             &[("src/lib.rs", "pub fn rvs_add() -> i32 { 1 }\n")],
         );
 
-        let result = rvs_run_infer_capsmap_BIPST(&dir, Path::new("CAPS/seed"));
+        let result = rvs_run_infer_capsmap_BIST(&dir, Path::new("CAPS/seed"));
         let callgraph_exists = dir.join("target/rivus-callgraph").exists();
         let output_exists = dir.join("CAPS/seed").exists();
         let output = format!(
@@ -1275,7 +1285,7 @@ mod tests {
         );
         std::fs::create_dir(dir.join("caps")).unwrap();
 
-        let result = rvs_run_infer_capsmap_BIPST(&dir, Path::new("CAPS/generated"));
+        let result = rvs_run_infer_capsmap_BIST(&dir, Path::new("CAPS/generated"));
         let output = format!(
             "result={result:?}\nshadow_exists={}\n",
             dir.join("CAPS").exists()
@@ -1308,7 +1318,7 @@ mod tests {
         ));
         std::os::unix::fs::symlink(&dir, &link).unwrap();
 
-        let result = rvs_run_infer_capsmap_BIPST(&dir, &link.join("CAPS/generated"));
+        let result = rvs_run_infer_capsmap_BIST(&dir, &link.join("CAPS/generated"));
         let output = format!(
             "result={result:?}\nshadow_exists={}\n",
             link.join("CAPS").exists()
@@ -1362,7 +1372,7 @@ mod tests {
         let sentinel = "dependency::entry=I\n";
         std::fs::write(dir.join("caps/deps"), sentinel).unwrap();
 
-        let result = rvs_run_infer_std_BIPST(&dir, Path::new("caps/deps"));
+        let result = rvs_run_infer_std_BIST(&dir, Path::new("caps/deps"));
         let callgraph_exists = dir.join("target/rivus-callgraph-std").exists();
         let deps_preserved = std::fs::read_to_string(dir.join("caps/deps")).unwrap() == sentinel;
         let output = format!(
@@ -1478,10 +1488,10 @@ mod tests {
         let sentinel = rvs_caps_v2(&[("manual::correction", "B")]);
         std::fs::write(dir.join("caps/generated"), &sentinel).unwrap();
 
-        let inside = rvs_run_infer_capsmap_BIPST(&dir, Path::new("caps/generated"));
+        let inside = rvs_run_infer_capsmap_BIST(&dir, Path::new("caps/generated"));
         let inside_preserved =
             std::fs::read_to_string(dir.join("caps/generated")).unwrap() == sentinel;
-        let outside = rvs_run_infer_capsmap_BIPST(&dir, Path::new("generated-caps"));
+        let outside = rvs_run_infer_capsmap_BIST(&dir, Path::new("generated-caps"));
         let outside_header = std::fs::read_to_string(dir.join("generated-caps"))
             .unwrap()
             .starts_with("# rivus-caps-v2\n");
@@ -1513,7 +1523,7 @@ mod tests {
         let output_path = dir.join("out-dir");
         std::fs::create_dir_all(&output_path).unwrap();
 
-        let result = rvs_run_infer_capsmap_BIPST(&dir, &output_path);
+        let result = rvs_run_infer_capsmap_BIST(&dir, &output_path);
         let cache_exists = dir.join("target/rivus-inferred-capsmap.txt").exists();
         let output = format!(
             "result_is_err={}\ncache_exists={cache_exists}\n",
@@ -1539,7 +1549,7 @@ mod tests {
         std::fs::create_dir_all(dir.join("caps")).unwrap();
         let output_path = PathBuf::from("target/../target/rivus-inferred-capsmap.txt");
 
-        let result = rvs_run_infer_capsmap_BIPST(&dir, &output_path);
+        let result = rvs_run_infer_capsmap_BIST(&dir, &output_path);
         let callgraph_exists = dir.join("target/rivus-callgraph").exists();
         let cache_exists = dir.join("target/rivus-inferred-capsmap.txt").exists();
         let output = format!(
@@ -1571,7 +1581,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = rvs_run_infer_capsmap_BIPST(&dir, Path::new("caps/deps"));
+        let result = rvs_run_infer_capsmap_BIST(&dir, Path::new("caps/deps"));
         let callgraph_exists = dir.join("target/rivus-callgraph").exists();
         let output = format!("result={result:?}\ncallgraph_exists={callgraph_exists}\n",)
             .replace(&dir.to_string_lossy().into_owned(), "$TMP");
@@ -1599,7 +1609,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = rvs_run_infer_capsmap_BIPST(&dir, Path::new("caps/deps"));
+        let result = rvs_run_infer_capsmap_BIST(&dir, Path::new("caps/deps"));
         assert!(
             result.is_ok(),
             "old deps output should be replaceable: {result:?}"
@@ -1621,7 +1631,7 @@ mod tests {
         std::fs::create_dir_all(dir.join("caps")).unwrap();
         std::fs::write(dir.join("generated"), "broken=Z\n").unwrap();
 
-        let result = rvs_run_infer_capsmap_BIPST(&dir, Path::new("generated"));
+        let result = rvs_run_infer_capsmap_BIST(&dir, Path::new("generated"));
         assert!(
             result.is_ok(),
             "custom output outside active caps should remain allowed: {result:?}"
@@ -1648,7 +1658,7 @@ mod tests {
         std::fs::write(dir.join("caps/generated"), "broken=Z\n").unwrap();
         std::os::unix::fs::symlink(dir.join("caps"), dir.join("caps-alias")).unwrap();
 
-        let result = rvs_run_infer_capsmap_BIPST(&dir, Path::new("caps-alias/generated"));
+        let result = rvs_run_infer_capsmap_BIST(&dir, Path::new("caps-alias/generated"));
         let generated_preserved =
             std::fs::read_to_string(dir.join("caps/generated")).unwrap() == "broken=Z\n";
         let output = format!(
@@ -1725,7 +1735,7 @@ mod tests {
         let output_path = PathBuf::from("caps").join(&layer);
         std::fs::write(dir.join(&output_path), "broken=Z\n").unwrap();
 
-        let result = rvs_run_infer_capsmap_BIPST(&dir, &output_path);
+        let result = rvs_run_infer_capsmap_BIST(&dir, &output_path);
         let generated_preserved =
             std::fs::read_to_string(dir.join(&output_path)).unwrap() == "broken=Z\n";
         let output = format!(
@@ -1750,7 +1760,7 @@ mod tests {
             &[("src/lib.rs", "pub fn rvs_add() -> i32 { 1 }\n")],
         );
 
-        let result = rvs_run_infer_capsmap_BIPST(&dir, Path::new("caps/deps"));
+        let result = rvs_run_infer_capsmap_BIST(&dir, Path::new("caps/deps"));
         let output_exists = dir.join("caps/deps").is_file();
         let output = format!("result={result:?}\noutput_exists={output_exists}\n");
         rvs_snapshot_BIS(
@@ -1837,6 +1847,81 @@ mod tests {
         assert!(std_emitted);
         assert!(!support_emitted);
         assert!(unknown.is_empty());
+    }
+
+    #[test]
+    fn test_20260822_std_unknown_callees_resolves_port_impl_via_aggregation() {
+        // A std-like caller reaching an implementation of a Port
+        // declaration whose own node lacks the Port fact: the unknown
+        // callee collector must resolve it through the aggregated Port
+        // set (structural PortMethod source) instead of reporting it as
+        // an unknown callee gap.
+        let mut callgraph = crate::artifacts::FnGraph::rvs_new();
+        let mut std_node = crate::artifacts::FnNode::default();
+        std_node.calls.insert(
+            FunctionIdentity {
+                crate_id: 1,
+                def_path: DefPath::from("support_crate::Mem::rvs_save_P@support_crate::Store"),
+            },
+            CallEdgeType::Strong,
+        );
+        callgraph.rvs_insert_M(DefPath::from("std::fs::write_all"), std_node);
+
+        // Port declaration carries the structural fact...
+        let mut declaration = crate::artifacts::FnNode::default();
+        declaration.facts.is_port_method = true;
+        callgraph.rvs_insert_M(
+            DefPath::from("support_crate::Store::rvs_save_P"),
+            declaration,
+        );
+        // ...the implementation does not: only the aggregated Port set
+        // (trait-method identity) recognizes it as a Port method.
+        let mut implementation = crate::artifacts::FnNode::default();
+        implementation.is_trait_impl = true;
+        implementation.facts.has_static_ref = true;
+        callgraph.rvs_insert_M(
+            DefPath::from("support_crate::Mem::rvs_save_P@support_crate::Store"),
+            implementation,
+        );
+
+        let local_scope = LocalScope::rvs_new(&BTreeSet::new());
+        let impl_index = rvs_build_impl_index(&callgraph);
+        let seed = CapsMap::rvs_new();
+        let inferred = rvs_infer_caps_with_index(&callgraph, &seed, &impl_index);
+        let unknown = rvs_collect_std_unknown_callees(
+            &callgraph,
+            &inferred,
+            &seed,
+            &impl_index,
+            &local_scope,
+        );
+        let aggregated = crate::inference::rvs_aggregate_port_methods_for_resolver(&callgraph);
+        let impl_resolved = CalleeCapsResolver::rvs_new_scoped(
+            &callgraph,
+            &seed,
+            &inferred,
+            &impl_index,
+            &aggregated,
+        )
+        .rvs_for_contract_check(&DefPath::from(
+            "support_crate::Mem::rvs_save_P@support_crate::Store",
+        ));
+        let impl_caps = impl_resolved
+            .map(|caps| caps.rvs_letters())
+            .unwrap_or_else(|| "unresolved".to_string());
+        let output = format!("unknown={unknown:?}\nimpl_caps={impl_caps}\n");
+        rvs_snapshot_BIS(
+            "test_20260822_std_unknown_callees_resolves_port_impl_via_aggregation",
+            &output,
+        );
+
+        assert!(unknown.is_empty());
+        // The structural Port source resolves the unmarked implementation
+        // to the fixed public contract: the contract-check view is exactly
+        // P — the audit S (static-ref fact on the implementation body)
+        // stays in the implementation's own inferred view and never
+        // crosses the P call-edge barrier.
+        assert_eq!(impl_caps, "P");
     }
 
     #[test]
@@ -1968,7 +2053,7 @@ mod tests {
         )
         .unwrap();
 
-        let error = rvs_run_infer_capsmap_BIPST(&dir, Path::new("caps/deps")).unwrap_err();
+        let error = rvs_run_infer_capsmap_BIST(&dir, Path::new("caps/deps")).unwrap_err();
         let mentions_ext = error.contains("caps/ext");
         let mentions_seed = error.contains("caps/seed");
         let output = format!("mentions_ext={mentions_ext}\nmentions_seed={mentions_seed}\n");
@@ -2015,7 +2100,7 @@ mod tests {
         )
         .unwrap();
 
-        rvs_run_infer_capsmap_BIPST(&dir, Path::new("caps/deps")).unwrap();
+        rvs_run_infer_capsmap_BIST(&dir, Path::new("caps/deps")).unwrap();
         let deps =
             CapsMap::rvs_parse(&std::fs::read_to_string(dir.join("caps/deps")).unwrap()).unwrap();
         let info = deps

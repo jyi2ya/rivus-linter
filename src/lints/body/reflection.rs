@@ -2,7 +2,7 @@ use rustc_lint::LateContext;
 
 use super::super::RVS_REFLECTION_USAGE;
 use super::super::msg::rvs_emit_node_span_lint_S;
-use super::super::utils::rvs_is_reflection_S;
+use super::super::utils::rvs_is_reflection;
 use super::spawn::rvs_is_sysroot_runtime_target;
 use super::{BodyFacts, rvs_path_lint_callable};
 use crate::lints::utils::ObservationKind;
@@ -17,7 +17,7 @@ pub(crate) fn rvs_check_fn_S<'tcx>(cx: &LateContext<'tcx>, facts: &BodyFacts) {
             continue;
         };
         if rvs_is_sysroot_runtime_target(cx, &observation.target, path.as_ref())
-            && rvs_is_reflection_S(path.as_ref())
+            && rvs_is_reflection(path.as_ref())
         {
             rvs_emit_node_span_lint_S(
                 cx,

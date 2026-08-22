@@ -12,7 +12,7 @@ use std::borrow::Cow;
 
 use super::utils::CallTarget;
 
-pub(crate) use collector::{BodyFacts, ImplicitExecutionKind, rvs_collect_body_facts};
+pub(crate) use collector::{BodyFacts, ImplicitExecutionKind, rvs_collect_body_facts_B};
 
 fn rvs_path_lint_callable<'a>(target: &'a CallTarget) -> Option<Cow<'a, str>> {
     match target {

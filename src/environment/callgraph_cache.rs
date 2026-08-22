@@ -95,7 +95,7 @@ fn rvs_load_published_std_callgraph_cache_with_hook_BIS(
             source,
         }
     })?;
-    let graph = artifacts::rvs_parse_callgraph_json_S(&json).map_err(|source| {
+    let graph = artifacts::rvs_parse_callgraph_json(&json).map_err(|source| {
         CallgraphCacheError::ParseArtifact {
             path: path.to_path_buf(),
             source,
@@ -121,7 +121,7 @@ pub(crate) fn rvs_publish_std_callgraph_cache_BIST(
             source,
         }
     })?;
-    let json = artifacts::rvs_serialize_callgraph_json_S(callgraph)
+    let json = artifacts::rvs_serialize_callgraph_json(callgraph)
         .map_err(|source| CallgraphCacheError::SerializePublishedCache { source })?;
     super::fs_guard::rvs_atomic_write_BIST(&path, json.as_bytes()).map_err(|error| {
         CallgraphCacheError::PublishCache {
@@ -210,7 +210,7 @@ fn rvs_merge_callgraph_dir_for_generation_with_hook_BIS(
             }
         })?;
         artifacts.push(
-            artifacts::rvs_parse_callgraph_json_S(&json).map_err(|source| {
+            artifacts::rvs_parse_callgraph_json(&json).map_err(|source| {
                 CallgraphCacheError::ParseArtifact {
                     path: path.to_path_buf(),
                     source,
@@ -245,7 +245,7 @@ mod tests {
 
     #[test]
     fn test_20260730_std_like_merge_errors_preserve_borrowed_source() {
-        let source = crate::artifacts::rvs_parse_callgraph_json_S(
+        let source = crate::artifacts::rvs_parse_callgraph_json(
             r#"{"std::rvs_legacy":{"calls":[],"has_body":true}}"#,
         )
         .unwrap();
@@ -298,13 +298,13 @@ mod tests {
         source.rvs_insert_M(DefPath::from("std::a_added_before_conflict"), added);
         source.rvs_insert_M(conflict_path, source_conflict);
 
-        let before = artifacts::rvs_serialize_callgraph_json_S(&target).unwrap();
+        let before = artifacts::rvs_serialize_callgraph_json(&target).unwrap();
         let direct_result = rvs_merge_std_like_callgraph_M(&mut target, &source);
-        let direct_after = artifacts::rvs_serialize_callgraph_json_S(&target).unwrap();
+        let direct_after = artifacts::rvs_serialize_callgraph_json(&target).unwrap();
 
-        let mut optional_target = crate::artifacts::rvs_parse_callgraph_json_S(&before).unwrap();
+        let mut optional_target = crate::artifacts::rvs_parse_callgraph_json(&before).unwrap();
         let optional_result = rvs_merge_std_like_callgraph_M(&mut optional_target, &source);
-        let optional_after = artifacts::rvs_serialize_callgraph_json_S(&optional_target).unwrap();
+        let optional_after = artifacts::rvs_serialize_callgraph_json(&optional_target).unwrap();
         let output = format!(
             "direct_ok={}\ndirect_changed={}\ndirect_added_node_present={}\noptional_ok={}\noptional_changed={}\noptional_added_node_present={}\n",
             direct_result.is_ok(),
@@ -394,7 +394,7 @@ mod tests {
         std::fs::create_dir(&artifacts).unwrap();
         std::fs::write(
             artifacts.join("current.json"),
-            crate::artifacts::rvs_serialize_callgraph_json_S(&rvs_current_std_graph()).unwrap(),
+            crate::artifacts::rvs_serialize_callgraph_json(&rvs_current_std_graph()).unwrap(),
         )
         .unwrap();
         std::fs::write(
@@ -411,7 +411,7 @@ mod tests {
         );
 
         let mut current = rvs_current_std_graph();
-        let legacy = crate::artifacts::rvs_parse_callgraph_json_S(
+        let legacy = crate::artifacts::rvs_parse_callgraph_json(
             r#"{"std::rvs_legacy":{"calls":[],"has_body":true}}"#,
         )
         .unwrap();
@@ -421,7 +421,7 @@ mod tests {
             Err(CallgraphArtifactError::MixedArtifactFormats { .. })
         );
 
-        let empty_legacy = crate::artifacts::rvs_parse_callgraph_json_S(r#"{}"#).unwrap();
+        let empty_legacy = crate::artifacts::rvs_parse_callgraph_json(r#"{}"#).unwrap();
         let empty_direct =
             rvs_merge_std_like_callgraph_M(&mut rvs_current_std_graph(), &empty_legacy);
         let empty_direct_variant = matches!(
@@ -448,7 +448,7 @@ mod tests {
         let artifacts = dir.join("artifacts");
         std::fs::create_dir(&artifacts).unwrap();
         let json =
-            crate::artifacts::rvs_serialize_callgraph_json_S(&rvs_current_std_graph()).unwrap();
+            crate::artifacts::rvs_serialize_callgraph_json(&rvs_current_std_graph()).unwrap();
         std::fs::write(artifacts.join("rivus-v4-foreign-demo-1-0.json"), &json).unwrap();
         let foreign =
             rvs_merge_generation_callgraph_dir_BIS(&artifacts, "rivus-v4-owned", &BTreeSet::new());

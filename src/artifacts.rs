@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use snafu::Snafu;
 
-use crate::capability::CapabilityFacts;
+use crate::capability::{CapabilityFacts, rvs_merge_capability_facts_M};
 #[allow(
     unused_imports,
     reason = "LocalScope re-exported for downstream callers"
@@ -135,8 +135,8 @@ struct CallgraphArtifact {
 #[serde(deny_unknown_fields)]
 struct FnNodeArtifact {
     #[serde(
-        serialize_with = "rvs_serialize_call_edges_S",
-        deserialize_with = "rvs_deserialize_call_edges_S"
+        serialize_with = "rvs_serialize_call_edges",
+        deserialize_with = "rvs_deserialize_call_edges"
     )]
     calls: BTreeMap<FunctionIdentity, CallEdgeType>,
     call_sites: BTreeSet<CallSiteIdentity>,
@@ -307,7 +307,7 @@ pub(crate) struct CallSiteSource {
     pub(crate) end: u32,
 }
 
-fn rvs_serialize_call_edges_S<S>(
+fn rvs_serialize_call_edges<S>(
     calls: &BTreeMap<FunctionIdentity, CallEdgeType>,
     serializer: S,
 ) -> Result<S::Ok, S::Error>
@@ -325,7 +325,7 @@ where
     seq.end()
 }
 
-fn rvs_deserialize_call_edges_S<'de, D>(
+fn rvs_deserialize_call_edges<'de, D>(
     deserializer: D,
 ) -> Result<BTreeMap<FunctionIdentity, CallEdgeType>, D::Error>
 where
@@ -502,8 +502,8 @@ impl CallSiteSource {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FnNode {
     #[serde(
-        serialize_with = "rvs_serialize_call_edges_S",
-        deserialize_with = "rvs_deserialize_call_edges_S"
+        serialize_with = "rvs_serialize_call_edges",
+        deserialize_with = "rvs_deserialize_call_edges"
     )]
     pub calls: BTreeMap<FunctionIdentity, CallEdgeType>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -570,45 +570,53 @@ impl Default for FnNode {
 }
 
 impl FnNode {
-    /// Merge another callgraph entry for the same function into this one.
-    pub fn rvs_merge_M(&mut self, other: &Self) {
-        for (identity, edge_type) in &other.calls {
-            rvs_merge_identity_call_edge_M(&mut self.calls, identity.clone(), *edge_type);
-        }
-        for (def_path, edge_type) in &other.entry_calls {
-            rvs_merge_call_edge_M(&mut self.entry_calls, def_path.clone(), *edge_type);
-        }
-        self.unresolved_test_calls
-            .extend(other.unresolved_test_calls.iter().cloned());
-        self.facts.rvs_merge_M(other.facts);
-        self.has_body |= other.has_body;
-        self.is_trait_impl |= other.is_trait_impl;
-        self.is_test |= other.is_test;
-        self.is_entrypoint |= other.is_entrypoint;
-        self.is_test_compilation |= other.is_test_compilation;
-        self.call_sites.extend(other.call_sites.iter().cloned());
-        self.sources.extend(other.sources.iter().cloned());
-        self.report_line_count = self.report_line_count.max(other.report_line_count);
-        self.report_function_count = self.report_function_count.max(other.report_function_count);
-        self.allows_dead_code |= other.allows_dead_code;
-        self.is_production |= other.is_production;
-        self.is_coverage_candidate |= other.is_coverage_candidate;
-        self.complete &= other.complete;
-    }
-
     pub(crate) fn rvs_dependency_calls(&self) -> impl Iterator<Item = &DefPath> {
         self.calls
             .keys()
             .map(|identity| &identity.def_path)
             .chain(self.entry_calls.keys())
     }
+}
 
-    #[cfg(test)]
-    pub(crate) fn rvs_test_target_M(&mut self, crate_id: u64) -> &mut FnNode {
-        debug_assert!(crate_id > 0, "stable crate id is nonzero");
-        self.crate_id = crate_id;
-        self
+/// Merge another callgraph entry for the same function into `target`.
+///
+/// A free function instead of an `&mut self` method: `FnNode` is pure data
+/// with all fields visible, and mutator methods on pure-data structs are
+/// rejected by the data-structure lint.
+pub fn rvs_merge_fn_node_M(target: &mut FnNode, other: &FnNode) {
+    for (identity, edge_type) in &other.calls {
+        rvs_merge_identity_call_edge_M(&mut target.calls, identity.clone(), *edge_type);
     }
+    for (def_path, edge_type) in &other.entry_calls {
+        rvs_merge_call_edge_M(&mut target.entry_calls, def_path.clone(), *edge_type);
+    }
+    target
+        .unresolved_test_calls
+        .extend(other.unresolved_test_calls.iter().cloned());
+    rvs_merge_capability_facts_M(&mut target.facts, other.facts);
+    target.has_body |= other.has_body;
+    target.is_trait_impl |= other.is_trait_impl;
+    target.is_test |= other.is_test;
+    target.is_entrypoint |= other.is_entrypoint;
+    target.is_test_compilation |= other.is_test_compilation;
+    target.call_sites.extend(other.call_sites.iter().cloned());
+    target.sources.extend(other.sources.iter().cloned());
+    target.report_line_count = target.report_line_count.max(other.report_line_count);
+    target.report_function_count = target
+        .report_function_count
+        .max(other.report_function_count);
+    target.allows_dead_code |= other.allows_dead_code;
+    target.is_production |= other.is_production;
+    target.is_coverage_candidate |= other.is_coverage_candidate;
+    target.complete &= other.complete;
+}
+
+/// Retarget a test-only node copy at `crate_id`.
+#[cfg(test)]
+pub(crate) fn rvs_test_target_of_M(node: &mut FnNode, crate_id: u64) -> &mut FnNode {
+    debug_assert!(crate_id > 0, "stable crate id is nonzero");
+    node.crate_id = crate_id;
+    node
 }
 
 fn rvs_merge_identity_call_edge_M(
@@ -741,7 +749,7 @@ impl FnGraph {
         node: &FnNode,
     ) -> Result<(), CallgraphArtifactError> {
         if let Some(existing) = self.nodes.get_mut(path) {
-            existing.rvs_merge_M(node);
+            rvs_merge_fn_node_M(existing, node);
         } else {
             self.nodes.insert(path.clone(), node.clone());
         }
@@ -853,7 +861,7 @@ fn rvs_record_crate_provenance_M(
     }
 }
 
-pub(crate) fn rvs_serialize_callgraph_json_S(
+pub(crate) fn rvs_serialize_callgraph_json(
     graph: &FnGraph,
 ) -> Result<String, CallgraphArtifactError> {
     if graph.format == CallgraphFormat::Legacy {
@@ -900,7 +908,7 @@ pub(crate) struct UntestedSelectionEntry {
     pub(crate) label: CoverageLabel,
 }
 
-pub(crate) fn rvs_serialize_untested_selection_S(
+pub(crate) fn rvs_serialize_untested_selection(
     selection: &BTreeMap<FunctionIdentity, CoverageLabel>,
 ) -> Result<String, CallgraphArtifactError> {
     let entries: Vec<UntestedSelectionEntry> = selection
@@ -914,7 +922,7 @@ pub(crate) fn rvs_serialize_untested_selection_S(
         .map_err(|source| CallgraphArtifactError::SerializeFunctionIdentities { source })
 }
 
-pub(crate) fn rvs_parse_untested_selection_S(
+pub(crate) fn rvs_parse_untested_selection(
     json: &str,
 ) -> Result<BTreeMap<FunctionIdentity, CoverageLabel>, CallgraphArtifactError> {
     let entries: Vec<UntestedSelectionEntry> = serde_json::from_str(json)
@@ -927,7 +935,7 @@ pub(crate) fn rvs_parse_untested_selection_S(
 }
 
 /// Parse versioned or legacy callgraph JSON into shared callgraph records.
-pub fn rvs_parse_callgraph_json_S(json: &str) -> Result<FnGraph, CallgraphArtifactError> {
+pub fn rvs_parse_callgraph_json(json: &str) -> Result<FnGraph, CallgraphArtifactError> {
     let value: serde_json::Value = serde_json::from_str(json)
         .map_err(|source| CallgraphArtifactError::InvalidJson { source })?;
     let object = value
@@ -1188,11 +1196,11 @@ mod tests {
                 "is_trait_impl": false
             }
         }"#;
-        let result = rvs_parse_callgraph_json_S(json).unwrap();
+        let result = rvs_parse_callgraph_json(json).unwrap();
         let output = format!("{result:?}\n");
         rvs_snapshot_BIS("test_20260609_parse_callgraph_valid_json", &output);
         assert_eq!(result.rvs_len(), 2);
-        assert!(rvs_serialize_callgraph_json_S(&result).is_err());
+        assert!(rvs_serialize_callgraph_json(&result).is_err());
         assert_eq!(result.rvs_values().count(), 2);
     }
 
@@ -1247,7 +1255,7 @@ mod tests {
         node.crate_id = 7;
         let mut graph = FnGraph::rvs_new();
         graph.rvs_insert_M(DefPath::from("demo::rvs_run_A"), node);
-        let json = rvs_serialize_callgraph_json_S(&graph).unwrap();
+        let json = rvs_serialize_callgraph_json(&graph).unwrap();
         let base: serde_json::Value = serde_json::from_str(&json).unwrap();
 
         let mut cases = Vec::new();
@@ -1288,7 +1296,7 @@ mod tests {
         let mut output = String::new();
         for (name, value) in cases {
             let accepted =
-                rvs_parse_callgraph_json_S(&serde_json::to_string(&value).unwrap()).is_ok();
+                rvs_parse_callgraph_json(&serde_json::to_string(&value).unwrap()).is_ok();
             output.push_str(&format!("{name}: accepted={accepted}\n"));
         }
         rvs_snapshot_BIS(
@@ -1316,7 +1324,7 @@ mod tests {
                 "report_function_count": 1
             }
         }"#;
-        let mut graph = rvs_parse_callgraph_json_S(json).unwrap();
+        let mut graph = rvs_parse_callgraph_json(json).unwrap();
         let node = graph.rvs_get("demo::rvs_legacy_A").unwrap();
         let scope = LocalScope::rvs_new(&BTreeSet::from([CrateName::from("demo")]));
         let report_candidate = crate::function_classification::FunctionClassification::rvs_new(
@@ -1325,7 +1333,7 @@ mod tests {
             node,
         )
         .rvs_is_report_candidate();
-        let serialize_error = rvs_serialize_callgraph_json_S(&graph).is_err();
+        let serialize_error = rvs_serialize_callgraph_json(&graph).is_err();
         let analysis = crate::inference::PreparedInference::rvs_prepare_M(
             &mut graph,
             &crate::capsmap::CapsMap::rvs_new(),
@@ -1334,8 +1342,8 @@ mod tests {
         let inference_incomplete = analysis
             .rvs_incomplete_paths()
             .contains(&DefPath::from("demo::rvs_legacy_A"));
-        let empty_legacy = rvs_parse_callgraph_json_S("{}").unwrap();
-        let empty_serialize_error = rvs_serialize_callgraph_json_S(&empty_legacy).is_err();
+        let empty_legacy = rvs_parse_callgraph_json("{}").unwrap();
+        let empty_serialize_error = rvs_serialize_callgraph_json(&empty_legacy).is_err();
         let output = format!(
             "serialize_error={serialize_error}\nempty_serialize_error={empty_serialize_error}\nreport_candidate={report_candidate}\ninference_incomplete={inference_incomplete}\n"
         );
@@ -1353,7 +1361,7 @@ mod tests {
     #[test]
     fn test_20260729_artifact_merge_rejects_legacy_current_mixture() {
         let legacy =
-            rvs_parse_callgraph_json_S(r#"{"legacy::rvs_read":{"calls":[],"has_body":true}}"#)
+            rvs_parse_callgraph_json(r#"{"legacy::rvs_read":{"calls":[],"has_body":true}}"#)
                 .unwrap();
         let mut current_node = FnNode::default();
         current_node.crate_id = 7;
@@ -1411,8 +1419,8 @@ mod tests {
         node.crate_id = 7;
         let mut graph = FnGraph::rvs_new();
         graph.rvs_insert_M(DefPath::from("demo::rvs_run"), node);
-        let json = rvs_serialize_callgraph_json_S(&graph).unwrap();
-        let parsed = rvs_parse_callgraph_json_S(&json).unwrap();
+        let json = rvs_serialize_callgraph_json(&graph).unwrap();
+        let parsed = rvs_parse_callgraph_json(&json).unwrap();
         let call_site_count = parsed
             .rvs_get("demo::rvs_run")
             .map_or(0, |node| node.call_sites.len());
@@ -1420,7 +1428,7 @@ mod tests {
         let mut repeated_occurrence: serde_json::Value = serde_json::from_str(&json).unwrap();
         repeated_occurrence["nodes"]["demo::rvs_run"]["call_sites"][1]["occurrence"] = 0.into();
         let repeated_occurrence_error =
-            rvs_parse_callgraph_json_S(&serde_json::to_string(&repeated_occurrence).unwrap())
+            rvs_parse_callgraph_json(&serde_json::to_string(&repeated_occurrence).unwrap())
                 .is_err();
 
         let local = BTreeSet::from([CrateName::from("demo")]);
@@ -1435,11 +1443,11 @@ mod tests {
         let forward = forward_graph
             .as_ref()
             .ok()
-            .and_then(|merged| rvs_serialize_callgraph_json_S(merged).ok());
+            .and_then(|merged| rvs_serialize_callgraph_json(merged).ok());
         let reverse = reverse_graph
             .as_ref()
             .ok()
-            .and_then(|merged| rvs_serialize_callgraph_json_S(merged).ok());
+            .and_then(|merged| rvs_serialize_callgraph_json(merged).ok());
         let deterministic = forward.is_some() && forward == reverse;
         let output = format!(
             "call_site_count={call_site_count}\nrepeated_occurrence_error={repeated_occurrence_error}\naggregate_complete={aggregate_complete}\ndeterministic={deterministic}\n"
@@ -1491,8 +1499,8 @@ mod tests {
         node.crate_id = 7;
         let mut graph = FnGraph::rvs_new();
         graph.rvs_insert_M(DefPath::from("demo::rvs_order"), node);
-        let json = rvs_serialize_callgraph_json_S(&graph).unwrap();
-        let parsed = rvs_parse_callgraph_json_S(&json).unwrap();
+        let json = rvs_serialize_callgraph_json(&graph).unwrap();
+        let parsed = rvs_parse_callgraph_json(&json).unwrap();
         let target = parsed
             .rvs_get("demo::rvs_order")
             .expect("never: target exists");
@@ -1537,10 +1545,10 @@ mod tests {
     #[test]
     fn test_20260729_malformed_and_incompatible_callgraph_inputs_return_errors() {
         let truncated = std::panic::catch_unwind(|| {
-            rvs_parse_callgraph_json_S(r#"{"schema_version":12,"nodes":{"demo::rvs_run""#)
+            rvs_parse_callgraph_json(r#"{"schema_version":12,"nodes":{"demo::rvs_run""#)
         });
         let incompatible = std::panic::catch_unwind(|| {
-            rvs_parse_callgraph_json_S(r#"{"schema_version":11,"nodes":{}}"#)
+            rvs_parse_callgraph_json(r#"{"schema_version":11,"nodes":{}}"#)
         });
         let truncated_error = truncated.is_ok_and(|result| result.is_err());
         let incompatible_error = incompatible.is_ok_and(|result| result.is_err());
@@ -1579,14 +1587,14 @@ mod tests {
         let mut graph = FnGraph::rvs_new();
         graph.rvs_insert_M(DefPath::from("demo::rvs_run"), node);
 
-        let json = rvs_serialize_callgraph_json_S(&graph).unwrap();
-        let parsed = rvs_parse_callgraph_json_S(&json).unwrap();
+        let json = rvs_serialize_callgraph_json(&graph).unwrap();
+        let parsed = rvs_parse_callgraph_json(&json).unwrap();
         let previous_version = json.replacen(
             &format!(r#""schema_version":{CALLGRAPH_SCHEMA_VERSION}"#),
             r#""schema_version":3"#,
             1,
         );
-        let previous_version_error = rvs_parse_callgraph_json_S(&previous_version).unwrap_err();
+        let previous_version_error = rvs_parse_callgraph_json(&previous_version).unwrap_err();
         // Schema 17 predates CapabilityFacts.has_const and must be rejected
         // with an explicit version error instead of a record parse failure.
         let schema_17 = json.replacen(
@@ -1594,7 +1602,7 @@ mod tests {
             r#""schema_version":17"#,
             1,
         );
-        let schema_17_error = rvs_parse_callgraph_json_S(&schema_17).unwrap_err();
+        let schema_17_error = rvs_parse_callgraph_json(&schema_17).unwrap_err();
         let version_marker = format!(r#""schema_version":{CALLGRAPH_SCHEMA_VERSION}"#);
         let output = format!(
             "schema_version={CALLGRAPH_SCHEMA_VERSION}\ncontains_version={}\nnodes={}\nprevious_version_error={previous_version_error}\nschema_17_error={schema_17_error}\n",
@@ -1627,7 +1635,7 @@ mod tests {
         node.crate_id = 7;
         node.crate_provenance = CrateProvenance::PrimaryPackage;
         graph.rvs_insert_M(DefPath::from("demo::rvs_run"), node);
-        let json = rvs_serialize_callgraph_json_S(&graph).unwrap();
+        let json = rvs_serialize_callgraph_json(&graph).unwrap();
         let base: serde_json::Value = serde_json::from_str(&json).unwrap();
 
         let fact_fields = [
@@ -1649,12 +1657,12 @@ mod tests {
                 .expect("never: serialized node is an object")
                 .remove(field);
             let is_rejected =
-                rvs_parse_callgraph_json_S(&serde_json::to_string(&missing).unwrap()).is_err();
+                rvs_parse_callgraph_json(&serde_json::to_string(&missing).unwrap()).is_err();
             rejected.push(is_rejected);
             output.push_str(&format!("{field}: rejected={is_rejected}\n"));
         }
 
-        let legacy = rvs_parse_callgraph_json_S(
+        let legacy = rvs_parse_callgraph_json(
             r#"{"demo::rvs_legacy_A":{"calls":[],"has_body":true,"has_async":true}}"#,
         );
         let legacy_async = legacy
@@ -1691,7 +1699,7 @@ mod tests {
         ];
         let mut output = String::new();
         for (name, json) in cases {
-            let result = rvs_parse_callgraph_json_S(json);
+            let result = rvs_parse_callgraph_json(json);
             output.push_str(&format!("{name}: {result:?}\n"));
             assert!(result.is_err(), "{name}");
         }
@@ -1739,23 +1747,23 @@ mod tests {
         node.crate_id = 7;
         let mut graph = FnGraph::rvs_new();
         graph.rvs_insert_M(DefPath::from("demo::rvs_run"), node);
-        let valid_json = rvs_serialize_callgraph_json_S(&graph).unwrap();
+        let valid_json = rvs_serialize_callgraph_json(&graph).unwrap();
         let mut missing_site_json: serde_json::Value = serde_json::from_str(&valid_json).unwrap();
         missing_site_json["nodes"]["demo::rvs_run"]["call_sites"]
             .as_array_mut()
             .expect("never: serialized call sites are an array")
             .pop();
         let missing_site =
-            rvs_parse_callgraph_json_S(&serde_json::to_string(&missing_site_json).unwrap())
+            rvs_parse_callgraph_json(&serde_json::to_string(&missing_site_json).unwrap())
                 .unwrap_err();
         let mut duplicate_occurrence_json: serde_json::Value =
             serde_json::from_str(&valid_json).unwrap();
         duplicate_occurrence_json["nodes"]["demo::rvs_run"]["call_sites"][1]["occurrence"] =
             0.into();
         let duplicate_occurrence =
-            rvs_parse_callgraph_json_S(&serde_json::to_string(&duplicate_occurrence_json).unwrap())
+            rvs_parse_callgraph_json(&serde_json::to_string(&duplicate_occurrence_json).unwrap())
                 .unwrap_err();
-        let valid = rvs_parse_callgraph_json_S(&valid_json);
+        let valid = rvs_parse_callgraph_json(&valid_json);
         let output = format!(
             "missing_site={missing_site}\nduplicate_occurrence={duplicate_occurrence}\nvalid={}\n",
             valid.is_ok(),
@@ -1789,8 +1797,8 @@ mod tests {
             ),
         ]);
 
-        let json = rvs_serialize_untested_selection_S(&selection).unwrap();
-        let parsed = rvs_parse_untested_selection_S(&json).unwrap();
+        let json = rvs_serialize_untested_selection(&selection).unwrap();
+        let parsed = rvs_parse_untested_selection(&json).unwrap();
         let output = format!("json={json}\nparsed={parsed:?}\n");
         rvs_snapshot_BIS("test_20260714_def_path_selection_roundtrip", &output);
 
@@ -1893,7 +1901,7 @@ mod tests {
                 "sources": [{"file":"src/lib.rs","name_start":7,"name_end":16}]
             }
         }"#;
-        let legacy = rvs_parse_callgraph_json_S(legacy_json).unwrap();
+        let legacy = rvs_parse_callgraph_json(legacy_json).unwrap();
         let legacy_source = legacy
             .rvs_get("demo::rvs_parse")
             .and_then(|node| node.sources.first())
@@ -1942,7 +1950,7 @@ mod tests {
             let json = format!(
                 r#"{{"demo::rvs_parse":{{"calls":[],"has_body":true,"sources":[{source}]}}}}"#
             );
-            let result = rvs_parse_callgraph_json_S(&json);
+            let result = rvs_parse_callgraph_json(&json);
             output.push_str(&format!("{name}: {result:?}\n"));
             assert!(result.is_err(), "{name}");
         }
@@ -2065,7 +2073,7 @@ mod tests {
         ];
         let mut output = String::new();
         for (name, json) in cases {
-            let result = rvs_parse_callgraph_json_S(json);
+            let result = rvs_parse_callgraph_json(json);
             output.push_str(&format!("{name}: {result:?}\n"));
             assert!(result.is_err(), "{name}");
         }

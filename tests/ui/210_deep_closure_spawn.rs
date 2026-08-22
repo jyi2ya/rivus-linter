@@ -1,6 +1,6 @@
 #![allow(non_snake_case)]
 
-fn rvs_deep_closure_spawn_BIMST() {
+fn rvs_deep_closure_spawn_BST() {
     let _c01 = || {
         let _c02 = || {
             let _c03 = || {

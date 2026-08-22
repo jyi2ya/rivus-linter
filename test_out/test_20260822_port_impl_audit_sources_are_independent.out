@@ -1,0 +1,3 @@
+StaticMutAdapter=PSU
+ThreadLocalAdapter=PST
+UnsafeFnAdapter=PU

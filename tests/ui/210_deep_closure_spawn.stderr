@@ -112,24 +112,10 @@ error: call through function pointer or generic callable — Rivus cannot resolv
 LL |     _c01();
    |     ^^^^^^
 
-error: 'rvs_deep_closure_spawn_BIMST' should be named 'rvs_deep_closure_spawn_BIST'; declared caps: BIMST; inferred caps: BST
+error: good fn 'rvs_deep_closure_spawn_BST' not called by any test
   --> $DIR/tests/ui/210_deep_closure_spawn.rs:3:1
    |
-LL | / fn rvs_deep_closure_spawn_BIMST() {
-LL | |     let _c01 = || {
-LL | |         let _c02 = || {
-LL | |             let _c03 = || {
-...  |
-LL | |     _c01();
-LL | | }
-   | |_^
-   |
-   = note: `#[deny(rivus::rvs_contract_mismatch)]` on by default
-
-error: good fn 'rvs_deep_closure_spawn_BIMST' not called by any test
-  --> $DIR/tests/ui/210_deep_closure_spawn.rs:3:1
-   |
-LL | / fn rvs_deep_closure_spawn_BIMST() {
+LL | / fn rvs_deep_closure_spawn_BST() {
 LL | |     let _c01 = || {
 LL | |         let _c02 = || {
 LL | |             let _c03 = || {
@@ -141,4 +127,4 @@ LL | | }
    = note: `-D rivus::rvs-untested-good-fn` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_untested_good_fn)]`
 
-error: aborting due to 20 previous errors
+error: aborting due to 19 previous errors

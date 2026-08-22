@@ -19,7 +19,7 @@ use crate::function_classification::LocalScope;
 /// # Panics
 ///
 /// Panics if the current executable path, current directory, or cargo cannot be resolved.
-pub(crate) fn rvs_run_annotate_BIPST(path: &Path) -> Result<(), String> {
+pub(crate) fn rvs_run_annotate_BIST(path: &Path) -> Result<(), String> {
     let project_path = rvs_canonical_cargo_project_BIS(path)?;
     let target_scope = CargoTargetScope::Production;
     let local_crate_names = rvs_detect_local_crate_prefixes_BIS(&project_path, target_scope)?;
@@ -49,7 +49,7 @@ pub(crate) fn rvs_run_annotate_BIPST(path: &Path) -> Result<(), String> {
 /// # Panics
 ///
 /// Panics if the current executable path, current directory, or cargo cannot be resolved.
-pub(crate) fn rvs_run_why_BIPST(function: &str, path: &Path) -> Result<(), String> {
+pub(crate) fn rvs_run_why_BIST(function: &str, path: &Path) -> Result<(), String> {
     let project_path = rvs_canonical_cargo_project_BIS(path)?;
     let target_scope = CargoTargetScope::WithTestExampleBench;
 
@@ -1195,7 +1195,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = rvs_run_why_BIPST("std::fs::rvs_read_BI", &dir);
+        let result = rvs_run_why_BIST("std::fs::rvs_read_BI", &dir);
         let output = format!("{result:?}\n");
         rvs_snapshot_BIS(
             "test_20260705_why_std_like_works_in_workspace_root",
@@ -1216,7 +1216,7 @@ mod tests {
             &[("src/lib.rs", "pub fn rvs_parse() -> i32 { 1 }\n")],
         );
 
-        let result = rvs_run_why_BIPST("parse", &dir);
+        let result = rvs_run_why_BIST("parse", &dir);
         let output = format!("{result:?}\n").replace(&dir.to_string_lossy().into_owned(), "$TMP");
         rvs_snapshot_BIS("test_20260706_why_inexact_match_returns_error", &output);
 
@@ -1235,7 +1235,7 @@ mod tests {
             )],
         );
 
-        let result = rvs_run_why_BIPST("why_readable_specialized::Worker::rvs_run", &dir);
+        let result = rvs_run_why_BIST("why_readable_specialized::Worker::rvs_run", &dir);
         let output = format!("{result:?}\n");
         rvs_snapshot_BIS(
             "test_20260715_why_accepts_unique_readable_specialized_path",
@@ -1358,7 +1358,7 @@ path = "src/main.rs"
         )
         .unwrap();
 
-        let result = rvs_run_annotate_BIPST(&dir);
+        let result = rvs_run_annotate_BIST(&dir);
         let source = std::fs::read_to_string(dir.join("src/main.rs")).unwrap();
         rvs_snapshot_BIS("test_20260702_annotate_uses_bin_crate_prefix", &source);
 
@@ -1390,7 +1390,7 @@ path = "src/main.rs"
             ],
         );
 
-        let result = rvs_run_annotate_BIPST(&dir);
+        let result = rvs_run_annotate_BIST(&dir);
         let source = std::fs::read_to_string(dir.join("src/lib.rs")).unwrap();
         let fixture = std::fs::read_to_string(dir.join("tests/fixtures/mod.rs")).unwrap();
         let output = format!("-- src/lib.rs --\n{source}\n-- tests/fixtures/mod.rs --\n{fixture}");
@@ -1450,7 +1450,7 @@ path = "src/main.rs"
         )
         .unwrap();
 
-        let result = rvs_run_annotate_BIPST(&dir);
+        let result = rvs_run_annotate_BIST(&dir);
         let source = std::fs::read_to_string(dir.join("src/main.rs")).unwrap();
         rvs_snapshot_BIS("test_20260702_annotate_renames_nested_main_helper", &source);
 
@@ -1505,7 +1505,7 @@ path = "src/main.rs"
         )
         .unwrap();
 
-        let result = rvs_run_annotate_BIPST(&dir);
+        let result = rvs_run_annotate_BIST(&dir);
         let source = std::fs::read_to_string(dir.join("src/lib.rs")).unwrap();
         rvs_snapshot_BIS(
             "test_20260702_annotate_renames_conflicting_duplicate_names",
@@ -1533,7 +1533,7 @@ path = "src/main.rs"
             )],
         );
 
-        let result = rvs_run_annotate_BIPST(&dir);
+        let result = rvs_run_annotate_BIST(&dir);
         let source = std::fs::read_to_string(dir.join("src/lib.rs")).unwrap();
         rvs_snapshot_BIS(
             "test_20260703_annotate_renames_existing_rvs_wrong_suffix",
@@ -1575,7 +1575,7 @@ path = "src/main.rs"
         )
         .unwrap();
 
-        let result = rvs_run_annotate_BIPST(&dir);
+        let result = rvs_run_annotate_BIST(&dir);
         let source = std::fs::read_to_string(dir.join("src/lib.rs")).unwrap();
         rvs_snapshot_BIS("test_20260704_annotate_renames_uppercase_function", &source);
 
@@ -1674,7 +1674,7 @@ path = "src/main.rs"
         )
         .unwrap();
 
-        let result = rvs_run_annotate_BIPST(&dir);
+        let result = rvs_run_annotate_BIST(&dir);
         let source = std::fs::read_to_string(dir.join("src/api.rs")).unwrap();
         rvs_snapshot_BIS(
             "test_20260704_annotate_renames_out_of_line_module_function",
@@ -1698,7 +1698,7 @@ path = "src/main.rs"
             ],
         );
 
-        let result = rvs_run_annotate_BIPST(&dir);
+        let result = rvs_run_annotate_BIST(&dir);
         let source = std::fs::read_to_string(dir.join("src/wire.rs")).unwrap();
         rvs_snapshot_BIS(
             "test_20260706_annotate_renames_path_attribute_module_function",
@@ -1725,7 +1725,7 @@ path = "src/main.rs"
             ],
         );
 
-        let result = rvs_run_annotate_BIPST(&dir);
+        let result = rvs_run_annotate_BIST(&dir);
         let lib_source = std::fs::read_to_string(dir.join("src/lib.rs")).unwrap();
         let main_source = std::fs::read_to_string(dir.join("src/main.rs")).unwrap();
         rvs_snapshot_BIS(
@@ -1752,7 +1752,7 @@ path = "src/main.rs"
             ],
         );
 
-        let result = rvs_run_annotate_BIPST(&dir);
+        let result = rvs_run_annotate_BIST(&dir);
         let lib_source = std::fs::read_to_string(dir.join("src/lib.rs")).unwrap();
         let bin_source = std::fs::read_to_string(dir.join("src/main.rs")).unwrap();
         rvs_snapshot_BIS(
@@ -1778,7 +1778,7 @@ path = "src/main.rs"
             )],
         );
 
-        let result = rvs_run_annotate_BIPST(&dir);
+        let result = rvs_run_annotate_BIST(&dir);
         let source = std::fs::read_to_string(dir.join("src/lib.rs")).unwrap();
         rvs_snapshot_BIS(
             "test_20260706_annotate_skips_macro_generated_function_without_source",
@@ -1826,7 +1826,7 @@ path = "src/main.rs"
         )
         .unwrap();
 
-        let result = rvs_run_annotate_BIPST(&dir);
+        let result = rvs_run_annotate_BIST(&dir);
         let source = std::fs::read_to_string(dir.join("src/lib.rs")).unwrap();
         rvs_snapshot_BIS("test_20260704_annotate_renames_inherent_method", &source);
 
@@ -1867,7 +1867,7 @@ path = "src/main.rs"
         )
         .unwrap();
 
-        let result = rvs_run_annotate_BIPST(&dir);
+        let result = rvs_run_annotate_BIST(&dir);
         let source = std::fs::read_to_string(dir.join("src/lib.rs")).unwrap();
         rvs_snapshot_BIS(
             "test_20260704_annotate_renames_generic_inherent_method",
@@ -1888,7 +1888,7 @@ path = "src/main.rs"
             &[("src/lib.rs", "pub fn parse( {\n")],
         );
 
-        let result = rvs_run_annotate_BIPST(&dir);
+        let result = rvs_run_annotate_BIST(&dir);
         let output = format!("{result:?}").replace(&dir.to_string_lossy().into_owned(), "$TMP");
         rvs_snapshot_BIS(
             "test_20260702_annotate_surfaces_callgraph_collection_error",

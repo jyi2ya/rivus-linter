@@ -7,10 +7,10 @@ LL |     let handle = std::thread::Builder::new().spawn(|| {}).unwrap();
    = note: `-D rivus::rvs-spawn-warning` implied by `-D warnings`
    = help: to override `-D warnings` add `#[allow(rivus::rvs_spawn_warning)]`
 
-error: good fn 'rvs_thread_builder_spawn_BIST' not called by any test
+error: good fn 'rvs_thread_builder_spawn_BST' not called by any test
   --> $DIR/tests/ui/230_thread_builder_spawn.rs:3:1
    |
-LL | / fn rvs_thread_builder_spawn_BIST() {
+LL | / fn rvs_thread_builder_spawn_BST() {
 LL | |     let handle = std::thread::Builder::new().spawn(|| {}).unwrap();
 LL | |     handle.join().unwrap();
 LL | | }

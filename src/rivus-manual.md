@@ -61,7 +61,7 @@ cargo rivus check -- --features foo  # 传递额外 cargo check 参数
 
 `check` 必须从待分析 package 的目录运行，不接受 `--workspace`、`--all`、`--package`/`-p` 或 `--exclude` 等 workspace package 选择参数；否则本地 crate 分类会与 Cargo 实际选择范围不一致。`--target-dir` 也不能透传，因为每次命令都会从 canonical project root 在 `target/.rivus-runs/` 下创建自己的隔离临时 target 和 artifact generation。generation 由 RAII guard 管理，正常返回或 panic 展开时自动删除；`kill -9` 或断电可能留下残留，交给 `cargo clean` 或人工清理。driver 在注册 lint 前一次性验证 generation identity、canonical root、模式和所有 `RIVUS_*` 路径组合，畸形或矛盾的协议会直接失败。其他不会覆盖 driver 环境或项目路径的 Cargo 参数可继续透传。
 
-调用传播屏障恰好是 `B/I/P/S/T`；普通调用要求调用方拥有被调用方的每个传播能力，但被调用方包含 P 时该调用边只要求 P。`A/C/U` 只来自函数自己的签名或函数体事实，不沿调用边传播，也不得出现在后缀中。本地 trait 声明一个非泛型 associated type `World`、至少一个无 receiver 的操作，且每个操作显式接收 `&Self::World` 或 `&mut Self::World` 时成为 World Port；trait 名不参与判断，额外 associated type 表示长期资源。Port 操作固定包含 P，各 impl 的 `B/I/S/T` 仍参与至少半数投票；完整投票契约用于检查具体 impl body 和默认 trait body。`Result`/`Option` 在类型系统中表达错误或缺失流程，不是能力，返回或传播它们不会增加能力字母。
+调用传播屏障恰好是 `B/I/P/S/T`；普通调用要求调用方拥有被调用方的每个传播能力，但被调用方包含 P 时该调用边只要求 P。`A/C/U` 只来自函数自己的签名或函数体事实，不沿调用边传播，也不得出现在后缀中。本地 trait 声明一个非泛型 associated type `World`、至少一个无 receiver 的操作，且每个操作显式接收 `&Self::World` 或 `&mut Self::World` 时成为 World Port；trait 名不参与判断，额外 associated type 表示长期资源。World Port 操作的公开传播能力固定为 P：trait 方法与 impl 方法的规范后缀都是 `_P`，实现体的 `B/I/S/T` 是审计信息（report/why），不进入领域调用契约，也不与名称后缀比较。`Result`/`Option` 在类型系统中表达错误或缺失流程，不是能力，返回或传播它们不会增加能力字母。
 
 注意：Rivus 从分发 seed 和项目 `caps/` 目录合并能力数据；项目中的每个 layer 必须使用带 `# rivus-caps-v2` 版本头的 v2 JSON Lines。当前版本把分发 seed 编译进 `cargo-rivus`，但调用方只依赖抽象的分发来源，未来可以让 seed 随标准库独立更新而不更换二进制。CLI 不再支持 `-m/--capsmap`，也不再读取或生成 `target/rivus-std-capsmap.txt`、`target/rivus-inferred-capsmap.txt`、`target/rivus-deps-capsmap.txt`、`target/rivus-effective-capsmap/`。项目 `caps/` 不存在时仍加载分发 seed。有效层级顺序为 `std → deps → 分发 seed → 项目 seed → suppress → ext → 其余字母序`；原子写入遗留的 `.层名.PID.序号.tmp` 临时文件会被忽略。
 
@@ -118,9 +118,9 @@ Total: 42 functions, 890 lines
 
 推断分两步：首先对不在 capsmap 精确边界中的函数，直接从行为特征推断能力（`async fn` → A、`const fn` → C、`unsafe fn` → U、`&mut` 参数 → M、`static` 引用 → S、`static mut` 引用 → S+U、`thread_local!` 引用 → S+T）；然后通过固定点迭代，将普通被调用方的 `B/I/P/S/T` 沿调用图向上传播，包含 P 的被调用方则只传播 P。`A/C/M/U` 不传播；其中 `A/C/U` 不得出现在后缀中。若同一函数同时被识别为普通 `static` 引用和 `thread_local!` 引用，结果会合并为 `S+T`（幂等）。capsmap 精确条目是冻结的权威边界，不继续吸收其内部调用的能力。
 
-Trait 方法的完整能力由各 impl 按传播能力逐项做 at-least-half vote（阈值为 `ceil(n/2)`）决定；trait 声明自身写的后缀只在没有 impl 可聚合时作为回退。因此 2 个 impl 中 1 个带能力会被抬升，3 个 impl 中仅 1 个带能力不会被抬升。World Port 操作固定在结果中加入 P，投票得到的完整契约用于向下检查；只有向调用方传播时才投影为 P。这一规则同样会影响 `annotate` 和 `why` 的显示结果。
+Trait 方法的完整能力由各 impl 按传播能力逐项做 at-least-half vote（阈值为 `ceil(n/2)`）决定；trait 声明自身写的后缀不参与语义推断——没有任何实现可聚合时，声明保持未知（空下界），后缀只在命名视图比较中出现。因此 2 个 impl 中 1 个带能力会被抬升，3 个 impl 中仅 1 个带能力不会被抬升。World Port 不参与 `B/I/S/T` 投票——其公开契约固定为 `_P`，实现效果只进审计视图。这一规则同样会影响 `annotate` 和 `why` 的显示结果。
 
-投票会保留参与实现数、阈值和逐能力票数。完整、可修改的本地实现若拥有投票未选中的传播能力，会产生 `TraitImplOutlierWarning`；该 warning 不改变投票结果和 capability totals。`why` 会显示 trait vote 详情，并保留 `incomplete` 与 `unknown` 完整度的区别；空的传播能力子集显示为 `none`，不等同于完整函数能力为 pure。相关实现图已加载时，`why` 还会显示不完整实现的已知传播能力以及具体实现的 contribution/outlier caps。持久化投票记录本身不保存实现路径，因此脱离实现图时不能列出具体实现。report 会列出最多十个本地 outlier 样本。
+投票会保留参与实现数、阈值和逐能力票数。完整、可修改的本地实现若拥有投票未选中的传播能力，会产生 `TraitImplOutlierWarning`；该 warning 不改变投票结果和 capability totals。Port 实现、外部实现和推断不完整的实现不产生此 warning。`why` 会显示 trait vote 详情，并保留 `incomplete` 与 `unknown` 完整度的区别；空的传播能力子集显示为 `none`，不等同于完整函数能力为 pure。相关实现图已加载时，`why` 还会显示不完整实现的已知传播能力以及具体实现的 contribution/outlier caps。持久化投票记录本身不保存实现路径，因此脱离实现图时不能列出具体实现。report 会列出最多十个本地 outlier 样本。
 
 ```bash
 cargo rivus infer-capsmap -o caps/deps       # 从项目 caps/ 推断，并把 direct external deps 写到指定文件
@@ -220,7 +220,7 @@ cargo rivus annotate /path/to  # 指定目录
 - 需要项目能成功 `cargo check`
 - annotate 只基于普通 `cargo check` 范围收集 callgraph 和候选；`tests/`、`examples/`、`benches/` 下的独立 Cargo target 暂不参与能力推断和直接重命名。`src/` 中的单元测试源码不按路径排除，但是否进入候选取决于普通 `cargo check` 是否编译到对应代码
 - rustc 选中的可执行入口、测试函数、trait impl 方法、synthetic 节点、宏展开或其他没有真实源码位置的函数不会作为直接 annotate 候选；可执行入口由 `tcx.entry_fn` 或两段路径 `main` 启发式判定，trait impl 方法可能会随 trait 声明或调用点的语义重命名被间接更新
-- 本地 trait 方法的能力由各 impl 按 at-least-half vote（`ceil(n/2)`）聚合；声明后缀只在没有 impl 可聚合时作为回退。结构合法的 World Port 操作在完整投票契约中固定加入 P，调用边只传播 P
+- 本地 trait 方法的能力由各 impl 按 at-least-half vote（`ceil(n/2)`）聚合；声明后缀不参与语义推断（无实现可聚合时保持未知，仅用于命名视图比较）。World Port 的公开契约固定为 `_P`：实现体的 `B/I/S/T` 是审计信息，不进入契约或后缀
 - annotate 后 `#[serde(default = "...")]` 等字符串字面量中的函数引用不会自动更新，需要手动修复
 - annotate 会删除 `target/rivus-callgraph-std.json` 及旧版 `target/rivus-callgraph`、`target/rivus-callgraph-std` 缓存（函数名已变，旧缓存失效），不会删除其他正在运行命令的 `target/.rivus-runs/` generation
 
@@ -273,15 +273,14 @@ caps/
 
 | 类别 | rustc 前缀 | 含义 | 影响退出码 |
 |------|-----------|------|-----------|
-| 违规 | `error` | 调用链能力冲突、stub 宏、空函数体 | 是 |
+| 违规 | `error` | 名称契约不一致（含能力字母缺失/多余）、stub 宏、空函数体 | 是 |
 | 警告 | `warning` | 各种代码质量问题、推断提示 | 否 |
 
 ## 违规类型
 
 | 类型 | 含义 |
 |------|------|
-| `Call` | 函数调用了自身能力不允许的函数 |
-| `StaticRef` | 函数引用了 `static` 或 `thread_local!` 变量但缺少相应能力（`static` 不可变引用需要 `S`，`static mut` 引用需要 `S` + `U`，`thread_local!` 引用需要 `S` + `T`） |
+| `Contract` | 函数名与推断出的完整契约不一致：能力字母缺失（如后缀缺 `M`、缺投票选中的能力）或多余；World Port 目标缺少结构性 `P` 也属此类。调用边能力由同一推断自洽保证，不再单独产生调用链违规 |
 | `StubMacro` | 函数体包含 `todo!()` 或 `unimplemented!()`——未实现的存根 |
 | `EmptyFn` | 函数体无任何逻辑（空函数体，或仅含 `debug_assert!`/`debug_assert_eq!`/`debug_assert_ne!`） |
 
@@ -328,7 +327,7 @@ caps/
 | `NonSuffixCapInSuffix` | 后缀包含 A/C/U 字母——这些能力从签名或函数体事实测量（U 也来自 `static mut` 访问），不应出现在名字中 |
 | `MissingMutable` | 函数有 `&mut` 参数（含 `&mut self`）但后缀缺少 `M` |
 | `MissingSideEffect` | 函数读取了 `static` 变量但后缀缺少 `S` |
-| `MissingThreadLocal` | 函数读取了 `thread_local!` 变量但后缀缺少 `T`（同时需要 `S`，参见 `StaticRef`） |
+| `MissingThreadLocal` | 函数读取了 `thread_local!` 变量但后缀缺少 `T`（同时需要 `S`） |
 | `NonAlphabeticalSuffix` | 能力后缀字母未按字母序排列 |
 | `DuplicateSuffixLetter` | 能力后缀中有重复字母 |
 | `UnknownSuffixLetter` | 能力后缀包含不在 `ABCIMPSTU` 中的字母——已知字母仍正常提取，未知字母仅报告提示 |
@@ -351,7 +350,7 @@ caps/
 3. **遇到 unknown callee warning 时**：linter 输出的 `Warning` 表示某个函数调用既非 `rvs_` 前缀也不在 capsmap 中。标准库路径运行 `cargo rivus infer-std -o caps/std`；若该命令报告分发 seed 缺少标准库前置函数，应更新 Rivus 维护的分发 seed，项目 `caps/seed` 只用于明确需要的临时覆盖。第三方依赖运行 `cargo rivus infer-capsmap -o caps/deps`。仅需修正当前项目普通检查结果时，将精确 `def_path` 写入 `caps/ext`
 4. **遇到 incomplete caps knowledge warning 时**：调用检查只使用已知能力下界，不能把记录当作 pure。`unknown` 知识应运行诊断给出的 `infer-std` 或 `infer-capsmap` 命令替换；刚生成的 `inferred` / `trait_vote` 记录仍可能因 opaque 函数体或不完整 trait 实现保持 incomplete，单纯重跑同一命令不会改变结果。标准库和本地路径使用诊断给出的 `cargo rivus why` 继续定位 incomplete callee；依赖函数体未被收集时审查依赖源码。没有逐项证明完整能力前，不得通过 `caps/ext` 把记录标为 complete
 5. **遇到其他 warning 时**：根据警告类型分别处理——缺少断言就加 `debug_assert!`，缺少文档就补 `///`，等等
-6. **遇到 violation 时**：调用链能力冲突。要么修改调用方的标记（可能级联影响），要么重构代码避免不合规的调用
+6. **遇到 violation 时**：名称与推断语义能力不一致。要么按推断结果重命名（可能级联影响），要么修正函数实际行为使名称成立
 7. **遇到推断提示时**：推断性提示——函数的实际行为暗示应有某能力但名字里没写。审查后决定：补上能力标记（注意级联影响），或确认是误判则忽略
 
 ---

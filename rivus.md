@@ -220,13 +220,15 @@ Port 操作的 P 不从函数后缀或 trait 名推断，而是由本地 trait �
 - 可以声明额外 associated type 表示连接、流、事务等长期资源
 - 不得包含 associated constant；generic World、receiver 方法或缺少 World 参数的操作会使整个 trait 按普通 trait 处理
 
-World Port 操作自动获得 P；各 impl 的 `B/I/S/T` 能力仍按至少半数规则逐项投票，入选能力与操作自身的 `A/C/M/U` 一起构成完整契约；后缀只保留 BIMPST 字母。具体 impl body 和默认 trait body 都按这个完整契约向下检查。调用边遇到任何包含 P 的完整契约时，只向调用方传播 P，不传播同一契约中的 `B/I/S/T`。
+World Port 操作的公开传播能力固定为 P：trait 方法与 impl 方法的规范后缀都是 `_P`（Rust 要求 impl 方法名与 trait 一致）。P 是有意的信息隐藏——`rvs_save_P` 只表示"能力由 World 解释器负责"；实现是否阻塞、I/O 或有副作用属于适配器审计信息，通过 report 和 `cargo rivus why` 查看，不属于领域调用契约。Port impl 不比较实现体推断出的 `B/I/S/T` 与名称后缀；`A/C/M/U` 仍从签名与函数体测量，不进入后缀。impl 的实际能力仍被完整推断并用于 report 与统计——report 展示的是完整语义 caps（如 `AP` = 结构性 P + 签名测量的 A；`PST` = P + 审计到的 S/T），与公开传播契约"恒为 P"是两个不同视图。调用边遇到 Port 契约时只向调用方传播 P；P 边同时是 incomplete 传播屏障，实现内部的不完整知识不污染领域调用方。
 
 调用方通过类型级解释器和显式 World 使用端口，不保存 `Box<dyn>` 服务对象。普通结果和领域错误使用具体类型；associated type 只用于调用方需要跨多次操作持有的长期资源。测试时替换解释器类型并提供内存 World。
 
 #### Trait 投票与非典型实现
 
-Trait 方法对 `B/I/P/S/T` 逐项执行 at-least-half vote，阈值为 `ceil(实现数量 / 2)`。声明自身的后缀只在没有实现可聚合时回退使用。投票表示典型完整能力，不表示所有实现的最坏情况。World Port 固定加入 P，并仅在调用边把完整契约投影成 P。
+Trait 方法对 `B/I/P/S/T` 逐项执行 at-least-half vote，阈值为 `ceil(实现数量 / 2)`。声明自身写的后缀不参与语义推断——没有任何实现可聚合时，声明保持未知（空下界），后缀只在命名视图比较中出现。投票表示典型完整能力，不表示所有实现的最坏情况。World Port 不参与 B/I/S/T 投票——其公开契约固定为 P。
+
+投票完整性按"未知票能否改变结果"判定：对每个未入选的传播能力，若 `known_votes + unknown_votes >= threshold` 则投票不稳定（incomplete），其中 `unknown_votes` 只统计已知下界不含该能力的 incomplete impl——已为该能力投过票的 incomplete impl 已计入 `known_votes`，不得重复计数；否则即使补全未知 impl 的票也不会翻转结果，vote 视为 complete。threshold 使用全部已知 impl 数量；无推断结果的 impl 键不参与投票也不计入实现数（当前每个图节点都有初始推断，该情形不会出现），threshold 不得降低。
 
 推断会保留参与实现数、阈值和逐能力票数。一个完整、可修改的本地实现若拥有投票未选中的传播能力，会产生 `RVS_TRAIT_IMPL_OUTLIER` warning。该 warning 不改变 trait 投票结果，也不改变 pure/good/ok 统计；它用于提示某个实现可能把隐藏环境、I/O、阻塞或其他副作用放进了一个通常不具备这些行为的抽象。Port、外部实现和推断不完整的实现组不产生此 warning。
 
@@ -255,7 +257,7 @@ rvs_write_db_IS    可调用  rvs_parse_int        ✅ (被调用方没有传播
 rvs_parse_int      不可调用 rvs_read_file_BI     ❌ (无 B/I 不可调有 B/I)
 rvs_add            可调用  rvs_sort_inplace_M    ✅ (M 为签名能力，不参与调用规则)
 rvs_parse_int      可调用  rvs_fetch_user      ✅ (A 为签名能力，不参与调用规则)
-rvs_order_P        可调用  Port::rvs_store_BIPS ✅ (包含 P 的调用边只传播 P)
+rvs_order_P        可调用  Port::rvs_store_P  ✅ (Port 调用边只传播 P)
 ```
 
 ### 修改函数时的能力合规流程
@@ -323,9 +325,9 @@ cargo rivus infer-capsmap -o caps/deps
    cargo rivus check    # 能力合规检查无违规
    ```
 3. **遇到 unknown callee warning 时**：linter 输出的 `Warning` 表示某个函数调用既非 `rvs_` 前缀也不在 capsmap 中。标准库路径运行 `cargo rivus infer-std -o caps/std`；若该命令报告分发 seed 缺少标准库前置函数，应更新 Rivus 维护的分发 seed，项目 `caps/seed` 只用于明确需要的临时覆盖。第三方依赖运行 `cargo rivus infer-capsmap -o caps/deps`。仅需修正当前项目普通检查结果时，将精确 `def_path` 写入 `caps/ext`
-4. **遇到 incomplete caps knowledge warning 时**：调用检查只使用已知能力下界，不能把记录当作 pure。`unknown` 知识应运行诊断给出的 `infer-std` 或 `infer-capsmap` 命令替换；刚生成的 `inferred` / `trait_vote` 记录仍可能因 opaque 函数体或不完整 trait 实现保持 incomplete，单纯重跑同一命令不会改变结果。标准库和本地路径使用诊断给出的 `cargo rivus why` 继续定位 incomplete callee；依赖函数体未被收集时审查依赖源码。没有逐项证明完整能力前，不得通过 `caps/ext` 把记录标为 complete
+4. **遇到 incomplete caps knowledge warning 时**：调用检查只使用已知能力下界，不能把记录当作 pure。warning 只报告真正缺失知识的根节点（root incomplete：artifact 不完整、caps 记录自身 incomplete/unknown、bodyless 无 exact contract、不稳定 trait vote）；传递性影响通过 `cargo rivus why` 查看传播路径，不产生级联 warning。标准库和本地路径使用诊断给出的 `cargo rivus why` 继续定位根因；依赖函数体未被收集时审查依赖源码。没有逐项证明完整能力前，不得通过 `caps/ext` 把记录标为 complete
 5. **遇到其他 warning 时**：根据警告类型分别处理——缺少断言就加 `debug_assert!`，缺少文档就补 `///`，等等
-6. **遇到 violation 时**：调用链能力冲突。要么修改调用方的标记（可能级联影响），要么重构代码避免不合规的调用
+6. **遇到 violation 时**：名称与推断语义能力不一致。要么按推断结果重命名（可能级联影响），要么修正函数实际行为使名称成立
 7. **遇到推断提示时**：推断性提示——函数的实际行为暗示应有某能力但名字里没写。审查后决定：补上能力标记（注意级联影响），或确认是误判则忽略
 
 ### 结构化并发

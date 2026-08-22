@@ -1,0 +1,22 @@
+Offline Caps Check: 0 error(s), 3 warning(s)
+------------------------------------------------------------
+warning[missing_rvs_prefix]: dep::opaque
+  'opaque' is missing the rvs_ prefix
+  expected name: rvs_opaque
+  declared caps: unknown
+  inferred caps: pure
+warning[incomplete_caps_knowledge]: demo::rvs_wrapper
+  calls rely on incomplete caps knowledge; checks use known capability lower bounds
+  layer: <inference>
+  file: <callgraph>
+  completeness: incomplete
+  knowledge bases: inferred
+  affected callees: 1
+  callee: dep::opaque [crate_id=2] (known caps: pure, basis=inferred)
+  affected callers: 1
+  caller: demo::rvs_wrapper [crate_id=1]
+  local inference is incomplete because the call graph reaches unknown or incomplete knowledge (callee target crate_id=2: dep::opaque); inspect `cargo rivus why 'dep::opaque' .`; `<inference>` is computed during check and is not a refreshable caps layer
+warning[unknown_callee]: dep::opaque
+  callee 'dep::opaque' has no rvs_ suffix and no caps/ entry
+  called by: demo::rvs_wrapper
+  run `cargo rivus infer-capsmap -o caps/deps` to refresh dependency capabilities; if inference still reports this path, add its exact def_path to caps/ext
