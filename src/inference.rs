@@ -26,6 +26,7 @@ pub(crate) struct PreparedInference {
     synthetic_paths: BTreeSet<DefPath>,
     incomplete_paths: BTreeSet<DefPath>,
     incomplete_roots: BTreeSet<DefPath>,
+    incomplete_root_kinds: BTreeMap<DefPath, IncompleteRootKind>,
     trait_votes: BTreeMap<DefPath, TraitCapabilityVote>,
 }
 
@@ -182,6 +183,7 @@ impl PreparedInference {
             synthetic_paths,
             incomplete_paths,
             incomplete_roots: incomplete_knowledge.roots,
+            incomplete_root_kinds: incomplete_knowledge.root_kinds,
             trait_votes,
         }
     }
@@ -220,6 +222,13 @@ impl PreparedInference {
     /// `rvs_incomplete_paths` remains the export-confidence set.
     pub(crate) const fn rvs_incomplete_roots(&self) -> &BTreeSet<DefPath> {
         &self.incomplete_roots
+    }
+
+    /// Provenance for each root: the most specific reason the root's own
+    /// knowledge is missing. Chooses the warning anchor and remediation
+    /// text; never changes capability or taint semantics.
+    pub(crate) const fn rvs_incomplete_root_kinds(&self) -> &BTreeMap<DefPath, IncompleteRootKind> {
+        &self.incomplete_root_kinds
     }
 
     pub(crate) const fn rvs_trait_votes(&self) -> &BTreeMap<DefPath, TraitCapabilityVote> {
@@ -364,6 +373,10 @@ impl PreparedLocalAnalysis {
 
     pub(crate) const fn rvs_incomplete_roots(&self) -> &BTreeSet<DefPath> {
         self.inference.rvs_incomplete_roots()
+    }
+
+    pub(crate) const fn rvs_incomplete_root_kinds(&self) -> &BTreeMap<DefPath, IncompleteRootKind> {
+        self.inference.rvs_incomplete_root_kinds()
     }
 
     pub(crate) const fn rvs_trait_votes(&self) -> &BTreeMap<DefPath, TraitCapabilityVote> {
@@ -749,6 +762,14 @@ impl<'a> CapabilityKnowledgeView<'a> {
             .or_else(|| self.base.rvs_lookup_info_def_path(path))
     }
 
+    /// Exact record lookup without the readable-path fallback: a record
+    /// exists under this precise key or not at all.
+    fn rvs_lookup_exact_record(self, path: &DefPath) -> Option<&'a CapabilityInfo> {
+        self.overlay
+            .and_then(|overlay| overlay.get(path))
+            .or_else(|| self.base.rvs_lookup_info(path.rvs_as_str()))
+    }
+
     fn rvs_lookup_caps(self, path: &DefPath) -> Option<&'a CapabilitySet> {
         self.rvs_lookup_info(path).map(CapabilityInfo::rvs_caps)
     }
@@ -851,6 +872,22 @@ impl<'a> CalleeCapsResolver<'a> {
 
     pub(crate) fn rvs_exact_caps_info(&self, callee: &DefPath) -> Option<&CapabilityInfo> {
         self.knowledge.rvs_lookup_info(callee)
+    }
+
+    /// The caps record key that an exact lookup resolves to: the callee's
+    /// own path when a record exists for it, otherwise the readable
+    /// wildcard path a specialization falls back to, otherwise `None`.
+    /// Multiple specializations of one generic share the fallback key and
+    /// therefore one knowledge record.
+    pub(crate) fn rvs_exact_caps_record_key(&self, callee: &DefPath) -> Option<DefPath> {
+        if self.knowledge.rvs_lookup_exact_record(callee).is_some() {
+            return Some(callee.clone());
+        }
+        let user_path = DefPath::from(callee.rvs_user_path().into_owned());
+        if user_path != *callee && self.knowledge.rvs_lookup_exact_record(&user_path).is_some() {
+            return Some(user_path);
+        }
+        None
     }
 
     pub(crate) fn rvs_exact_caps(&self, callee: &DefPath) -> Option<CapabilitySet> {
@@ -1507,6 +1544,64 @@ fn rvs_incomplete_inference_paths_with_knowledge(
     .tainted
 }
 
+/// Why a path is a root knowledge gap.
+///
+/// The kind is diagnostic provenance: it chooses the warning anchor and
+/// remediation text. It never changes capability or taint semantics.
+/// Ordering uses `rvs_precedence`, not a derived variant order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum IncompleteRootKind {
+    /// The callgraph artifact itself is incomplete (collection failure or
+    /// merged partial targets).
+    IncompleteArtifact,
+    /// A caps layer record for this path is `incomplete` or `unknown`.
+    IncompleteCapsRecord,
+    /// A bodyless declaration without an exact caps record or a resolvable
+    /// contract (including bodyless trait declarations with an unstable
+    /// vote).
+    BodylessNoContract,
+    /// A bodyless ordinary trait declaration whose vote is unstable.
+    UnstableTraitVote,
+    /// A callee referenced on a call edge but absent from the graph, every
+    /// knowledge layer, and the inference output.
+    GhostCallee,
+}
+
+impl IncompleteRootKind {
+    pub(crate) const fn rvs_name(self) -> &'static str {
+        match self {
+            Self::IncompleteArtifact => "incomplete_artifact",
+            Self::IncompleteCapsRecord => "incomplete_caps_record",
+            Self::BodylessNoContract => "bodyless_no_contract",
+            Self::UnstableTraitVote => "unstable_trait_vote",
+            Self::GhostCallee => "ghost_callee",
+        }
+    }
+
+    /// Precedence rank when one path qualifies for several kinds:
+    /// UnstableTraitVote, then IncompleteArtifact, then
+    /// IncompleteCapsRecord, then BodylessNoContract; ghost callees
+    /// never merge with others.
+    pub(crate) const fn rvs_precedence(self) -> u8 {
+        match self {
+            Self::UnstableTraitVote => 0,
+            Self::IncompleteArtifact => 1,
+            Self::IncompleteCapsRecord => 2,
+            Self::BodylessNoContract => 3,
+            Self::GhostCallee => 4,
+        }
+    }
+
+    /// The most specific kind per the documented precedence order.
+    pub(crate) const fn rvs_most_specific(self, other: Self) -> Self {
+        if self.rvs_precedence() <= other.rvs_precedence() {
+            self
+        } else {
+            other
+        }
+    }
+}
+
 /// Root and propagated incomplete knowledge for one inference pass.
 ///
 /// `roots` are the nodes whose own knowledge is missing (artifact flags,
@@ -1516,6 +1611,14 @@ fn rvs_incomplete_inference_paths_with_knowledge(
 /// user-facing function property. P edges are propagation barriers.
 pub(crate) struct IncompleteKnowledge {
     pub(crate) roots: BTreeSet<DefPath>,
+    /// Provenance per root. A path can qualify for several kinds and the
+    /// most specific wins, in this precedence order: UnstableTraitVote,
+    /// then IncompleteArtifact, then IncompleteCapsRecord, then
+    /// BodylessNoContract. Ghost callees (roots without a graph node)
+    /// always carry GhostCallee. The kind picks the warning anchor and
+    /// the remediation text; it never changes capability or taint
+    /// semantics.
+    pub(crate) root_kinds: BTreeMap<DefPath, IncompleteRootKind>,
     pub(crate) tainted: BTreeSet<DefPath>,
 }
 
@@ -1581,6 +1684,7 @@ fn rvs_incomplete_knowledge_with_knowledge(
             // knowledge arrives. Declarations with an exact caps record are
             // never vote roots (the record is authoritative).
             let mut roots = pass.base_roots;
+            let mut root_kinds = pass.base_root_kinds;
             for trait_method in unstable_votes {
                 if port_methods.contains(&trait_method)
                     || knowledge.rvs_lookup_info(&trait_method).is_some()
@@ -1591,11 +1695,15 @@ fn rvs_incomplete_knowledge_with_knowledge(
                     .rvs_get(trait_method.rvs_as_str())
                     .is_some_and(|node| !node.has_body)
                 {
-                    roots.insert(trait_method);
+                    roots.insert(trait_method.clone());
+                    // The unstable vote is the specific reason: it wins over
+                    // the generic bodyless fallback.
+                    root_kinds.insert(trait_method, IncompleteRootKind::UnstableTraitVote);
                 }
             }
             return IncompleteKnowledge {
                 roots,
+                root_kinds,
                 tainted: pass.tainted,
             };
         }
@@ -1605,6 +1713,7 @@ fn rvs_incomplete_knowledge_with_knowledge(
 
 struct IncompletePropagationPass {
     base_roots: BTreeSet<DefPath>,
+    base_root_kinds: BTreeMap<DefPath, IncompleteRootKind>,
     tainted: BTreeSet<DefPath>,
 }
 
@@ -1644,24 +1753,80 @@ fn rvs_propagate_incomplete_pass(
             })
             .map(|(path, _)| path.clone())
             .collect();
-        // A callee referenced on a call edge but absent from the graph,
-        // every knowledge layer, and the inference output is itself a root
-        // knowledge gap: nothing can resolve it, so its callers' export
-        // confidence and `why` output point at this root.
+        // A callee referenced on a call edge but absent from the graph is
+        // a knowledge root when no authoritative knowledge resolves it: an
+        // incomplete/unknown caps record is the record's root, and a
+        // callee absent from every knowledge layer, the inference output,
+        // and any resolvable contract (e.g. a complete empty trait vote
+        // that never enters the pending queue) is a ghost root. Complete
+        // records are taint barriers and never roots.
         for (callee, callers) in &dependents.callers {
-            if graph.rvs_get(callee.rvs_as_str()).is_none()
-                && knowledge.rvs_lookup_info(callee).is_none()
+            if callers.is_empty() || graph.rvs_get(callee.rvs_as_str()).is_some() {
+                continue;
+            }
+            let unresolved_ghost = knowledge.rvs_lookup_info(callee).is_none()
                 && !inferred.contains_key(callee)
-                && !callers.is_empty()
+                && resolver.rvs_for_contract_check(callee).is_none();
+            if unresolved_ghost
+                || rvs_has_incomplete_capsmap_knowledge(callee, knowledge, port_methods)
             {
                 roots.insert(callee.clone());
             }
         }
         roots
     };
+    // Root provenance: pick the most specific kind per root, in the
+    // precedence order UnstableTraitVote > IncompleteArtifact >
+    // IncompleteCapsRecord > BodylessNoContract (ghost callees, which
+    // have no node, always get GhostCallee). Artifact incompleteness
+    // beats a caps-record cause because the artifact is the wider gap:
+    // it can invalidate the record's own basis.
+    let mut base_root_kinds: BTreeMap<DefPath, IncompleteRootKind> = graph
+        .rvs_iter()
+        .filter(|(path, _)| base_roots.contains(*path))
+        .map(|(path, node)| {
+            let kind = if !node.complete {
+                IncompleteRootKind::IncompleteArtifact
+            } else if rvs_has_incomplete_capsmap_knowledge(path, knowledge, port_methods) {
+                IncompleteRootKind::IncompleteCapsRecord
+            } else {
+                IncompleteRootKind::BodylessNoContract
+            };
+            (path.clone(), kind)
+        })
+        .collect();
+    for (callee, callers) in &dependents.callers {
+        if callers.is_empty() || graph.rvs_get(callee.rvs_as_str()).is_some() {
+            continue;
+        }
+        if rvs_has_incomplete_capsmap_knowledge(callee, knowledge, port_methods) {
+            base_root_kinds.insert(callee.clone(), IncompleteRootKind::IncompleteCapsRecord);
+        } else if knowledge.rvs_lookup_info(callee).is_none()
+            && !inferred.contains_key(callee)
+            && resolver.rvs_for_contract_check(callee).is_none()
+        {
+            base_root_kinds.insert(callee.clone(), IncompleteRootKind::GhostCallee);
+        }
+    }
     let mut incomplete = base_roots.clone();
 
+    // A callee whose resolved knowledge carries P is a Port edge: callers
+    // only require P from it, so its incompleteness must not taint them.
+    // The knowledge can come from inference or directly from an external
+    // caps record (which may itself stay incomplete).
+    let rvs_callee_is_port_edge = |callee: &DefPath| -> bool {
+        inferred
+            .get(callee)
+            .is_some_and(|caps| caps.rvs_contains(Capability::P))
+            || knowledge
+                .rvs_lookup_caps(callee)
+                .is_some_and(|caps| caps.rvs_contains(Capability::P))
+    };
+
     for (callee, callers) in &dependents.callers {
+        if rvs_callee_is_port_edge(callee) {
+            continue;
+        }
         if resolver.rvs_for_contract_check(callee).is_some()
             && !rvs_has_incomplete_capsmap_knowledge(callee, knowledge, port_methods)
         {
@@ -1677,9 +1842,7 @@ fn rvs_propagate_incomplete_pass(
 
     let mut pending: VecDeque<DefPath> = incomplete.iter().cloned().collect();
     while let Some(path) = pending.pop_front() {
-        if !inferred
-            .get(&path)
-            .is_some_and(|caps| caps.rvs_contains(Capability::P))
+        if !rvs_callee_is_port_edge(&path)
             && let Some(callers) = dependents.callers.get(&path)
         {
             for caller in callers {
@@ -1711,6 +1874,7 @@ fn rvs_propagate_incomplete_pass(
     }
     IncompletePropagationPass {
         base_roots,
+        base_root_kinds,
         tainted: incomplete,
     }
 }
@@ -2053,6 +2217,7 @@ pub(crate) fn rvs_collect_direct_external_deps(
         ),
         incomplete_paths,
         incomplete_roots: BTreeSet::new(),
+        incomplete_root_kinds: BTreeMap::new(),
     };
     prepared.rvs_collect_direct_external_deps(graph, local_crate_names, seed)
 }
@@ -2077,6 +2242,304 @@ mod tests {
             )]),
             ..FnNode::default()
         }
+    }
+
+    #[test]
+    fn test_20260823_external_incomplete_record_without_node_is_root() {
+        // F1 regression: a directly called external path with an
+        // incomplete caps record but no graph node must be a knowledge
+        // root (the record's root), not merely a propagated taint on its
+        // callers.
+        let mut graph = FnGraph::rvs_new();
+        let mut local = rvs_make_behavior();
+        local.calls.insert(
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: DefPath::from("dep::external"),
+            },
+            CallEdgeType::Strong,
+        );
+        graph.rvs_insert_M(DefPath::from("demo::rvs_caller"), local);
+
+        let mut info = crate::capability::CapabilityInfo::rvs_new(
+            CapabilitySet::rvs_new(),
+            crate::capability::CapabilityBasis::Inferred,
+            crate::capability::CapabilityCompleteness::Unknown,
+        );
+        info.rvs_with_source_M(crate::capability::CapabilitySource {
+            layer: "deps".to_string(),
+            file: std::path::PathBuf::from("caps/deps"),
+            line: 2,
+        });
+        let mut seed = capsmap::CapsMap::rvs_new();
+        seed.rvs_insert_info_M(CapsMapKey::rvs_new("dep::external"), info);
+
+        let analysis = PreparedLocalAnalysis::rvs_prepare_M(
+            &mut graph,
+            &seed,
+            &BTreeSet::from([CrateName::from("demo")]),
+        );
+        let roots = analysis.rvs_incomplete_roots();
+        let kinds = analysis.rvs_incomplete_root_kinds();
+        let output = format!(
+            "roots={:?}\nkinds={:?}\ncaller_tainted={}\n",
+            roots
+                .iter()
+                .map(|path| path.rvs_as_str().to_string())
+                .collect::<Vec<_>>(),
+            kinds
+                .iter()
+                .map(|(path, kind)| (path.rvs_as_str().to_string(), kind.rvs_name()))
+                .collect::<Vec<_>>(),
+            analysis
+                .rvs_incomplete_paths()
+                .contains(&DefPath::from("demo::rvs_caller")),
+        );
+        rvs_snapshot_BIS(
+            "test_20260823_external_incomplete_record_without_node_is_root",
+            &output,
+        );
+
+        assert_eq!(
+            kinds.get(&DefPath::from("dep::external")),
+            Some(&IncompleteRootKind::IncompleteCapsRecord)
+        );
+        assert!(roots.contains(&DefPath::from("dep::external")));
+        assert!(!roots.contains(&DefPath::from("demo::rvs_caller")));
+        assert!(
+            analysis
+                .rvs_incomplete_paths()
+                .contains(&DefPath::from("demo::rvs_caller"))
+        );
+    }
+
+    #[test]
+    fn test_20260823_incomplete_port_record_does_not_taint_callers() {
+        // H6 regression: a callee whose caps record carries P (even with
+        // incomplete completeness) is a Port edge. Ordinary callers only
+        // require P from it, so the record's incompleteness must not
+        // taint them — the root warning names the record, and the callers
+        // keep their own completeness.
+        let mut graph = FnGraph::rvs_new();
+        let mut local = rvs_make_behavior();
+        local.calls.insert(
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: DefPath::from("dep::port_service"),
+            },
+            CallEdgeType::Strong,
+        );
+        graph.rvs_insert_M(DefPath::from("demo::rvs_call"), local);
+
+        let mut info = crate::capability::CapabilityInfo::rvs_new(
+            CapabilitySet::rvs_from_validated("P"),
+            crate::capability::CapabilityBasis::Inferred,
+            crate::capability::CapabilityCompleteness::Incomplete,
+        );
+        info.rvs_with_source_M(crate::capability::CapabilitySource {
+            layer: "deps".to_string(),
+            file: std::path::PathBuf::from("caps/deps"),
+            line: 3,
+        });
+        let mut seed = capsmap::CapsMap::rvs_new();
+        seed.rvs_insert_info_M(CapsMapKey::rvs_new("dep::port_service"), info);
+
+        let analysis = PreparedLocalAnalysis::rvs_prepare_M(
+            &mut graph,
+            &seed,
+            &BTreeSet::from([CrateName::from("demo")]),
+        );
+        let output = format!(
+            "roots={:?}\npath_tainted={}\ncaller_tainted={}\n",
+            analysis
+                .rvs_incomplete_roots()
+                .iter()
+                .map(|path| path.rvs_as_str().to_string())
+                .collect::<Vec<_>>(),
+            analysis
+                .rvs_incomplete_paths()
+                .contains(&DefPath::from("dep::port_service")),
+            analysis
+                .rvs_incomplete_paths()
+                .contains(&DefPath::from("demo::rvs_call")),
+        );
+        rvs_snapshot_BIS(
+            "test_20260823_incomplete_port_record_does_not_taint_callers",
+            &output,
+        );
+
+        // The record itself is still a knowledge root (its own
+        // completeness is incomplete), but the Port edge is a propagation
+        // barrier: the direct caller stays untainted.
+        assert!(
+            analysis
+                .rvs_incomplete_roots()
+                .contains(&DefPath::from("dep::port_service"))
+        );
+        assert!(
+            analysis
+                .rvs_incomplete_paths()
+                .contains(&DefPath::from("dep::port_service"))
+        );
+        assert!(
+            !analysis
+                .rvs_incomplete_paths()
+                .contains(&DefPath::from("demo::rvs_call")),
+            "Port edge must not taint ordinary callers"
+        );
+    }
+
+    #[test]
+    fn test_20260822_incomplete_roots_carry_origin_kinds() {
+        // Two independent roots (a bodyless ghost callee and an incomplete
+        // caps record) and one shared tainted caller: the root set and the
+        // taint set stay separate, and every root carries its specific
+        // origin kind for warning anchoring.
+        let mut graph = FnGraph::rvs_new();
+        let mut local = rvs_make_behavior();
+        local.calls.insert(
+            FunctionIdentity {
+                crate_id: 1,
+                def_path: DefPath::from("dep::ghost"),
+            },
+            CallEdgeType::Strong,
+        );
+        local.calls.insert(
+            FunctionIdentity {
+                crate_id: 2,
+                def_path: DefPath::from("dep::recorded"),
+            },
+            CallEdgeType::Strong,
+        );
+        graph.rvs_insert_M(DefPath::from("demo::rvs_shared_caller"), local);
+        // A collected bodyless declaration whose caps record is incomplete:
+        // the record is the root, not the missing body.
+        graph.rvs_insert_M(
+            DefPath::from("dep::recorded"),
+            FnNode {
+                has_body: false,
+                crate_id: 2,
+                crate_provenance: crate::artifacts::CrateProvenance::Dependency,
+                ..rvs_make_behavior()
+            },
+        );
+
+        let mut info = crate::capability::CapabilityInfo::rvs_new(
+            CapabilitySet::rvs_new(),
+            crate::capability::CapabilityBasis::Inferred,
+            crate::capability::CapabilityCompleteness::Unknown,
+        );
+        info.rvs_with_source_M(crate::capability::CapabilitySource {
+            layer: "deps".to_string(),
+            file: std::path::PathBuf::from("caps/deps"),
+            line: 2,
+        });
+        let mut seed = capsmap::CapsMap::rvs_new();
+        seed.rvs_insert_info_M(CapsMapKey::rvs_new("dep::recorded"), info);
+
+        let analysis = PreparedLocalAnalysis::rvs_prepare_M(
+            &mut graph,
+            &seed,
+            &BTreeSet::from([CrateName::from("demo")]),
+        );
+        let roots = analysis.rvs_incomplete_roots();
+        let kinds = analysis.rvs_incomplete_root_kinds();
+        let output = format!(
+            "roots={:?}\nkinds={:?}\nshared_tainted={}\n",
+            roots
+                .iter()
+                .map(|path| path.rvs_as_str().to_string())
+                .collect::<Vec<_>>(),
+            kinds
+                .iter()
+                .map(|(path, kind)| (path.rvs_as_str().to_string(), kind.rvs_name()))
+                .collect::<Vec<_>>(),
+            analysis
+                .rvs_incomplete_paths()
+                .contains(&DefPath::from("demo::rvs_shared_caller")),
+        );
+        rvs_snapshot_BIS("test_20260822_incomplete_roots_carry_origin_kinds", &output);
+
+        // The ghost callee and the incomplete record are both roots with
+        // their specific kinds; the shared caller is tainted but never a
+        // root, and every root has a kind.
+        assert_eq!(roots.len(), 2);
+        assert_eq!(
+            kinds.get(&DefPath::from("dep::ghost")),
+            Some(&IncompleteRootKind::GhostCallee)
+        );
+        assert_eq!(
+            kinds.get(&DefPath::from("dep::recorded")),
+            Some(&IncompleteRootKind::IncompleteCapsRecord)
+        );
+        assert!(roots.iter().all(|root| kinds.contains_key(root)));
+        assert!(!roots.contains(&DefPath::from("demo::rvs_shared_caller")));
+        assert!(
+            analysis
+                .rvs_incomplete_paths()
+                .contains(&DefPath::from("demo::rvs_shared_caller"))
+        );
+    }
+
+    #[test]
+    fn test_20260824_pure_trait_alias_is_not_a_ghost_root() {
+        // Fix regression: a called trait alias absent from the graph whose
+        // implementations are all pure resolves to a complete empty vote.
+        // The empty set never enters the pending queue, so the alias is
+        // absent from `inferred`; it must not be misclassified as a ghost
+        // root (no warning, no caller taint).
+        let mut graph = FnGraph::rvs_new();
+        let mut local = rvs_make_behavior();
+        local.calls.insert(
+            FunctionIdentity {
+                crate_id: 1,
+                def_path: DefPath::from("demo::Parser::rvs_parse"),
+            },
+            CallEdgeType::Strong,
+        );
+        graph.rvs_insert_M(DefPath::from("demo::rvs_dispatch"), local);
+        // Two pure implementations: the at-least-half vote is complete
+        // and empty.
+        for impl_path in [
+            "demo::Alpha::rvs_parse@demo::Parser",
+            "demo::Beta::rvs_parse@demo::Parser",
+        ] {
+            let mut implementation = rvs_make_behavior();
+            implementation.is_trait_impl = true;
+            graph.rvs_insert_M(DefPath::from(impl_path), implementation);
+        }
+
+        let analysis = PreparedLocalAnalysis::rvs_prepare_M(
+            &mut graph,
+            &capsmap::CapsMap::rvs_new(),
+            &BTreeSet::from([CrateName::from("demo")]),
+        );
+        let output = format!(
+            "alias_root={}\ndispatch_tainted={}\n",
+            analysis
+                .rvs_incomplete_roots()
+                .contains(&DefPath::from("demo::Parser::rvs_parse")),
+            analysis
+                .rvs_incomplete_paths()
+                .contains(&DefPath::from("demo::rvs_dispatch")),
+        );
+        rvs_snapshot_BIS(
+            "test_20260824_pure_trait_alias_is_not_a_ghost_root",
+            &output,
+        );
+
+        assert!(
+            !analysis
+                .rvs_incomplete_roots()
+                .contains(&DefPath::from("demo::Parser::rvs_parse")),
+            "a complete empty vote is resolvable knowledge, not a ghost"
+        );
+        assert!(
+            !analysis
+                .rvs_incomplete_paths()
+                .contains(&DefPath::from("demo::rvs_dispatch")),
+            "the caller of a complete pure contract is not tainted"
+        );
     }
 
     #[test]

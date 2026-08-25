@@ -825,6 +825,26 @@ impl FnGraph {
     }
 }
 
+/// Resolve a user-facing function query the way `cargo rivus why` does:
+/// an exact graph or synthetic match wins; otherwise every graph and
+/// synthetic path whose readable form equals the query matches.
+pub(crate) fn rvs_function_query_matches(
+    graph: &FnGraph,
+    synthetic_paths: &BTreeSet<DefPath>,
+    query: &str,
+) -> Vec<DefPath> {
+    let exact = DefPath::from(query);
+    if graph.rvs_get(query).is_some() || synthetic_paths.contains(&exact) {
+        return vec![exact];
+    }
+    graph
+        .rvs_keys()
+        .chain(synthetic_paths.iter())
+        .filter(|path| path.rvs_user_path() == query)
+        .cloned()
+        .collect()
+}
+
 fn rvs_record_crate_provenance_M(
     provenance_by_crate_id: &mut BTreeMap<u64, (CrateProvenance, DefPath)>,
     crate_id: u64,

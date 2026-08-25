@@ -1,0 +1,26 @@
+Offline Caps Check: 0 error(s), 2 warning(s)
+------------------------------------------------------------
+warning[incomplete_caps_knowledge]: dep::inferred_one
+  calls rely on incomplete caps knowledge; checks use known capability lower bounds
+  root kind: incomplete_caps_record
+  layer: deps
+  file: caps/deps:3
+  completeness: incomplete
+  knowledge bases: inferred
+  callee: dep::inferred_one (known caps: (no known caps), basis=inferred)
+  direct callers: 1
+  callee target: dep::inferred_one [crate_id=2]
+  caller: demo::rvs_use [crate_id=1]
+  inferred dependency knowledge for 'dep::inferred_one' remains incomplete because a dependency body is opaque or reaches other incomplete knowledge (callee target crate_id=2: dep::inferred_one); inspect `cargo rivus why 'dep::inferred_one' .`; rerunning `cargo rivus infer-capsmap -o caps/deps` without resolving that boundary will preserve the lower bound
+warning[incomplete_caps_knowledge]: dep::voted_one
+  calls rely on incomplete caps knowledge; checks use known capability lower bounds
+  root kind: incomplete_caps_record
+  layer: deps
+  file: caps/deps:3
+  completeness: incomplete
+  knowledge bases: trait_vote
+  callee: dep::voted_one (known caps: (no known caps), basis=trait_vote)
+  direct callers: 1
+  callee target: dep::voted_one [crate_id=2]
+  caller: demo::rvs_use [crate_id=1]
+  inferred dependency knowledge for 'dep::voted_one' remains incomplete because a dependency body is opaque or reaches other incomplete knowledge (callee target crate_id=2: dep::voted_one); inspect `cargo rivus why 'dep::voted_one' .`; rerunning `cargo rivus infer-capsmap -o caps/deps` without resolving that boundary will preserve the lower bound

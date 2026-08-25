@@ -1,5 +1,17 @@
-Offline Caps Check: 0 error(s), 1 warning(s)
+Offline Caps Check: 0 error(s), 2 warning(s)
 ------------------------------------------------------------
+warning[incomplete_caps_knowledge]: core::slice::iter
+  calls rely on incomplete caps knowledge; checks use known capability lower bounds
+  root kind: ghost_callee
+  layer: <inference>
+  file: <callgraph>
+  completeness: incomplete
+  knowledge bases: none
+  callee: core::slice::iter (known caps: (no known caps), basis=none)
+  direct callers: 1
+  callee target: core::slice::iter [crate_id=2]
+  caller: demo::rvs_handle [crate_id=1]
+  standard-library callee 'core::slice::iter' is absent from the callgraph and every caps layer (callee target crate_id=2: core::slice::iter); run `cargo rivus infer-std -o caps/std`, or add its exact def_path to caps/seed once its behavior is verified
 warning[unknown_callee]: core::slice::iter
   callee 'core::slice::iter' has no rvs_ suffix and no caps/ entry
   called by: demo::rvs_handle

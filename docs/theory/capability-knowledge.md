@@ -46,9 +46,7 @@
 
 incomplete 诊断必须区分来源不明的旧记录和新推断知识。来源不明的记录建议重新生成；新推断知识必须指出它是保守下界，并提供可继续检查的 callee、trait 实现或 opaque 边界，不能谎称重新生成必然消除警告。`<inference>` 是检查时计算结果，不是可刷新的 caps layer。
 
-同一层、文件和完整度形成的全局 incomplete 摘要为每个受影响 caller 发射一次，共享相同的全局 callee 集合文本。同一 caller 内的多个调用不重复发射相同摘要。Rivus lint 属性只在 crate root 生效。
-
-全局摘要的分组只消费已经通过目标筛选的记录。每条记录保留精确 caller、callee 和调用点身份；摘要从每个 caller 的组内按稳定顺序选择一个代表调用点作为发射锚点，并在说明中保留对应 callee 的 `crate_id`、完整路径和可直接执行的 `cargo rivus why` 命令。没有调用点时退回 caller 函数锚点。
+incomplete 知识按知识根因（root）分组发射：一条 caps record 是一个根（精确键与 readable 回退键解析到同一 record 的多个 specialization 合并为一个根），一条 inference root（ghost、bodyless、artifact、不稳定 vote）也是一个根。每个被本地直接调用的根因产生一条 warning，数量等于根因数，不随调用点或受影响 caller 数量增长；每条 warning 携带 root 的具体成因（root kind）与针对该成因的修复指引。record root 的诊断以 `file:line` 定位其 caps record——同一 readable path 下多个 exact record 也保持可区分。诊断锚定该根因的第一个精确调用点，且诊断中命名的 identity 与锚点来自同一 usage；没有调用点时退回第一个 caller 的函数锚点。直接 caller 保留在诊断 details（前 5 个加溢出计数；传递性受影响函数不逐个列出）中，但绝不作为独立 warning 锚点发射。同一根因的多个 crate 身份（同 def_path 不同 crate_id）合并为一条。ghost callee 的知识 basis 是 `none`（它不存在于任何知识层），其修复指引与 unknown-callee 诊断一致：先刷新生成层，剩余路径进项目修正层。Rivus lint 属性只在 crate root 生效。
 
 推断输入在一次分析中是不可变知识视图：基础 caps 层与目标范围内 Port 方法按优先级查询。准备分析预先建立反向调用依赖和 trait 实现依赖；能力与完整度在同一快照上分别运行一次工作队列传播，生成的 trait alias 在固定点之后物化，不能通过复制 capsmap 并重新扫描整图来反复注入。分析也不能为了增加临时知识而复制整张调用图。
 

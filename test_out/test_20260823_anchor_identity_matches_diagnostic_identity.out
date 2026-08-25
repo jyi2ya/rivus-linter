@@ -1,0 +1,15 @@
+Offline Caps Check: 0 error(s), 1 warning(s)
+------------------------------------------------------------
+warning[incomplete_caps_knowledge]: dep::multi
+  calls rely on incomplete caps knowledge; checks use known capability lower bounds
+  root kind: incomplete_caps_record
+  layer: deps
+  file: caps/deps:2
+  completeness: unknown
+  knowledge bases: inferred
+  callee: dep::multi (known caps: (no known caps), basis=inferred)
+  direct callers: 2
+  callee target: dep::multi [crate_id=40, 41]
+  caller: demo::rvs_alpha [crate_id=10]
+  caller: demo::rvs_beta [crate_id=11]
+  inferred dependency knowledge for 'dep::multi' remains incomplete because a dependency body is opaque or reaches other incomplete knowledge (callee target crate_id=40: dep::multi); inspect `cargo rivus why 'dep::multi' .`; rerunning `cargo rivus infer-capsmap -o caps/deps` without resolving that boundary will preserve the lower bound

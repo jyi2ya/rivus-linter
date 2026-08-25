@@ -394,16 +394,7 @@ fn rvs_why_function_matches(
     synthetic_paths: &BTreeSet<DefPath>,
     function: &str,
 ) -> Vec<DefPath> {
-    let exact = DefPath::from(function);
-    if callgraph.rvs_get(function).is_some() || synthetic_paths.contains(&exact) {
-        return vec![exact];
-    }
-    callgraph
-        .rvs_keys()
-        .chain(synthetic_paths)
-        .filter(|path| path.rvs_user_path() == function)
-        .cloned()
-        .collect()
+    crate::artifacts::rvs_function_query_matches(callgraph, synthetic_paths, function)
 }
 
 fn rvs_format_why_caps(

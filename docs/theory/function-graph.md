@@ -87,7 +87,7 @@ free function、impl method 和带默认实现的 trait method 共享同一条 b
 
 调用诊断身份同时保存 callee、函数内序号和可用时的精确源码范围。occurrence 只在单个真实函数身份内有意义。对同一 callee 的多个真实调用以不同 occurrence 完整保留。最终 rustc 阶段若找不到指定调用点，不能回退到函数范围并伪造已匹配确认。
 
-聚合型 incomplete-knowledge 警告为每个受影响 caller 保留独立函数锚点，同一 caller 内的多个调用不重复发射相同摘要；Rivus lint 属性只在 crate root 生效。
+聚合型 incomplete-knowledge 警告按知识根因（root）发射：每个根一条 warning、一个锚点（根因的第一个精确调用点，无调用点时退回第一个 caller 函数锚点），受影响 caller 保留在诊断 details 中，不作为独立锚点；同一 caller 内的多个调用不重复发射相同摘要。Rivus lint 属性只在 crate root 生效。
 
 ## 推断过程
 

@@ -1,16 +1,17 @@
 Offline Caps Check: 0 error(s), 2 warning(s)
 ------------------------------------------------------------
-warning[incomplete_caps_knowledge]: demo::rvs_dispatch
+warning[incomplete_caps_knowledge]: demo::Parser::rvs_parse
   calls rely on incomplete caps knowledge; checks use known capability lower bounds
+  root kind: unstable_trait_vote
   layer: <inference>
   file: <callgraph>
   completeness: incomplete
   knowledge bases: inferred
-  affected callees: 1
-  callee: demo::Parser::rvs_parse [crate_id=2] (known caps: pure, basis=inferred)
-  affected callers: 1
+  callee: demo::Parser::rvs_parse (known caps: (no known caps), basis=inferred)
+  direct callers: 1
+  callee target: demo::Parser::rvs_parse [crate_id=2]
   caller: demo::rvs_dispatch [crate_id=1]
-  local inference is incomplete because the call graph reaches unknown or incomplete knowledge (callee target crate_id=2: demo::Parser::rvs_parse); inspect `cargo rivus why 'demo::Parser::rvs_parse' .`; `<inference>` is computed during check and is not a refreshable caps layer
+  trait vote for 'demo::Parser::rvs_parse' is unstable because impls disagree or knowledge is missing, so its resolved caps may change (callee target crate_id=2: demo::Parser::rvs_parse); inspect `cargo rivus why 'demo::Parser::rvs_parse' .` and complete the missing implementations or knowledge
 warning[unknown_callee]: demo::Parser::rvs_parse
   callee 'demo::Parser::rvs_parse' has no valid capability declaration and no caps/ entry
   called by: demo::rvs_dispatch

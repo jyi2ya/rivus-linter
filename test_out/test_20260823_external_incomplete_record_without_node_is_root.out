@@ -1,0 +1,3 @@
+roots=["dep::external"]
+kinds=[("dep::external", "incomplete_caps_record")]
+caller_tainted=true

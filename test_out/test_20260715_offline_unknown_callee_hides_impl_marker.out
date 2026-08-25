@@ -1,5 +1,17 @@
-Offline Caps Check: 0 error(s), 1 warning(s)
+Offline Caps Check: 0 error(s), 2 warning(s)
 ------------------------------------------------------------
+warning[incomplete_caps_knowledge]: dep::Worker::run
+  calls rely on incomplete caps knowledge; checks use known capability lower bounds
+  root kind: ghost_callee
+  layer: <inference>
+  file: <callgraph>
+  completeness: incomplete
+  knowledge bases: none
+  callee: dep::Worker::run (known caps: (no known caps), basis=none)
+  direct callers: 1
+  callee target: dep::Worker::run [crate_id=2] (specialization of this readable record)
+  caller: demo::rvs_handle [crate_id=1]
+  callee 'dep::Worker::run' is absent from the callgraph, every caps layer, and the inference output (callee target crate_id=2: dep::Worker::run); run `cargo rivus infer-capsmap -o caps/deps` to refresh dependency capabilities; if inference still reports this path, verify its behavior at the anchored call site and add its exact def_path to caps/ext
 warning[unknown_callee]: dep::Worker::run
   callee 'dep::Worker::run' has no rvs_ suffix and no caps/ entry
   called by: demo::rvs_handle

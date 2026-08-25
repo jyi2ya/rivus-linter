@@ -1,0 +1,14 @@
+Offline Caps Check: 0 error(s), 1 warning(s)
+------------------------------------------------------------
+warning[incomplete_caps_knowledge]: dep::Worker::run
+  calls rely on incomplete caps knowledge; checks use known capability lower bounds
+  root kind: incomplete_artifact
+  layer: deps
+  file: caps/deps:4
+  completeness: incomplete
+  knowledge bases: inferred
+  callee: dep::Worker::run (known caps: (no known caps), basis=inferred)
+  direct callers: 1
+  callee target: dep::Worker::run [crate_id=2] (specialization of this readable record)
+  caller: demo::rvs_dispatch [crate_id=1]
+  the callgraph artifact for 'dep::Worker::run' is incomplete, so inference cannot close its knowledge (callee target crate_id=2: dep::Worker::run); this record's readable path cannot be resolved by `cargo rivus why`; review the record for 'dep::Worker::run' in its caps layer and rerun the collection once the failing or partial target compiles

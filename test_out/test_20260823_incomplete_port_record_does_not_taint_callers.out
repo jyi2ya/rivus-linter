@@ -1,0 +1,3 @@
+roots=["dep::port_service"]
+path_tainted=true
+caller_tainted=false

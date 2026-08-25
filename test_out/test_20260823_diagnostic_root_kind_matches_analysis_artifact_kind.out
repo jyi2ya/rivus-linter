@@ -1,0 +1,14 @@
+Offline Caps Check: 0 error(s), 1 warning(s)
+------------------------------------------------------------
+warning[incomplete_caps_knowledge]: dep::flaky
+  calls rely on incomplete caps knowledge; checks use known capability lower bounds
+  root kind: incomplete_artifact
+  layer: deps
+  file: caps/deps:6
+  completeness: incomplete
+  knowledge bases: inferred
+  callee: dep::flaky (known caps: (no known caps), basis=inferred)
+  direct callers: 1
+  callee target: dep::flaky [crate_id=2]
+  caller: demo::rvs_call [crate_id=1]
+  the callgraph artifact for 'dep::flaky' is incomplete, so inference cannot close its knowledge (callee target crate_id=2: dep::flaky); inspect `cargo rivus why 'dep::flaky' .` and rerun the collection once the failing or partial target compiles

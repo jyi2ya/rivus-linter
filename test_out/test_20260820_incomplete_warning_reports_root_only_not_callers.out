@@ -5,17 +5,18 @@ warning[missing_rvs_prefix]: dep::opaque
   expected name: rvs_opaque
   declared caps: unknown
   inferred caps: pure
-warning[incomplete_caps_knowledge]: demo::rvs_wrapper
+warning[incomplete_caps_knowledge]: dep::opaque
   calls rely on incomplete caps knowledge; checks use known capability lower bounds
+  root kind: bodyless_no_contract
   layer: <inference>
   file: <callgraph>
   completeness: incomplete
   knowledge bases: inferred
-  affected callees: 1
-  callee: dep::opaque [crate_id=2] (known caps: pure, basis=inferred)
-  affected callers: 1
+  callee: dep::opaque (known caps: (no known caps), basis=inferred)
+  direct callers: 1
+  callee target: dep::opaque [crate_id=2]
   caller: demo::rvs_wrapper [crate_id=1]
-  local inference is incomplete because the call graph reaches unknown or incomplete knowledge (callee target crate_id=2: dep::opaque); inspect `cargo rivus why 'dep::opaque' .`; `<inference>` is computed during check and is not a refreshable caps layer
+  bodyless declaration 'dep::opaque' has no exact caps record or resolvable contract, so inference cannot close its knowledge (callee target crate_id=2: dep::opaque); inspect `cargo rivus why 'dep::opaque' .` and add its exact def_path to caps/seed once the behavior is verified
 warning[unknown_callee]: dep::opaque
   callee 'dep::opaque' has no rvs_ suffix and no caps/ entry
   called by: demo::rvs_wrapper

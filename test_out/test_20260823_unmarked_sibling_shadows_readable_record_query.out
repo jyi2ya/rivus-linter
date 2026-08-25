@@ -1,0 +1,19 @@
+Offline Caps Check: 0 error(s), 2 warning(s)
+------------------------------------------------------------
+warning[missing_rvs_prefix]: dep::Worker::run
+  'run' is missing the rvs_ prefix
+  expected name: rvs_run
+  declared caps: unknown
+  inferred caps: pure
+warning[incomplete_caps_knowledge]: dep::Worker::run
+  calls rely on incomplete caps knowledge; checks use known capability lower bounds
+  root kind: incomplete_caps_record
+  layer: deps
+  file: caps/deps:4
+  completeness: incomplete
+  knowledge bases: inferred
+  callee: dep::Worker::run (known caps: (no known caps), basis=inferred)
+  direct callers: 1
+  callee target: dep::Worker::run [crate_id=2] (specialization of this readable record)
+  caller: demo::rvs_dispatch [crate_id=1]
+  inferred dependency knowledge for 'dep::Worker::run' remains incomplete because a dependency body is opaque or reaches other incomplete knowledge (callee target crate_id=2: dep::Worker::run); this record's readable path cannot be resolved by `cargo rivus why`; review the record for 'dep::Worker::run' in its caps layer; rerunning `cargo rivus infer-capsmap -o caps/deps` without resolving that boundary will preserve the lower bound

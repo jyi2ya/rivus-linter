@@ -1,0 +1,3 @@
+roots=["dep::ghost", "dep::recorded"]
+kinds=[("dep::ghost", "ghost_callee"), ("dep::recorded", "incomplete_caps_record")]
+shared_tainted=true

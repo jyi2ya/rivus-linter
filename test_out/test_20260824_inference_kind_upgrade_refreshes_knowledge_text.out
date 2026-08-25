@@ -1,0 +1,29 @@
+Offline Caps Check: 2 error(s), 2 warning(s)
+------------------------------------------------------------
+error[missing_side_effect]: demo::W::rvs_parse
+  'rvs_parse' is missing capability marker missing_side_effect
+  expected name: rvs_parse_S
+  declared caps: pure
+  inferred caps: S
+error[missing_side_effect]: demo::rvs_dispatch
+  'rvs_dispatch' is missing capability marker missing_side_effect
+  expected name: rvs_dispatch_S
+  declared caps: pure
+  inferred caps: S
+warning[incomplete_caps_knowledge]: demo::W::rvs_parse
+  calls rely on incomplete caps knowledge; checks use known capability lower bounds
+  root kind: unstable_trait_vote
+  layer: <inference>
+  file: <callgraph>
+  completeness: incomplete
+  knowledge bases: inferred
+  callee: demo::W::rvs_parse (known caps: S, basis=inferred)
+  direct callers: 1
+  callee target: demo::W::rvs_parse [crate_id=1]
+  callee target: demo::W::rvs_parse [crate_id=2] (specialization of this readable record)
+  caller: demo::rvs_dispatch [crate_id=1]
+  trait vote for 'demo::W::rvs_parse' is unstable because impls disagree or knowledge is missing, so its resolved caps may change (callee target crate_id=1: demo::W::rvs_parse); inspect `cargo rivus why 'demo::W::rvs_parse' .` and complete the missing implementations or knowledge
+warning[unknown_callee]: demo::W::rvs_parse
+  callee 'demo::W::rvs_parse' has no valid capability declaration and no caps/ entry
+  called by: demo::rvs_dispatch
+  run `cargo rivus infer-capsmap -o caps/deps` to refresh dependency capabilities; if inference still reports this path, add its exact def_path to caps/ext

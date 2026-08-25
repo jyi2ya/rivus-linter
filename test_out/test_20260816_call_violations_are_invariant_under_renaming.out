@@ -1,3 +1,3 @@
-plain=["unknown_callee"]
-forged=["unknown_callee"]
-wrong=["unknown_callee"]
+plain=["incomplete_caps_knowledge", "unknown_callee"]
+forged=["incomplete_caps_knowledge", "unknown_callee"]
+wrong=["incomplete_caps_knowledge", "unknown_callee"]

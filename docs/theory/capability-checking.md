@@ -108,7 +108,7 @@ receiver 分类覆盖显式写法：`self: &Self` 等价 `&self`，`self: &mut S
 
 知识分为三层：
 
-- **root incomplete**：真正缺失知识的函数——callgraph artifact 不完整、caps 记录自身标 incomplete/unknown、bodyless 且无 exact contract、投票结果不稳定的普通 trait method。只有 root 产生 warning。
+- **root incomplete**：真正缺失知识的函数——callgraph artifact 不完整、caps 记录自身标 incomplete/unknown、bodyless 且无 exact contract、投票结果不稳定的普通 trait method、被调用但不存在于调用图和一切知识层的 ghost callee。只有 root 产生 warning；共享同一 caps record 的多个 specialization 合并为一条 root。
 - **export confidence**：沿普通调用边传播的传递可信度，仅供 `infer-std` / `infer-capsmap` 序列化 capsmap completeness 和 `cargo rivus why` 根因路径使用，不是用户可见函数属性。P 调用边是传播屏障。
 - **命名**：expected name 永远只由 semantic inferred caps 生成，不读取 completeness，也不读取当前名称的旧后缀。`check` 接受的规范名称必须等于 `annotate(strip(source))` 的产出。
 
