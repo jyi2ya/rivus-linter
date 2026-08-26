@@ -15,6 +15,10 @@
     reason = "RAII guard Drop impls must clean up generation directories during panic unwinding"
 )]
 #![allow(
+    rivus::rvs_unsupported_indirect_call,
+    reason = "rustc-driver, salsa, and serde callbacks are dynamic by design; the linter is a single analysis engine and these edges are out of HIR reach"
+)]
+#![allow(
     rivus::rvs_untested_good_fn,
     reason = "rustc-driver internal helpers, tested via full lint pass"
 )]
