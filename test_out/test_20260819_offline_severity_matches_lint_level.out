@@ -1,0 +1,9 @@
+ContractMismatch=Deny
+NonSuffixCapInSuffix=Deny
+MissingRvsPrefix=Warn
+DuplicateSuffix=Warn
+IncompleteCapsKnowledge=Warn
+NonAlphabeticalSuffix=Warn
+TraitImplOutlier=Warn
+UnknownCallee=Warn
+UnknownSuffixLetter=Warn

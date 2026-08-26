@@ -1132,11 +1132,13 @@ mod tests {
         };
         use crate::offline_caps::OfflineCapsLint;
         use rustc_lint::Level;
+        let mut output = String::new();
         for lint in [
             OfflineCapsLint::ContractMismatch,
             OfflineCapsLint::NonSuffixCapInSuffix,
         ] {
             assert_eq!(level_for(lint), Level::Deny, "{lint:?} must be Deny");
+            output.push_str(&format!("{lint:?}=Deny\n"));
         }
         for lint in [
             OfflineCapsLint::MissingRvsPrefix,
@@ -1148,7 +1150,9 @@ mod tests {
             OfflineCapsLint::UnknownSuffixLetter,
         ] {
             assert_eq!(level_for(lint), Level::Warn, "{lint:?} must be Warn");
+            output.push_str(&format!("{lint:?}=Warn\n"));
         }
+        rvs_snapshot_BIS("test_20260819_offline_severity_matches_lint_level", &output);
     }
 
     #[test]
