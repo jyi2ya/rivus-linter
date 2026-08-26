@@ -408,6 +408,8 @@ fn rvs_write_collected_edits_BIS(
 }
 
 fn rvs_checked_rename_count(current: usize, delta: usize, label: &str) -> Result<usize, String> {
+    debug_assert!(current < usize::MAX, "running total must not be saturated");
+    debug_assert!(delta < usize::MAX, "increment must not be saturated");
     super::rvs_checked_count_sum(current, delta, label)
 }
 
@@ -1009,7 +1011,10 @@ mod tests {
     #[test]
     fn test_20260706_checked_rename_count_handles_ok_and_overflow() {
         let ok = rvs_checked_rename_count(4, 5, "demo");
-        let overflow = rvs_checked_rename_count(usize::MAX, 1, "demo");
+        // Non-saturated operands whose sum still overflows: exercises the
+        // labeled overflow error without tripping the saturation sentinel
+        // precondition.
+        let overflow = rvs_checked_rename_count(usize::MAX - 2, 5, "demo");
         rvs_snapshot_BIS(
             "test_20260706_checked_rename_count_handles_ok_and_overflow",
             &format!("ok={ok:?}\noverflow={overflow:?}\n"),

@@ -161,6 +161,8 @@ fn rvs_build_report(entries: &[FnEntry]) -> Result<Report, String> {
 }
 
 fn rvs_checked_report_sum(current: usize, delta: usize, label: &str) -> Result<usize, String> {
+    debug_assert!(current < usize::MAX, "running total must not be saturated");
+    debug_assert!(delta < usize::MAX, "increment must not be saturated");
     super::rvs_checked_count_sum(current, delta, label)
 }
 
@@ -1729,16 +1731,16 @@ mod tests {
             FnEntry {
                 capabilities: CapabilitySet::rvs_new(),
                 function_count: 1,
-                line_count: usize::MAX,
+                line_count: usize::MAX - 1,
             },
             FnEntry {
                 capabilities: CapabilitySet::rvs_new(),
                 function_count: 1,
-                line_count: 1,
+                line_count: 2,
             },
         ]);
         let sum_ok = rvs_checked_report_sum(2, 3, "demo");
-        let sum_overflow = rvs_checked_report_sum(usize::MAX, 1, "demo");
+        let sum_overflow = rvs_checked_report_sum(usize::MAX - 2, 5, "demo");
         let output = format!(
             "build_zero={build_zero:?}\nbuild_overflow={build_overflow:?}\nsum_ok={sum_ok:?}\nsum_overflow={sum_overflow:?}\n"
         );
