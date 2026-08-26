@@ -12,4 +12,4 @@ warning[incomplete_caps_knowledge]: dep::multi
   callee target: dep::multi [crate_id=40, 41]
   caller: demo::rvs_alpha [crate_id=10]
   caller: demo::rvs_beta [crate_id=11]
-  inferred dependency knowledge for 'dep::multi' remains incomplete because a dependency body is opaque or reaches other incomplete knowledge (callee target crate_id=40: dep::multi); inspect `cargo rivus why 'dep::multi' .`; rerunning `cargo rivus infer-capsmap -o caps/deps` without resolving that boundary will preserve the lower bound
+  inferred dependency knowledge for 'dep::multi' remains incomplete because a dependency body is opaque or reaches other incomplete knowledge (callee target crate_id=40: dep::multi); inspect `cargo rivus why 'dep::multi' .`; rerunning `cargo rivus infer-capsmap -o caps/deps` without resolving that boundary will preserve the lower bound; instead, verify the behavior against the dependency source and hand-annotate an explicit complete record in caps/ext with a `#` comment documenting the evidence

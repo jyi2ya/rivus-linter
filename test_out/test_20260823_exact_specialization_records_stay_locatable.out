@@ -11,7 +11,7 @@ warning[incomplete_caps_knowledge]: dep::Worker::run
   direct callers: 1
   callee target: dep::Worker::run [crate_id=2]
   caller: demo::rvs_dispatch [crate_id=1]
-  inferred dependency knowledge for 'dep::Worker::run' remains incomplete because a dependency body is opaque or reaches other incomplete knowledge (callee target crate_id=2: dep::Worker::run); this record's readable path cannot be resolved by `cargo rivus why`; review the record for 'dep::Worker::run' in its caps layer; rerunning `cargo rivus infer-capsmap -o caps/deps` without resolving that boundary will preserve the lower bound
+  inferred dependency knowledge for 'dep::Worker::run' remains incomplete because a dependency body is opaque or reaches other incomplete knowledge (callee target crate_id=2: dep::Worker::run); this record's readable path cannot be resolved by `cargo rivus why`; review the record for 'dep::Worker::run' in its caps layer; rerunning `cargo rivus infer-capsmap -o caps/deps` without resolving that boundary will preserve the lower bound; instead, verify the behavior against the dependency source and hand-annotate an explicit complete record in caps/ext with a `#` comment documenting the evidence
 warning[incomplete_caps_knowledge]: dep::Worker::run
   calls rely on incomplete caps knowledge; checks use known capability lower bounds
   root kind: incomplete_caps_record
@@ -23,4 +23,4 @@ warning[incomplete_caps_knowledge]: dep::Worker::run
   direct callers: 1
   callee target: dep::Worker::run [crate_id=2]
   caller: demo::rvs_dispatch [crate_id=1]
-  inferred dependency knowledge for 'dep::Worker::run' remains incomplete because a dependency body is opaque or reaches other incomplete knowledge (callee target crate_id=2: dep::Worker::run); this record's readable path cannot be resolved by `cargo rivus why`; review the record for 'dep::Worker::run' in its caps layer; rerunning `cargo rivus infer-capsmap -o caps/deps` without resolving that boundary will preserve the lower bound
+  inferred dependency knowledge for 'dep::Worker::run' remains incomplete because a dependency body is opaque or reaches other incomplete knowledge (callee target crate_id=2: dep::Worker::run); this record's readable path cannot be resolved by `cargo rivus why`; review the record for 'dep::Worker::run' in its caps layer; rerunning `cargo rivus infer-capsmap -o caps/deps` without resolving that boundary will preserve the lower bound; instead, verify the behavior against the dependency source and hand-annotate an explicit complete record in caps/ext with a `#` comment documenting the evidence

@@ -11,7 +11,7 @@ warning[incomplete_caps_knowledge]: dep::ghost
   direct callers: 1
   callee target: dep::ghost [crate_id=2]
   caller: demo::rvs_direct [crate_id=1]
-  callee 'dep::ghost' is absent from the callgraph, every caps layer, and the inference output (callee target crate_id=2: dep::ghost); run `cargo rivus infer-capsmap -o caps/deps` to refresh dependency capabilities; if inference still reports this path, verify its behavior at the anchored call site and add its exact def_path to caps/ext
+  callee 'dep::ghost' is absent from the callgraph, every caps layer, and the inference output (callee target crate_id=2: dep::ghost); run `cargo rivus infer-capsmap -o caps/deps` to refresh dependency capabilities; if inference still reports this path, verify its behavior at the anchored call site and hand-annotate an explicit complete record in caps/ext with a `#` comment documenting the evidence
 warning[unknown_callee]: dep::ghost
   callee 'dep::ghost' has no rvs_ suffix and no caps/ entry
   called by: demo::rvs_direct

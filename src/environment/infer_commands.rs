@@ -913,8 +913,13 @@ mod tests {
 
     #[test]
     fn test_20260730_infer_std_preserves_known_io_lower_bound_through_incomplete_chain() {
-        let read_path = DefPath::from("std::fs::read_to_string");
-        let metadata_path = DefPath::from("std::fs::File::metadata");
+        // Seed entries for std::fs::read_to_string and File::metadata are
+        // hand-annotated complete records now, so this chain exercises the
+        // incomplete propagation on paths the seed does not cover: the
+        // opaque support-crate branch keeps the chain incomplete while the
+        // libc fstat64 seed lower bound (BI) still flows up unchanged.
+        let read_path = DefPath::from("support_crate::rvs_read_chain");
+        let metadata_path = DefPath::from("support_crate::rvs_stat_chain");
         let stat_path = DefPath::from("libc::unix::linux_like::fstat64");
         let opaque_path = DefPath::from("support_crate::opaque_branch");
         let mut graph = crate::artifacts::FnGraph::rvs_new();
@@ -2094,8 +2099,11 @@ mod tests {
         )
         .unwrap();
         std::fs::create_dir_all(dir.join("caps")).unwrap();
+        // ext overrides the distributed seed (which now carries a complete
+        // BIS record for read_to_string), pinning the fixture's BI bound so
+        // the closure-body propagation stays observable.
         std::fs::write(
-            dir.join("caps/std"),
+            dir.join("caps/ext"),
             rvs_caps_v2(&[("std::fs::read_to_string", "BI")]),
         )
         .unwrap();

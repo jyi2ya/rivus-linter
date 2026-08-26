@@ -1731,15 +1731,26 @@ fn rvs_incomplete_caps_remediation(
                 if rvs_is_std_like_def_path(usage.root.rvs_as_str()) =>
             {
                 format!(
-                    "standard-library callee '{path}' is absent from the callgraph and every caps layer ({identity_context}); run `cargo rivus infer-std -o caps/std`, or add its exact def_path to caps/seed once its behavior is verified"
+                    "standard-library callee '{path}' is absent from the callgraph and every caps layer ({identity_context}); run `cargo rivus infer-std -o caps/std`, or verify its behavior against the standard-library source and hand-annotate an explicit complete record in caps/seed with a `#` comment documenting the evidence"
                 )
             }
             crate::inference::IncompleteRootKind::GhostCallee => format!(
-                "callee '{path}' is absent from the callgraph, every caps layer, and the inference output ({identity_context}); run `cargo rivus infer-capsmap -o caps/deps` to refresh dependency capabilities; if inference still reports this path, verify its behavior at the anchored call site and add its exact def_path to caps/ext"
+                "callee '{path}' is absent from the callgraph, every caps layer, and the inference output ({identity_context}); run `cargo rivus infer-capsmap -o caps/deps` to refresh dependency capabilities; if inference still reports this path, verify its behavior at the anchored call site and hand-annotate an explicit complete record in caps/ext with a `#` comment documenting the evidence"
             ),
-            crate::inference::IncompleteRootKind::BodylessNoContract => format!(
-                "bodyless declaration '{path}' has no exact caps record or resolvable contract, so inference cannot close its knowledge ({identity_context}); {why_hint} and add its exact def_path to caps/seed once the behavior is verified"
-            ),
+            crate::inference::IncompleteRootKind::BodylessNoContract => {
+                // Same layer split as the ghost arm: std-like declarations
+                // are curated in caps/seed, dependency declarations in
+                // caps/ext.
+                if rvs_is_std_like_def_path(usage.root.rvs_as_str()) {
+                    format!(
+                        "bodyless declaration '{path}' has no exact caps record or resolvable contract, so inference cannot close its knowledge ({identity_context}); {why_hint} and verify its behavior before hand-annotating an explicit complete record in caps/seed with a `#` comment documenting the evidence"
+                    )
+                } else {
+                    format!(
+                        "bodyless declaration '{path}' has no exact caps record or resolvable contract, so inference cannot close its knowledge ({identity_context}); {why_hint} and verify its behavior before hand-annotating an explicit complete record in caps/ext with a `#` comment documenting the evidence"
+                    )
+                }
+            }
             crate::inference::IncompleteRootKind::UnstableTraitVote => format!(
                 "trait vote for '{path}' is unstable because impls disagree or knowledge is missing, so its resolved caps may change ({identity_context}); {why_hint} and complete the missing implementations or knowledge"
             ),
@@ -1757,25 +1768,32 @@ fn rvs_incomplete_caps_remediation(
         .bases
         .iter()
         .any(|basis| basis == "inferred" || basis == "trait_vote");
+    // Manual annotation guidance: once the callee's behavior is verified
+    // (source reviewed or tested), write an explicit complete record with a
+    // `#` comment stating the evidence. Std-like gaps go to caps/seed (the
+    // project-local seed layer; Rivus maintainers fold verified entries
+    // into the distributed seed so every consumer benefits); dependency
+    // gaps go to caps/ext, the highest local layer, so regenerating
+    // std/deps never overwrites them.
     if usage.layer == "std" {
         if has_inferred {
             return format!(
-                "inferred standard-library knowledge remains incomplete because inference reached an opaque body or incomplete trait contribution ({identity_context}); {why_hint}; rerunning `cargo rivus infer-std -o caps/std` without resolving that boundary will preserve the lower bound"
+                "inferred standard-library knowledge remains incomplete because inference reached an opaque body or incomplete trait contribution ({identity_context}); {why_hint}; rerunning `cargo rivus infer-std -o caps/std` without resolving that boundary will preserve the lower bound; instead, verify the behavior against the standard-library source and hand-annotate an explicit complete record for '{path}' in caps/seed with a `#` comment documenting the evidence"
             );
         }
         return format!(
-            "{why_hint} for {identity_context}, then run `cargo rivus infer-std -o caps/std` to replace migrated standard-library knowledge; if inferred records remain incomplete, inspect their opaque bodies or incomplete trait contributions rather than marking them complete without evidence"
+            "{why_hint} for {identity_context}; rerunning `cargo rivus infer-std -o caps/std` may replace migrated knowledge, but records that stay incomplete should be hand-annotated instead: verify the behavior against the standard-library source and write an explicit complete record for '{path}' in caps/seed with a `#` comment documenting the evidence"
         );
     }
 
     if usage.layer == "deps" {
         if has_inferred {
             return format!(
-                "inferred dependency knowledge for '{path}' remains incomplete because a dependency body is opaque or reaches other incomplete knowledge ({identity_context}); {why_hint}; rerunning `cargo rivus infer-capsmap -o caps/deps` without resolving that boundary will preserve the lower bound"
+                "inferred dependency knowledge for '{path}' remains incomplete because a dependency body is opaque or reaches other incomplete knowledge ({identity_context}); {why_hint}; rerunning `cargo rivus infer-capsmap -o caps/deps` without resolving that boundary will preserve the lower bound; instead, verify the behavior against the dependency source and hand-annotate an explicit complete record in caps/ext with a `#` comment documenting the evidence"
             );
         }
         return format!(
-            "{why_hint} for {identity_context}, then run `cargo rivus infer-capsmap -o caps/deps` to replace migrated dependency knowledge; if generated records remain incomplete, inspect their opaque or incomplete prerequisites rather than marking them complete without evidence"
+            "{why_hint} for {identity_context}; rerunning `cargo rivus infer-capsmap -o caps/deps` may replace migrated knowledge, but records that stay incomplete should be hand-annotated instead: verify the behavior against the dependency source and write an explicit complete record for '{path}' in caps/ext with a `#` comment documenting the evidence"
         );
     }
 

@@ -180,7 +180,10 @@
 {"path":"rustc_type_ir::ty_kind::Binder::inputs","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
 {"path":"rustc_type_ir::ty_kind::Binder::output","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
 {"path":"rustc_type_ir::visit::TypeSuperVisitable::super_visit_with","caps":"M","basis":{"kind":"inferred"},"completeness":"incomplete"}
-{"path":"rustc_type_ir::visit::TypeVisitable::visit_with","caps":"M","basis":{"kind":"inferred"},"completeness":"incomplete"}
+# rustc-src 0febdbab2 rustc_type_ir/src/visit.rs:73: visit_with drives a &mut TypeVisitor
+# through the type structure (visitor methods take &mut V); signature-measured M. Verified
+# against the default impls in the same file.
+{"path":"rustc_type_ir::visit::TypeVisitable::visit_with","caps":"M","basis":{"kind":"explicit"},"completeness":"complete"}
 {"path":"rustc_type_ir::visit::TypeVisitableExt::has_escaping_bound_vars","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
 {"path":"rustix::backend::fs::types::Mode::empty","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
 {"path":"rustix::fs::abs::open","caps":"BIS","basis":{"kind":"explicit"},"completeness":"complete"}
@@ -198,3 +201,61 @@
 {"path":"toml_edit::item::Item::as_table_like","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
 {"path":"toml_edit::table::Table::iter","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
 {"path":"toml_edit::table::TableLike::iter","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+# Hand-annotated dependency entries (2026-08-25). Sources read from
+# ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f at the locked versions.
+# ra_ap_ide 0.0.336: Analysis::file_structure/rename run salsa queries against the
+# in-memory RootDatabase via with_db -> hir::attach_db_allow_change, which stashes the
+# &dyn HirDatabase in a thread_local! GLOBAL_DB (ra_ap_hir_ty next_solver/interner.rs)
+# and catches salsa cancellation; blocking, thread-local db attachment. rename builds a
+# SourceChange (pure edit data) — verified item-by-item: no fs:: usage in
+# ra_ap_ide/src/rename.rs or ra_ap_ide_db/src/rename.rs; persisting edits is the
+# caller's job (this repo's rvs_apply_source_renames_BIST carries the I). The toolchain's
+# inferred BIST lower bound was the uncollected-body conservative spread; the verified
+# capability is BST.
+{"path":"ra_ap_ide::Analysis::file_structure","caps":"BST","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"ra_ap_ide::Analysis::rename","caps":"BST","basis":{"kind":"explicit"},"completeness":"complete"}
+# ra_ap_load-cargo 0.0.336 lib.rs:56: reads env::current_dir, discovers manifests and
+# loads the workspace from disk into RootDatabase.
+{"path":"ra_ap_load_cargo::load_workspace_at","caps":"BIST","basis":{"kind":"explicit"},"completeness":"complete"}
+# ra_ap_vfs 0.0.336 vfs_path.rs:35: as_path borrows the encoded path, pure.
+{"path":"ra_ap_vfs::vfs_path::VfsPath::as_path","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+# rustc_hir intravisit (rustc-src 0febdbab2): default visit_expr (intravisit.rs:393)
+# delegates to walk_expr through &mut self — same signature-measured M as the
+# visit_block/visit_inline_const records above.
+{"path":"rustc_hir::intravisit::Visitor::visit_expr","caps":"M","basis":{"kind":"explicit"},"completeness":"complete"}
+# serde_core 1.0.229: Deserialize::deserialize typical impls (bool/String, de/impls.rs)
+# read from the deserializer into a new value, no mutation of captured state. Limitation:
+# a generic T::deserialize call site resolves to this record, so effects flowing through
+# an IO-backed deserializer (e.g. serde_json::Deserializer::from_reader) are invisible —
+# same vote-model over-approximation window as Write::write_all in caps/seed, but in the
+# under-approximating direction; the reader-side call should carry the caps itself.
+{"path":"serde_core::de::Deserialize::deserialize","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+# SerializeSeq::serialize_element pushes into the output buffer (&mut self, ser/mod.rs:1526).
+{"path":"serde_core::ser::SerializeSeq::serialize_element","caps":"M","basis":{"kind":"explicit"},"completeness":"complete"}
+# serde_json 1.0.151: from_str/from_slice parse in-memory text (de.rs:2667/2709);
+# to_string/to_vec serialize to an owned buffer (ser.rs:2245/2213). No IO, no globals.
+{"path":"serde_json::de::from_slice","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"serde_json::de::from_str","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"serde_json::ser::to_string","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"serde_json::ser::to_vec","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+# tempfile 3.27.0: Builder::new is a pure constructor (no random state until creation);
+# tempdir_in/new_in create a random-named directory on disk; persist* rename the temp file
+# on the filesystem; close runs remove_dir_all (dir/mod.rs:470).
+{"path":"tempfile::Builder::new","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"tempfile::Builder::tempdir_in","caps":"BIST","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"tempfile::dir::TempDir::close","caps":"BIS","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"tempfile::file::NamedTempFile::new_in","caps":"BIST","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"tempfile::file::NamedTempFile::persist","caps":"BIS","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"tempfile::file::NamedTempFile::persist_noclobber","caps":"BIS","basis":{"kind":"explicit"},"completeness":"complete"}
+# toml_edit 0.22.27: constructors and lookups are pure in-memory tree operations
+# (table.rs:339 get, 376 contains_key); entry/get_mut/insert/or_insert mutate the table
+# (table.rs:321/346/412, table.rs:720 or_insert, item.rs:26 Item::or_insert).
+{"path":"toml_edit::inline_table::InlineTable::new","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"toml_edit::item::Item::get","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"toml_edit::table::Entry::or_insert","caps":"M","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"toml_edit::table::Table::entry","caps":"M","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"toml_edit::table::Table::get","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"toml_edit::table::Table::new","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"toml_edit::table::TableLike::contains_key","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"toml_edit::table::TableLike::get_mut","caps":"M","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"toml_edit::table::TableLike::insert","caps":"M","basis":{"kind":"explicit"},"completeness":"complete"}

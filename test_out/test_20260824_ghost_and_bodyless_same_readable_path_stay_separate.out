@@ -11,7 +11,7 @@ warning[incomplete_caps_knowledge]: dep::W::run
   direct callers: 1
   callee target: dep::W::run [crate_id=2] (specialization of this readable record)
   caller: demo::rvs_dispatch [crate_id=1]
-  bodyless declaration 'dep::W::run' has no exact caps record or resolvable contract, so inference cannot close its knowledge (callee target crate_id=2: dep::W::run); inspect `cargo rivus why 'dep::W::run' .` and add its exact def_path to caps/seed once the behavior is verified
+  bodyless declaration 'dep::W::run' has no exact caps record or resolvable contract, so inference cannot close its knowledge (callee target crate_id=2: dep::W::run); inspect `cargo rivus why 'dep::W::run' .` and verify its behavior before hand-annotating an explicit complete record in caps/ext with a `#` comment documenting the evidence
 warning[incomplete_caps_knowledge]: dep::W::run
   calls rely on incomplete caps knowledge; checks use known capability lower bounds
   root kind: ghost_callee
@@ -23,7 +23,7 @@ warning[incomplete_caps_knowledge]: dep::W::run
   direct callers: 1
   callee target: dep::W::run [crate_id=2] (specialization of this readable record)
   caller: demo::rvs_dispatch [crate_id=1]
-  callee 'dep::W::run' is absent from the callgraph, every caps layer, and the inference output (callee target crate_id=2: dep::W::run); run `cargo rivus infer-capsmap -o caps/deps` to refresh dependency capabilities; if inference still reports this path, verify its behavior at the anchored call site and add its exact def_path to caps/ext
+  callee 'dep::W::run' is absent from the callgraph, every caps layer, and the inference output (callee target crate_id=2: dep::W::run); run `cargo rivus infer-capsmap -o caps/deps` to refresh dependency capabilities; if inference still reports this path, verify its behavior at the anchored call site and hand-annotate an explicit complete record in caps/ext with a `#` comment documenting the evidence
 warning[unknown_callee]: dep::W::run
   callee 'dep::W::run' has no rvs_ suffix and no caps/ entry
   called by: demo::rvs_dispatch

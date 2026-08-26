@@ -21,7 +21,7 @@ warning[incomplete_caps_knowledge]: dep::plain
   direct callers: 1
   callee target: dep::plain [crate_id=2]
   caller: demo::rvs_handle [crate_id=1]
-  callee 'dep::plain' is absent from the callgraph, every caps layer, and the inference output (callee target crate_id=2: dep::plain); run `cargo rivus infer-capsmap -o caps/deps` to refresh dependency capabilities; if inference still reports this path, verify its behavior at the anchored call site and add its exact def_path to caps/ext
+  callee 'dep::plain' is absent from the callgraph, every caps layer, and the inference output (callee target crate_id=2: dep::plain); run `cargo rivus infer-capsmap -o caps/deps` to refresh dependency capabilities; if inference still reports this path, verify its behavior at the anchored call site and hand-annotate an explicit complete record in caps/ext with a `#` comment documenting the evidence
 warning[unknown_callee]: dep::plain
   callee 'dep::plain' has no rvs_ suffix and no caps/ entry
   called by: demo::rvs_handle

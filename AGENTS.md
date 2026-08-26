@@ -320,12 +320,12 @@ cargo rivus infer-capsmap -o caps/deps
    ```bash
    cargo fmt            # 格式化代码
    cargo build          # 编译通过
-   cargo clippy         # 无警告
+   cargo clippy         # 无警告（不使用 --all-targets；测试代码豁免本项目 clippy 规则）
    cargo test           # 测试通过
    cargo rivus check    # 能力合规检查无违规
    ```
 3. **遇到 unknown callee warning 时**：linter 输出的 `Warning` 表示某个函数调用既非 `rvs_` 前缀也不在 capsmap 中。标准库路径运行 `cargo rivus infer-std -o caps/std`；若该命令报告分发 seed 缺少标准库前置函数，应更新 Rivus 维护的分发 seed，项目 `caps/seed` 只用于明确需要的临时覆盖。第三方依赖运行 `cargo rivus infer-capsmap -o caps/deps`。仅需修正当前项目普通检查结果时，将精确 `def_path` 写入 `caps/ext`
-4. **遇到 incomplete caps knowledge warning 时**：调用检查只使用已知能力下界，不能把记录当作 pure。warning 按"每个知识根因一条"产出（root incomplete：artifact 不完整、caps 记录自身 incomplete/unknown、bodyless 无 exact contract、不稳定 trait vote、ghost callee）——warning 数等于本地直接调用的根因数，不随调用点数量增长；每条 warning 携带 `root kind`（root 的具体成因）与针对该成因的修复指引；锚定根因的第一个精确调用点，直接调用方只出现在 details 中（传递性影响不逐个列出），`cargo rivus why` 查询根因本身。共享同一 readable caps record 的多个 specialization 合并为一条 root。标准库和本地路径使用诊断给出的 `cargo rivus why` 继续定位根因；依赖函数体未被收集时审查依赖源码。没有逐项证明完整能力前，不得通过 `caps/ext` 把记录标为 complete
+4. **遇到 incomplete caps knowledge warning 时**：调用检查只使用已知能力下界，不能把记录当作 pure。warning 按"每个知识根因一条"产出（root incomplete：artifact 不完整、caps 记录自身 incomplete/unknown、bodyless 无 exact contract、不稳定 trait vote、ghost callee）——warning 数等于本地直接调用的根因数，不随调用点数量增长；每条 warning 携带 `root kind`（root 的具体成因）与针对该成因的修复指引；锚定根因的第一个精确调用点，直接调用方只出现在 details 中（传递性影响不逐个列出），`cargo rivus why` 查询根因本身。共享同一 readable caps record 的多个 specialization 合并为一条 root。重跑推断后仍 incomplete 的记录必须手工标定：std 记录写 explicit complete 记录并在记录上方用 `#` 注释写明依据（来源、版本、验证方式），依赖记录在 `caps/ext` 同样手工标定并写注释。Rivus 本仓库的维护者把 std 标定合入仓库的 `caps/seed`（即编译进二进制的分发 seed，惠及所有消费者）；普通项目的 std 标定写入项目自己的 `caps/seed` 覆盖层即可。没有逐项证明完整能力前，不得把记录标为 complete
 5. **遇到其他 warning 时**：根据警告类型分别处理——缺少断言就加 `debug_assert!`，缺少文档就补 `///`，等等
 6. **遇到 violation 时**：名称与推断语义能力不一致。要么按推断结果重命名（可能级联影响），要么修正函数实际行为使名称成立
 7. **遇到推断提示时**：推断性提示——函数的实际行为暗示应有某能力但名字里没写。审查后决定：补上能力标记（注意级联影响），或确认是误判则忽略

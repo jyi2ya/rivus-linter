@@ -11,7 +11,7 @@ warning[incomplete_caps_knowledge]: dep::absent_effect
   direct callers: 1
   callee target: dep::absent_effect [crate_id=40]
   caller: demo::Adapter::rvs_fetch_P@demo::Transport [crate_id=1]
-  callee 'dep::absent_effect' is absent from the callgraph, every caps layer, and the inference output (callee target crate_id=40: dep::absent_effect); run `cargo rivus infer-capsmap -o caps/deps` to refresh dependency capabilities; if inference still reports this path, verify its behavior at the anchored call site and add its exact def_path to caps/ext
+  callee 'dep::absent_effect' is absent from the callgraph, every caps layer, and the inference output (callee target crate_id=40: dep::absent_effect); run `cargo rivus infer-capsmap -o caps/deps` to refresh dependency capabilities; if inference still reports this path, verify its behavior at the anchored call site and hand-annotate an explicit complete record in caps/ext with a `#` comment documenting the evidence
 warning[unknown_callee]: dep::absent_effect
   callee 'dep::absent_effect' has no rvs_ suffix and no caps/ entry
   called by: demo::Adapter::rvs_fetch_P@demo::Transport

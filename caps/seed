@@ -1326,3 +1326,171 @@
 {"path":"unwind::libunwind::_Unwind_GetTextRelBase","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
 {"path":"unwind::libunwind::_Unwind_SetGR","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
 {"path":"unwind::libunwind::_Unwind_SetIP","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+# Hand-annotated std/core/alloc entries (2026-08-25, toolchain nightly-2026-04-18 0febdbab2).
+# Evidence: signatures and bodies read in ~/.rustup/.../library/{core,alloc,std}/src.
+# Conventions: "" = pure; M = &mut mutation; BIS = blocking file/dir/process-adjacent IO;
+# S = ambient/global state read; ST = thread-local state (RandomState per-thread keys).
+# Trait methods record the typical implementation (at-least-half vote semantics).
+# BTreeMap/BTreeSet: read-only lookups "", &mut mutators M (alloc/src/collections/btree/map.rs, set.rs).
+{"path":"alloc::collections::btree::map::BTreeMap::contains_key","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"alloc::collections::btree::map::BTreeMap::get","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"alloc::collections::btree::map::BTreeMap::entry","caps":"M","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"alloc::collections::btree::map::BTreeMap::get_mut","caps":"M","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"alloc::collections::btree::map::BTreeMap::insert","caps":"M","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"alloc::collections::btree::map::BTreeMap::retain","caps":"M","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"alloc::collections::btree::map::entry::Entry::or_default","caps":"M","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"alloc::collections::btree::map::entry::Entry::or_insert","caps":"M","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"alloc::collections::btree::map::entry::Entry::or_insert_with","caps":"M","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"alloc::collections::btree::set::BTreeSet::contains","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"alloc::collections::btree::set::BTreeSet::insert","caps":"M","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"alloc::collections::btree::set::BTreeSet::is_disjoint","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"alloc::collections::btree::set::BTreeSet::remove","caps":"M","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"alloc::collections::btree::set::BTreeSet::retain","caps":"M","basis":{"kind":"explicit"},"completeness":"complete"}
+# VecDeque: iter is a pure read (alloc/src/collections/vec_deque/mod.rs:1505), push_back mutates (2211).
+{"path":"alloc::collections::vec_deque::VecDeque::iter","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"alloc::collections::vec_deque::VecDeque::push_back","caps":"M","basis":{"kind":"explicit"},"completeness":"complete"}
+# slice: sorts are in-place (&mut self, alloc/src/slice/mod.rs sort*); join allocates a new buffer, pure.
+{"path":"alloc::slice::[T]::join","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"alloc::slice::[T]::sort","caps":"M","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"alloc::slice::[T]::sort_by","caps":"M","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"alloc::slice::[T]::sort_by_key","caps":"M","basis":{"kind":"explicit"},"completeness":"complete"}
+# str/String: replace and from_utf8_lossy allocate results, no mutation or IO; push_str/replace_range take &mut self.
+{"path":"alloc::str::str::replace","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"alloc::string::String::from_utf8_lossy","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"alloc::string::String::push_str","caps":"M","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"alloc::string::String::replace_range","caps":"M","basis":{"kind":"explicit"},"completeness":"complete"}
+# Vec::remove shifts elements in place (alloc/src/vec/mod.rs).
+{"path":"alloc::vec::Vec::remove","caps":"M","basis":{"kind":"explicit"},"completeness":"complete"}
+# Ord::cmp on primitive-like types is a pure total-order comparison (core/src/cmp.rs; Ordering derives Ord).
+{"path":"core::cmp::Ord::cmp","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+# Default::default typical impls construct a default value (no mutation of arguments, no IO, no globals).
+{"path":"core::default::Default::default","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+# Extend::extend mutates the receiver (&mut self, core/src/iter/traits/collect.rs:416).
+{"path":"core::iter::traits::collect::Extend::extend","caps":"M","basis":{"kind":"explicit"},"completeness":"complete"}
+# Iterator adapters/consumers: &mut self receivers make them signature-measured M; count/collect take self by value (pure).
+{"path":"core::iter::traits::double_ended::DoubleEndedIterator::next_back","caps":"M","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::iter::traits::iterator::Iterator::all","caps":"M","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::iter::traits::iterator::Iterator::any","caps":"M","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::iter::traits::iterator::Iterator::collect","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::iter::traits::iterator::Iterator::count","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::iter::traits::iterator::Iterator::find","caps":"M","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::iter::traits::iterator::Iterator::find_map","caps":"M","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::iter::traits::iterator::Iterator::min_by_key","caps":"M","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::iter::traits::iterator::Iterator::next","caps":"M","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::iter::traits::iterator::Iterator::position","caps":"M","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::iter::traits::iterator::Iterator::rposition","caps":"M","basis":{"kind":"explicit"},"completeness":"complete"}
+# Option/Result: panic-on-none, but no capability beyond reading self; const fns stay C-measured, suffix stays empty.
+{"path":"core::option::Option::expect","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::option::Option::unwrap_or_default","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::result::Result::expect","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::result::Result::unwrap","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+# slice: contains/windows/contains are pure reads (core/src/slice/mod.rs:1116 windows is const fn, 2590 contains).
+{"path":"core::slice::[T]::contains","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::slice::[T]::sort_unstable","caps":"M","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::slice::[T]::windows","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+# str: all listed methods are non-mutating pattern scans or splits (core/src/str/mod.rs).
+# parse (mod.rs:2765) delegates to the target type's FromStr::from_str. Limitation:
+# like serde's Deserialize::deserialize in caps/ext, "x".parse::<T>() with an effectful
+# local T::from_str resolves through this record and the impl's effects stay invisible;
+# local FromStr impls carry their own caps in the callgraph, and this record only
+# governs impls that are not separately collected.
+{"path":"core::str::str::contains","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::str::str::ends_with","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::str::str::find","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::str::str::lines","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::str::str::match_indices","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::str::str::parse","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::str::str::rfind","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::str::str::rsplit","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::str::str::rsplit_once","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::str::str::split","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::str::str::split_once","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::str::str::split_whitespace","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::str::str::starts_with","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::str::str::strip_prefix","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::str::str::strip_suffix","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::str::str::trim","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::str::str::trim_end","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"core::str::str::trim_start","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+# hash map/set: HashMap::new -> Default -> RandomState::new reads per-thread cached random
+# hash keys (std/src/hash/random.rs thread_local! KEYS). The seed only affects the
+# unspecified iteration order and the resulting map stays Send+Sync (RandomState itself
+# is Send+Sync), so this is not a ThreadLocal capability in the Rivus sense (the T letter
+# marks state that cannot be shared across threads). Treated as a pure constructor.
+{"path":"std::collections::hash::map::HashMap::contains_key","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::collections::hash::map::HashMap::get","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::collections::hash::map::HashMap::iter","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::collections::hash::map::HashMap::keys","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::collections::hash::map::HashMap::values","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::collections::hash::map::HashMap::new","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::collections::hash::map::HashMap::entry","caps":"M","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::collections::hash::map::HashMap::insert","caps":"M","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::collections::hash::map::HashMap::remove","caps":"M","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::collections::hash::map::Entry::or_default","caps":"M","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::collections::hash::map::Entry::or_insert","caps":"M","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::collections::hash::map::Entry::or_insert_with","caps":"M","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::collections::hash::set::HashSet::contains","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::collections::hash::set::HashSet::new","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::collections::hash::set::HashSet::insert","caps":"M","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::collections::hash::set::HashSet::remove","caps":"M","basis":{"kind":"explicit"},"completeness":"complete"}
+# env: args/args_os read process-global argv. On unix they iterate the ARGC/ARGV
+# startup statics (sys/args/unix.rs) with no syscall or blocking wait — the linux
+# evidence supports S only; platforms that fetch args on demand would add B.
+{"path":"std::env::args","caps":"S","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::env::args_os","caps":"S","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::env::current_dir","caps":"BIS","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::env::current_exe","caps":"BIS","basis":{"kind":"explicit"},"completeness":"complete"}
+# fs: file metadata and read/write operations are blocking file IO touching external state (BIS), matching seed's fs::remove_file=BIS.
+{"path":"std::fs::DirEntry::file_type","caps":"BIS","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::fs::DirEntry::path","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::fs::File::metadata","caps":"BIS","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::fs::File::sync_all","caps":"BIS","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::fs::OpenOptions::open","caps":"BIS","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::fs::create_dir","caps":"BIS","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::fs::create_dir_all","caps":"BIS","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::fs::metadata","caps":"BIS","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::fs::read","caps":"BIS","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::fs::read_dir","caps":"BIS","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::fs::read_to_string","caps":"BIS","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::fs::symlink_metadata","caps":"BIS","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::fs::write","caps":"BIS","basis":{"kind":"explicit"},"completeness":"complete"}
+# io: Error constructors/kind are pure. Write::write_all: the default impl loops over
+# write; IO writers (File, TcpStream, UnixStream, ChildStdin, Stdout, Stderr) make that
+# blocking IO (Stdout/Stderr override it but delegate to blocking writes), while
+# in-memory impls (Vec, VecDeque, Cursor, &mut [u8], BorrowedCursor) override it with
+# pure memory writes. The at-least-half vote across std impls selects the IO side, so
+# the typical capability is BIM; a generic W: Write call site resolves to this record,
+# so in-memory writers are deliberately over-approximated — the record is the only
+# knowledge a generic call site has.
+{"path":"std::io::Write::write_all","caps":"BIM","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::io::error::Error::kind","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::io::error::Error::new","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::io::error::Error::other","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+# path: pure string/component manipulation; canonicalize/exists/is_dir/is_file hit the filesystem (BIS).
+{"path":"std::path::Path::canonicalize","caps":"BIS","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::path::Path::exists","caps":"BIS","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::path::Path::extension","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::path::Path::file_name","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::path::Path::file_stem","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::path::Path::is_dir","caps":"BIS","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::path::Path::is_file","caps":"BIS","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::path::Path::join","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::path::Path::parent","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::path::Path::starts_with","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::path::Path::to_string_lossy","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+# process: spawn/output create and drive child processes (BIMS; exec touches the
+# filesystem); wait blocks on waitpid, which waits on a process rather than doing
+# file/network IO itself, so it stays BMS by the I-letter definition (no spawn I);
+# builders mutate the Command (M).
+{"path":"std::process::Child::wait","caps":"BMS","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::process::Command::args","caps":"M","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::process::Command::env","caps":"M","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::process::Command::env_remove","caps":"M","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::process::Command::new","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::process::Command::output","caps":"BIMS","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::process::Command::spawn","caps":"BIMS","basis":{"kind":"explicit"},"completeness":"complete"}
+# time: SystemTime::now reads the system clock (S); duration_since is pure arithmetic (may panic, not a capability).
+{"path":"std::time::SystemTime::duration_since","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"std::time::SystemTime::now","caps":"S","basis":{"kind":"explicit"},"completeness":"complete"}
+# ffi: to_string_lossy allocates a display copy, pure.
+{"path":"std::ffi::os_str::OsStr::to_string_lossy","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
