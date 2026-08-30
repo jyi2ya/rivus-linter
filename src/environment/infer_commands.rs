@@ -42,7 +42,12 @@ pub(crate) fn rvs_run_infer_capsmap_BIST(path: &Path, output: &Path) -> Result<(
     let output_layer = rvs_caps_output_layer_BIS(&abs_seed, &resolved_output, caps_dir_exists)?;
     rvs_require_inference_output_layer(&output_layer.as_deref(), "deps", "infer-capsmap")?;
     let publication = rvs_pin_output_path_BIS(&resolved_output, "deps capsmap")?;
-    let excluded_layers = [OsStr::new("deps")];
+    // deps generation input: seed + std + ext. ext carries the project's
+    // hand-verified dependency contracts; paths already recorded in any
+    // input layer are skipped by generation (their records stay where
+    // they are, and the runtime layer order reads them directly).
+    // suppress is a downstream runtime correction, not generation input.
+    let excluded_layers = [OsStr::new("deps"), OsStr::new("suppress")];
     let seed = CapsMap::rvs_load_effective_dir_excluding_names_BIS(&abs_seed, &excluded_layers)
         .map_err(|e| format!("caps: {e}"))?;
 
@@ -1490,12 +1495,18 @@ mod tests {
             rvs_caps_v2(&[("manual::correction", "S")]),
         )
         .unwrap();
+        // The sentinel marks a non-canonical output target inside caps/;
+        // the output-layer rejection fires before input loading, so the
+        // stray file is never parsed as a layer.
         let sentinel = rvs_caps_v2(&[("manual::correction", "B")]);
         std::fs::write(dir.join("caps/generated"), &sentinel).unwrap();
 
         let inside = rvs_run_infer_capsmap_BIST(&dir, Path::new("caps/generated"));
         let inside_preserved =
             std::fs::read_to_string(dir.join("caps/generated")).unwrap() == sentinel;
+        // Clean up the rejected stray file so the outside-caps run loads
+        // a valid directory.
+        std::fs::remove_file(dir.join("caps/generated")).unwrap();
         let outside = rvs_run_infer_capsmap_BIST(&dir, Path::new("generated-caps"));
         let outside_header = std::fs::read_to_string(dir.join("generated-caps"))
             .unwrap()

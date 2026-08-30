@@ -272,19 +272,22 @@ rvs_order_P        可调用  Port::rvs_store_P  ✅ (Port 调用边只传播 P)
 
 ### capsmap
 
-为非 `rvs_` 函数声明能力。**只支持项目根目录下的 `caps/` 目录和 capsmap v2 JSON Lines 格式**；不支持单文件 capsmap、不支持 `-m/--capsmap` 覆盖路径，也不再读取或生成 `target/rivus-*-capsmap*` / `target/rivus-effective-capsmap/`。
+为非 `rvs_` 函数声明能力。**只支持项目根目录下的 `caps/` 目录和 capsmap v2 JSON Lines 格式**；不支持单文件 capsmap、不支持 `-m/--capsmap` 覆盖路径，也不再读取或生成 `target/rivus-*-capsmap*` / `target/rivus-effective-capsmap/`。`caps/` 目录只支持以下五个文件，其他非隐藏文件会被拒绝。
 
 ```
 caps/
-├── seed      # 可选项目覆盖；底层基线由 Rivus 分发 seed 提供
-├── std       # std/core/alloc 的全量条目（通过 `cargo rivus infer-std -o caps/std` 生成）
-├── deps      # 第三方依赖条目（通过 `cargo rivus infer-capsmap -o caps/deps` 生成）
-├── suppress  # 修正条目（覆盖 std/deps 中过宽的能力标记）
-└── ext       # 手工修正或无法自动推导的精确条目（标准层中最高优先级）
+├── std       # linter 维护并自动生成（通过 `cargo rivus infer-std -o caps/std`）
+├── seed      # linter 手工维护，infer-std 的推断输入（分发 seed 合并在最底层）
+├── deps      # 下游用户维护并自动生成（通过 `cargo rivus infer-capsmap -o caps/deps`）
+├── ext       # 下游用户手工维护，依赖手工标定，infer-capsmap 的输入
+└── suppress  # 下游用户手工维护，覆盖 deps 中过宽的 caps、标定 incomplete
 ```
 
 目录内的文件按固定层级顺序加载（后加载的覆盖先加载的）：
-`std` → `deps` → 分发 seed → 项目 `seed` → `suppress` → `ext` → 其余文件按字母序。
+`std` → `seed` → `deps` → `ext` → `suppress`。
+手工层（seed/ext/suppress）排在对应的自动生成层（std/deps）之后，手工修正覆盖自动结果；分发 seed 合并在最底层，作为推断基线被生成结果覆盖。`infer-capsmap` 不重复生成输入层（分发 seed/seed/std/ext）已记录的路径，suppress 修正不传播进生成的 deps 记录（间接调用方的 caps 按未修正知识生成）；`infer-std` 以 seed + suppress 为推断输入，输出全量 std 条目，seed 修正靠层级覆盖生效。
+
+**Rivus 仓库的角色**：本仓库（linter 开发方）维护 `seed` 和 `std` 两层；下游项目维护 `deps`、`ext`、`suppress` 三层。
 
 分发 seed 的获取方式不是稳定接口。当前版本将它编译进 `cargo-rivus`；调用方只能依赖“Rivus 提供与受支持工具链匹配的 seed”，不能依赖 seed 永远随二进制发布。未来可以让二进制保持不变，而 seed 随标准库和目标平台独立更新。
 

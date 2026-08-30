@@ -1,5 +1,5 @@
-all=U
-include_shuffled=U
+all=M
+include_shuffled=P
 include_layers_shuffled=M
-exclude_zeta=S
-exclude_additional=P
+exclude_suppress=P
+extra_file_rejected=true

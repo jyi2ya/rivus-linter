@@ -25,16 +25,18 @@ enum DistributedSeedSelection {
 impl CapsMap {
     /// 加载目录中所有 caps 文件，按固定层级顺序合并。
     ///
-    /// 层级顺序：std → deps → seed → suppress → ext → 其余按字母序。
+    /// 层级顺序：std → seed → deps → ext → suppress；分发 seed（如选择
+    /// 加载）合并在最底层。目录只支持这五个文件。
     /// 后加载的覆盖先加载的同名条目。
     #[cfg(test)]
     pub fn rvs_load_dir_BIS(dir: &Path) -> Result<Self, CapsMapError> {
         rvs_load_caps_dir_BIS(dir, CapsDirSelection::All, DistributedSeedSelection::Omit)
     }
 
-    /// Load effective capability data with the distributed seed inserted at
-    /// the seed layer. The distribution transport is intentionally hidden so
-    /// callers do not depend on the seed being embedded in the binary.
+    /// Load effective capability data with the distributed seed merged at
+    /// the very bottom of the layer order. The distribution transport is
+    /// intentionally hidden so callers do not depend on the seed being
+    /// embedded in the binary.
     pub fn rvs_load_effective_dir_BIS(dir: &Path) -> Result<Self, CapsMapError> {
         rvs_load_caps_dir_BIS(
             dir,
@@ -118,33 +120,26 @@ fn rvs_load_caps_dir_BIS(
     distributed_seed_selection: DistributedSeedSelection,
 ) -> Result<CapsMap, CapsMapError> {
     let selection = rvs_check_caps_dir_selection(dir, selection)?;
-    let mut result = CapsMap::rvs_new();
-    let mut distributed_seed = match distributed_seed_selection {
+    // The distributed seed merges at the very bottom of the layer order,
+    // beneath every project layer (including generated std): generated
+    // records override the curated baseline, and the hand-curated
+    // project seed layer sits above both.
+    let mut result = match distributed_seed_selection {
         DistributedSeedSelection::Include if rvs_selection_contains_seed(selection) => {
-            Some(rvs_load_distributed_seed()?)
+            rvs_load_distributed_seed()?
         }
         #[cfg(test)]
-        DistributedSeedSelection::Omit | DistributedSeedSelection::Include => None,
+        DistributedSeedSelection::Omit | DistributedSeedSelection::Include => CapsMap::rvs_new(),
         #[cfg(not(test))]
-        DistributedSeedSelection::Include => None,
+        DistributedSeedSelection::Include => CapsMap::rvs_new(),
     };
     if !rvs_caps_dir_exists_BIS(dir)? {
-        if let Some(seed) = distributed_seed {
-            result.rvs_extend_from_M(seed);
-        }
         return Ok(result);
     }
     rvs_require_caps_dir_BIS(dir)?;
     let mut files = rvs_collect_selected_caps_dir_files_BIS(dir, selection)?;
     rvs_sort_by_layer_M(&mut files);
     for path in files {
-        if distributed_seed.is_some() && rvs_distributed_seed_precedes_path(&path) {
-            result.rvs_extend_from_M(
-                distributed_seed
-                    .take()
-                    .expect("never: distributed seed is present"),
-            );
-        }
         if matches!(selection, CapsDirSelection::Include(_))
             && !rvs_optional_caps_layer_file_BIS(&path)?
         {
@@ -158,9 +153,6 @@ fn rvs_load_caps_dir_BIS(
         let partial = rvs_parse_caps_file(&path, &content)?;
         result.rvs_extend_from_M(partial);
     }
-    if let Some(seed) = distributed_seed {
-        result.rvs_extend_from_M(seed);
-    }
     Ok(result)
 }
 
@@ -170,14 +162,6 @@ fn rvs_selection_contains_seed(selection: CapsDirSelection<'_>) -> bool {
         CapsDirSelection::Include(layers) => layers.contains(&"seed"),
         CapsDirSelection::Exclude(layers) => !layers.contains(&OsStr::new("seed")),
     }
-}
-
-fn rvs_distributed_seed_precedes_path(path: &Path) -> bool {
-    let name = path.file_name().and_then(OsStr::to_str).unwrap_or("");
-    LAYER_ORDER
-        .iter()
-        .position(|layer| *layer == name)
-        .is_none_or(|position| position >= 2)
 }
 
 pub(crate) fn rvs_parse_caps_file(path: &Path, content: &str) -> Result<CapsMap, CapsMapError> {
@@ -281,6 +265,12 @@ fn rvs_collect_caps_dir_files_BIS(
             });
         }
         if file_type.is_file() {
+            // Only the five canonical layers are supported; stray files in
+            // caps/ are rejected so typos cannot silently become unread
+            // overlays that later layers override anyway.
+            if !LAYER_ORDER.contains(&name.as_str()) {
+                return Err(CapsMapError::UnsupportedLayerName { layer: name });
+            }
             files.push(path);
         } else if LAYER_ORDER.contains(&name.as_str()) {
             return Err(CapsMapError::PathMustBeFile {

@@ -63,7 +63,7 @@ cargo rivus check -- --features foo  # 传递额外 cargo check 参数
 
 调用传播屏障恰好是 `B/I/P/S/T`；普通调用要求调用方拥有被调用方的每个传播能力，但被调用方包含 P 时该调用边只要求 P。`A/C/U` 只来自函数自己的签名或函数体事实，不沿调用边传播，也不得出现在后缀中。本地 trait 声明一个非泛型 associated type `World`、至少一个无 receiver 的操作，且每个操作显式接收 `&Self::World` 或 `&mut Self::World` 时成为 World Port；trait 名不参与判断，额外 associated type 表示长期资源。World Port 操作的公开传播能力固定为 P：trait 方法与 impl 方法的规范后缀都是 `_P`，实现体的 `B/I/S/T` 是审计信息（report/why），不进入领域调用契约，也不与名称后缀比较。`Result`/`Option` 在类型系统中表达错误或缺失流程，不是能力，返回或传播它们不会增加能力字母。
 
-注意：Rivus 从分发 seed 和项目 `caps/` 目录合并能力数据；项目中的每个 layer 必须使用带 `# rivus-caps-v2` 版本头的 v2 JSON Lines。当前版本把分发 seed 编译进 `cargo-rivus`，但调用方只依赖抽象的分发来源，未来可以让 seed 随标准库独立更新而不更换二进制。CLI 不再支持 `-m/--capsmap`，也不再读取或生成 `target/rivus-std-capsmap.txt`、`target/rivus-inferred-capsmap.txt`、`target/rivus-deps-capsmap.txt`、`target/rivus-effective-capsmap/`。项目 `caps/` 不存在时仍加载分发 seed。有效层级顺序为 `std → deps → 分发 seed → 项目 seed → suppress → ext → 其余字母序`；原子写入遗留的 `.层名.PID.序号.tmp` 临时文件会被忽略。
+注意：Rivus 从分发 seed 和项目 `caps/` 目录合并能力数据；项目中的每个 layer 必须使用带 `# rivus-caps-v2` 版本头的 v2 JSON Lines。当前版本把分发 seed 编译进 `cargo-rivus`，但调用方只依赖抽象的分发来源，未来可以让 seed 随标准库独立更新而不更换二进制。CLI 不再支持 `-m/--capsmap`，也不再读取或生成 `target/rivus-std-capsmap.txt`、`target/rivus-inferred-capsmap.txt`、`target/rivus-deps-capsmap.txt`、`target/rivus-effective-capsmap/`。项目 `caps/` 不存在时仍加载分发 seed。`caps/` 只支持 std/seed/deps/ext/suppress 五个文件，其他非隐藏文件会被拒绝。有效层级顺序为 `std → seed → deps → ext → suppress`（分发 seed 合并在最底层）；原子写入遗留的 `.层名.PID.序号.tmp` 临时文件会被忽略。
 
 
 注意：`check` 默认编译 `--all-targets`，因此测试、示例和 benchmark 中的函数也会被分析。未测试 good/ok 函数在所有 target 的 callgraph 合并后统一判断；从 unit test 或 integration test 沿测试编译实际产生的调用边可达即视为覆盖，不要求测试直接调用每个 helper。同名 `DefPath` 出现在多个 Cargo target 中时，合并图对各节点做行为、调用边、事实、角色和源码的保守并集；可执行入口由 `tcx.entry_fn` 或两段路径 `main` 启发式判定。结果在最终 rustc lint 阶段发出，Rivus lint 属性只在 crate root 生效。任一 target 编译失败时不会根据部分图输出覆盖结论。直接 rustc/UI 模式使用当前 crate 内存图做传递可达性判断。`infer-capsmap` 和 `infer-std` 只编译 production targets。
@@ -129,7 +129,7 @@ cargo rivus infer-capsmap -o caps/deps       # 从项目 caps/ 推断，并把 d
 选项：
 - `-o, --output <PATH>` — **必填**。direct external deps capsmap 输出路径；相对路径按目标项目目录解析。若输出位于项目的 active `caps/` 目录中，必须精确使用 `caps/deps`；任意自定义路径只能位于 `caps/` 之外。命令只写这个显式输出，不再写入 `target/rivus-inferred-capsmap.txt` 或 `target/rivus-deps-capsmap.txt`。
 
-注意：推断基线始终包含分发 seed，再叠加项目 `caps/` 中除 `deps` 外的适用层，避免旧 deps 干扰重新推断。命令不会允许输出覆盖 active `caps/` 中的 `std`、`seed`、`suppress`、`ext` 或自定义层。首次运行时允许 `caps/` 不存在，使用分发 seed 推断并创建 `-o` 指定输出的父目录。同一项目的 `infer-std` 和 `infer-capsmap` 通过项目根目录下持久存在的 `.rivus-caps.lock` 串行化；进程内 registry 排斥同进程线程，POSIX record lock 排斥其他进程且不会被 fork 后尚未 exec 的子进程继承。
+注意：推断输入为分发 seed + 项目 `seed` + `std` + `ext`（不含 `deps`/`suppress`：deps 是上一次生成的结果会自我污染，suppress 修正不传播进生成的 deps 记录——间接调用方的 caps 按未修正知识生成，修正只在运行时层级生效）。输入层（含分发 seed）已记录的路径不重复生成——ext 中的手工标定保留在 ext 原处，由运行时层级直接读取。命令不会允许输出覆盖 active `caps/` 中的 `std`、`seed`、`suppress`、`ext`。首次运行时允许 `caps/` 不存在，使用分发 seed 推断并创建 `-o` 指定输出的父目录。同一项目的 `infer-std` 和 `infer-capsmap` 通过项目根目录下持久存在的 `.rivus-caps.lock` 串行化；进程内 registry 排斥同进程线程，POSIX record lock 排斥其他进程且不会被 fork 后尚未 exec 的子进程继承。
 
 
 ---
@@ -138,7 +138,7 @@ cargo rivus infer-capsmap -o caps/deps       # 从项目 caps/ 推断，并把 d
 
 通过 `-Zbuild-std` 编译 std/core/alloc，推断标准库函数的能力标注。构建过程中随标准库源码一起编译的 `hashbrown`、`addr2line`、`gimli`、`object` 等实现依赖会作为临时推断知识参与能力传播，不会仅因 crate 名不属于 std/core/alloc 就被要求写入 seed；只有没有可信函数体、声明或能力边界的 opaque 调用才是 seed 缺口。函数体内无法解析的泛型或间接调用仍使相关记录保持 `incomplete`，但其 synthetic path 不是可由 seed 补全的外部边界。最小 probe 显式关闭 dev profile 的 debug assertions，避免 debug-only 标准库检查污染公开 caps。需要 nightly Rust；命令实际会设置 `RUSTUP_TOOLCHAIN=nightly` 并运行 `cargo check -Zbuild-std=std,core,alloc`，如果本机没有可用的 nightly toolchain 会直接失败。`PATH` 必须是一个有效的本地 crate 项目；仅含 `[workspace]` 的虚拟根目录不受支持。
 
-注意：该命令以分发 seed 为基线，再从 `PATH/caps` 加载可选的项目 `seed` 和 `suppress` 覆盖（不加载 `std`/`deps`/`ext`，因为那些是上一次生成的结果，会干扰重新生成），并在其基础上推断标准库条目。分发机制不是稳定接口：当前 seed 编译进二进制，以后可以改为按标准库工具链独立更新。命令在 active `caps/` 中只允许写入 `std`，不会覆盖 `deps`、`seed`、`suppress`、`ext` 或自定义层；如果没有完整收集到非本地 `std`、`core`、`alloc` 三个 crate，也会报错并保留原输出。成功写出 caps 后，命令会把本次完整合并的 versioned 函数图原子替换到 `target/rivus-callgraph-std.json`。缓存包括标准库调用的支持 crate 上下文，供后续 std `why` 展示图证据。published 文件只接受当前精确 schema version，未知 wire 字段、旧 versioned envelope、截断 JSON 或 headerless 内容都会作为结构化 cache error 拒绝。`why` 仍按查询时的完整 caps 层级解释当前有效能力，因此 `ext` 等人工覆盖优先于缓存中的历史推断上下文。任一前置步骤失败都保留上一个缓存。旧版 `target/rivus-callgraph-std/` 目录只允许作为 standalone std-only 只读诊断图；它没有当前 target/provenance/完整度，不能发布为当前文件，也不能与 fresh project graph 合并。
+注意：该命令以分发 seed（合并在最底层）+ 项目 `seed` + `suppress` 为推断输入（不加载 `std`/`deps`/`ext`，因为那些是上一次生成的结果或依赖标定，会干扰重新生成），并在其基础上推断标准库条目。分发机制不是稳定接口：当前 seed 编译进二进制，以后可以改为按标准库工具链独立更新。命令在 active `caps/` 中只允许写入 `std`，不会覆盖 `deps`、`seed`、`suppress`、`ext`；std 输出是全量条目，seed 修正靠层级覆盖生效。如果没有完整收集到非本地 `std`、`core`、`alloc` 三个 crate，也会报错并保留原输出。成功写出 caps 后，命令会把本次完整合并的 versioned 函数图原子替换到 `target/rivus-callgraph-std.json`。缓存包括标准库调用的支持 crate 上下文，供后续 std `why` 展示图证据。published 文件只接受当前精确 schema version，未知 wire 字段、旧 versioned envelope、截断 JSON 或 headerless 内容都会作为结构化 cache error 拒绝。`why` 仍按查询时的完整 caps 层级解释当前有效能力，因此 `suppress`/`ext` 等人工覆盖优先于缓存中的历史推断上下文。任一前置步骤失败都保留上一个缓存。旧版 `target/rivus-callgraph-std/` 目录只允许作为 standalone std-only 只读诊断图；它没有当前 target/provenance/完整度，不能发布为当前文件，也不能与 fresh project graph 合并。
 
 ```bash
 cargo rivus infer-std -o caps/std        # 将 std caps 写到指定文件（通常 caps/std）
@@ -228,20 +228,20 @@ cargo rivus annotate /path/to  # 指定目录
 
 ## capsmap
 
-为非 `rvs_` 函数声明能力。**只支持项目根目录下的 `caps/` 目录和 capsmap v2 JSON Lines**：
+为非 `rvs_` 函数声明能力。**只支持项目根目录下的 `caps/` 目录和 capsmap v2 JSON Lines**，且目录只支持以下五个文件（其他非隐藏文件会被拒绝）：
 
 ```
 caps/
-├── seed      # 可选项目覆盖；底层基线由 Rivus 分发 seed 提供
-├── std       # std/core/alloc 的全量条目（`cargo rivus infer-std -o caps/std`）
-├── deps      # 第三方依赖条目（`cargo rivus infer-capsmap -o caps/deps`）
-├── suppress  # 修正条目（覆盖 std/deps 中过宽的能力标记）
-└── ext       # 手工修正或无法自动推导的精确条目（标准层中最高优先级）
+├── std       # linter 维护并自动生成（`cargo rivus infer-std -o caps/std`）
+├── seed      # linter 手工维护，infer-std 的推断输入（分发 seed 合并在最底层）
+├── deps      # 下游用户维护并自动生成（`cargo rivus infer-capsmap -o caps/deps`）
+├── ext       # 下游用户手工维护，依赖手工标定，infer-capsmap 的输入
+└── suppress  # 下游用户手工维护，覆盖 deps 中过宽的 caps、标定 incomplete
 ```
 
 目录内的文件按固定层级顺序加载（后加载的覆盖先加载的）：
-`std` → `deps` → 分发 seed → 项目 `seed` → `suppress` → `ext` → 其余文件按字母序。
-因此 `ext` 是固定标准层中的最高优先级；若目录中还有额外文件，额外文件会在 `ext` 之后按文件名顺序加载并可覆盖前面的条目。
+`std` → `seed` → `deps` → `ext` → `suppress`；分发 seed 合并在最底层。
+手工层（seed/ext/suppress）排在对应自动生成层（std/deps）之后，手工修正覆盖自动结果。`infer-capsmap` 不重复生成输入层（分发 seed/seed/std/ext）已记录的路径，suppress 修正不传播进生成的 deps 记录（间接调用方的 caps 按未修正知识生成）；`infer-std` 以 seed + suppress 为推断输入，输出全量 std 条目，seed 修正靠层级覆盖生效。Rivus 仓库（linter 开发方）维护 `std` 和 `seed`，下游项目维护 `deps`、`ext`、`suppress`。
 
 每个 layer 的第一条有效行必须是版本头，之后每行一个 JSON record：
 

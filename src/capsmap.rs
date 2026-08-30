@@ -80,11 +80,24 @@ pub enum CapsMapError {
         layer: String,
         expected: &'static str,
     },
+    #[snafu(display(
+        "caps directory supports only the layers std/seed/deps/ext/suppress; move '{layer}' elsewhere"
+    ))]
+    UnsupportedLayerName { layer: String },
 }
 
 /// 固定层级顺序。后加载的覆盖先加载的。
 /// 这是整个系统中唯一的层级定义——所有调用者都引用这一个常量。
-pub(crate) const LAYER_ORDER: &[&str] = &["std", "deps", "seed", "suppress", "ext"];
+///
+/// 各层定位（成对的手工层排在对应自动生成层之后，手工修正覆盖自动结果）：
+/// - `std`：linter 维护，`infer-std` 自动生成；
+/// - `seed`：linter 手工维护，`infer-std` 的推断输入（分发 seed 合并在其底层）；
+/// - `deps`：下游用户维护，`infer-capsmap` 自动生成；
+/// - `ext`：下游用户手工维护，依赖手工标定，`infer-capsmap` 的输入；
+/// - `suppress`：下游用户手工维护，覆盖 `deps` 中过宽的 caps、标定 incomplete。
+///
+/// `caps/` 目录只支持这五个文件；其他非隐藏文件会被拒绝。
+pub(crate) const LAYER_ORDER: &[&str] = &["std", "seed", "deps", "ext", "suppress"];
 
 pub(crate) fn rvs_reserved_layer_name(name: &OsStr) -> Option<&'static str> {
     let name = name.to_str()?;
@@ -456,7 +469,7 @@ mod tests {
             .and_then(crate::capability::CapabilityInfo::rvs_source)
             .map(|source| source.file.display().to_string());
         let output = format!(
-            "distributed_only={:?}\ndistributed_source={distributed_source:?}\ngenerated_cannot_override={:?}\nproject_correction={:?}\n",
+            "distributed_only={:?}\ndistributed_source={distributed_source:?}\ngenerated_overrides={:?}\nproject_correction={:?}\n",
             caps(&distributed_only),
             caps(&with_generated),
             caps(&with_project_correction),
@@ -467,7 +480,10 @@ mod tests {
         );
 
         assert_eq!(caps(&distributed_only).as_deref(), Some(""));
-        assert_eq!(caps(&with_generated).as_deref(), Some(""));
+        // std ranks above the distributed seed: generated std records can
+        // override the distributed entry; the project seed layer and
+        // suppress still outrank both.
+        assert_eq!(caps(&with_generated).as_deref(), Some("B"));
         assert_eq!(caps(&with_project_correction).as_deref(), Some("S"));
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -740,6 +756,8 @@ mod tests {
 
     #[test]
     fn test_20260611_seed_overrides_std() {
+        // Layer order: std (generated) -> seed (hand-curated). The
+        // hand-curated seed layer overrides generated std records.
         let dir = std::env::temp_dir().join("test_20260611_seed_overrides_std");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
@@ -841,23 +859,21 @@ mod tests {
     fn test_20260710_capsmap_selection_preserves_global_precedence_table() {
         let dir = rvs_make_temp_dir_BIS("capsmap-selection-precedence");
         for (name, caps) in [
-            ("std", "A"),
-            ("deps", "B"),
             ("seed", "I"),
-            ("suppress", "M"),
+            ("std", "A"),
             ("ext", "P"),
-            ("alpha", "S"),
-            ("zeta", "U"),
+            ("deps", "B"),
+            ("suppress", "M"),
         ] {
             std::fs::write(dir.join(name), rvs_caps_v2(&[("winner", caps)])).unwrap();
         }
 
         let cases = [
-            ("all", CapsMap::rvs_load_dir_BIS(&dir).unwrap(), "U"),
+            ("all", CapsMap::rvs_load_dir_BIS(&dir).unwrap(), "M"),
             (
                 "include_shuffled",
-                CapsMap::rvs_load_dir_layers_BIS(&dir, &["zeta", "std", "ext"]).unwrap(),
-                "U",
+                CapsMap::rvs_load_dir_layers_BIS(&dir, &["ext", "seed", "std"]).unwrap(),
+                "P",
             ),
             (
                 "include_layers_shuffled",
@@ -865,13 +881,8 @@ mod tests {
                 "M",
             ),
             (
-                "exclude_zeta",
-                CapsMap::rvs_load_dir_excluding_BIS(&dir, &["zeta"]).unwrap(),
-                "S",
-            ),
-            (
-                "exclude_additional",
-                CapsMap::rvs_load_dir_excluding_BIS(&dir, &["alpha", "zeta"]).unwrap(),
+                "exclude_suppress",
+                CapsMap::rvs_load_dir_excluding_BIS(&dir, &["suppress"]).unwrap(),
                 "P",
             ),
         ];
@@ -882,6 +893,18 @@ mod tests {
             output.push_str(&format!("{name}={actual}\n"));
             assert_eq!(actual, expected, "{name}");
         }
+        // Extra files are rejected outright: caps/ supports only the five
+        // canonical layers.
+        std::fs::write(dir.join("alpha"), rvs_caps_v2(&[("stray", "S")])).unwrap();
+        let rejected = CapsMap::rvs_load_dir_BIS(&dir);
+        output.push_str(&format!(
+            "extra_file_rejected={}\n",
+            matches!(rejected, Err(CapsMapError::UnsupportedLayerName { .. }))
+        ));
+        assert!(matches!(
+            rejected,
+            Err(CapsMapError::UnsupportedLayerName { .. })
+        ));
         rvs_snapshot_BIS(
             "test_20260710_capsmap_selection_preserves_global_precedence_table",
             &output,
@@ -1106,12 +1129,14 @@ mod tests {
             std::path::PathBuf::from("ext"),
             std::path::PathBuf::from("seed"),
             std::path::PathBuf::from("std"),
+            std::path::PathBuf::from("deps"),
+            std::path::PathBuf::from("suppress"),
         ];
         rvs_sort_by_layer_M(&mut files);
         let ordered: Vec<String> = files
             .iter()
             .map(|path| path.to_string_lossy().into_owned())
             .collect();
-        assert_eq!(ordered, vec!["std", "seed", "ext"]);
+        assert_eq!(ordered, vec!["std", "seed", "deps", "ext", "suppress"]);
     }
 }

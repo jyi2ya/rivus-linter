@@ -1773,7 +1773,8 @@ fn rvs_incomplete_caps_remediation(
     // `#` comment stating the evidence. Std-like gaps go to caps/seed (the
     // project-local seed layer; Rivus maintainers fold verified entries
     // into the distributed seed so every consumer benefits); dependency
-    // gaps go to caps/ext, the highest local layer, so regenerating
+    // gaps go to caps/ext, which outranks generated deps (only the
+    // runtime-correction suppress layer ranks higher), so regenerating
     // std/deps never overwrites them.
     if usage.layer == "std" {
         if has_inferred {

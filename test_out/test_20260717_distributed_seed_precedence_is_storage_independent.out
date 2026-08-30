@@ -1,4 +1,4 @@
 distributed_only=Some("")
 distributed_source=Some("<distributed-seed>")
-generated_cannot_override=Some("")
+generated_overrides=Some("B")
 project_correction=Some("S")
