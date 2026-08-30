@@ -1,14 +1,1 @@
-Offline Caps Check: 0 error(s), 1 warning(s)
-------------------------------------------------------------
-warning[incomplete_caps_knowledge]: alloc::boxed::Box::new_uninit
-  calls rely on incomplete caps knowledge; checks use known capability lower bounds
-  root kind: incomplete_caps_record
-  layer: std
-  file: caps/std:146
-  completeness: incomplete
-  knowledge bases: inferred
-  callee: alloc::boxed::Box::new_uninit (known caps: (no known caps), basis=inferred)
-  direct callers: 1
-  callee target: alloc::boxed::Box::new_uninit [crate_id=2]
-  caller: demo::rvs_handle [crate_id=1]
-  inferred standard-library knowledge remains incomplete because inference reached an opaque body or incomplete trait contribution (callee target crate_id=2: alloc::boxed::Box::new_uninit); this record's readable path may be ambiguous in `cargo rivus why`; if it resolves, inspect `cargo rivus why 'alloc::boxed::Box::new_uninit' .`, otherwise review the record for 'alloc::boxed::Box::new_uninit' in its caps layer; rerunning `cargo rivus infer-std -o caps/std` without resolving that boundary will preserve the lower bound; instead, verify the behavior against the standard-library source and hand-annotate an explicit complete record for 'alloc::boxed::Box::new_uninit' in caps/seed with a `#` comment documenting the evidence
+Offline Caps Check: ok

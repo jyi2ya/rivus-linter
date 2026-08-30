@@ -1,15 +1,20 @@
-Offline Caps Check: 0 error(s), 1 warning(s)
+Offline Caps Check: 0 error(s), 2 warning(s)
 ------------------------------------------------------------
 warning[incomplete_caps_knowledge]: dep::multi
   calls rely on incomplete caps knowledge; checks use known capability lower bounds
-  root kind: incomplete_caps_record
-  layer: deps
-  file: caps/deps:2
-  completeness: unknown
-  knowledge bases: inferred
-  callee: dep::multi (known caps: (no known caps), basis=inferred)
+  root kind: ghost_callee
+  layer: <inference>
+  file: <callgraph>
+  completeness: incomplete
+  knowledge bases: none
+  callee: dep::multi (known caps: (no known caps), basis=none)
   direct callers: 2
   callee target: dep::multi [crate_id=40, 41]
   caller: demo::rvs_alpha [crate_id=10]
   caller: demo::rvs_beta [crate_id=11]
-  inferred dependency knowledge for 'dep::multi' remains incomplete because a dependency body is opaque or reaches other incomplete knowledge (callee target crate_id=40: dep::multi); inspect `cargo rivus why 'dep::multi' .`; rerunning `cargo rivus infer-capsmap -o caps/deps` without resolving that boundary will preserve the lower bound; instead, verify the behavior against the dependency source and hand-annotate an explicit complete record in caps/ext with a `#` comment documenting the evidence
+  callee 'dep::multi' is absent from the callgraph, every caps layer, and the inference output (callee target crate_id=40: dep::multi); run `cargo rivus infer-capsmap -o caps/deps` to refresh dependency capabilities; if inference still reports this path, verify its behavior at the anchored call site and hand-annotate an explicit complete record in caps/ext with a `#` comment documenting the evidence
+warning[unknown_callee]: dep::multi
+  callee 'dep::multi' has no rvs_ suffix and no caps/ entry
+  called by: demo::rvs_alpha
+  called by: demo::rvs_beta
+  run `cargo rivus infer-capsmap -o caps/deps` to refresh dependency capabilities; if inference still reports this path, add its exact def_path to caps/ext

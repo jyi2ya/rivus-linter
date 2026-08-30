@@ -70,6 +70,7 @@ pub(crate) fn rvs_run_infer_capsmap_BIST(path: &Path, output: &Path) -> Result<(
     }
 
     let deps_result = rvs_format_def_path_capability_info(&direct_external_calls);
+    rvs_report_generated_incomplete_BST("deps", "ext", &direct_external_calls);
     rvs_write_pinned_capsmap_result_BIST(&deps_result, &publication, "deps capsmap")
 }
 
@@ -136,6 +137,7 @@ pub(crate) fn rvs_run_infer_std_BIST(path: &Path, output: &Path) -> Result<(), S
     }
 
     let result = rvs_format_def_path_capability_info(&std_only);
+    rvs_report_generated_incomplete_BST("std", "seed", &std_only);
     rvs_write_pinned_capsmap_result_BIST(&result, &publication, "std capsmap")?;
     rvs_publish_std_callgraph_cache_BIST(&project_path, &callgraph)
         .map_err(|error| error.to_string())
@@ -216,6 +218,45 @@ fn rvs_std_inferred_capability_info(
 
 fn rvs_should_emit_std_capability(path: &DefPath, local_scope: &LocalScope) -> bool {
     !local_scope.rvs_contains(path) && rvs_is_std_like_def_path(path.rvs_as_str())
+}
+
+/// The generation-time incomplete summary: generated-layer records are
+/// lower bounds by design, so their incompleteness is reported by the
+/// generating command (never by `cargo rivus check`), with hand
+/// calibration as the completion path.
+fn rvs_generated_incomplete_summary(
+    output_layer: &str,
+    hand_layer: &str,
+    incomplete: usize,
+    total: usize,
+) -> String {
+    debug_assert!(incomplete > 0, "only incomplete outputs get a summary");
+    debug_assert!(incomplete <= total, "incomplete subset cannot exceed total");
+    format!(
+        "warning: {incomplete} of {total} records written to caps/{output_layer} remain incomplete lower bounds; hand-annotate verified entries in caps/{hand_layer} with a `#` evidence comment to complete them"
+    )
+}
+
+fn rvs_report_generated_incomplete_BST(
+    output_layer: &str,
+    hand_layer: &str,
+    records: &BTreeMap<DefPath, crate::capability::CapabilityInfo>,
+) {
+    // Count on the normalized records the output actually writes:
+    // specializations sharing one readable key merge into one record.
+    let written = crate::inference::rvs_normalized_capability_records(records);
+    let incomplete = written
+        .values()
+        .filter(|info| {
+            info.rvs_completeness() != crate::capability::CapabilityCompleteness::Complete
+        })
+        .count();
+    if incomplete > 0 {
+        eprintln!(
+            "{}",
+            rvs_generated_incomplete_summary(output_layer, hand_layer, incomplete, written.len())
+        );
+    }
 }
 
 fn rvs_require_inference_output_layer(
@@ -1480,6 +1521,68 @@ mod tests {
             assert_eq!(result.is_err(), should_error);
         }
         rvs_snapshot_BIS("test_20260715_inference_output_layer_roles", &output);
+    }
+
+    #[test]
+    fn test_20260830_generated_incomplete_summary_is_command_scoped() {
+        // Generation-time reporting: each generator owns its layer's
+        // incompleteness (check stays silent about generated layers).
+        // Counts reflect the records actually written: specializations
+        // sharing one readable key merge into one record whose
+        // completeness is the least complete of the group, so the
+        // summary never overstates the file contents.
+        let incomplete = crate::capability::CapabilityInfo::rvs_new(
+            crate::capability::CapabilitySet::rvs_new(),
+            crate::capability::CapabilityBasis::Inferred,
+            crate::capability::CapabilityCompleteness::Incomplete,
+        );
+        let complete = crate::capability::CapabilityInfo::rvs_new(
+            crate::capability::CapabilitySet::rvs_new(),
+            crate::capability::CapabilityBasis::Inferred,
+            crate::capability::CapabilityCompleteness::Complete,
+        );
+        let mut records = BTreeMap::new();
+        records.insert(DefPath::from("dep::opaque"), incomplete.clone());
+        records.insert(DefPath::from("dep::clear"), complete.clone());
+        // Two specializations of one readable record: the written file
+        // has one `dep::Worker::run` record with the least-complete
+        // (incomplete) completeness, not two records.
+        records.insert(
+            DefPath::from("dep::Worker{impl#6465703a3a7538}::run"),
+            incomplete.clone(),
+        );
+        records.insert(
+            DefPath::from("dep::Worker{impl#6465703a3a7531363e}::run"),
+            complete,
+        );
+
+        let written = crate::inference::rvs_normalized_capability_records(&records);
+        let written_keys: Vec<&str> = written.keys().map(|key| key.rvs_as_str()).collect();
+        let counted_incomplete = written
+            .values()
+            .filter(|info| {
+                info.rvs_completeness() != crate::capability::CapabilityCompleteness::Complete
+            })
+            .count();
+        let deps_warning = rvs_generated_incomplete_summary("deps", "ext", 5, 120);
+        let std_warning = rvs_generated_incomplete_summary("std", "seed", 6614, 9032);
+        let output = format!(
+            "deps={deps_warning}\nstd={std_warning}\nwritten={}\ncounted={counted_incomplete}\n",
+            written_keys.join(", "),
+        );
+        rvs_snapshot_BIS(
+            "test_20260830_generated_incomplete_summary_is_command_scoped",
+            &output,
+        );
+
+        assert!(deps_warning.starts_with("warning: 5 of 120 records"));
+        assert!(deps_warning.contains("caps/deps"));
+        assert!(deps_warning.contains("caps/ext"));
+        assert!(std_warning.contains("caps/std"));
+        assert!(std_warning.contains("caps/seed"));
+        assert_eq!(written_keys.len(), 3);
+        assert!(written_keys.contains(&"dep::Worker::run"));
+        assert_eq!(counted_incomplete, 2);
     }
 
     #[test]

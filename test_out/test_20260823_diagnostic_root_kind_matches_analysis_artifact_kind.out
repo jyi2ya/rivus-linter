@@ -3,8 +3,8 @@ Offline Caps Check: 0 error(s), 1 warning(s)
 warning[incomplete_caps_knowledge]: dep::flaky
   calls rely on incomplete caps knowledge; checks use known capability lower bounds
   root kind: incomplete_artifact
-  layer: deps
-  file: caps/deps:6
+  layer: <inference>
+  file: <callgraph>
   completeness: incomplete
   knowledge bases: inferred
   callee: dep::flaky (known caps: (no known caps), basis=inferred)

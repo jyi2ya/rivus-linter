@@ -4,4 +4,4 @@ first_anchor_caller=10:demo::rvs_alpha
 first_anchor_callee=50:dependency::incomplete
 first_anchor_source=Some("src/alpha.rs")
 exact_identity_detail=true
-why_context=true
+why_context=false

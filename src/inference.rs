@@ -762,14 +762,6 @@ impl<'a> CapabilityKnowledgeView<'a> {
             .or_else(|| self.base.rvs_lookup_info_def_path(path))
     }
 
-    /// Exact record lookup without the readable-path fallback: a record
-    /// exists under this precise key or not at all.
-    fn rvs_lookup_exact_record(self, path: &DefPath) -> Option<&'a CapabilityInfo> {
-        self.overlay
-            .and_then(|overlay| overlay.get(path))
-            .or_else(|| self.base.rvs_lookup_info(path.rvs_as_str()))
-    }
-
     fn rvs_lookup_caps(self, path: &DefPath) -> Option<&'a CapabilitySet> {
         self.rvs_lookup_info(path).map(CapabilityInfo::rvs_caps)
     }
@@ -868,26 +860,6 @@ impl<'a> CalleeCapsResolver<'a> {
         self.knowledge
             .rvs_lookup_info(callee)
             .filter(|info| info.rvs_completeness() != CapabilityCompleteness::Complete)
-    }
-
-    pub(crate) fn rvs_exact_caps_info(&self, callee: &DefPath) -> Option<&CapabilityInfo> {
-        self.knowledge.rvs_lookup_info(callee)
-    }
-
-    /// The caps record key that an exact lookup resolves to: the callee's
-    /// own path when a record exists for it, otherwise the readable
-    /// wildcard path a specialization falls back to, otherwise `None`.
-    /// Multiple specializations of one generic share the fallback key and
-    /// therefore one knowledge record.
-    pub(crate) fn rvs_exact_caps_record_key(&self, callee: &DefPath) -> Option<DefPath> {
-        if self.knowledge.rvs_lookup_exact_record(callee).is_some() {
-            return Some(callee.clone());
-        }
-        let user_path = DefPath::from(callee.rvs_user_path().into_owned());
-        if user_path != *callee && self.knowledge.rvs_lookup_exact_record(&user_path).is_some() {
-            return Some(user_path);
-        }
-        None
     }
 
     pub(crate) fn rvs_exact_caps(&self, callee: &DefPath) -> Option<CapabilitySet> {
@@ -2120,9 +2092,12 @@ pub(crate) fn rvs_format_def_path_capsmap(caps: &BTreeMap<DefPath, CapabilitySet
     rvs_format_capsmap(&normalized)
 }
 
-pub(crate) fn rvs_format_def_path_capability_info(
+/// Merge specialization entries sharing one readable record key into
+/// the single record actually written to a caps layer: caps union with
+/// the least-complete completeness and combined basis.
+pub(crate) fn rvs_normalized_capability_records(
     infos: &BTreeMap<DefPath, CapabilityInfo>,
-) -> String {
+) -> BTreeMap<CapsMapKey, CapabilityInfo> {
     let mut normalized: BTreeMap<CapsMapKey, CapabilityInfo> = BTreeMap::new();
     for (path, info) in infos {
         let key = CapsMapKey::rvs_new(path.rvs_user_path().into_owned());
@@ -2134,8 +2109,14 @@ pub(crate) fn rvs_format_def_path_capability_info(
             normalized.insert(key, info.clone());
         }
     }
+    normalized
+}
+
+pub(crate) fn rvs_format_def_path_capability_info(
+    infos: &BTreeMap<DefPath, CapabilityInfo>,
+) -> String {
     let mut map = capsmap::CapsMap::rvs_new();
-    map.rvs_extend_info_entries_M(normalized);
+    map.rvs_extend_info_entries_M(rvs_normalized_capability_records(infos));
     map.rvs_render_v2()
 }
 

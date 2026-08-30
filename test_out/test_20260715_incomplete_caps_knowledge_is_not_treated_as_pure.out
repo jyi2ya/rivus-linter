@@ -1,14 +1,1 @@
-Offline Caps Check: 0 error(s), 1 warning(s)
-------------------------------------------------------------
-warning[incomplete_caps_knowledge]: dependency::maybe_effectful
-  calls rely on incomplete caps knowledge; checks use known capability lower bounds
-  root kind: incomplete_caps_record
-  layer: deps
-  file: caps/deps:2
-  completeness: unknown
-  knowledge bases: inferred
-  callee: dependency::maybe_effectful (known caps: (no known caps), basis=inferred)
-  direct callers: 1
-  callee target: dependency::maybe_effectful [crate_id=2]
-  caller: demo::rvs_handle [crate_id=1]
-  inferred dependency knowledge for 'dependency::maybe_effectful' remains incomplete because a dependency body is opaque or reaches other incomplete knowledge (callee target crate_id=2: dependency::maybe_effectful); inspect `cargo rivus why 'dependency::maybe_effectful' .`; rerunning `cargo rivus infer-capsmap -o caps/deps` without resolving that boundary will preserve the lower bound; instead, verify the behavior against the dependency source and hand-annotate an explicit complete record in caps/ext with a `#` comment documenting the evidence
+Offline Caps Check: ok

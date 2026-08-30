@@ -1,0 +1,4 @@
+deps=warning: 5 of 120 records written to caps/deps remain incomplete lower bounds; hand-annotate verified entries in caps/ext with a `#` evidence comment to complete them
+std=warning: 6614 of 9032 records written to caps/std remain incomplete lower bounds; hand-annotate verified entries in caps/seed with a `#` evidence comment to complete them
+written=dep::Worker::run, dep::clear, dep::opaque
+counted=2

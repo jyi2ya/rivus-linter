@@ -1151,6 +1151,10 @@ fn rvs_expected_name_without_non_suffix_caps(context: &OfflineFnContext<'_>) -> 
 
 /// Whether this call edge points at an inference knowledge root (ghost,
 /// bodyless, artifact, unstable vote). Port operations are never roots.
+/// `IncompleteCapsRecord` roots are excluded: their gap is an incomplete
+/// or unknown caps record in any caps layer (generated std/deps by
+/// design, hand-written ext/suppress by declaration), which is that
+/// layer's generator's report, never a check warning.
 fn rvs_inference_root_kind(
     call: &IndexedCall<'_>,
     callee_target: Option<&IndexedNode<'_>>,
@@ -1161,6 +1165,9 @@ fn rvs_inference_root_kind(
         return None;
     }
     if let Some(kind) = analysis_root_kinds.get(&call.callee.def_path) {
+        if kind == &crate::inference::IncompleteRootKind::IncompleteCapsRecord {
+            return None;
+        }
         // A graph-node root must also carry the incomplete flag: a root
         // whose own propagation is complete is not a warning here.
         if let Some(callee_id) = call.local_target
@@ -1172,33 +1179,6 @@ fn rvs_inference_root_kind(
         return Some(*kind);
     }
     None
-}
-
-fn rvs_new_record_usage(
-    record_key: DefPath,
-    kind_origin: DefPath,
-    root_kind: crate::inference::IncompleteRootKind,
-    layer: &str,
-    file: &str,
-    info: &crate::capability::CapabilityInfo,
-) -> IncompleteCapsUsage {
-    IncompleteCapsUsage {
-        root: record_key,
-        layer: layer.to_string(),
-        file: file.to_string(),
-        line: info.rvs_source().map(|source| source.line),
-        completeness: info.rvs_completeness(),
-        bases: BTreeSet::from([info.rvs_basis().rvs_name().to_string()]),
-        root_kind,
-        kind_origin,
-        knowledge_text: format!(
-            "known caps: {}, basis={}",
-            rvs_format_caps_bound(info.rvs_caps(), info.rvs_completeness()),
-            info.rvs_basis().rvs_name()
-        ),
-        usages: BTreeSet::new(),
-        callee_identities: BTreeMap::new(),
-    }
 }
 
 /// The knowledge line for an inference root: the root's own inference
@@ -1256,73 +1236,31 @@ fn rvs_collect_call_diagnostics_M(
             let callee_target = call
                 .local_target
                 .map(|callee_id| index.rvs_target(callee_id));
-            // F3: one knowledge root per caps record. Specializations whose
-            // exact lookup falls back to one readable record key are one
-            // root, so the emitted key is always directly queryable.
-            let exact_incomplete = (!callee_target.is_some_and(|target| target.is_local_port))
-                .then(|| {
-                    resolver
-                        .rvs_exact_caps_record_key(&call.callee.def_path)
-                        .zip(resolver.rvs_exact_caps_info(&call.callee.def_path))
-                })
-                .flatten()
-                .filter(|(_, info)| info.rvs_completeness() != CapabilityCompleteness::Complete);
-            if let Some((record_key, info)) = exact_incomplete {
-                let source = info.rvs_source();
-                let layer = source.map_or("<in-memory>", |source| source.layer.as_str());
-                let file = source.map_or("<unknown>", |source| {
-                    source.file.to_str().unwrap_or("<non-utf8>")
-                });
-                let key = format!("record\0{}\0{}\0{}", layer, file, record_key.rvs_as_str());
-                // F4: the analysis root kind is authoritative when present
-                // (e.g. an incomplete artifact wins over the record kind);
-                // callees without any analysis kind keep the record kind.
-                let root_kind = analysis_root_kinds
-                    .get(&call.callee.def_path)
-                    .copied()
-                    .unwrap_or(crate::inference::IncompleteRootKind::IncompleteCapsRecord);
-                let entry = sinks.incomplete_caps.entry(key).or_insert_with(|| {
-                    rvs_new_record_usage(
-                        record_key.clone(),
-                        call.callee.def_path.clone(),
-                        root_kind,
-                        layer,
-                        file,
-                        info,
-                    )
-                });
-                // Specializations merging into one readable record can
-                // carry different analysis kinds; the most specific kind
-                // per the documented precedence describes the group, and
-                // the kind's origin callee follows the upgrade so the
-                // anchor and remediation describe that specialization.
-                if root_kind.rvs_most_specific(entry.root_kind) != entry.root_kind {
-                    entry.root_kind = root_kind;
-                    entry.kind_origin = call.callee.def_path.clone();
-                }
-                entry.usages.extend(usages.iter().cloned());
-                entry
-                    .callee_identities
-                    .entry(call.callee.def_path.clone())
-                    .or_default()
-                    .insert(call.callee.crate_id);
-            } else if let Some(kind) =
+            // Command-scope ownership: check warns only about incomplete
+            // roots of the workspace's own analysis — ghost callees,
+            // bodyless declarations without contracts, unstable trait
+            // votes, and partial artifacts (F2/F6). Generated-layer caps
+            // records are lower bounds by design; their incompleteness is
+            // the generating command's report (`infer-std` /
+            // `infer-capsmap` summary), never a check warning.
+            //
+            // F2: ghosts have no local target but are inference roots;
+            // F6: basis is the root's own inference result. One
+            // diagnostic per root callee path: each knowledge gap gets
+            // its own warning with root-specific remediation, so the
+            // warning count matches the root count. Roots group by
+            // readable path: several specializations of one root
+            // render as one warning with per-identity lines instead of
+            // several marker-stripped indistinguishable warnings.
+            // Ghosts never merge with non-ghost roots of the same
+            // readable path (documented precedence): their basis and
+            // remediation describe total absence, not partial
+            // knowledge. Non-ghost kinds aggregate by the same
+            // precedence as record roots, upgrading kind_origin with
+            // the kind so the anchor describes the merged kind.
+            if let Some(kind) =
                 rvs_inference_root_kind(call, callee_target, inference, analysis_root_kinds)
             {
-                // F2: ghosts have no local target but are inference roots;
-                // F6: basis is the root's own inference result. One
-                // diagnostic per root callee path: each knowledge gap gets
-                // its own warning with root-specific remediation, so the
-                // warning count matches the root count. Roots group by
-                // readable path: several specializations of one root
-                // render as one warning with per-identity lines instead of
-                // several marker-stripped indistinguishable warnings.
-                // Ghosts never merge with non-ghost roots of the same
-                // readable path (documented precedence): their basis and
-                // remediation describe total absence, not partial
-                // knowledge. Non-ghost kinds aggregate by the same
-                // precedence as record roots, upgrading kind_origin with
-                // the kind so the anchor describes the merged kind.
                 let root_path = call.callee.def_path.clone();
                 let readable_root = DefPath::from(root_path.rvs_user_path().into_owned());
                 let is_ghost = kind == crate::inference::IncompleteRootKind::GhostCallee;
@@ -1693,81 +1631,18 @@ fn rvs_incomplete_caps_remediation(
     // rather than certainty.
     let why_hint = match why_kind {
         WhyHintKind::Resolvable => format!("inspect `cargo rivus why '{path}' .`"),
-        WhyHintKind::Unresolvable => {
-            if usage.layer == "<inference>" {
-                format!(
-                    "the readable path '{path}' is shared by several specializations and cannot be resolved by `cargo rivus why`; identify the target from the callee detail lines and the anchored call site"
-                )
-            } else {
-                format!(
-                    "this record's readable path cannot be resolved by `cargo rivus why`; review the record for '{path}' in its caps layer"
-                )
-            }
-        }
-        WhyHintKind::MaybeAmbiguous => {
-            if usage.layer == "<inference>" {
-                format!(
-                    "the readable path '{path}' may be shared by several specializations in the standard-library callgraph, so `cargo rivus why` may report ambiguity; if it resolves, inspect `cargo rivus why '{path}' .`, otherwise identify the target from the callee detail lines and the anchored call site"
-                )
-            } else {
-                format!(
-                    "this record's readable path may be ambiguous in `cargo rivus why`; if it resolves, inspect `cargo rivus why '{path}' .`, otherwise review the record for '{path}' in its caps layer"
-                )
-            }
-        }
+        WhyHintKind::Unresolvable => format!(
+            "the readable path '{path}' is shared by several specializations and cannot be resolved by `cargo rivus why`; identify the target from the callee detail lines and the anchored call site"
+        ),
+        WhyHintKind::MaybeAmbiguous => format!(
+            "the readable path '{path}' may be shared by several specializations in the standard-library callgraph, so `cargo rivus why` may report ambiguity; if it resolves, inspect `cargo rivus why '{path}' .`, otherwise identify the target from the callee detail lines and the anchored call site"
+        ),
     };
     // An incomplete artifact is the wider gap: it can invalidate the
-    // record's own basis, so repair-and-recollect guidance comes before
-    // any layer-specific record advice, even for record-backed roots.
+    // root's own basis, so repair-and-recollect guidance comes first.
     let artifact_remediation = format!(
         "the callgraph artifact for '{path}' is incomplete, so inference cannot close its knowledge ({identity_context}); {why_hint} and rerun the collection once the failing or partial target compiles"
     );
-    if usage.root_kind == crate::inference::IncompleteRootKind::IncompleteArtifact {
-        return artifact_remediation;
-    }
-    if usage.layer == "<inference>" {
-        return match usage.root_kind {
-            crate::inference::IncompleteRootKind::GhostCallee
-                if rvs_is_std_like_def_path(usage.root.rvs_as_str()) =>
-            {
-                format!(
-                    "standard-library callee '{path}' is absent from the callgraph and every caps layer ({identity_context}); run `cargo rivus infer-std -o caps/std`, or verify its behavior against the standard-library source and hand-annotate an explicit complete record in caps/seed with a `#` comment documenting the evidence"
-                )
-            }
-            crate::inference::IncompleteRootKind::GhostCallee => format!(
-                "callee '{path}' is absent from the callgraph, every caps layer, and the inference output ({identity_context}); run `cargo rivus infer-capsmap -o caps/deps` to refresh dependency capabilities; if inference still reports this path, verify its behavior at the anchored call site and hand-annotate an explicit complete record in caps/ext with a `#` comment documenting the evidence"
-            ),
-            crate::inference::IncompleteRootKind::BodylessNoContract => {
-                // Same layer split as the ghost arm: std-like declarations
-                // are curated in caps/seed, dependency declarations in
-                // caps/ext.
-                if rvs_is_std_like_def_path(usage.root.rvs_as_str()) {
-                    format!(
-                        "bodyless declaration '{path}' has no exact caps record or resolvable contract, so inference cannot close its knowledge ({identity_context}); {why_hint} and verify its behavior before hand-annotating an explicit complete record in caps/seed with a `#` comment documenting the evidence"
-                    )
-                } else {
-                    format!(
-                        "bodyless declaration '{path}' has no exact caps record or resolvable contract, so inference cannot close its knowledge ({identity_context}); {why_hint} and verify its behavior before hand-annotating an explicit complete record in caps/ext with a `#` comment documenting the evidence"
-                    )
-                }
-            }
-            crate::inference::IncompleteRootKind::UnstableTraitVote => format!(
-                "trait vote for '{path}' is unstable because impls disagree or knowledge is missing, so its resolved caps may change ({identity_context}); {why_hint} and complete the missing implementations or knowledge"
-            ),
-            crate::inference::IncompleteRootKind::IncompleteCapsRecord => format!(
-                "local inference is incomplete because the call graph reaches unknown or incomplete knowledge ({identity_context}); {why_hint}; `<inference>` is computed during check and is not a refreshable caps layer"
-            ),
-            // Unreachable: artifact roots return before the layer
-            // dispatch. The shared artifact text keeps this arm defensive
-            // instead of panicking on future call-path changes.
-            crate::inference::IncompleteRootKind::IncompleteArtifact => artifact_remediation,
-        };
-    }
-
-    let has_inferred = usage
-        .bases
-        .iter()
-        .any(|basis| basis == "inferred" || basis == "trait_vote");
     // Manual annotation guidance: once the callee's behavior is verified
     // (source reviewed or tested), write an explicit complete record with a
     // `#` comment stating the evidence. Std-like gaps go to caps/seed (the
@@ -1776,32 +1651,43 @@ fn rvs_incomplete_caps_remediation(
     // gaps go to caps/ext, which outranks generated deps (only the
     // runtime-correction suppress layer ranks higher), so regenerating
     // std/deps never overwrites them.
-    if usage.layer == "std" {
-        if has_inferred {
-            return format!(
-                "inferred standard-library knowledge remains incomplete because inference reached an opaque body or incomplete trait contribution ({identity_context}); {why_hint}; rerunning `cargo rivus infer-std -o caps/std` without resolving that boundary will preserve the lower bound; instead, verify the behavior against the standard-library source and hand-annotate an explicit complete record for '{path}' in caps/seed with a `#` comment documenting the evidence"
-            );
+    match usage.root_kind {
+        crate::inference::IncompleteRootKind::IncompleteArtifact => artifact_remediation,
+        crate::inference::IncompleteRootKind::GhostCallee
+            if rvs_is_std_like_def_path(usage.root.rvs_as_str()) =>
+        {
+            format!(
+                "standard-library callee '{path}' is absent from the callgraph and every caps layer ({identity_context}); run `cargo rivus infer-std -o caps/std`, or verify its behavior against the standard-library source and hand-annotate an explicit complete record in caps/seed with a `#` comment documenting the evidence"
+            )
         }
-        return format!(
-            "{why_hint} for {identity_context}; rerunning `cargo rivus infer-std -o caps/std` may replace migrated knowledge, but records that stay incomplete should be hand-annotated instead: verify the behavior against the standard-library source and write an explicit complete record for '{path}' in caps/seed with a `#` comment documenting the evidence"
-        );
-    }
-
-    if usage.layer == "deps" {
-        if has_inferred {
-            return format!(
-                "inferred dependency knowledge for '{path}' remains incomplete because a dependency body is opaque or reaches other incomplete knowledge ({identity_context}); {why_hint}; rerunning `cargo rivus infer-capsmap -o caps/deps` without resolving that boundary will preserve the lower bound; instead, verify the behavior against the dependency source and hand-annotate an explicit complete record in caps/ext with a `#` comment documenting the evidence"
-            );
+        crate::inference::IncompleteRootKind::GhostCallee => format!(
+            "callee '{path}' is absent from the callgraph, every caps layer, and the inference output ({identity_context}); run `cargo rivus infer-capsmap -o caps/deps` to refresh dependency capabilities; if inference still reports this path, verify its behavior at the anchored call site and hand-annotate an explicit complete record in caps/ext with a `#` comment documenting the evidence"
+        ),
+        crate::inference::IncompleteRootKind::BodylessNoContract => {
+            // Same layer split as the ghost arm: std-like declarations
+            // are curated in caps/seed, dependency declarations in
+            // caps/ext.
+            if rvs_is_std_like_def_path(usage.root.rvs_as_str()) {
+                format!(
+                    "bodyless declaration '{path}' has no exact caps record or resolvable contract, so inference cannot close its knowledge ({identity_context}); {why_hint} and verify its behavior before hand-annotating an explicit complete record in caps/seed with a `#` comment documenting the evidence"
+                )
+            } else {
+                format!(
+                    "bodyless declaration '{path}' has no exact caps record or resolvable contract, so inference cannot close its knowledge ({identity_context}); {why_hint} and verify its behavior before hand-annotating an explicit complete record in caps/ext with a `#` comment documenting the evidence"
+                )
+            }
         }
-        return format!(
-            "{why_hint} for {identity_context}; rerunning `cargo rivus infer-capsmap -o caps/deps` may replace migrated knowledge, but records that stay incomplete should be hand-annotated instead: verify the behavior against the dependency source and write an explicit complete record for '{path}' in caps/ext with a `#` comment documenting the evidence"
-        );
+        crate::inference::IncompleteRootKind::UnstableTraitVote => format!(
+            "trait vote for '{path}' is unstable because impls disagree or knowledge is missing, so its resolved caps may change ({identity_context}); {why_hint} and complete the missing implementations or knowledge"
+        ),
+        // Unreachable: record-backed roots are filtered out of check
+        // diagnostics (their incompleteness belongs to the generating
+        // command). The arm stays for match exhaustiveness if a future
+        // call path reintroduces the kind.
+        crate::inference::IncompleteRootKind::IncompleteCapsRecord => format!(
+            "incomplete caps records are the generating command's report, not a check warning ({identity_context}); rerun `cargo rivus infer-std` / `cargo rivus infer-capsmap` to see the layer's incomplete summary"
+        ),
     }
-
-    format!(
-        "knowledge in layer '{}' remains incomplete for {identity_context}; {why_hint} and its opaque or incomplete prerequisites before adding an explicit correction",
-        usage.layer
-    )
 }
 
 fn rvs_append_unknown_callee_diagnostics_M(
@@ -1943,6 +1829,88 @@ mod tests {
         if let Some(&crate_id) = crate_ids.first() {
             node.crate_id = crate_id;
         }
+    }
+
+    #[test]
+    fn test_20260830_check_incomplete_warnings_scope_to_workspace_analysis() {
+        // Command-scope ownership: `cargo rivus check` warns only about
+        // incomplete roots of the workspace's own analysis (ghost callees,
+        // bodyless declarations, unstable votes, partial artifacts).
+        // Generated-layer records (std/deps/...) are lower bounds by
+        // design; their incompleteness is reported by the generating
+        // commands, never by check.
+        let ghost = FunctionIdentity {
+            crate_id: 2,
+            def_path: DefPath::from("dep::ghost"),
+        };
+        let mut caller = rvs_node(&[]);
+        caller.calls = BTreeMap::from([
+            (
+                FunctionIdentity {
+                    crate_id: 2,
+                    def_path: DefPath::from("dep::recorded"),
+                },
+                CallEdgeType::Strong,
+            ),
+            (
+                FunctionIdentity {
+                    crate_id: 3,
+                    def_path: DefPath::from("alloc::boxed::Box::new_uninit"),
+                },
+                CallEdgeType::Strong,
+            ),
+            (ghost, CallEdgeType::Strong),
+        ]);
+        let mut graph = FnGraph::rvs_new();
+        graph.rvs_insert_M(DefPath::from("demo::rvs_local"), caller);
+
+        let mut deps_info = CapabilityInfo::rvs_new(
+            CapabilitySet::rvs_new(),
+            CapabilityBasis::Inferred,
+            CapabilityCompleteness::Incomplete,
+        );
+        deps_info.rvs_with_source_M(CapabilitySource {
+            layer: "deps".to_string(),
+            file: PathBuf::from("caps/deps"),
+            line: 4,
+        });
+        let mut std_info = CapabilityInfo::rvs_new(
+            CapabilitySet::rvs_new(),
+            CapabilityBasis::Inferred,
+            CapabilityCompleteness::Incomplete,
+        );
+        std_info.rvs_with_source_M(CapabilitySource {
+            layer: "std".to_string(),
+            file: PathBuf::from("caps/std"),
+            line: 146,
+        });
+        let mut caps = CapsMap::rvs_new();
+        caps.rvs_insert_info_M(CapsMapKey::from("dep::recorded"), deps_info);
+        caps.rvs_insert_info_M(CapsMapKey::from("alloc::boxed::Box::new_uninit"), std_info);
+
+        let report =
+            rvs_check_offline_caps(&graph, &caps, &BTreeSet::from([CrateName::from("demo")]));
+        let output = report.to_string();
+        rvs_snapshot_BIS(
+            "test_20260830_check_incomplete_warnings_scope_to_workspace_analysis",
+            &output,
+        );
+
+        let incomplete_warnings: Vec<_> = report
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.kind == OfflineCapsKind::IncompleteCapsKnowledge)
+            .collect();
+        assert_eq!(
+            incomplete_warnings.len(),
+            1,
+            "only the workspace ghost root warns: {output}"
+        );
+        assert_eq!(
+            incomplete_warnings[0].function.rvs_as_str(),
+            "dep::ghost",
+            "the one warning is the ghost callee: {output}"
+        );
     }
 
     #[test]
@@ -2299,6 +2267,9 @@ mod tests {
 
     #[test]
     fn test_20260715_incomplete_caps_knowledge_is_not_treated_as_pure() {
+        // Command-scope ownership: an incomplete deps record is a lower
+        // bound the call check still consumes, but its incompleteness is
+        // `infer-capsmap`'s report — check stays silent about it.
         let mut graph = FnGraph::rvs_new();
         graph.rvs_insert_M(
             DefPath::from("demo::rvs_handle"),
@@ -2319,25 +2290,27 @@ mod tests {
 
         let report =
             rvs_check_offline_caps(&graph, &caps, &BTreeSet::from([CrateName::from("demo")]));
-        let diagnostic = report
-            .diagnostics
-            .iter()
-            .find(|diagnostic| diagnostic.kind == OfflineCapsKind::IncompleteCapsKnowledge)
-            .expect("never: incomplete caps knowledge emits a warning");
         let output = report.to_string();
         rvs_snapshot_BIS(
             "test_20260715_incomplete_caps_knowledge_is_not_treated_as_pure",
             &output,
         );
 
-        assert!(diagnostic.message.contains("capability lower bounds"));
-        assert!(output.contains("dependency::maybe_effectful"));
-        assert!(output.contains("cargo rivus infer-capsmap -o caps/deps"));
-        assert!(!output.contains("add reviewed corrections to caps/ext"));
+        assert!(
+            !report
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.kind == OfflineCapsKind::IncompleteCapsKnowledge),
+            "generated-layer record incompleteness is not check's warning: {output}"
+        );
     }
 
     #[test]
     fn test_20260721_fresh_inferred_std_incomplete_warning_is_actionable() {
+        // Command-scope ownership: an inferred-incomplete std record is a
+        // lower bound the call check still consumes, but its
+        // incompleteness is `infer-std`'s report — check stays silent
+        // about it.
         let mut graph = FnGraph::rvs_new();
         graph.rvs_insert_M(
             DefPath::from("demo::rvs_handle"),
@@ -2364,10 +2337,13 @@ mod tests {
             &output,
         );
 
-        assert!(output.contains("inferred standard-library knowledge remains incomplete"));
-        assert!(output.contains("cargo rivus why 'alloc::boxed::Box::new_uninit' ."));
-        assert!(!output.contains("replace migrated standard-library knowledge"));
-        assert!(!output.contains("add reviewed corrections to caps/ext"));
+        assert!(
+            !report
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.kind == OfflineCapsKind::IncompleteCapsKnowledge),
+            "generated std incompleteness is not check's warning: {output}"
+        );
     }
 
     #[test]
@@ -2510,162 +2486,6 @@ mod tests {
     }
 
     #[test]
-    fn test_20260823_shared_record_specializations_merge_into_one_root() {
-        // F3 regression: two specializations whose exact lookups fall back
-        // to one readable caps record are one knowledge root: exactly one
-        // warning, keyed by the readable record path that `why` accepts.
-        let first = FunctionIdentity {
-            crate_id: 2,
-            def_path: DefPath::from("dep::Worker{impl#6465703a3a576f726b65723c75383e}::run"),
-        };
-        let second = FunctionIdentity {
-            crate_id: 2,
-            def_path: DefPath::from("dep::Worker{impl#6465703a3a576f726b65723c7531363e}::run"),
-        };
-        let mut caller = rvs_node(&[]);
-        caller.calls = BTreeMap::from([
-            (first.clone(), CallEdgeType::Strong),
-            (second, CallEdgeType::Strong),
-        ]);
-        let mut graph = FnGraph::rvs_new();
-        graph.rvs_insert_M(DefPath::from("demo::rvs_dispatch"), caller);
-
-        let mut info = CapabilityInfo::rvs_new(
-            CapabilitySet::rvs_new(),
-            CapabilityBasis::Inferred,
-            CapabilityCompleteness::Incomplete,
-        );
-        info.rvs_with_source_M(CapabilitySource {
-            layer: "deps".to_string(),
-            file: PathBuf::from("caps/deps"),
-            line: 4,
-        });
-        let mut caps = CapsMap::rvs_new();
-        caps.rvs_insert_info_M(CapsMapKey::rvs_new("dep::Worker::run"), info);
-
-        let report =
-            rvs_check_offline_caps(&graph, &caps, &BTreeSet::from([CrateName::from("demo")]));
-        let output = report.to_string();
-        rvs_snapshot_BIS(
-            "test_20260823_shared_record_specializations_merge_into_one_root",
-            &output,
-        );
-
-        let root_warnings: Vec<_> = report
-            .diagnostics
-            .iter()
-            .filter(|diagnostic| diagnostic.kind == OfflineCapsKind::IncompleteCapsKnowledge)
-            .collect();
-        assert_eq!(
-            root_warnings.len(),
-            1,
-            "two specializations of one record are one root: {output}"
-        );
-        // The emitted key is the readable record path (marker-free).
-        let root = root_warnings
-            .first()
-            .expect("never: one merged record root");
-        assert_eq!(root.function.rvs_as_str(), "dep::Worker::run");
-        // F1: the readable record path is ambiguous for `why` (two
-        // specializations share it), so remediation must not suggest it;
-        // it points at reviewing the record itself instead.
-        let remediation = root
-            .details
-            .iter()
-            .find(|detail| detail.contains("remains incomplete") || detail.contains("insufficient"))
-            .cloned()
-            .unwrap_or_default();
-        assert!(
-            !remediation.contains("cargo rivus why 'dep::Worker::run' ."),
-            "ambiguous readable path must not be suggested: {remediation}"
-        );
-        assert!(remediation.contains("cannot be resolved by `cargo rivus why`"));
-        assert!(remediation.contains("review the record for 'dep::Worker::run'"));
-        // H2: the called specializations stay visible as readable callee
-        // target lines (deduplicated by readable form); no identity
-        // markers leak.
-        assert!(root.details.iter().any(|detail| {
-            detail.contains(
-                "callee target: dep::Worker::run [crate_id=2] (specialization of this readable record)",
-            )
-        }));
-        assert!(!output.contains("{impl#"));
-    }
-
-    #[test]
-    fn test_20260823_record_bases_are_per_root() {
-        // F6 regression: two incomplete records in the same layer/file
-        // with different bases must report only their own basis; the old
-        // group-wide aggregate gave every root both bases.
-        let mut caller = rvs_node(&[]);
-        caller.calls = BTreeMap::from([
-            (
-                FunctionIdentity {
-                    crate_id: 2,
-                    def_path: DefPath::from("dep::inferred_one"),
-                },
-                CallEdgeType::Strong,
-            ),
-            (
-                FunctionIdentity {
-                    crate_id: 2,
-                    def_path: DefPath::from("dep::voted_one"),
-                },
-                CallEdgeType::Strong,
-            ),
-        ]);
-        let mut graph = FnGraph::rvs_new();
-        graph.rvs_insert_M(DefPath::from("demo::rvs_use"), caller);
-
-        let mut caps = CapsMap::rvs_new();
-        for (path, basis) in [
-            ("dep::inferred_one", CapabilityBasis::Inferred),
-            (
-                "dep::voted_one",
-                CapabilityBasis::TraitVote {
-                    implementations: 2,
-                    threshold: 1,
-                    votes: BTreeMap::new(),
-                },
-            ),
-        ] {
-            let mut info = CapabilityInfo::rvs_new(
-                CapabilitySet::rvs_new(),
-                basis,
-                CapabilityCompleteness::Incomplete,
-            );
-            info.rvs_with_source_M(CapabilitySource {
-                layer: "deps".to_string(),
-                file: PathBuf::from("caps/deps"),
-                line: 3,
-            });
-            caps.rvs_insert_info_M(CapsMapKey::rvs_new(path), info);
-        }
-
-        let report =
-            rvs_check_offline_caps(&graph, &caps, &BTreeSet::from([CrateName::from("demo")]));
-        let output = report.to_string();
-        rvs_snapshot_BIS("test_20260823_record_bases_are_per_root", &output);
-
-        let knowledge_bases: Vec<String> = report
-            .diagnostics
-            .iter()
-            .filter(|diagnostic| diagnostic.kind == OfflineCapsKind::IncompleteCapsKnowledge)
-            .map(|diagnostic| {
-                diagnostic
-                    .details
-                    .iter()
-                    .find(|detail| detail.starts_with("knowledge bases: "))
-                    .cloned()
-                    .unwrap_or_default()
-            })
-            .collect();
-        assert_eq!(knowledge_bases.len(), 2, "one warning per record: {output}");
-        assert!(knowledge_bases.contains(&"knowledge bases: inferred".to_string()));
-        assert!(knowledge_bases.contains(&"knowledge bases: trait_vote".to_string()));
-    }
-
-    #[test]
     fn test_20260823_diagnostic_root_kind_matches_analysis_artifact_kind() {
         // F4 regression: a callee that is both an incomplete artifact and
         // backed by an incomplete caps record must keep the analysis kind
@@ -2745,138 +2565,6 @@ mod tests {
         assert!(
             !remediation.contains("rerunning `cargo rivus infer-capsmap -o caps/deps`"),
             "record-refresh advice must not mask the artifact gap: {output}"
-        );
-    }
-
-    #[test]
-    fn test_20260823_unmarked_sibling_shadows_readable_record_query() {
-        // F1 regression: `why` resolves an exact graph match first. When
-        // an unmarked sibling function shares the readable record key,
-        // suggesting the readable query would silently inspect the
-        // sibling instead of the specializations this root covers; the
-        // hint must fall back to reviewing the record.
-        let specialization = FunctionIdentity {
-            crate_id: 2,
-            def_path: DefPath::from("dep::Worker{impl#6465703a3a3a}::run"),
-        };
-        let mut caller = rvs_node(&[]);
-        caller.calls = BTreeMap::from([(specialization, CallEdgeType::Strong)]);
-        let mut graph = FnGraph::rvs_new();
-        graph.rvs_insert_M(DefPath::from("demo::rvs_dispatch"), caller);
-        // The unmarked sibling: an exact graph node under the readable
-        // record key. `why 'dep::Worker::run'` would resolve to it.
-        graph.rvs_insert_M(DefPath::from("dep::Worker::run"), rvs_node(&[]));
-
-        let mut info = CapabilityInfo::rvs_new(
-            CapabilitySet::rvs_new(),
-            CapabilityBasis::Inferred,
-            CapabilityCompleteness::Incomplete,
-        );
-        info.rvs_with_source_M(CapabilitySource {
-            layer: "deps".to_string(),
-            file: PathBuf::from("caps/deps"),
-            line: 4,
-        });
-        let mut caps = CapsMap::rvs_new();
-        caps.rvs_insert_info_M(CapsMapKey::rvs_new("dep::Worker::run"), info);
-
-        let report =
-            rvs_check_offline_caps(&graph, &caps, &BTreeSet::from([CrateName::from("demo")]));
-        let output = report.to_string();
-        rvs_snapshot_BIS(
-            "test_20260823_unmarked_sibling_shadows_readable_record_query",
-            &output,
-        );
-
-        let diagnostic = report
-            .diagnostics
-            .iter()
-            .find(|diagnostic| diagnostic.kind == OfflineCapsKind::IncompleteCapsKnowledge)
-            .expect("never: one root diagnostic");
-        assert!(
-            diagnostic
-                .details
-                .iter()
-                .all(|detail| !detail.contains("cargo rivus why 'dep::Worker::run' .")),
-            "exact-match sibling shadows the readable query, so it must not be suggested: {output}"
-        );
-        assert!(output.contains("review the record for 'dep::Worker::run'"));
-    }
-
-    #[test]
-    fn test_20260823_shared_record_kinds_aggregate_by_precedence() {
-        // F3 regression: two specializations resolving to one readable
-        // record can carry different analysis kinds; the merged root
-        // must report the most specific kind (artifact beats record),
-        // not whichever specialization was grouped first.
-        let flaky = FunctionIdentity {
-            crate_id: 2,
-            def_path: DefPath::from("dep::Worker{impl#6465703a3a666c616b79}::run"),
-        };
-        let solid = FunctionIdentity {
-            crate_id: 2,
-            def_path: DefPath::from("dep::Worker{impl#6465703a3a736f6c6964}::run"),
-        };
-        let mut caller = rvs_node(&[]);
-        caller.calls = BTreeMap::from([
-            (flaky.clone(), CallEdgeType::Strong),
-            (solid, CallEdgeType::Strong),
-        ]);
-        let mut graph = FnGraph::rvs_new();
-        graph.rvs_insert_M(DefPath::from("demo::rvs_dispatch"), caller);
-        // The first specialization is an incomplete artifact.
-        graph.rvs_insert_M(
-            flaky.def_path.clone(),
-            FnNode {
-                has_body: false,
-                crate_id: 2,
-                crate_provenance: CrateProvenance::Dependency,
-                complete: false,
-                ..rvs_node(&[])
-            },
-        );
-
-        let mut info = CapabilityInfo::rvs_new(
-            CapabilitySet::rvs_new(),
-            CapabilityBasis::Inferred,
-            CapabilityCompleteness::Incomplete,
-        );
-        info.rvs_with_source_M(CapabilitySource {
-            layer: "deps".to_string(),
-            file: PathBuf::from("caps/deps"),
-            line: 4,
-        });
-        let mut caps = CapsMap::rvs_new();
-        caps.rvs_insert_info_M(CapsMapKey::rvs_new("dep::Worker::run"), info);
-
-        let report =
-            rvs_check_offline_caps(&graph, &caps, &BTreeSet::from([CrateName::from("demo")]));
-        let output = report.to_string();
-        rvs_snapshot_BIS(
-            "test_20260823_shared_record_kinds_aggregate_by_precedence",
-            &output,
-        );
-
-        let root_warnings: Vec<_> = report
-            .diagnostics
-            .iter()
-            .filter(|diagnostic| diagnostic.kind == OfflineCapsKind::IncompleteCapsKnowledge)
-            .collect();
-        assert_eq!(root_warnings.len(), 1, "one merged root: {output}");
-        let root = root_warnings
-            .first()
-            .expect("never: one merged root by precedence");
-        assert!(
-            root.details
-                .iter()
-                .any(|detail| detail == "root kind: incomplete_artifact"),
-            "most specific kind wins regardless of merge order: {output}"
-        );
-        assert!(
-            root.details
-                .iter()
-                .any(|detail| detail.contains("the callgraph artifact")),
-            "artifact remediation follows the aggregated kind: {output}"
         );
     }
 
@@ -3072,69 +2760,6 @@ mod tests {
             Some(PathBuf::from("src/origin.rs")),
             "kind_origin is the specialization, not the record key: {output}"
         );
-    }
-
-    #[test]
-    fn test_20260824_why_unique_match_requires_kind_origin() {
-        // Fix regression: when the readable query uniquely resolves to an
-        // unmarked sibling but the root's kind came from a marked
-        // specialization, the sibling is a different function than the
-        // anchor describes, so `why` must not be suggested.
-        let marked = FunctionIdentity {
-            crate_id: 2,
-            def_path: DefPath::from("dep::Worker{impl#6465703a3a7538}::run"),
-        };
-        let mut caller = rvs_node(&[]);
-        caller.calls = BTreeMap::from([(marked.clone(), CallEdgeType::Strong)]);
-        let mut graph = FnGraph::rvs_new();
-        graph.rvs_insert_M(DefPath::from("demo::rvs_dispatch"), caller);
-        // The unmarked sibling exists as an exact graph node: `why` would
-        // resolve the readable query to it, not to the marked callee.
-        graph.rvs_insert_M(DefPath::from("dep::Worker::run"), rvs_node(&[]));
-        graph.rvs_insert_M(
-            marked.def_path.clone(),
-            FnNode {
-                has_body: false,
-                crate_id: 2,
-                crate_provenance: CrateProvenance::Dependency,
-                complete: true,
-                ..rvs_node(&[])
-            },
-        );
-
-        let mut info = CapabilityInfo::rvs_new(
-            CapabilitySet::rvs_new(),
-            CapabilityBasis::Inferred,
-            CapabilityCompleteness::Incomplete,
-        );
-        info.rvs_with_source_M(CapabilitySource {
-            layer: "deps".to_string(),
-            file: PathBuf::from("caps/deps"),
-            line: 4,
-        });
-        let mut caps = CapsMap::rvs_new();
-        caps.rvs_insert_info_M(CapsMapKey::rvs_new("dep::Worker::run"), info);
-
-        let report =
-            rvs_check_offline_caps(&graph, &caps, &BTreeSet::from([CrateName::from("demo")]));
-        let output = report.to_string();
-        rvs_snapshot_BIS(
-            "test_20260824_why_unique_match_requires_kind_origin",
-            &output,
-        );
-
-        let root = report
-            .diagnostics
-            .iter()
-            .find(|diagnostic| diagnostic.kind == OfflineCapsKind::IncompleteCapsKnowledge)
-            .expect("never: one root diagnostic");
-        assert!(
-            root.details
-                .iter()
-                .all(|detail| { !detail.contains("cargo rivus why 'dep::Worker::run' .") }),
-            "a unique sibling match different from kind_origin must not be suggested: {output}"
-        );
-        assert!(!output.contains("{impl#"));
     }
 
     #[test]
@@ -3409,21 +3034,11 @@ mod tests {
         graph.rvs_insert_M(DefPath::from("demo::rvs_alpha"), first);
         graph.rvs_insert_M(DefPath::from("demo::rvs_beta"), second);
 
-        let mut info = CapabilityInfo::rvs_new(
-            CapabilitySet::rvs_new(),
-            CapabilityBasis::Inferred,
-            CapabilityCompleteness::Unknown,
+        let report = rvs_check_offline_caps(
+            &graph,
+            &CapsMap::rvs_new(),
+            &BTreeSet::from([CrateName::from("demo")]),
         );
-        info.rvs_with_source_M(CapabilitySource {
-            layer: "deps".to_string(),
-            file: PathBuf::from("caps/deps"),
-            line: 2,
-        });
-        let mut caps = CapsMap::rvs_new();
-        caps.rvs_insert_info_M(CapsMapKey::from(callee_path.rvs_as_str()), info);
-
-        let report =
-            rvs_check_offline_caps(&graph, &caps, &BTreeSet::from([CrateName::from("demo")]));
         let output = report.to_string();
         rvs_snapshot_BIS(
             "test_20260823_anchor_identity_matches_diagnostic_identity",
@@ -3455,7 +3070,7 @@ mod tests {
         let remediation = diagnostic
             .details
             .iter()
-            .find(|detail| detail.contains("remains incomplete"))
+            .find(|detail| detail.contains("is absent from the callgraph"))
             .cloned()
             .unwrap_or_default();
         assert!(
@@ -3469,82 +3084,6 @@ mod tests {
                 .iter()
                 .any(|detail| detail.contains("dep::multi [crate_id=40, 41]"))
         );
-    }
-
-    #[test]
-    fn test_20260823_exact_specialization_records_stay_locatable() {
-        // Fix: two exact marker-keyed records sharing one readable path
-        // must remain locatable: each root warning points at its own
-        // record line, and no identity markers leak into the output.
-        let first = FunctionIdentity {
-            crate_id: 2,
-            def_path: DefPath::from("dep::Worker{impl#6465703a3a7538}::run"),
-        };
-        let second = FunctionIdentity {
-            crate_id: 2,
-            def_path: DefPath::from("dep::Worker{impl#6465703a3a753136}::run"),
-        };
-        let mut caller = rvs_node(&[]);
-        caller.calls = BTreeMap::from([
-            (first.clone(), CallEdgeType::Strong),
-            (second, CallEdgeType::Strong),
-        ]);
-        let mut graph = FnGraph::rvs_new();
-        graph.rvs_insert_M(DefPath::from("demo::rvs_dispatch"), caller);
-
-        let mut caps = CapsMap::rvs_new();
-        for (path, line) in [
-            ("dep::Worker{impl#6465703a3a7538}::run", 11),
-            ("dep::Worker{impl#6465703a3a753136}::run", 27),
-        ] {
-            let mut info = CapabilityInfo::rvs_new(
-                CapabilitySet::rvs_new(),
-                CapabilityBasis::Inferred,
-                CapabilityCompleteness::Incomplete,
-            );
-            info.rvs_with_source_M(CapabilitySource {
-                layer: "deps".to_string(),
-                file: PathBuf::from("caps/deps"),
-                line,
-            });
-            caps.rvs_insert_info_M(CapsMapKey::rvs_new(path), info);
-        }
-
-        let report =
-            rvs_check_offline_caps(&graph, &caps, &BTreeSet::from([CrateName::from("demo")]));
-        let output = report.to_string();
-        rvs_snapshot_BIS(
-            "test_20260823_exact_specialization_records_stay_locatable",
-            &output,
-        );
-
-        let root_warnings: Vec<_> = report
-            .diagnostics
-            .iter()
-            .filter(|diagnostic| diagnostic.kind == OfflineCapsKind::IncompleteCapsKnowledge)
-            .collect();
-        assert_eq!(
-            root_warnings.len(),
-            2,
-            "one warning per exact record: {output}"
-        );
-        let file_details: Vec<String> = root_warnings
-            .iter()
-            .filter_map(|diagnostic| {
-                diagnostic
-                    .details
-                    .iter()
-                    .find(|detail| detail.starts_with("file: "))
-                    .cloned()
-            })
-            .collect();
-        assert_eq!(file_details.len(), 2);
-        assert!(
-            file_details.contains(&"file: caps/deps:11".to_string())
-                && file_details.contains(&"file: caps/deps:27".to_string()),
-            "each warning locates its own record line: {file_details:?}"
-        );
-        assert!(!output.contains("{impl#"));
     }
 
     #[test]
@@ -4698,38 +4237,33 @@ mod tests {
 
     #[test]
     fn test_20260811_incomplete_caps_warning_keeps_one_root_anchor_lists_callers() {
+        // One knowledge gap shared by many callers: exactly one root
+        // warning, with every affected caller visible as detail. The
+        // ghost callee carries no caps record, so the root is the
+        // workspace's own analysis gap.
         let mut graph = FnGraph::rvs_new();
         graph.rvs_insert_M(
             DefPath::from("demo::rvs_first"),
-            rvs_node(&["dependency::incomplete"]),
+            rvs_node(&["dependency::ghost"]),
         );
         graph.rvs_insert_M(
             DefPath::from("demo::rvs_second"),
-            rvs_node(&["dependency::incomplete"]),
+            rvs_node(&["dependency::ghost"]),
         );
-        let mut info = CapabilityInfo::rvs_new(
-            CapabilitySet::rvs_new(),
-            CapabilityBasis::Inferred,
-            CapabilityCompleteness::Unknown,
-        );
-        info.rvs_with_source_M(CapabilitySource {
-            layer: "deps".to_string(),
-            file: PathBuf::from("caps/deps"),
-            line: 2,
-        });
-        let mut caps = CapsMap::rvs_new();
-        caps.rvs_insert_info_M(CapsMapKey::from("dependency::incomplete"), info);
 
-        let report =
-            rvs_check_offline_caps(&graph, &caps, &BTreeSet::from([CrateName::from("demo")]));
-        let emission = report
+        let report = rvs_check_offline_caps(
+            &graph,
+            &CapsMap::rvs_new(),
+            &BTreeSet::from([CrateName::from("demo")]),
+        );
+        let incomplete_emissions: Vec<_> = report
             .rvs_emissions(&graph)
             .into_iter()
-            .find(|emission| emission.lint == OfflineCapsLint::IncompleteCapsKnowledge)
-            .expect("never: incomplete knowledge emits a warning");
-        let anchor_callers: BTreeSet<String> = emission
-            .span_anchors
+            .filter(|emission| emission.lint == OfflineCapsLint::IncompleteCapsKnowledge)
+            .collect();
+        let anchor_callers: BTreeSet<String> = incomplete_emissions
             .iter()
+            .flat_map(|emission| emission.span_anchors.iter())
             .map(|anchor| anchor.identity.def_path.rvs_as_str().to_string())
             .collect();
         let diagnostic = report
@@ -4751,7 +4285,8 @@ mod tests {
             })
             .collect();
         let output = format!(
-            "anchors={}\ndetail_callers={}\n",
+            "emissions={}\nanchors={}\ndetail_callers={}\n",
+            incomplete_emissions.len(),
             anchor_callers
                 .iter()
                 .map(String::as_str)
@@ -4768,23 +4303,26 @@ mod tests {
             &output,
         );
 
-        // Root-only: exactly one anchor for the root, while every affected
-        // caller stays visible as explanatory detail.
-        assert_eq!(emission.span_anchors.len(), 1);
-        assert_eq!(anchor_callers.len(), 1);
+        // Root-only: one warning for the gap, while every affected caller
+        // stays visible as explanatory detail.
+        assert_eq!(incomplete_emissions.len(), 1);
         assert!(detail_callers.contains("demo::rvs_first"));
         assert!(detail_callers.contains("demo::rvs_second"));
     }
 
     #[test]
     fn test_20260811_incomplete_caps_same_caller_deduplicates_anchors() {
-        let callee_path = DefPath::from("dependency::incomplete");
+        // Repeated call sites of one knowledge gap in one caller must not
+        // multiply warnings: the ghost root produces one root diagnostic,
+        // anchored on precise call sites.
+        let callee_path = DefPath::from("dependency::ghost");
         let caller_path = DefPath::from("demo::rvs_caller");
-        let mut node = rvs_node(&[callee_path.rvs_as_str()]);
+        let mut node = rvs_node(&[]);
         let callee_identity = FunctionIdentity {
             crate_id: 1,
             def_path: callee_path.clone(),
         };
+        node.calls = BTreeMap::from([(callee_identity.clone(), CallEdgeType::Strong)]);
         node.call_sites = BTreeSet::from([
             CallSiteIdentity {
                 callee: callee_identity.clone(),
@@ -4797,40 +4335,38 @@ mod tests {
                 source: Some(CallSiteSource::rvs_new(PathBuf::from("src/lib.rs"), 30, 40)),
             },
             CallSiteIdentity {
-                callee: callee_identity.clone(),
+                callee: callee_identity,
                 occurrence: 2,
                 source: Some(CallSiteSource::rvs_new(PathBuf::from("src/lib.rs"), 50, 60)),
             },
         ]);
         let mut graph = FnGraph::rvs_new();
         graph.rvs_insert_M(caller_path, node);
-        let mut info = CapabilityInfo::rvs_new(
-            CapabilitySet::rvs_new(),
-            CapabilityBasis::Inferred,
-            CapabilityCompleteness::Unknown,
-        );
-        info.rvs_with_source_M(CapabilitySource {
-            layer: "deps".to_string(),
-            file: PathBuf::from("caps/deps"),
-            line: 2,
-        });
-        let mut caps = CapsMap::rvs_new();
-        caps.rvs_insert_info_M(CapsMapKey::from(callee_path.rvs_as_str()), info);
 
-        let report =
-            rvs_check_offline_caps(&graph, &caps, &BTreeSet::from([CrateName::from("demo")]));
-        let emission = report
+        let report = rvs_check_offline_caps(
+            &graph,
+            &CapsMap::rvs_new(),
+            &BTreeSet::from([CrateName::from("demo")]),
+        );
+        let incomplete_emissions: Vec<_> = report
             .rvs_emissions(&graph)
             .into_iter()
-            .find(|emission| emission.lint == OfflineCapsLint::IncompleteCapsKnowledge)
-            .expect("never: incomplete knowledge emits a warning");
-        let output = format!("anchors={}\n", emission.span_anchors.len());
+            .filter(|emission| emission.lint == OfflineCapsLint::IncompleteCapsKnowledge)
+            .collect();
+        let anchor_count: usize = incomplete_emissions
+            .iter()
+            .map(|emission| emission.span_anchors.len())
+            .sum();
+        let output = format!(
+            "emissions={}\nanchors={anchor_count}\n",
+            incomplete_emissions.len()
+        );
         rvs_snapshot_BIS(
             "test_20260811_incomplete_caps_same_caller_deduplicates_anchors",
             &output,
         );
 
-        assert_eq!(emission.span_anchors.len(), 1);
+        assert_eq!(incomplete_emissions.len(), 1);
     }
 
     #[test]
@@ -4896,18 +4432,7 @@ mod tests {
         graph.rvs_insert_M(DefPath::from("demo::rvs_aaa_no_site"), sourceless);
         graph.rvs_insert_M(first_path.clone(), first);
         graph.rvs_insert_M(second_path, second);
-        let mut info = CapabilityInfo::rvs_new(
-            CapabilitySet::rvs_new(),
-            CapabilityBasis::Inferred,
-            CapabilityCompleteness::Unknown,
-        );
-        info.rvs_with_source_M(CapabilitySource {
-            layer: "deps".to_string(),
-            file: PathBuf::from("caps/deps"),
-            line: 2,
-        });
-        let mut caps = CapsMap::rvs_new();
-        caps.rvs_insert_info_M(CapsMapKey::from(callee_path.rvs_as_str()), info);
+        let caps = CapsMap::rvs_new();
 
         let report =
             rvs_check_offline_caps(&graph, &caps, &BTreeSet::from([CrateName::from("demo")]));
@@ -5041,18 +4566,7 @@ mod tests {
         let mut graph = FnGraph::rvs_new();
         graph.rvs_insert_M(effect_path, effect);
         graph.rvs_insert_M(caller_path.clone(), caller);
-        let mut incomplete = CapabilityInfo::rvs_new(
-            CapabilitySet::rvs_new(),
-            CapabilityBasis::Inferred,
-            CapabilityCompleteness::Incomplete,
-        );
-        incomplete.rvs_with_source_M(CapabilitySource {
-            layer: "deps".to_string(),
-            file: PathBuf::from("caps/deps"),
-            line: 9,
-        });
-        let mut caps = CapsMap::rvs_new();
-        caps.rvs_insert_info_M(CapsMapKey::from(incomplete_path.rvs_as_str()), incomplete);
+        let caps = CapsMap::rvs_new();
 
         let report =
             rvs_check_offline_caps(&graph, &caps, &BTreeSet::from([CrateName::from("demo")]));

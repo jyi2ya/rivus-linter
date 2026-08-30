@@ -1,2 +1,3 @@
+emissions=1
 anchors=demo::rvs_first
 detail_callers=demo::rvs_first, demo::rvs_second
