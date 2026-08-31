@@ -276,6 +276,11 @@ caps/
 | 违规 | `error` | 名称契约不一致（含能力字母缺失/多余）、stub 宏、空函数体 | 是 |
 | 警告 | `warning` | 各种代码质量问题、推断提示 | 否 |
 
+诊断按知识来源分为两类，等级语义不同：
+
+- **直接 lint**（单编译单元内的 node/body lint 与纯名称语法检查）：在采集编译中执行并经 rustc lint 管线发射，服从 crate root 的 Rivus lint level 与 `-D warnings`。采集编译任何非零退出（编译错误或 deny 级直接 lint）都会终止本次 `check`：不合并调用图、不运行离线分析，失败原样返回。
+- **图诊断**（需要合并全项目调用图的诊断：命名契约、unknown callee、incomplete knowledge、trait outlier、全项目 untested 等）：severity 固定为 error/warning，不受 crate root lint 属性、`#[allow]` 或 `-D warnings` 影响。图 error 使 `check` 非零退出，图 warning 不影响退出码。
+
 ## 违规类型
 
 | 类型 | 含义 |

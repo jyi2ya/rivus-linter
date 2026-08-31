@@ -118,7 +118,6 @@ pub(crate) struct FnCheckData<'a> {
     pub diagnostic_spans: &'a mut BTreeMap<FunctionIdentity, (HirId, Span)>,
     pub diagnostic_call_spans:
         &'a mut BTreeMap<(FunctionIdentity, CallSiteIdentity), (HirId, Span)>,
-    pub collect_caps_facts: bool,
-    pub should_emit_lints: bool,
+    pub mode: super::LintExecutionMode,
     pub crate_provenance: CrateProvenance,
 }

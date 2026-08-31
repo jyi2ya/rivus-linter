@@ -147,13 +147,12 @@ fn rvs_run_driver_BIST() -> ExitCode {
         if rivus_enabled {
             rvs_rewrite_cap_lints_M(&mut args, CapLintsRewrite::AllowToWarn);
         }
-        let callgraph_lint_mode = rvs_callgraph_lint_mode(
-            wrapper_mode,
-            rivus_enabled,
-            driver_config.as_ref().is_some_and(|config| {
-                matches!(config.mode, workspace::RivusDriverMode::Callgraph(_))
-            }),
-        );
+        let collection_lints = driver_config.as_ref().and_then(|config| match config.mode {
+            workspace::RivusDriverMode::Callgraph { lints, .. } => Some(lints),
+            _ => None,
+        });
+        let callgraph_lint_mode =
+            rvs_callgraph_lint_mode(wrapper_mode, rivus_enabled, collection_lints);
         rvs_add_callgraph_lint_args_M(&mut args, callgraph_lint_mode);
 
         if rivus_enabled {
@@ -189,12 +188,13 @@ enum CapLintsRewrite {
 const fn rvs_callgraph_lint_mode(
     wrapper_mode: bool,
     rivus_enabled: bool,
-    collection_requested: bool,
+    collection_lints: Option<workspace::CollectionLints>,
 ) -> CallgraphLintMode {
-    if wrapper_mode && rivus_enabled && collection_requested {
-        CallgraphLintMode::Collect
-    } else {
-        CallgraphLintMode::Normal
+    // Only silent collection suppresses diagnostics; the lint-bearing
+    // collection of `cargo rivus check` keeps normal lint levels.
+    match (wrapper_mode && rivus_enabled, collection_lints) {
+        (true, Some(workspace::CollectionLints::Silent)) => CallgraphLintMode::Collect,
+        _ => CallgraphLintMode::Normal,
     }
 }
 
@@ -482,11 +482,15 @@ mod tests {
         assert!(enabled.iter().any(|arg| arg == "--cap-lints=warn"));
         assert_eq!(existing_cap.get(2).map(String::as_str), Some("warn"));
         assert_eq!(
-            rvs_callgraph_lint_mode(true, false, true),
+            rvs_callgraph_lint_mode(true, true, Some(workspace::CollectionLints::Check)),
             CallgraphLintMode::Normal
         );
         assert_eq!(
-            rvs_callgraph_lint_mode(true, true, true),
+            rvs_callgraph_lint_mode(true, true, None),
+            CallgraphLintMode::Normal
+        );
+        assert_eq!(
+            rvs_callgraph_lint_mode(true, true, Some(workspace::CollectionLints::Silent)),
             CallgraphLintMode::Collect
         );
     }

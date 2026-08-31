@@ -6,12 +6,13 @@ use snafu::Snafu;
 
 use crate::artifacts::{CrateProvenance, FnGraph, FunctionIdentity};
 use crate::capsmap::{self, CapsMap};
-use crate::lints::{LintEnvironment, RivusLintConfig};
+use crate::lints::{LintEnvironment, LintExecutionMode, RivusLintConfig};
 use crate::offline_caps::OfflineCapsEmission;
 use crate::symbols::CrateName;
 
 use super::workspace::{
-    RivusCallgraphOutput, RivusDriverConfig, RivusDriverMode, RivusOfflineDriverInput,
+    CollectionLints, RivusCallgraphOutput, RivusDriverConfig, RivusDriverMode,
+    RivusOfflineDriverInput,
 };
 
 static RVS_CALLGRAPH_ARTIFACT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -92,14 +93,28 @@ pub(crate) fn rvs_prepare_lint_config_BIS(
     driver_config: RivusDriverConfig,
 ) -> RivusLintConfig<RivusLintEnvironment> {
     let RivusDriverConfig { mode, ui_testing } = driver_config;
-    let (capsmap_path, offline_input, callgraph_output) = match mode {
-        RivusDriverMode::ProjectCaps { capsmap } => (capsmap, None, None),
-        RivusDriverMode::Offline(input) => (None, Some(input), None),
-        RivusDriverMode::Callgraph(output) => (None, None, Some(output)),
+    let (lint_mode, capsmap_path, offline_input, callgraph_output) = match mode {
+        RivusDriverMode::ProjectCaps { capsmap } => (
+            LintExecutionMode::ProjectCapsCompatibility,
+            capsmap,
+            None,
+            None,
+        ),
+        RivusDriverMode::Offline(input) => (
+            LintExecutionMode::ReplayDiagnostics,
+            None,
+            Some(input),
+            None,
+        ),
+        RivusDriverMode::Callgraph { output, lints } => {
+            let lint_mode = match lints {
+                CollectionLints::Silent => LintExecutionMode::CollectOnly,
+                CollectionLints::Check => LintExecutionMode::CheckAndCollect,
+            };
+            (lint_mode, None, None, Some(output))
+        }
     };
-    let collect_callgraph = callgraph_output.is_some();
-    let should_emit_caps_report = !collect_callgraph && offline_input.is_none();
-    let capsmap = if should_emit_caps_report {
+    let capsmap = if lint_mode.rvs_is_caps_report() {
         rvs_load_capsmap_path_BIS(capsmap_path.as_deref()).map(Some)
     } else {
         Ok(None)
@@ -114,12 +129,11 @@ pub(crate) fn rvs_prepare_lint_config_BIS(
         });
 
     RivusLintConfig {
+        mode: lint_mode,
         capsmap,
         untested_functions,
         offline_emissions,
         test_outputs: rvs_collect_test_outputs_BIS(Path::new("test_out"), ui_testing),
-        collect_callgraph,
-        should_emit_caps_report,
         ui_testing,
         crate_provenance,
         world: RivusLintWorld {

@@ -32,7 +32,7 @@ use crate::symbols::CrateName;
 
 const RVS_RUN_GENERATION_MARKER_FILE: &str = ".rivus-generation.json";
 const RVS_PRIMARY_PACKAGE_TARGETS_FILE: &str = ".rivus-primary-package-targets";
-const RVS_RUN_GENERATION_SCHEMA_VERSION: u32 = 4;
+const RVS_RUN_GENERATION_SCHEMA_VERSION: u32 = 5;
 const RVS_PRIMARY_PACKAGE_TARGETS_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Snafu)]
@@ -182,6 +182,17 @@ enum RunGenerationCollectionMode {
     StandardLibrary,
 }
 
+/// Whether the collection compile also runs the direct lints. `check` is
+/// the lint-bearing collection of `cargo rivus check`; its non-zero exit
+/// short-circuits the command before graph analysis. `silent` serves the
+/// analysis-only commands (report/why/infer) and suppresses diagnostics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum CollectionLints {
+    Silent,
+    Check,
+}
+
 impl From<CallgraphCollectionMode> for RunGenerationCollectionMode {
     fn from(value: CallgraphCollectionMode) -> Self {
         match value {
@@ -212,6 +223,7 @@ enum RunGenerationMode {
     Collection {
         collection: RunGenerationCollectionMode,
         target_scope: RunGenerationTargetScope,
+        lints: CollectionLints,
     },
 }
 
@@ -221,12 +233,24 @@ impl RunGenerationMode {
             Self::Analysis { .. } => "analysis",
             Self::Collection {
                 collection: RunGenerationCollectionMode::Workspace,
+                lints: CollectionLints::Silent,
                 ..
             } => "collection-workspace",
             Self::Collection {
+                collection: RunGenerationCollectionMode::Workspace,
+                lints: CollectionLints::Check,
+                ..
+            } => "collection-workspace-check",
+            Self::Collection {
                 collection: RunGenerationCollectionMode::AllCrates,
+                lints: CollectionLints::Silent,
                 ..
             } => "collection-all-crates",
+            Self::Collection {
+                collection: RunGenerationCollectionMode::AllCrates,
+                lints: CollectionLints::Check,
+                ..
+            } => "collection-all-crates-check",
             Self::Collection {
                 collection: RunGenerationCollectionMode::StandardLibrary,
                 ..
@@ -355,9 +379,14 @@ pub(crate) struct RivusOfflineDriverInput {
 
 #[derive(Debug, Clone)]
 pub(crate) enum RivusDriverMode {
-    ProjectCaps { capsmap: Option<PathBuf> },
+    ProjectCaps {
+        capsmap: Option<PathBuf>,
+    },
     Offline(RivusOfflineDriverInput),
-    Callgraph(RivusCallgraphOutput),
+    Callgraph {
+        output: RivusCallgraphOutput,
+        lints: CollectionLints,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -674,7 +703,7 @@ fn rvs_parse_driver_protocol_environment_BIS(
     let generation_project_root = marker.project_root.clone();
 
     let mode = match marker.mode {
-        RunGenerationMode::Collection { .. } => {
+        RunGenerationMode::Collection { lints, .. } => {
             rvs_require_driver_flag(environment.callgraph.as_ref(), "RIVUS_CALLGRAPH")?;
             let artifact_dir = rvs_require_driver_path_match(
                 environment.callgraph_dir.as_ref(),
@@ -711,15 +740,18 @@ fn rvs_parse_driver_protocol_environment_BIS(
             ] {
                 rvs_reject_driver_variable(value, name)?;
             }
-            RivusDriverMode::Callgraph(RivusCallgraphOutput {
-                generation_id: marker.generation_id,
-                artifact_dir,
-                crate_provenance: rvs_driver_crate_provenance_BIS(
-                    &canonical_root,
-                    &generation_id,
-                    &environment.rustc_arguments,
-                )?,
-            })
+            RivusDriverMode::Callgraph {
+                output: RivusCallgraphOutput {
+                    generation_id: marker.generation_id,
+                    artifact_dir,
+                    crate_provenance: rvs_driver_crate_provenance_BIS(
+                        &canonical_root,
+                        &generation_id,
+                        &environment.rustc_arguments,
+                    )?,
+                },
+                lints,
+            }
         }
         RunGenerationMode::Analysis {
             analysis: RunGenerationAnalysisMode::ProjectCaps,
@@ -1272,11 +1304,17 @@ pub(crate) fn rvs_current_wrapper_exe_BIS() -> Result<PathBuf, std::io::Error> {
 ///
 /// Panics if the current executable path is invalid or cargo cannot be spawned.
 pub(crate) fn rvs_run_cargo_check_BIST(extra_args: &[String]) -> Result<(), i32> {
+    rvs_run_cargo_check_at_BIST(Path::new("."), extra_args)
+}
+
+/// The lint-bearing pipeline of `cargo rivus check` for an explicit project
+/// path: the collection compile runs the direct lints, and its non-zero
+/// exit short-circuits the command before graph analysis.
+fn rvs_run_cargo_check_at_BIST(project_path: &Path, extra_args: &[String]) -> Result<(), i32> {
     if let Err(e) = rvs_reject_forwarded_check_args(extra_args) {
         eprintln!("{e}");
         return Err(2);
     }
-    let project_path = Path::new(".");
     let target_scope = CargoTargetScope::WithTestExampleBench;
     let extra_args_ref: Vec<&str> = extra_args.iter().map(|arg| arg.as_str()).collect();
     let caps = match rvs_load_project_caps_BIS(project_path) {
@@ -1293,32 +1331,26 @@ pub(crate) fn rvs_run_cargo_check_BIST(extra_args: &[String]) -> Result<(), i32>
             return Err(1);
         }
     };
-    let callgraph_result = rvs_collect_callgraph_with_args_detailed_BIST(
+    let callgraph = match rvs_collect_callgraph_with_args_detailed_BIST(
         project_path,
         CallgraphCollectionMode::Workspace,
         target_scope,
         extra_args_ref.clone(),
         &local_crate_names,
-    );
-    let callgraph = match callgraph_result {
+        CollectionLints::Check,
+    ) {
         Ok(collected) => collected.callgraph,
-        Err(error) if rvs_callgraph_failure_exit_code(&error).is_some() => {
-            eprintln!("offline caps check unavailable: {error}");
-            return Err(rvs_callgraph_failure_exit_code(&error)
-                .expect("never: guarded callgraph cargo failure has an exit code"));
+        Err(CallgraphCollectionError::Cargo(CargoCheckError::ExitCode(code))) => {
+            // The lint-bearing collection compile failed and already
+            // surfaced its diagnostics; graph analysis is skipped.
+            eprintln!(
+                "rivus check stopped: the collection compile failed with exit code {code}; \
+                 fix the diagnostics above before graph analysis runs"
+            );
+            return Err(code);
         }
-        Err(e) => {
-            eprintln!("offline caps check unavailable: {e}");
-            if let Err(lint_error) = rvs_run_project_lints_BIST(
-                project_path,
-                &target_scope,
-                &extra_args_ref,
-                &None,
-                None,
-            ) {
-                eprintln!("{lint_error}");
-                return Err(lint_error.rvs_exit_code());
-            }
+        Err(error) => {
+            eprintln!("offline caps check unavailable: {error}");
             return Err(1);
         }
     };
@@ -1684,6 +1716,7 @@ pub(crate) fn rvs_collect_callgraph_with_args_BIST(
         target_scope,
         extra_args,
         local_crate_names,
+        CollectionLints::Silent,
     )
     .map(|collected| collected.callgraph)
     .map_err(|error| error.to_string())
@@ -1695,12 +1728,14 @@ fn rvs_collect_callgraph_with_args_detailed_BIST(
     target_scope: CargoTargetScope,
     extra_args: Vec<&str>,
     local_crate_names: &BTreeSet<CrateName>,
+    lints: CollectionLints,
 ) -> Result<CollectedCallgraph, CallgraphCollectionError> {
     let mut generation = rvs_reserve_run_generation_for_BIST(
         path,
         RunGenerationMode::Collection {
             collection: collection.into(),
             target_scope: target_scope.into(),
+            lints,
         },
     )
     .map_err(|error| CallgraphCollectionError::Artifact(error.to_string()))?;
@@ -1848,10 +1883,12 @@ fn rvs_test_generation_mode(purpose: &str) -> RunGenerationMode {
         "callgraph" => RunGenerationMode::Collection {
             collection: RunGenerationCollectionMode::Workspace,
             target_scope: RunGenerationTargetScope::Production,
+            lints: CollectionLints::Silent,
         },
         "callgraph-std" => RunGenerationMode::Collection {
             collection: RunGenerationCollectionMode::StandardLibrary,
             target_scope: RunGenerationTargetScope::Production,
+            lints: CollectionLints::Silent,
         },
         _ => RunGenerationMode::Analysis {
             target_scope: RunGenerationTargetScope::WithTestExampleBench,
@@ -1947,13 +1984,6 @@ fn rvs_cleanup_run_generation_BIMS(generation: &mut RivusRunGeneration) -> Resul
     generation
         .rvs_cleanup_BIMS()
         .map_err(|error| error.to_string())
-}
-
-const fn rvs_callgraph_failure_exit_code(error: &CallgraphCollectionError) -> Option<i32> {
-    match error {
-        CallgraphCollectionError::Cargo(error) => Some(error.rvs_exit_code()),
-        CallgraphCollectionError::Artifact(_) => None,
-    }
 }
 
 fn rvs_load_required_std_callgraph_cache_BIS(path: &Path) -> Result<FnGraph, String> {
@@ -2248,6 +2278,7 @@ mod tests {
             CargoCheckMode::Callgraph { collection, .. } => RunGenerationMode::Collection {
                 collection: (*collection).into(),
                 target_scope: target_scope.into(),
+                lints: CollectionLints::Silent,
             },
         };
         rvs_reserve_run_generation_for_BIST(project, mode)
@@ -4080,24 +4111,6 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
     }
 
     #[test]
-    fn test_20260714_callgraph_compile_failure_skips_lint_fallback() {
-        let compile_failure = CallgraphCollectionError::Cargo(CargoCheckError::ExitCode(101));
-        let artifact_failure = CallgraphCollectionError::Artifact("missing artifact".to_string());
-        let output = format!(
-            "compile={:?}\nartifact={:?}\n",
-            rvs_callgraph_failure_exit_code(&compile_failure),
-            rvs_callgraph_failure_exit_code(&artifact_failure),
-        );
-        rvs_snapshot_BIS(
-            "test_20260714_callgraph_compile_failure_skips_lint_fallback",
-            &output,
-        );
-
-        assert_eq!(rvs_callgraph_failure_exit_code(&compile_failure), Some(101));
-        assert_eq!(rvs_callgraph_failure_exit_code(&artifact_failure), None);
-    }
-
-    #[test]
     fn test_20260714_grouped_banned_import_reports_once() {
         let dir = rvs_make_workspace_temp_dir_BIS("grouped-banned-import");
         std::fs::create_dir_all(dir.join("src")).unwrap();
@@ -5741,6 +5754,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
             RunGenerationMode::Collection {
                 collection: RunGenerationCollectionMode::Workspace,
                 target_scope: RunGenerationTargetScope::Production,
+                lints: CollectionLints::Silent,
             },
         )
         .unwrap();
@@ -5902,5 +5916,96 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
             e,
             CargoCheckError::Message(m) if m == "cargo fail"
         )));
+    }
+
+    #[test]
+    fn test_20260831_check_collection_deny_short_circuits_graph_analysis() {
+        let dir = rvs_make_cargo_project_BIS(
+            "check-deny-short-circuit",
+            "check-deny-short-circuit",
+            &[(
+                "src/lib.rs",
+                "#![allow(non_snake_case)]\npub fn rvs_pending() { todo!() }\n",
+            )],
+        );
+        let result = rvs_run_cargo_check_at_BIST(&dir, &[]);
+        let output = format!("is_err={}\ncode={:?}\n", result.is_err(), result.err());
+        rvs_snapshot_BIS(
+            "test_20260831_check_collection_deny_short_circuits_graph_analysis",
+            &output,
+        );
+
+        // The deny-level stub fires in the lint-bearing collection compile;
+        // the command exits with the cargo code before graph analysis runs.
+        assert_eq!(result, Err(101));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260831_check_warning_project_completes_full_pipeline() {
+        let dir = rvs_make_cargo_project_BIS(
+            "check-warning-pipeline",
+            "check-warning-pipeline",
+            &[(
+                "src/lib.rs",
+                "#![allow(non_snake_case)]\npub fn rvs_add(left: i32, right: i32) -> i32 {\n    debug_assert!(left >= 0);\n    debug_assert!(right >= 0);\n    left + right\n}\n",
+            )],
+        );
+        let result = rvs_run_cargo_check_at_BIST(&dir, &[]);
+        let output = format!("is_ok={}\n", result.is_ok());
+        rvs_snapshot_BIS(
+            "test_20260831_check_warning_project_completes_full_pipeline",
+            &output,
+        );
+
+        // Warnings (missing doc, untested good fn) do not fail either phase.
+        assert_eq!(result, Ok(()));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260831_check_graph_error_fails_replay_phase() {
+        let dir = rvs_make_cargo_project_BIS(
+            "check-graph-error",
+            "check-graph-error",
+            &[(
+                "src/lib.rs",
+                "#![allow(non_snake_case)]\nstatic FLAG: u32 = 7;\npub fn rvs_flag() -> u32 {\n    FLAG\n}\n",
+            )],
+        );
+        // Phase isolation: the lint-bearing collection compile alone must
+        // succeed for this fixture, so a failure of the full command can
+        // only come from the replay phase.
+        let target_scope = CargoTargetScope::WithTestExampleBench;
+        let local_crate_names = rvs_load_local_crate_prefixes_BIS(&dir, target_scope)
+            .expect("never: graph-error fixture should expose its local crate names");
+        let collection_ok = rvs_collect_callgraph_with_args_detailed_BIST(
+            &dir,
+            CallgraphCollectionMode::Workspace,
+            target_scope,
+            vec![],
+            &local_crate_names,
+            CollectionLints::Check,
+        )
+        .is_ok();
+        let result = rvs_run_cargo_check_at_BIST(&dir, &[]);
+        let output = format!(
+            "collection_ok={collection_ok}\nis_err={}\ncode={:?}\n",
+            result.is_err(),
+            result.err()
+        );
+        rvs_snapshot_BIS(
+            "test_20260831_check_graph_error_fails_replay_phase",
+            &output,
+        );
+
+        assert!(
+            collection_ok,
+            "fixture must not fail the collection compile"
+        );
+        // The contract mismatch is a graph Error replayed in the second
+        // phase and fails the command with the cargo exit code.
+        assert_eq!(result, Err(101));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

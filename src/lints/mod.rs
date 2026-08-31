@@ -14,7 +14,9 @@ use rustc_session::declare_tool_lint;
 use rustc_span::Span;
 
 use crate::artifacts::{CallSiteIdentity, CrateProvenance, FunctionIdentity};
-use crate::capability::{Capability, CapabilityFacts, CapabilityPolicy, ParsedFunctionName};
+use crate::capability::{
+    Capability, CapabilityFacts, CapabilityPolicy, CapabilitySet, ParsedFunctionName,
+};
 use crate::capsmap::CapsMap;
 use crate::symbols::{CrateName, DefPath};
 
@@ -28,7 +30,7 @@ mod test_quality;
 mod utils;
 
 pub use crate::artifacts::FnGraph;
-pub(crate) use ports::{LintEnvironment, RivusLintConfig};
+pub(crate) use ports::{LintEnvironment, LintExecutionMode, RivusLintConfig};
 
 use body::{catch_unwind, debug_assert, empty_fn, error_swallow, reflection, spawn, stub_macro};
 use caps::callgraph;
@@ -235,8 +237,7 @@ macro_rules! rvs_fn_check_data {
             callgraph: &mut $pass.callgraph,
             diagnostic_spans: &mut $pass.diagnostic_spans,
             diagnostic_call_spans: &mut $pass.diagnostic_call_spans,
-            collect_caps_facts: $pass.collect_caps_facts,
-            should_emit_lints: $pass.should_emit_lints,
+            mode: $pass.mode,
             crate_provenance: $pass.crate_provenance,
         }
     };
@@ -256,9 +257,7 @@ pub struct RivusLintPass<E: LintEnvironment> {
     diagnostic_spans: BTreeMap<FunctionIdentity, (rustc_hir::HirId, Span)>,
     diagnostic_call_spans: BTreeMap<(FunctionIdentity, CallSiteIdentity), (rustc_hir::HirId, Span)>,
     done_crate_level: bool,
-    collect_caps_facts: bool,
-    should_emit_lints: bool,
-    should_emit_caps_report: bool,
+    mode: LintExecutionMode,
     test_fn_names: HashSet<String>,
     banned_import_statements: HashSet<(rustc_span::StableSourceFileId, u32, String)>,
     untested_functions:
@@ -278,12 +277,11 @@ impl<E: LintEnvironment> RivusLintPass<E> {
     /// load failures as deferred diagnostics instead of failing eagerly.
     pub fn rvs_new(config: RivusLintConfig<E>) -> Self {
         let RivusLintConfig {
+            mode,
             capsmap,
             untested_functions,
             offline_emissions,
             test_outputs,
-            collect_callgraph,
-            should_emit_caps_report,
             ui_testing,
             crate_provenance,
             world,
@@ -301,7 +299,6 @@ impl<E: LintEnvironment> RivusLintPass<E> {
             Ok(emissions) => (emissions, None),
             Err(error) => (Vec::new(), Some(error)),
         };
-        let has_offline_emissions = !offline_emissions.is_empty();
         Self {
             capsmap,
             capsmap_error,
@@ -313,11 +310,7 @@ impl<E: LintEnvironment> RivusLintPass<E> {
             diagnostic_spans: BTreeMap::new(),
             diagnostic_call_spans: BTreeMap::new(),
             done_crate_level: false,
-            collect_caps_facts: collect_callgraph
-                || should_emit_caps_report
-                || has_offline_emissions,
-            should_emit_lints: !collect_callgraph,
-            should_emit_caps_report,
+            mode,
             test_fn_names: HashSet::new(),
             banned_import_statements: HashSet::new(),
             untested_functions,
@@ -399,11 +392,10 @@ impl<'tcx, E: LintEnvironment> LateLintPass<'tcx> for RivusLintPass<E> {
         if let Some(error) = self.offline_emissions_error.take() {
             cx.tcx.dcx().err(error);
         }
-        if self.should_emit_caps_report {
-            if let Err(error) = self.rvs_ensure_capsmap_M() {
-                cx.tcx.dcx().err(format!("failed to load capsmap: {error}"));
-                self.should_emit_caps_report = false;
-            }
+        if self.mode.rvs_is_caps_report()
+            && let Err(error) = self.rvs_ensure_capsmap_M()
+        {
+            cx.tcx.dcx().err(format!("failed to load capsmap: {error}"));
         }
 
         // Pre-scan: collect names of test functions
@@ -429,7 +421,7 @@ impl<'tcx, E: LintEnvironment> LateLintPass<'tcx> for RivusLintPass<E> {
             }
         }
 
-        if self.should_emit_lints {
+        if self.mode.rvs_should_emit_lints() {
             deny_warnings::rvs_check_crate_S(cx);
         }
     }
@@ -440,14 +432,16 @@ impl<'tcx, E: LintEnvironment> LateLintPass<'tcx> for RivusLintPass<E> {
         }
         self.done_crate_level = true;
 
-        if self.should_emit_caps_report {
+        // A caps-report mode whose capsmap failed to load has already
+        // reported the load error in check_crate; the report is skipped.
+        if self.mode.rvs_is_caps_report() && self.capsmap.is_some() {
             let local_crate_names = BTreeSet::from([CrateName::rvs_from_manifest_name(
                 cx.tcx.crate_name(rustc_span::def_id::LOCAL_CRATE).as_str(),
             )]);
             let caps = self
                 .capsmap
                 .as_ref()
-                .expect("never: direct caps report loads capsmap in check_crate");
+                .expect("never: caps report mode has a loaded capsmap");
             let report = crate::offline_caps::rvs_check_offline_caps(
                 &self.callgraph,
                 caps,
@@ -483,7 +477,7 @@ impl<'tcx, E: LintEnvironment> LateLintPass<'tcx> for RivusLintPass<E> {
             &self.callgraph,
             self.test_outputs.as_ref(),
             &mut self.world,
-            self.should_emit_caps_report,
+            self.mode.rvs_is_caps_report(),
             self.ui_testing,
         );
     }
@@ -706,14 +700,10 @@ fn rvs_diagnostic_scope_B(
 
 /// Dispatches to fn-level checks for free functions, inherent impl methods,
 /// and trait impl methods.
-fn rvs_run_fn_checks_BMS<'tcx>(
-    cx: &LateContext<'tcx>,
-    subject: &FnSubject<'_, 'tcx>,
-    data: &mut FnCheckData<'_>,
-) {
+fn rvs_run_fn_checks_S<'tcx>(cx: &LateContext<'tcx>, subject: &FnSubject<'_, 'tcx>) {
     // Trait impl methods (non-Port) keep their historical exemption from
     // fn-level production checks, including coverage registration; their
-    // TODO feedback runs at the dispatch site instead.
+    // unfinished-marker feedback runs at the dispatch site instead.
     if subject.is_trait_impl && !subject.is_port_method {
         return;
     }
@@ -722,24 +712,7 @@ fn rvs_run_fn_checks_BMS<'tcx>(
     let parsed_name = ParsedFunctionName::rvs_parse(name);
     let has_rvs_prefix = parsed_name.rvs_has_rvs_prefix();
     if has_rvs_prefix || subject.is_port_method {
-        // Semantic caps in direct mode are the signature/body facts plus
-        // the structural Port marker; the name suffix is a read-only view
-        // and contributes nothing. Propagated capabilities only appear in
-        // the offline engine, which owns call-edge closure.
-        let facts = CapabilityFacts::rvs_from_signature(
-            subject.sig,
-            utils::rvs_has_mutable_params(subject.sig),
-            subject.is_port_method,
-        )
-        .rvs_with_static_refs(
-            subject.body_facts.has_static_ref,
-            subject.body_facts.has_static_mut_ref,
-            subject.body_facts.has_thread_local_ref,
-        );
-        let mut effective_caps = CapabilityPolicy::rvs_signature_caps(facts);
-        if subject.is_port_method {
-            effective_caps.rvs_insert_M(Capability::P);
-        }
+        let effective_caps = rvs_effective_caps(subject);
 
         let is_stub = stub_macro::rvs_check_fn_S(cx, subject.body_facts, subject.span);
         empty_fn::rvs_check_fn_S(cx, subject.body, subject.span, subject.has_body, is_stub);
@@ -765,40 +738,81 @@ fn rvs_run_fn_checks_BMS<'tcx>(
             consumed_arg::rvs_check_fn_S(cx, subject.sig, subject.body.params, name);
             validate::rvs_check_fn_S(cx, name, subject.sig, &effective_caps);
         }
-
-        let is_good = CapabilityPolicy::rvs_is_good(&effective_caps);
-        let coverage_fns = if is_good {
-            Some(&mut *data.good_fns)
-        } else if CapabilityPolicy::rvs_is_ok(&effective_caps) && !subject.is_trait_impl {
-            Some(&mut *data.ok_fns)
-        } else {
-            None
-        };
-        if has_rvs_prefix
-            && data.should_emit_lints
-            && !subject.is_test
-            && !utils::rvs_has_allow(attrs, "dead_code")
-            && !utils::rvs_has_allow(attrs, "unused")
-            && let Some(coverage_fns) = coverage_fns
-        {
-            coverage_fns.push(ctx::CoverageFn {
-                identity: crate::artifacts::FunctionIdentity {
-                    crate_id: cx
-                        .tcx
-                        .stable_crate_id(subject.hir_id.owner.def_id.to_def_id().krate)
-                        .as_u64(),
-                    def_path: DefPath::rvs_new(utils::rvs_def_path_B(
-                        cx,
-                        subject.hir_id.owner.def_id.to_def_id(),
-                    )),
-                },
-                name: name.to_string(),
-                hir_id: subject.hir_id,
-                span: subject.span,
-            });
-        }
     }
     test_name_format::rvs_check_fn_S(cx, name, subject.span, subject.is_test);
+}
+
+/// Semantic caps in direct mode: the signature/body facts plus the
+/// structural Port marker. The name suffix is a read-only view and
+/// contributes nothing; propagated capabilities only appear in the
+/// offline engine, which owns call-edge closure.
+fn rvs_effective_caps(subject: &FnSubject<'_, '_>) -> CapabilitySet {
+    let facts = CapabilityFacts::rvs_from_signature(
+        subject.sig,
+        utils::rvs_has_mutable_params(subject.sig),
+        subject.is_port_method,
+    )
+    .rvs_with_static_refs(
+        subject.body_facts.has_static_ref,
+        subject.body_facts.has_static_mut_ref,
+        subject.body_facts.has_thread_local_ref,
+    );
+    let mut effective_caps = CapabilityPolicy::rvs_signature_caps(facts);
+    if subject.is_port_method {
+        effective_caps.rvs_insert_M(Capability::P);
+    }
+    effective_caps
+}
+
+/// Registers a good/ok coverage candidate for the untested selection.
+/// Registration is collection, not emission: it also runs in replay
+/// processes that no longer emit direct lints, so the selection can
+/// anchor onto real spans.
+fn rvs_register_coverage_candidate_BM<'tcx>(
+    cx: &LateContext<'tcx>,
+    subject: &FnSubject<'_, 'tcx>,
+    data: &mut FnCheckData<'_>,
+) {
+    if subject.is_trait_impl && !subject.is_port_method {
+        return;
+    }
+    let name = subject.rvs_name();
+    let parsed_name = ParsedFunctionName::rvs_parse(name);
+    if !parsed_name.rvs_has_rvs_prefix() {
+        return;
+    }
+    let attrs = cx.tcx.hir_attrs(subject.hir_id);
+    if subject.is_test
+        || utils::rvs_has_allow(attrs, "dead_code")
+        || utils::rvs_has_allow(attrs, "unused")
+    {
+        return;
+    }
+    let effective_caps = rvs_effective_caps(subject);
+    let coverage_fns = if CapabilityPolicy::rvs_is_good(&effective_caps) {
+        Some(&mut *data.good_fns)
+    } else if CapabilityPolicy::rvs_is_ok(&effective_caps) && !subject.is_trait_impl {
+        Some(&mut *data.ok_fns)
+    } else {
+        None
+    };
+    if let Some(coverage_fns) = coverage_fns {
+        coverage_fns.push(ctx::CoverageFn {
+            identity: crate::artifacts::FunctionIdentity {
+                crate_id: cx
+                    .tcx
+                    .stable_crate_id(subject.hir_id.owner.def_id.to_def_id().krate)
+                    .as_u64(),
+                def_path: DefPath::rvs_new(utils::rvs_def_path_B(
+                    cx,
+                    subject.hir_id.owner.def_id.to_def_id(),
+                )),
+            },
+            name: name.to_string(),
+            hir_id: subject.hir_id,
+            span: subject.span,
+        });
+    }
 }
 
 fn rvs_run_body_fn_pipeline_BMS<'tcx, F>(
@@ -810,10 +824,10 @@ fn rvs_run_body_fn_pipeline_BMS<'tcx, F>(
 ) where
     F: FnOnce(DiagnosticScope),
 {
-    if data.should_emit_lints {
+    if data.mode.rvs_should_emit_lints() {
         match scope {
             DiagnosticScope::Production => {
-                rvs_run_fn_checks_BMS(cx, subject, data);
+                rvs_run_fn_checks_S(cx, subject);
                 if !(subject.is_trait_impl && !subject.is_port_method) {
                     todo_comment::rvs_check_fn_S(cx, subject.span);
                 }
@@ -837,7 +851,12 @@ fn rvs_run_body_fn_pipeline_BMS<'tcx, F>(
         // scopes.
         rvs_check_unsupported_implicit_execution_S(cx, subject.body_facts);
     }
-    if data.collect_caps_facts {
+    // Coverage candidates are production source only, matching the
+    // offline engine's is_coverage_candidate exclusion of test modules.
+    if data.mode.rvs_registers_coverage_candidates() && scope == DiagnosticScope::Production {
+        rvs_register_coverage_candidate_BM(cx, subject, data);
+    }
+    if data.mode.rvs_collect_caps_facts() {
         let collected = callgraph::rvs_collect_callgraph_for_item_BMS(
             data.callgraph,
             cx,
@@ -877,7 +896,8 @@ fn rvs_check_item_BMS<'tcx>(
         } => {
             let name = ident.name.as_str();
             let body = cx.tcx.hir_body(*body);
-            let body_facts = body::rvs_collect_body_facts_B(cx, body, data.should_emit_lints);
+            let body_facts =
+                body::rvs_collect_body_facts_B(cx, body, data.mode.rvs_should_emit_lints());
             let attrs = cx.tcx.hir_attrs(item.hir_id());
             let is_test = utils::rvs_has_attr(attrs, "test") || test_fn_names.contains(name);
             let scope = rvs_diagnostic_scope_B(cx, item.owner_id.def_id.to_def_id(), is_test);
@@ -917,7 +937,7 @@ fn rvs_check_item_BMS<'tcx>(
             });
         }
         ItemKind::Use(path, use_kind) => {
-            if data.should_emit_lints
+            if data.mode.rvs_should_emit_lints()
                 && rvs_diagnostic_scope_B(cx, item.owner_id.def_id.to_def_id(), false)
                     == DiagnosticScope::Production
             {
@@ -931,7 +951,7 @@ fn rvs_check_item_BMS<'tcx>(
             }
         }
         ItemKind::ExternCrate(..) => {
-            if data.should_emit_lints
+            if data.mode.rvs_should_emit_lints()
                 && rvs_diagnostic_scope_B(cx, item.owner_id.def_id.to_def_id(), false)
                     == DiagnosticScope::Production
             {
@@ -939,7 +959,7 @@ fn rvs_check_item_BMS<'tcx>(
             }
         }
         ItemKind::Enum(_, _, enum_def) => {
-            if data.should_emit_lints
+            if data.mode.rvs_should_emit_lints()
                 && rvs_diagnostic_scope_B(cx, item.owner_id.def_id.to_def_id(), false)
                     == DiagnosticScope::Production
             {
@@ -948,7 +968,7 @@ fn rvs_check_item_BMS<'tcx>(
             }
         }
         ItemKind::Struct(_, _, data_fields) => {
-            if data.should_emit_lints
+            if data.mode.rvs_should_emit_lints()
                 && rvs_diagnostic_scope_B(cx, item.owner_id.def_id.to_def_id(), false)
                     == DiagnosticScope::Production
             {
@@ -962,7 +982,7 @@ fn rvs_check_item_BMS<'tcx>(
             }
         }
         ItemKind::Impl(imp) => {
-            if data.should_emit_lints
+            if data.mode.rvs_should_emit_lints()
                 && rvs_diagnostic_scope_B(cx, item.owner_id.def_id.to_def_id(), false)
                     == DiagnosticScope::Production
             {
@@ -1013,8 +1033,9 @@ fn rvs_check_impl_item_BMS<'tcx>(
         let is_test = utils::rvs_has_attr(attrs, "test") || test_fn_names.contains(name);
         let is_pub = !is_trait_impl && cx.tcx.visibility(impl_item.owner_id.def_id).is_public();
         let scope = rvs_diagnostic_scope_B(cx, impl_item.owner_id.def_id.to_def_id(), is_test);
-        let body_facts = body::rvs_collect_body_facts_B(cx, body, data.should_emit_lints);
-        if data.should_emit_lints
+        let body_facts =
+            body::rvs_collect_body_facts_B(cx, body, data.mode.rvs_should_emit_lints());
+        if data.mode.rvs_should_emit_lints()
             && scope == DiagnosticScope::Production
             && !is_trait_impl
             && let Some(imp) = parent_impl
@@ -1069,7 +1090,7 @@ fn rvs_check_impl_item_BMS<'tcx>(
                 );
             }
         });
-        if data.should_emit_lints
+        if data.mode.rvs_should_emit_lints()
             && scope == DiagnosticScope::Production
             && (is_trait_impl && !is_port_method)
         {
@@ -1096,7 +1117,8 @@ fn rvs_check_trait_item_BMS<'tcx>(
     match &trait_item.kind {
         TraitItemKind::Fn(sig, TraitFn::Provided(body_id)) => {
             let body = cx.tcx.hir_body(*body_id);
-            let body_facts = body::rvs_collect_body_facts_B(cx, body, data.should_emit_lints);
+            let body_facts =
+                body::rvs_collect_body_facts_B(cx, body, data.mode.rvs_should_emit_lints());
             let scope = rvs_diagnostic_scope_B(cx, trait_item.owner_id.def_id.to_def_id(), false);
             let subject = FnSubject::rvs_body(
                 trait_item.ident,
@@ -1129,7 +1151,7 @@ fn rvs_check_trait_item_BMS<'tcx>(
             });
         }
         TraitItemKind::Fn(sig, TraitFn::Required(_)) => {
-            if data.should_emit_lints
+            if data.mode.rvs_should_emit_lints()
                 && rvs_diagnostic_scope_B(cx, trait_item.owner_id.def_id.to_def_id(), false)
                     == DiagnosticScope::Production
             {
@@ -1164,7 +1186,7 @@ fn rvs_check_trait_item_BMS<'tcx>(
                 );
             }
             // Required methods (no body) — collect signature info for callgraph.
-            if data.collect_caps_facts {
+            if data.mode.rvs_collect_caps_facts() {
                 let def_path = callgraph::rvs_collect_callgraph_for_signature_BMS(
                     data.callgraph,
                     cx,

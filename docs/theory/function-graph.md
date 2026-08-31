@@ -83,6 +83,15 @@ body collector 只遍历 HIR，并进入 closure、async block 等嵌套 body。
 
 free function、impl method 和带默认实现的 trait method 共享同一条 body-bearing 处理流水线；各函数来源只提供测试、文档和 Port 等策略差异。无函数体的 required trait method 只投影签名事实，不能用空 body facts 伪装成已观察的函数体。
 
+## 诊断类别与等级
+
+诊断按知识来源分为两类，等级语义互不相同：
+
+- **直接 lint**：单个 HIR 编译单元内即可判断的 node/body lint 与纯名称语法检查（后缀字母序、重复字母、未知字母、缺 allow 等）。在 rustc 进程内发射，服从 crate root 的 Rivus lint level 与 `-D warnings`。`check` 的采集编译承担此类诊断；采集编译任何非零退出（编译错误或 deny 级直接 lint）即终止本次命令——不合并 artifact、不运行离线推断、不进入任何后续阶段，失败原样返回。
+- **图诊断**：需要合并全项目调用图才能判断的诊断——命名契约、unknown callee、incomplete knowledge、trait outlier、调用边合规与全项目 untested 选择。由离线引擎在图合并后计算，severity 固定为 Error 或 Warning，是引擎输出的一部分，不受 crate root lint 属性、`#[allow]` 或 `-D warnings` 影响，对其配置 lint level 不改变结果。图 Error 使命令以非零退出结束，图 warning 不影响退出码。
+
+图诊断的位置与渲染属于环境适配：核心产生结构化诊断（类别、severity、锚点），渲染先后有两个实现——迁移期内由第二个 rustc 编译把锚定 identity 解析回源码 span 并经 rustc 管线呈现，最终形态由外部渲染器直接消费 artifact 记录的源码位置（文件 + 基准 + 字节范围）。两种渲染必须产生一致的锚定位置；无法解析源码位置的图诊断按 def_path 呈现，不得静默丢弃。
+
 ## 测试覆盖
 
 测试是否覆盖函数，取决于从测试函数出发能否沿 strong 调用边到达该函数，而不是调用处书写的别名或是否由测试直接调用。weak 边（函数引用）只保守传播能力，不提供测试覆盖。导入重命名不能让真实调用失去测试覆盖，也不能让另一个函数借用同名别名伪造覆盖。artifact 保存测试中的已解析目标，并为无法解析的调用保留独立的方法名回退；同名回退只有在恰好对应一个候选函数时才提供覆盖，不能一次掩盖多个同名函数。
