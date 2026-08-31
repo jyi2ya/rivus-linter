@@ -295,7 +295,7 @@ caps/
 | `TestNameFormatWarning` | `#[test]` 函数名不匹配 `^test_\d{8}_\w+$` 格式 |
 | `DuplicateTestWarning` | 同名测试函数出现多次（跨文件检测） |
 | `BannedImportWarning` | 导入了被禁 crate（`thiserror`、`anyhow`、`eyre`、`color_eyre`） |
-| `NonRvsFnWarning` | 函数缺少 `rvs_` 前缀（`#[test]` 函数、rustc 选中的可执行入口、trait impl 方法和没有可写源码位置的生成函数除外） |
+| `NonRvsFnWarning` | 函数缺少 `rvs_` 前缀（测试模块成员——路径含 `tests` segment 的函数，含 `#[test]` 函数——rustc 选中的可执行入口、trait impl 方法和没有可写源码位置的生成函数除外） |
 | `MissingDocWarning` | `rvs_` 开头的 pub 函数/方法缺少 `///` 文档注释 |
 | `DenyWarningsWarning` | crate 级 `#![deny(warnings)]` 反模式——应改用具名 lint |
 | `WildcardImportWarning` | `use xxx::*;` 通配导入（`super::*` 和 `*::prelude::*` 除外） |

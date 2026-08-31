@@ -1,0 +1,5 @@
+demo::tests::make_num: is_test=false offline_checked=false exempt=true
+demo::tests::nested::fixture: is_test=false offline_checked=false exempt=true
+demo::tests::rvs_run: is_test=true offline_checked=false exempt=true
+demo::make_num: is_test=false offline_checked=true exempt=false
+tests::helper: is_test=false offline_checked=false exempt=true

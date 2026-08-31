@@ -89,6 +89,8 @@ impl LocalScope {
 pub(crate) struct FunctionClassification {
     is_local: bool,
     is_entrypoint: bool,
+    /// Canonical test identity: either a test harness function or a
+    /// member of a path-convention `tests` module.
     is_test: bool,
     is_trait_impl: bool,
     is_port_method: bool,
@@ -103,7 +105,7 @@ impl FunctionClassification {
         Self {
             is_local: node.complete && scope.rvs_contains_target(def_path, node.crate_provenance),
             is_entrypoint: node.is_entrypoint,
-            is_test: node.is_test,
+            is_test: node.is_test || def_path.rvs_is_in_test_module(),
             is_trait_impl: node.is_trait_impl,
             is_port_method: node.facts.is_port_method,
             has_source: !node.sources.is_empty(),
@@ -247,6 +249,50 @@ mod tests {
         }
         rvs_snapshot_BIS(
             "test_20260711_function_classification_policy_matrix",
+            &output,
+        );
+    }
+
+    #[test]
+    fn test_20260831_test_module_members_generate_no_source_diagnostics() {
+        // Path-convention test identity (function-graph theory): a def
+        // path containing a `tests` segment before the function name
+        // segment marks a test-module member, which generates no
+        // ordinary source diagnostics: a plain helper inside
+        // `#[cfg(test)] mod tests` must not be flagged for the missing
+        // rvs_ prefix or any other contract/suffix defect, regardless
+        // of any `#[test]` attribute.
+        let scope = LocalScope::rvs_new(&BTreeSet::from([CrateName::from("demo")]));
+        let mut node = FnNode::default();
+        node.sources
+            .insert(FnSource::rvs_new("/workspace/src/lib.rs".into(), 1, 2));
+        let cases = [
+            ("demo::tests::make_num", false, true),
+            ("demo::tests::nested::fixture", false, true),
+            ("demo::tests::rvs_run", true, true),
+            ("demo::make_num", false, false),
+            ("tests::helper", false, true),
+        ];
+        let mut output = String::new();
+        for (path, is_test, expect_exempt) in cases {
+            let mut case_node = node.clone();
+            case_node.is_test = is_test;
+            let classification =
+                FunctionClassification::rvs_new(&scope, &DefPath::from(path), &case_node);
+            let exempt = !classification.rvs_is_offline_checked();
+            output.push_str(&format!(
+                "{path}: is_test={is_test} offline_checked={} exempt={exempt}\n",
+                classification.rvs_is_offline_checked()
+            ));
+            assert_eq!(exempt, expect_exempt, "{path}");
+            assert_eq!(
+                !classification.rvs_is_contract_enforced(),
+                expect_exempt,
+                "{path}"
+            );
+        }
+        rvs_snapshot_BIS(
+            "test_20260831_test_module_members_generate_no_source_diagnostics",
             &output,
         );
     }
