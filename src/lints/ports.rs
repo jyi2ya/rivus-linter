@@ -61,6 +61,20 @@ impl LintExecutionMode {
     pub(crate) const fn rvs_is_caps_report(self) -> bool {
         matches!(self, Self::ProjectCapsCompatibility)
     }
+
+    /// Function-graph nodes are inserted into the in-process graph. The
+    /// anchor-only replay keeps the identity/call-site walks but skips
+    /// node construction and merging entirely.
+    pub(crate) const fn rvs_collects_graph_nodes(self) -> bool {
+        !matches!(self, Self::ReplayDiagnostics)
+    }
+
+    /// The crate-post test-quality pass runs in this process. The
+    /// anchor-only replay has empty test facts, no coverage view, and no
+    /// callgraph output, so the pass is skipped entirely.
+    pub(crate) const fn rvs_runs_test_quality(self) -> bool {
+        !matches!(self, Self::ReplayDiagnostics)
+    }
 }
 
 #[derive(Debug)]

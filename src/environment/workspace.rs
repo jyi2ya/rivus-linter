@@ -2161,7 +2161,6 @@ mod tests {
     use crate::test_support::{
         rvs_caps_v2, rvs_make_cargo_project_BIS, rvs_make_temp_dir_BIS, rvs_snapshot_BIS,
     };
-    use std::collections::BTreeMap;
 
     fn rvs_make_workspace_temp_dir_BIS(tag: &str) -> PathBuf {
         rvs_make_temp_dir_BIS(&format!("workspace-{tag}"))

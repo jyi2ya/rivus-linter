@@ -6,6 +6,7 @@ use rustc_lint::LateContext;
 use rustc_span::{FileName, Ident, Span};
 
 use super::super::ctx::FnSubject;
+use super::super::ports::LintExecutionMode;
 use super::super::utils::{
     CallTarget, rvs_count_body_effective_lines, rvs_def_path_B, rvs_has_allow,
     rvs_has_mutable_params,
@@ -64,15 +65,17 @@ pub(crate) fn rvs_collect_callgraph_for_item_BMS<'tcx>(
     cx: &LateContext<'tcx>,
     subject: &FnSubject<'_, 'tcx>,
     crate_provenance: CrateProvenance,
+    mode: LintExecutionMode,
 ) -> CollectedCallgraphItem {
     let local_def_id = subject.hir_id.owner.def_id;
     let def_id = local_def_id.to_def_id();
     let caller_path = DefPath::rvs_new(rvs_def_path_B(cx, def_id));
     let cargo_package_name = crate::symbols::rvs_cargo_package_name_BS();
+    let crate_id = cx.tcx.stable_crate_id(def_id.krate).as_u64();
     if caller_path.rvs_is_build_script_for_package(cargo_package_name.as_deref()) {
         return CollectedCallgraphItem {
             caller: FunctionIdentity {
-                crate_id: cx.tcx.stable_crate_id(def_id.krate).as_u64(),
+                crate_id,
                 def_path: caller_path,
             },
             call_sites: Vec::new(),
@@ -80,19 +83,6 @@ pub(crate) fn rvs_collect_callgraph_for_item_BMS<'tcx>(
     }
     let is_in_test_module = caller_path.rvs_is_in_test_module();
     let is_entrypoint = rvs_is_executable_entry_B(cx, def_id);
-    let crate_id = cx.tcx.stable_crate_id(def_id.krate).as_u64();
-    let attrs = cx.tcx.hir_attrs(subject.hir_id);
-    let mut node = rvs_fn_node_from_signature(
-        cx,
-        subject.ident,
-        subject.sig,
-        subject.is_trait_impl,
-        subject.is_test,
-        subject.is_port_method,
-        is_entrypoint,
-        is_in_test_module,
-        subject.span,
-    );
 
     let resolved_edges: Vec<(
         DefPath,
@@ -132,21 +122,9 @@ pub(crate) fn rvs_collect_callgraph_for_item_BMS<'tcx>(
         })
         .collect();
 
-    node.facts = node.facts.rvs_with_static_refs(
-        subject.body_facts.has_static_ref,
-        subject.body_facts.has_static_mut_ref,
-        subject.body_facts.has_thread_local_ref,
-    );
-    let allows_dead_code = rvs_has_allow(attrs, "dead_code") || rvs_has_allow(attrs, "unused");
-    let is_reportable = subject.is_port_method
-        || ParsedFunctionName::rvs_parse(subject.rvs_name()).rvs_has_rvs_prefix();
-    let report_line_count =
-        if is_reportable && !subject.is_test && !is_in_test_module && !allows_dead_code {
-            Some(rvs_count_body_effective_lines(cx, subject.body))
-        } else {
-            None
-        };
-
+    // The occurrence numbering is shared by the anchor path and the node
+    // path: it follows the unified HIR traversal order of the filtered
+    // resolved edges and must never be recomputed elsewhere.
     let mut target_calls: BTreeMap<FunctionIdentity, CallEdgeType> = BTreeMap::new();
     let mut all_call_sites: Vec<CollectedCallSite> = Vec::new();
     for (edge_index, edge) in resolved_edges.iter().enumerate() {
@@ -180,7 +158,45 @@ pub(crate) fn rvs_collect_callgraph_for_item_BMS<'tcx>(
             span: *span,
         });
     }
-    node.calls = target_calls.clone();
+    if !mode.rvs_collects_graph_nodes() {
+        // Anchor-only replay: the caller identity and call-site spans feed
+        // the emission anchors; no function-graph node is built.
+        return CollectedCallgraphItem {
+            caller: FunctionIdentity {
+                crate_id,
+                def_path: caller_path,
+            },
+            call_sites: all_call_sites,
+        };
+    }
+
+    let attrs = cx.tcx.hir_attrs(subject.hir_id);
+    let mut node = rvs_fn_node_from_signature(
+        cx,
+        subject.ident,
+        subject.sig,
+        subject.is_trait_impl,
+        subject.is_test,
+        subject.is_port_method,
+        is_entrypoint,
+        is_in_test_module,
+        subject.span,
+    );
+    node.facts = node.facts.rvs_with_static_refs(
+        subject.body_facts.has_static_ref,
+        subject.body_facts.has_static_mut_ref,
+        subject.body_facts.has_thread_local_ref,
+    );
+    let allows_dead_code = rvs_has_allow(attrs, "dead_code") || rvs_has_allow(attrs, "unused");
+    let is_reportable = subject.is_port_method
+        || ParsedFunctionName::rvs_parse(subject.rvs_name()).rvs_has_rvs_prefix();
+    let report_line_count =
+        if is_reportable && !subject.is_test && !is_in_test_module && !allows_dead_code {
+            Some(rvs_count_body_effective_lines(cx, subject.body))
+        } else {
+            None
+        };
+    node.calls = target_calls;
     node.call_sites = all_call_sites
         .iter()
         .map(|call_site| call_site.identity.clone())
@@ -239,12 +255,17 @@ pub(crate) fn rvs_collect_callgraph_for_signature_BMS(
     is_trait_impl: bool,
     is_port_method: bool,
     crate_provenance: CrateProvenance,
+    mode: LintExecutionMode,
 ) -> DefPath {
     let local_def_id = hir_id.owner.def_id;
     let def_id = local_def_id.to_def_id();
     let caller_path = DefPath::rvs_new(rvs_def_path_B(cx, def_id));
     let cargo_package_name = crate::symbols::rvs_cargo_package_name_BS();
-    if caller_path.rvs_is_build_script_for_package(cargo_package_name.as_deref()) {
+    if caller_path.rvs_is_build_script_for_package(cargo_package_name.as_deref())
+        || !mode.rvs_collects_graph_nodes()
+    {
+        // Anchor-only replay still needs the def path for the span anchor,
+        // but builds no function-graph node.
         return caller_path;
     }
     let is_in_test_module = caller_path.rvs_is_in_test_module();

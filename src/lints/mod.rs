@@ -385,7 +385,10 @@ impl<'tcx, E: LintEnvironment> LateLintPass<'tcx> for RivusLintPass<E> {
             cx.tcx.dcx().err(format!("failed to load capsmap: {error}"));
         }
 
-        // Pre-scan: collect names of test functions
+        // Pre-scan: collect names of test functions. The test harness strips
+        // `#[test]` attributes in test crates, so this scan is the reliable
+        // test-identity source for the collected graph facts (node.is_test
+        // seeds coverage reachability) — it must run in every mode.
         if cx.tcx.sess.is_test_crate() {
             let krate = cx.tcx.hir_crate_items(());
             for owner in krate.owners() {
@@ -454,18 +457,20 @@ impl<'tcx, E: LintEnvironment> LateLintPass<'tcx> for RivusLintPass<E> {
             self.ui_testing,
         );
 
-        test_quality::rvs_check_crate_post_MPS::<E>(
-            cx,
-            &self.test_names,
-            &self.good_fns,
-            &self.ok_fns,
-            &self.test_calls,
-            &self.callgraph,
-            self.test_outputs.as_ref(),
-            &mut self.world,
-            self.mode.rvs_is_caps_report(),
-            self.ui_testing,
-        );
+        if self.mode.rvs_runs_test_quality() {
+            test_quality::rvs_check_crate_post_MPS::<E>(
+                cx,
+                &self.test_names,
+                &self.good_fns,
+                &self.ok_fns,
+                &self.test_calls,
+                &self.callgraph,
+                self.test_outputs.as_ref(),
+                &mut self.world,
+                self.mode.rvs_is_caps_report(),
+                self.ui_testing,
+            );
+        }
     }
 
     fn check_item(&mut self, cx: &LateContext<'tcx>, item: &'tcx rustc_hir::Item<'tcx>) {
@@ -850,6 +855,7 @@ fn rvs_run_body_fn_pipeline_BMS<'tcx, F>(
             cx,
             subject,
             data.crate_provenance,
+            data.mode,
         );
         data.diagnostic_spans
             .insert(collected.caller.clone(), (subject.hir_id, subject.span));
@@ -1184,6 +1190,7 @@ fn rvs_check_trait_item_BMS<'tcx>(
                     false,
                     is_port_trait,
                     data.crate_provenance,
+                    data.mode,
                 );
                 data.diagnostic_spans.insert(
                     FunctionIdentity {

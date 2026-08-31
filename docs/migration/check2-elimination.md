@@ -27,7 +27,7 @@
 | 1 | 用 `LintExecutionMode` enum 替换 pass 内布尔三元组（行为保持） | **完成** |
 | 2 | 直接 lint 移入采集编译；check #1 失败短路；#2 只回放图诊断 | **完成** |
 | 3 | untested selection 在中间直接构造为图诊断，删除 #2 的 good/ok 重登记 | **完成** |
-| 4 | #2 缩成纯 anchor replay（identity→Span 收集器），删除其余收集职责 | 未开始 |
+| 4 | #2 缩成纯 anchor replay（identity→Span 收集器），删除其余收集职责 | **完成** |
 | 5 | 建立 artifact `DiagnosticSource` resolver + 一致性对照测试 | 未开始 |
 | 6 | 外部渲染器端口 + shadow mode 输出比对 | 未开始 |
 | 7 | 切换渲染器，删除第二次 Cargo 编译与 emissions/ack 协议 | 未开始 |
@@ -52,7 +52,27 @@
 - [x] 回归：UI untested fixtures（41/183/425/430 等）stderr 不变；20260831 端到端快照复核（warning-pipeline 项目含 untested good fn → #2 图 warning，退出 0 不变）。
 
 - [x] 评审修复（2026-09-01）：schema 常量实际补齐 5→6（workspace.rs + ui_tests.rs，此前记录声称未执行）；三处过时注释更正（ports.rs ReplayDiagnostics 登记、rvs_register_coverage_candidate_BM 文档、offline_caps 前缀过滤理由）。
+## 阶段 4 计划（已完成，2026-09-01）
+
+目标：ReplayDiagnostics 进程只保留 emissions 锚定所需工作；其余收集职责删除。锚点编号与节点构建共享同一条 body 遍历与循环，不建立第二套遍历（避免编号漂移触发 D6 硬失败）。
+
+- [x] `LintExecutionMode` 增加访问器 `rvs_collects_graph_nodes()`（仅 ReplayDiagnostics 为 false）。
+- [x] `rvs_collect_callgraph_for_item_BMS` / `rvs_collect_callgraph_for_signature_BMS` 接收 mode：锚点路径（caller identity + 调用点 occurrence→span）恒执行；节点构建（facts、行数统计、unresolved test calls、coverage 标志、`rvs_merge_node_M`）仅当 collects_graph_nodes。
+- [x] `check_crate`：~~test-harness 预扫描（test_fn_names）~~ **保留全模式运行**（D7：harness 剥掉 `#[test]` 属性，预扫描是 is_test 图事实的唯一可靠来源，不能门控）；`test_outputs` 目录加载收窄到 `rvs_should_emit_lints()` 模式（移至 lint_driver prepare）。
+- [x] `check_crate_post`：ReplayDiagnostics 跳过 test_quality（其四个职责在 replay 全为 no-op：test_names 空、coverage 关、World 无输出）。
+- [x] theory 构建过程补一句：回放阶段复用同一遍历收集锚点、不构建节点。
+- [x] 回归：20260831 三个端到端测试（依赖 replay 锚定的 untested/contract emission ack 闭环即验证锚点正确性）+ UI 全套 + 下游 fixture。
+
+教训见 D7（test-harness 预扫描是图事实来源，不是 lint 附属）——初版把预扫描门控在 should_emit_lints 上，破坏了采集编译的 is_test 事实与覆盖可达性，被 test_20260715_specialized_impls_keep_distinct_callgraph_identity 抓回，已撤销门控并加注释说明。
 ## 已完成记录
+
+### 阶段 4（2026-09-01）
+
+- `LintExecutionMode::rvs_collects_graph_nodes()`（仅 ReplayDiagnostics 为 false）；两个 callgraph 收集器接收 mode：锚点路径（caller identity + 调用点 occurrence→span，与节点路径共享同一条循环，无第二套编号）恒执行，节点构建（facts、行数统计、unresolved test calls、coverage 标志、`rvs_merge_node_M`）仅节点收集模式执行。
+- `check_crate_post`：ReplayDiagnostics 跳过 test_quality（四个职责在 replay 全为 no-op）；`test_outputs` 目录加载收窄到 lint 发射模式（lint_driver prepare）。
+- 预扫描保留全模式运行（D7）。
+- theory 构建过程更新为"纯锚点回放"描述；下游 fixture 输出与阶段 3 完全一致。
+- 门禁：fmt/build/clippy(基线 6)/test 全过/`cargo rivus check` ok/git diff --check ok。
 
 ### 阶段 3（2026-09-01）
 
@@ -100,6 +120,7 @@
 - **D4（登记简化）**：`rvs_collect_caps_facts` 收拢为恒 true——原 Offline 模式在 emissions 为空时跳过图收集的分支被删除；该差异仅影响进程内无用的工作量，不产生输出差异（artifact 写出仅在配置了 callgraph_output 时生效，#2 无输出目录）。
 - **D5（迁移期 builtin warning 重复，已知回归）**：#1（Check 采集）与 #2（回放）都是 Normal lint level、独立 target 目录各自全新编译，rustc 内建 warning（如 unused variable）会在两遍各出现一次。Rivus 自身诊断无重复（模式门控）。备选方案（#2 加 `-Awarnings` 或把回放改为 dcx 固定等级发射）都会改变图诊断等级语义，属阶段 5–7 的工作；作为迁移期已知噪音接受，阶段 7 消除。
 - **D6（untested 锚定 fail-closed）**：untested 转为 emissions 后，锚定 identity 在回放编译中找不到匹配时经 ack 校验使整个 check 失败（旧路径静默跳过无匹配的选择项）。两遍编译使用相同 target scope 与全新 target 目录，当前宇宙一致；未来若两遍的 target 选择逻辑分叉，将以硬失败而非丢失诊断的形式暴露。
+- **D7（test-harness 预扫描是图事实来源）**：rustc test harness 会剥掉 `#[test]` 属性并改写为 `RustcTestMarker`，因此 `test_fn_names` 预扫描是测试身份（`node.is_test` → 覆盖可达性种子）的可靠来源，与 lint 发射无关，任何执行模式都不能跳过。阶段 4 曾误将其门控在 lint 发射上，导致采集图覆盖判定全断。
 
 ## 测试策略
 

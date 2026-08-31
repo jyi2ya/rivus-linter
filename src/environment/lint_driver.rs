@@ -131,7 +131,11 @@ pub(crate) fn rvs_prepare_lint_config_BIS(
         mode: lint_mode,
         capsmap,
         offline_emissions,
-        test_outputs: rvs_collect_test_outputs_BIS(Path::new("test_out"), ui_testing),
+        test_outputs: if lint_mode.rvs_should_emit_lints() {
+            rvs_collect_test_outputs_BIS(Path::new("test_out"), ui_testing)
+        } else {
+            None
+        },
         ui_testing,
         crate_provenance,
         world: RivusLintWorld {
