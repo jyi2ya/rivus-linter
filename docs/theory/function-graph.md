@@ -63,11 +63,19 @@
 - **body lint**：每个函数体只遍历一次并生成 `BodyFacts`，各规则只解释共享事实，不再自行遍历函数体
 - **caps lint**：把签名事实和 `BodyFacts` 投影为函数图事实，再由跨函数、跨 crate 的离线能力引擎统一推断
 
-body collector 只遍历 HIR，并进入 closure、async block 等嵌套 body。进入嵌套 body 是统一 HIR 遍历设施的职责，不属于任一具体 lint。callgraph、测试调用识别和 body lint 必须消费同一份 HIR 调用观察；已解析调用直接携带结构化 `DefPath`，各消费者不能重新包装路径字符串。方法解析失败时保留独立的 unresolved-method 观察。
+诊断发射另按用途分为三个互斥作用域，不能由各条 lint 自行组合 `is_test`、编译模式或图角色判断：
+
+- **project invariant**：维护分析可成立所需的项目级约束，对 production 和 test source 都生效，例如非法作用域的 Rivus lint 属性和无法建模的隐式执行禁令
+- **production diagnostic**：面向被分析程序的命名、能力契约、文档、body 质量、unknown/incomplete knowledge 和 unsupported indirect call；test source 不发射此类诊断
+- **test contract**：只约束真实 `#[test]` 函数的测试命名、重复测试和快照
+
+HIR dispatcher 在进入 node/body lint 前根据 owner 身份一次性选择诊断作用域。`#[test]` 函数以及 `DefPath` 中函数名 segment 之前含 `tests` segment 的 owner 都属于 test source。collector 不受诊断作用域影响，始终收集完整事实和调用观察；closure、async block 等嵌套 body 不建立第二套测试身份，它们的观察归属 enclosing owner 并继承该 owner 的诊断作用域。各 lint 只能消费 dispatcher 已选择的作用域，不能再次解析路径或拼接测试布尔值。
+
+body collector 只遍历 HIR，并进入 closure、async block 等嵌套 body。进入嵌套 body 是统一 HIR 遍历设施的职责，不属于任一具体 lint；嵌套 body 的调用观察仍归属 enclosing owner，不能脱离 owner 的诊断作用域单独发射。callgraph、测试调用识别和 body lint 必须消费同一份 HIR 调用观察；已解析调用直接携带结构化 `DefPath`，各消费者不能重新包装路径字符串。方法解析失败时保留独立的 unresolved-method 观察。
 
 函数图保守记录源码中显式存在的 HIR `Call` 和 `MethodCall`，不尝试证明运行时可达性。因此未调用 closure、未轮询 async block、常量假分支和其他仍存在于 HIR 的显式调用同样形成边。该 over-approximation 用允许误报换取规则简单、稳定和可审查。编译期求值上下文（inline const block `const { ... }`、array repeat 长度表达式、inline asm `const` 操作数和 const generic argument）中的调用不形成运行时调用边——这些调用在编译期完成执行，不产生运行时效果，因此不传播能力、不提供测试覆盖，也不进入函数图。
 
-分析不读取 MIR，也不从编译器 lowering 结果反推调用。函数指针和 callable 值流、隐式 drop、运算符与索引 desugar、Future poll、callback 是否立即执行、活动 enum variant 等不属于受支持的调用恢复范围。代码若依赖这些机制隐藏能力边，已经超出 Rivus 约束的 Rust 子集；工具不能猜测一个具体目标。函数图是 definition-level HIR callgraph，不是 monomorphized instance-level callgraph。通过函数指针参数、闭包变量、运行时读取的 `const`/`static`/associated const `fn()` 值或泛型 `F: Fn()` 参数发起的间接调用无法在 HIR 层解析具体目标，collector 必须为每个此类调用发出 `RVS_UNSUPPORTED_INDIRECT_CALL` warning，不猜测 callee，也不生成虚假调用边。该 warning 只用于诊断反馈，不影响图完整度推断、函数能力传播或 trait 投票；存在间接调用的函数仍可被推断为 complete pure，因为间接调用的目标在 HIR 层不可知。所有 body-bearing 函数（含普通 trait impl 方法）都会收到此 warning，但 warning 不改变 trait 投票结果或函数能力。
+分析不读取 MIR，也不从编译器 lowering 结果反推调用。函数指针和 callable 值流、隐式 drop、运算符与索引 desugar、Future poll、callback 是否立即执行、活动 enum variant 等不属于受支持的调用恢复范围。代码若依赖这些机制隐藏能力边，已经超出 Rivus 约束的 Rust 子集；工具不能猜测一个具体目标。函数图是 definition-level HIR callgraph，不是 monomorphized instance-level callgraph。通过函数指针参数、闭包变量、运行时读取的 `const`/`static`/associated const `fn()` 值或泛型 `F: Fn()` 参数发起的间接调用无法在 HIR 层解析具体目标，collector 保留 unsupported-indirect 观察，不猜测 callee，也不生成虚假调用边。production source 为每个此类调用发出 `RVS_UNSUPPORTED_INDIRECT_CALL` warning；test source 只保留观察供测试调用与覆盖分析使用，不发射该 production diagnostic。该观察不影响图完整度推断、函数能力传播或 trait 投票；存在间接调用的函数仍可被推断为 complete pure，因为间接调用的目标在 HIR 层不可知。普通 trait impl 的 production body 同样适用此 warning，但 warning 不改变 trait 投票结果或函数能力。
 
 用户仓库和 workspace 源码不能定义会隐式执行用户代码、但 HIR 函数图无法恢复调用点的自定义 operator/index（含 `Deref`/`DerefMut`）或 `Drop` impl，也不能使用显式 `Fn`/`FnMut`/`FnOnce` trait 调用和 inline asm。`RVS_UNSUPPORTED_IMPLICIT_EXECUTION` 默认拒绝这些形式，不生成猜测边。依赖或标准库定义的 operator/index 实现仍可正常使用，因此字符串比较、集合索引等普通操作不要求用户代码为依赖实现承担源码禁令。普通 `check` 通过 Cargo `RUSTC_WORKSPACE_WRAPPER` 只对 workspace crate 运行该 HIR lint；第三方依赖不加载 lint driver，因此依赖源码中的同类定义不受此源码子集规则影响。
 
@@ -104,7 +112,7 @@ free function、impl method 和带默认实现的 trait method 共享同一条 b
 
 ## 差异
 
-能力诊断、annotate、why、report 不再各自发明一套解释，而是基于同一张图做不同视图。lint pass 只从 HIR 收集能力事实；能力契约、后缀、静态状态和调用边诊断统一由离线能力引擎计算。各视图复用同一套本地分类策略；离线诊断在遍历真实节点时构造一次名称上下文供各诊断规则消费。由 rustc 选中的可执行入口、测试和无可写源码的生成节点不生成一般源码诊断；trait impl 不生成名称契约。Port impl 的契约固定投影为 `P`，其实现效果只进审计视图；未知调用和 `U` 等安全事实仍报告。synthetic 推断路径没有真实节点，也不参与节点诊断。直接 rustc/UI 模式使用当前 crate 的内存图，`cargo rivus check` 使用合并后的全项目图。
+能力诊断、annotate、why、report 不再各自发明一套解释，而是基于同一张图做不同视图。lint pass 只从 HIR 收集能力事实；能力契约、后缀、静态状态和调用边诊断统一由离线能力引擎计算。各视图复用同一套本地分类策略；离线诊断在遍历真实节点时构造一次名称上下文供各诊断规则消费。由 rustc 选中的可执行入口、test source 和无可写源码的生成节点不生成 production diagnostic；trait impl 不生成名称契约。Port impl 的契约固定投影为 `P`，其实现效果只进审计视图。project invariant 仍适用于 test source；test contract 只适用于真实 `#[test]` 函数；未知调用和 `U` 等安全事实在 production source 上仍报告。synthetic 推断路径没有真实节点，也不参与节点诊断。直接 rustc/UI 模式使用当前 crate 的内存图，`cargo rivus check` 使用合并后的全项目图。
 
 各视图共享函数的本地范围、入口点、测试、trait impl、Port、源码和生成代码分类，但保留具名的视图策略；contract、offline、report 和 rename 不得因复用分类而被压成同一套筛选条件。
 

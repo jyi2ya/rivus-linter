@@ -678,6 +678,32 @@ fn rvs_check_unsupported_implicit_execution_S(cx: &LateContext<'_>, facts: &body
     }
 }
 
+/// Diagnostic emission scope selected once by the HIR dispatcher from the
+/// owner's identity, per the function-graph theory: project invariants fire
+/// for both scopes, production diagnostics only for `Production`, and test
+/// contracts only for real `#[test]` functions inside `Test`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DiagnosticScope {
+    Production,
+    Test,
+}
+
+/// Test source: a `#[test]` function or an owner whose DefPath contains a
+/// `tests` segment before the function-name segment. Nested bodies inherit
+/// the enclosing owner's scope and never re-derive it.
+fn rvs_diagnostic_scope_B(
+    cx: &LateContext<'_>,
+    def_id: rustc_span::def_id::DefId,
+    is_test: bool,
+) -> DiagnosticScope {
+    let path = DefPath::rvs_new(utils::rvs_def_path_B(cx, def_id));
+    if is_test || path.rvs_is_in_test_module() {
+        DiagnosticScope::Test
+    } else {
+        DiagnosticScope::Production
+    }
+}
+
 /// Dispatches to fn-level checks for free functions, inherent impl methods,
 /// and trait impl methods.
 fn rvs_run_fn_checks_BMS<'tcx>(
@@ -685,6 +711,12 @@ fn rvs_run_fn_checks_BMS<'tcx>(
     subject: &FnSubject<'_, 'tcx>,
     data: &mut FnCheckData<'_>,
 ) {
+    // Trait impl methods (non-Port) keep their historical exemption from
+    // fn-level production checks, including coverage registration; their
+    // TODO feedback runs at the dispatch site instead.
+    if subject.is_trait_impl && !subject.is_port_method {
+        return;
+    }
     let name = subject.rvs_name();
     let attrs = cx.tcx.hir_attrs(subject.hir_id);
     let parsed_name = ParsedFunctionName::rvs_parse(name);
@@ -773,18 +805,36 @@ fn rvs_run_body_fn_pipeline_BMS<'tcx, F>(
     cx: &LateContext<'tcx>,
     subject: &FnSubject<'_, 'tcx>,
     data: &mut FnCheckData<'_>,
-    should_check_fn: bool,
+    scope: DiagnosticScope,
     after_checks: F,
 ) where
-    F: FnOnce(),
+    F: FnOnce(DiagnosticScope),
 {
-    if should_check_fn {
-        rvs_run_fn_checks_BMS(cx, subject, data);
-        todo_comment::rvs_check_fn_S(cx, subject.span);
-        after_checks();
-    }
     if data.should_emit_lints {
-        rvs_check_unsupported_indirect_calls_S(cx, subject.body_facts);
+        match scope {
+            DiagnosticScope::Production => {
+                rvs_run_fn_checks_BMS(cx, subject, data);
+                if !(subject.is_trait_impl && !subject.is_port_method) {
+                    todo_comment::rvs_check_fn_S(cx, subject.span);
+                }
+            }
+            DiagnosticScope::Test => {
+                test_name_format::rvs_check_fn_S(
+                    cx,
+                    subject.rvs_name(),
+                    subject.span,
+                    subject.is_test,
+                );
+            }
+        }
+        after_checks(scope);
+        // Unsupported indirect calls are a production diagnostic; test
+        // source keeps the observation for coverage analysis only.
+        if scope == DiagnosticScope::Production {
+            rvs_check_unsupported_indirect_calls_S(cx, subject.body_facts);
+        }
+        // Implicit execution is a project invariant and applies to both
+        // scopes.
         rvs_check_unsupported_implicit_execution_S(cx, subject.body_facts);
     }
     if data.collect_caps_facts {
@@ -830,6 +880,7 @@ fn rvs_check_item_BMS<'tcx>(
             let body_facts = body::rvs_collect_body_facts_B(cx, body, data.should_emit_lints);
             let attrs = cx.tcx.hir_attrs(item.hir_id());
             let is_test = utils::rvs_has_attr(attrs, "test") || test_fn_names.contains(name);
+            let scope = rvs_diagnostic_scope_B(cx, item.owner_id.def_id.to_def_id(), is_test);
             let subject = FnSubject::rvs_body(
                 *ident,
                 item.hir_id(),
@@ -842,7 +893,7 @@ fn rvs_check_item_BMS<'tcx>(
                 false,
                 false,
             );
-            rvs_run_body_fn_pipeline_BMS(cx, &subject, data, data.should_emit_lints, || {
+            rvs_run_body_fn_pipeline_BMS(cx, &subject, data, scope, |scope| {
                 ctx::rvs_record_test_site_M(
                     is_test,
                     name,
@@ -852,19 +903,24 @@ fn rvs_check_item_BMS<'tcx>(
                     test_names,
                     test_calls,
                 );
-                let vis = cx.tcx.visibility(item.owner_id.def_id);
-                let is_pub = vis.is_public();
-                missing_doc::rvs_check_fn_S(cx, name, item.span, attrs, is_pub);
-                missing_safety_doc::rvs_check_fn_S(
-                    cx,
-                    item.hir_id(),
-                    item.span,
-                    &sig.header.safety,
-                );
+                if scope == DiagnosticScope::Production {
+                    let vis = cx.tcx.visibility(item.owner_id.def_id);
+                    let is_pub = vis.is_public();
+                    missing_doc::rvs_check_fn_S(cx, name, item.span, attrs, is_pub);
+                    missing_safety_doc::rvs_check_fn_S(
+                        cx,
+                        item.hir_id(),
+                        item.span,
+                        &sig.header.safety,
+                    );
+                }
             });
         }
         ItemKind::Use(path, use_kind) => {
-            if data.should_emit_lints {
+            if data.should_emit_lints
+                && rvs_diagnostic_scope_B(cx, item.owner_id.def_id.to_def_id(), false)
+                    == DiagnosticScope::Production
+            {
                 banned_import::rvs_check_item_BMS(
                     cx,
                     item,
@@ -875,18 +931,27 @@ fn rvs_check_item_BMS<'tcx>(
             }
         }
         ItemKind::ExternCrate(..) => {
-            if data.should_emit_lints {
+            if data.should_emit_lints
+                && rvs_diagnostic_scope_B(cx, item.owner_id.def_id.to_def_id(), false)
+                    == DiagnosticScope::Production
+            {
                 banned_import::rvs_check_extern_crate_S(cx, item);
             }
         }
         ItemKind::Enum(_, _, enum_def) => {
-            if data.should_emit_lints {
+            if data.should_emit_lints
+                && rvs_diagnostic_scope_B(cx, item.owner_id.def_id.to_def_id(), false)
+                    == DiagnosticScope::Production
+            {
                 missing_debug_derive::rvs_check_struct_or_enum_S(cx, item);
                 catch_all_error::rvs_check_enum_S(cx, item, enum_def);
             }
         }
         ItemKind::Struct(_, _, data_fields) => {
-            if data.should_emit_lints {
+            if data.should_emit_lints
+                && rvs_diagnostic_scope_B(cx, item.owner_id.def_id.to_def_id(), false)
+                    == DiagnosticScope::Production
+            {
                 missing_debug_derive::rvs_check_struct_or_enum_S(cx, item);
                 match data_fields {
                     VariantData::Struct { fields, .. } | VariantData::Tuple(fields, ..) => {
@@ -897,7 +962,10 @@ fn rvs_check_item_BMS<'tcx>(
             }
         }
         ItemKind::Impl(imp) => {
-            if data.should_emit_lints {
+            if data.should_emit_lints
+                && rvs_diagnostic_scope_B(cx, item.owner_id.def_id.to_def_id(), false)
+                    == DiagnosticScope::Production
+            {
                 deref_polymorphism::rvs_check_impl_S(cx, item, imp);
                 implicit_execution::rvs_check_impl_S(cx, item, imp);
             }
@@ -944,11 +1012,10 @@ fn rvs_check_impl_item_BMS<'tcx>(
         let attrs = cx.tcx.hir_attrs(impl_item.hir_id());
         let is_test = utils::rvs_has_attr(attrs, "test") || test_fn_names.contains(name);
         let is_pub = !is_trait_impl && cx.tcx.visibility(impl_item.owner_id.def_id).is_public();
-        // Port trait methods are checked (with P capability auto-assigned),
-        // even though other trait impl methods are skipped.
-        let should_check_fn = data.should_emit_lints && (!is_trait_impl || is_port_method);
+        let scope = rvs_diagnostic_scope_B(cx, impl_item.owner_id.def_id.to_def_id(), is_test);
         let body_facts = body::rvs_collect_body_facts_B(cx, body, data.should_emit_lints);
         if data.should_emit_lints
+            && scope == DiagnosticScope::Production
             && !is_trait_impl
             && let Some(imp) = parent_impl
             && let rustc_hir::OwnerNode::Item(parent_item) = parent_node
@@ -978,7 +1045,9 @@ fn rvs_check_impl_item_BMS<'tcx>(
             is_trait_impl,
             is_port_method,
         );
-        rvs_run_body_fn_pipeline_BMS(cx, &subject, data, should_check_fn, || {
+        // Port trait methods are checked (with P capability auto-assigned),
+        // even though other trait impl methods are skipped.
+        rvs_run_body_fn_pipeline_BMS(cx, &subject, data, scope, |scope| {
             ctx::rvs_record_test_site_M(
                 is_test,
                 name,
@@ -988,17 +1057,22 @@ fn rvs_check_impl_item_BMS<'tcx>(
                 test_names,
                 test_calls,
             );
-            if !is_test && is_pub {
-                missing_doc::rvs_check_fn_S(cx, name, impl_item.span, attrs, true);
+            if scope == DiagnosticScope::Production {
+                if !is_test && is_pub {
+                    missing_doc::rvs_check_fn_S(cx, name, impl_item.span, attrs, true);
+                }
+                missing_safety_doc::rvs_check_fn_S(
+                    cx,
+                    impl_item.hir_id(),
+                    impl_item.span,
+                    &sig.header.safety,
+                );
             }
-            missing_safety_doc::rvs_check_fn_S(
-                cx,
-                impl_item.hir_id(),
-                impl_item.span,
-                &sig.header.safety,
-            );
         });
-        if data.should_emit_lints && !should_check_fn {
+        if data.should_emit_lints
+            && scope == DiagnosticScope::Production
+            && (is_trait_impl && !is_port_method)
+        {
             todo_comment::rvs_check_fn_S(cx, impl_item.span);
         }
     }
@@ -1023,6 +1097,7 @@ fn rvs_check_trait_item_BMS<'tcx>(
         TraitItemKind::Fn(sig, TraitFn::Provided(body_id)) => {
             let body = cx.tcx.hir_body(*body_id);
             let body_facts = body::rvs_collect_body_facts_B(cx, body, data.should_emit_lints);
+            let scope = rvs_diagnostic_scope_B(cx, trait_item.owner_id.def_id.to_def_id(), false);
             let subject = FnSubject::rvs_body(
                 trait_item.ident,
                 trait_item.hir_id(),
@@ -1035,24 +1110,29 @@ fn rvs_check_trait_item_BMS<'tcx>(
                 false,
                 is_port_trait,
             );
-            rvs_run_body_fn_pipeline_BMS(cx, &subject, data, data.should_emit_lints, || {
-                missing_doc::rvs_check_fn_S(
-                    cx,
-                    trait_item.ident.name.as_str(),
-                    trait_item.span,
-                    attrs,
-                    is_pub,
-                );
-                missing_safety_doc::rvs_check_fn_S(
-                    cx,
-                    trait_item.hir_id(),
-                    trait_item.span,
-                    &sig.header.safety,
-                );
+            rvs_run_body_fn_pipeline_BMS(cx, &subject, data, scope, |scope| {
+                if scope == DiagnosticScope::Production {
+                    missing_doc::rvs_check_fn_S(
+                        cx,
+                        trait_item.ident.name.as_str(),
+                        trait_item.span,
+                        attrs,
+                        is_pub,
+                    );
+                    missing_safety_doc::rvs_check_fn_S(
+                        cx,
+                        trait_item.hir_id(),
+                        trait_item.span,
+                        &sig.header.safety,
+                    );
+                }
             });
         }
         TraitItemKind::Fn(sig, TraitFn::Required(_)) => {
-            if data.should_emit_lints {
+            if data.should_emit_lints
+                && rvs_diagnostic_scope_B(cx, trait_item.owner_id.def_id.to_def_id(), false)
+                    == DiagnosticScope::Production
+            {
                 let name = trait_item.ident.name.as_str();
                 let parsed_name = ParsedFunctionName::rvs_parse(name);
                 if parsed_name.rvs_has_rvs_prefix() {

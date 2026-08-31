@@ -317,6 +317,7 @@ caps/
 | `SpawnWarning` | 函数调用了非结构化 spawn（`tokio::spawn`、`std::thread::spawn` 等）——应改用结构化并发原语 |
 | `ContractMismatchWarning` | 函数名与推断出的完整契约不一致；包括 World Port 缺少结构性 `P`、后缀字母能力（如 M）或投票选中的能力缺失。A/C/U 从事实测量，缺失时不算契约不一致 |
 | `TraitImplOutlierWarning` | 完整、可修改的普通 trait 实现拥有投票未选中的传播能力；不改变 trait 投票和 capability totals |
+| `UnsupportedIndirectCallWarning` | production source 通过函数指针、闭包变量或泛型 callable 发起 HIR 无法解析目标的调用；test source 仍收集该调用观察供覆盖分析使用，但不发出此 production warning |
 
 ## 推断提示
 
