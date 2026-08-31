@@ -1,8 +1,8 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 
-use crate::artifacts::{CrateProvenance, FnGraph, FunctionIdentity};
+use crate::artifacts::{CrateProvenance, FnGraph};
 use crate::capsmap::CapsMap;
 use crate::offline_caps::OfflineCapsEmission;
 use crate::symbols::CrateName;
@@ -37,8 +37,7 @@ pub(crate) enum LintExecutionMode {
     CheckAndCollect,
     /// Replay merged-graph diagnostics and the untested selection onto HIR
     /// anchors. Direct lints are owned by the collection compile and do
-    /// not fire here; coverage-candidate registration still runs so the
-    /// untested selection can anchor.
+    /// not fire here.
     ReplayDiagnostics,
     /// Direct single-crate analysis: run direct lints and the local caps
     /// report against the in-crate graph.
@@ -62,23 +61,12 @@ impl LintExecutionMode {
     pub(crate) const fn rvs_is_caps_report(self) -> bool {
         matches!(self, Self::ProjectCapsCompatibility)
     }
-
-    /// Good/ok coverage candidates are registered in this process so the
-    /// untested selection can anchor onto their spans.
-    pub(crate) const fn rvs_registers_coverage_candidates(self) -> bool {
-        matches!(
-            self,
-            Self::ReplayDiagnostics | Self::ProjectCapsCompatibility
-        )
-    }
 }
 
 #[derive(Debug)]
 pub(crate) struct RivusLintConfig<E: LintEnvironment> {
     pub(crate) mode: LintExecutionMode,
     pub(crate) capsmap: Result<Option<CapsMap>, String>,
-    pub(crate) untested_functions:
-        Result<Option<BTreeMap<FunctionIdentity, crate::artifacts::CoverageLabel>>, String>,
     pub(crate) offline_emissions: Result<Vec<OfflineCapsEmission>, String>,
     pub(crate) test_outputs: Option<BTreeSet<String>>,
     pub(crate) ui_testing: bool,

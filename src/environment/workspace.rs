@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::env;
 use std::ffi::OsString;
 use std::fmt;
@@ -32,7 +32,7 @@ use crate::symbols::CrateName;
 
 const RVS_RUN_GENERATION_MARKER_FILE: &str = ".rivus-generation.json";
 const RVS_PRIMARY_PACKAGE_TARGETS_FILE: &str = ".rivus-primary-package-targets";
-const RVS_RUN_GENERATION_SCHEMA_VERSION: u32 = 5;
+const RVS_RUN_GENERATION_SCHEMA_VERSION: u32 = 6;
 const RVS_PRIMARY_PACKAGE_TARGETS_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Snafu)]
@@ -205,12 +205,9 @@ impl From<CallgraphCollectionMode> for RunGenerationCollectionMode {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "input", rename_all = "snake_case", deny_unknown_fields)]
-enum RunGenerationAnalysisMode {
+pub(crate) enum RunGenerationAnalysisMode {
     ProjectCaps,
-    Offline {
-        has_untested_selection: bool,
-        has_offline_emissions: bool,
-    },
+    Offline,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -372,9 +369,8 @@ fn rvs_write_artifact_no_replace_BIST(
 
 #[derive(Debug, Clone)]
 pub(crate) struct RivusOfflineDriverInput {
-    pub(crate) untested_paths: Option<PathBuf>,
-    pub(crate) emissions: Option<PathBuf>,
-    pub(crate) acknowledgement_dir: Option<PathBuf>,
+    pub(crate) emissions: PathBuf,
+    pub(crate) acknowledgement_dir: PathBuf,
 }
 
 #[derive(Debug, Clone)]
@@ -788,11 +784,7 @@ fn rvs_parse_driver_protocol_environment_BIS(
             RivusDriverMode::ProjectCaps { capsmap }
         }
         RunGenerationMode::Analysis {
-            analysis:
-                RunGenerationAnalysisMode::Offline {
-                    has_untested_selection,
-                    has_offline_emissions,
-                },
+            analysis: RunGenerationAnalysisMode::Offline,
             ..
         } => {
             rvs_require_driver_flag(environment.offline_caps.as_ref(), "RIVUS_OFFLINE_CAPS")?;
@@ -804,68 +796,27 @@ fn rvs_parse_driver_protocol_environment_BIS(
                     "RIVUS_CRATE_PROVENANCE",
                 ),
                 (environment.capsmap.as_ref(), "RIVUS_CAPSMAP"),
+                (environment.untested_paths.as_ref(), "RIVUS_UNTESTED_PATHS"),
             ] {
                 rvs_reject_driver_variable(value, name)?;
             }
-            let untested_paths = if has_untested_selection {
-                Some(rvs_require_driver_path_match(
-                    environment.untested_paths.as_ref(),
-                    "RIVUS_UNTESTED_PATHS",
-                    &canonical_root.join("untested-functions.json"),
-                )?)
-            } else {
-                rvs_reject_driver_variable(
-                    environment.untested_paths.as_ref(),
-                    "RIVUS_UNTESTED_PATHS",
-                )?;
-                None
-            };
-            let (emissions, acknowledgement_dir) = if has_offline_emissions {
-                (
-                    Some(rvs_require_driver_path_match(
-                        environment.offline_emissions.as_ref(),
-                        "RIVUS_OFFLINE_EMISSIONS",
-                        &canonical_root.join("offline-emissions.json"),
-                    )?),
-                    Some(rvs_require_driver_path_match(
-                        environment.offline_emissions_ack_dir.as_ref(),
-                        "RIVUS_OFFLINE_EMISSIONS_ACK_DIR",
-                        &canonical_root.join("offline-emission-acks"),
-                    )?),
-                )
-            } else {
-                rvs_reject_driver_variable(
-                    environment.offline_emissions.as_ref(),
-                    "RIVUS_OFFLINE_EMISSIONS",
-                )?;
-                rvs_reject_driver_variable(
-                    environment.offline_emissions_ack_dir.as_ref(),
-                    "RIVUS_OFFLINE_EMISSIONS_ACK_DIR",
-                )?;
-                (None, None)
-            };
+            let emissions = rvs_require_driver_path_match(
+                environment.offline_emissions.as_ref(),
+                "RIVUS_OFFLINE_EMISSIONS",
+                &canonical_root.join("offline-emissions.json"),
+            )?;
+            let acknowledgement_dir = rvs_require_driver_path_match(
+                environment.offline_emissions_ack_dir.as_ref(),
+                "RIVUS_OFFLINE_EMISSIONS_ACK_DIR",
+                &canonical_root.join("offline-emission-acks"),
+            )?;
             RivusDriverMode::Offline(RivusOfflineDriverInput {
-                untested_paths,
                 emissions,
                 acknowledgement_dir,
             })
         }
     };
     Ok(RivusDriverConfig { mode, ui_testing })
-}
-
-/// Resolve the capsmap path for the lint pass.
-///
-/// Project layers are loaded from `caps/`; the distributed seed is supplied
-/// by the linter independently of this environment path. There is no target/*
-/// caps cache and no `-m` override.
-fn rvs_resolve_capsmap_BIMS(cmd: &mut Command, project_path: &Path) -> Result<(), String> {
-    let project_caps = project_path.join("caps");
-    if rvs_validate_optional_capsmap_dir_BIS(&project_caps)? {
-        rvs_load_project_caps_BIS(project_path)?;
-        cmd.env("RIVUS_CAPSMAP", project_caps);
-    }
-    Ok(())
 }
 
 pub(crate) fn rvs_validate_optional_capsmap_dir_BIS(path: &Path) -> Result<bool, String> {
@@ -904,14 +855,12 @@ pub(crate) enum CargoCheckMode {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CargoLintInput {
-    ProjectCaps,
     Offline(OfflineLintInput),
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct OfflineLintInput {
-    pub(crate) untested_paths: Option<PathBuf>,
-    pub(crate) emissions: Option<OfflineEmissionInput>,
+    pub(crate) emissions: OfflineEmissionInput,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1226,21 +1175,13 @@ fn rvs_prepare_cargo_check_command_BIST(
         .env("RIVUS_GENERATION_ROOT", config.generation.rvs_root());
 
     match &config.mode {
-        CargoCheckMode::Lint(CargoLintInput::ProjectCaps) => {
-            rvs_resolve_capsmap_BIMS(&mut cmd, &project_path).map_err(CargoCheckError::Message)?;
-        }
         CargoCheckMode::Lint(CargoLintInput::Offline(input)) => {
             cmd.env("RIVUS_OFFLINE_CAPS", "1");
-            if let Some(path) = &input.untested_paths {
-                cmd.env("RIVUS_UNTESTED_PATHS", path);
-            }
-            if let Some(emissions) = &input.emissions {
-                cmd.env("RIVUS_OFFLINE_EMISSIONS", &emissions.path);
-                cmd.env(
-                    "RIVUS_OFFLINE_EMISSIONS_ACK_DIR",
-                    &emissions.acknowledgement_dir,
-                );
-            }
+            cmd.env("RIVUS_OFFLINE_EMISSIONS", &input.emissions.path);
+            cmd.env(
+                "RIVUS_OFFLINE_EMISSIONS_ACK_DIR",
+                &input.emissions.acknowledgement_dir,
+            );
         }
         CargoCheckMode::Callgraph { artifact_dir, .. } => {
             cmd.env("RIVUS_CALLGRAPH", "1");
@@ -1368,13 +1309,13 @@ fn rvs_run_cargo_check_at_BIST(project_path: &Path, extra_args: &[String]) -> Re
         &caps,
         &local_crate_names,
     );
-    let offline_emissions = report.rvs_emissions(&callgraph);
+    let mut offline_emissions = report.rvs_emissions(&callgraph);
+    offline_emissions.extend(crate::offline_caps::rvs_untested_emissions(&uncovered));
     let lint_result = rvs_run_project_lints_BIST(
         project_path,
         &target_scope,
         &extra_args_ref,
-        &Some(&uncovered),
-        Some(&offline_emissions),
+        &offline_emissions,
     );
     if let Err(error) = lint_result {
         eprintln!("{error}");
@@ -1384,58 +1325,39 @@ fn rvs_run_cargo_check_at_BIST(project_path: &Path, extra_args: &[String]) -> Re
     Ok(())
 }
 
+/// The replay compile of `cargo rivus check`: it anchors the merged-graph
+/// emissions (contract diagnostics and the untested selection) onto real
+/// source spans. Always runs in Offline mode, even with zero emissions.
 fn rvs_run_project_lints_BIST(
     project_path: &Path,
     target_scope: &CargoTargetScope,
     extra_args: &[&str],
-    uncovered: &Option<
-        &BTreeMap<crate::artifacts::FunctionIdentity, crate::artifacts::CoverageLabel>,
-    >,
-    offline_emissions: Option<&[crate::offline_caps::OfflineCapsEmission]>,
+    offline_emissions: &[crate::offline_caps::OfflineCapsEmission],
 ) -> Result<(), CargoCheckError> {
-    let analysis = if uncovered.is_none() && offline_emissions.is_none() {
-        RunGenerationAnalysisMode::ProjectCaps
-    } else {
-        RunGenerationAnalysisMode::Offline {
-            has_untested_selection: uncovered.is_some(),
-            has_offline_emissions: offline_emissions.is_some(),
-        }
-    };
     let mut generation = rvs_reserve_run_generation_for_BIST(
         project_path,
         RunGenerationMode::Analysis {
             target_scope: (*target_scope).into(),
-            analysis,
+            analysis: RunGenerationAnalysisMode::Offline,
         },
     )
     .map_err(|error| CargoCheckError::Message(error.to_string()))?;
     let lint_result = (|| {
-        let mut input = OfflineLintInput::default();
-        if let Some(functions) = uncovered {
-            let path = rvs_write_untested_selection_BIST(generation.rvs_root(), functions)
-                .map_err(CargoCheckError::Message)?;
-            input.untested_paths = Some(path);
-        }
-        if let Some(offline_emissions) = offline_emissions {
-            let path = rvs_write_offline_emissions_BIST(generation.rvs_root(), offline_emissions)
-                .map_err(CargoCheckError::Message)?;
-            let ack_dir = generation.rvs_root().join("offline-emission-acks");
-            std::fs::create_dir(&ack_dir).map_err(|error| {
-                CargoCheckError::Message(format!(
-                    "cannot create offline emission acknowledgement directory {}: {error}",
-                    ack_dir.display()
-                ))
-            })?;
-            input.emissions = Some(OfflineEmissionInput {
+        let path = rvs_write_offline_emissions_BIST(generation.rvs_root(), offline_emissions)
+            .map_err(CargoCheckError::Message)?;
+        let ack_dir = generation.rvs_root().join("offline-emission-acks");
+        std::fs::create_dir(&ack_dir).map_err(|error| {
+            CargoCheckError::Message(format!(
+                "cannot create offline emission acknowledgement directory {}: {error}",
+                ack_dir.display()
+            ))
+        })?;
+        let lint_input = CargoLintInput::Offline(OfflineLintInput {
+            emissions: OfflineEmissionInput {
                 path,
                 acknowledgement_dir: ack_dir,
-            });
-        }
-        let lint_input = if uncovered.is_none() && offline_emissions.is_none() {
-            CargoLintInput::ProjectCaps
-        } else {
-            CargoLintInput::Offline(input)
-        };
+            },
+        });
         let cargo_result = rvs_run_cargo_check_impl_BIST(&CargoCheckConfig {
             project_path,
             generation: &generation,
@@ -1444,9 +1366,7 @@ fn rvs_run_project_lints_BIST(
             extra_args: extra_args.to_vec(),
             target_subdir: Some(generation.rvs_target_subdir()),
         });
-        let ack_result = if cargo_result.is_ok()
-            && let Some(offline_emissions) = offline_emissions
-        {
+        let ack_result = if cargo_result.is_ok() {
             rvs_verify_offline_emission_acks_BIS(generation.rvs_root(), offline_emissions).map(Some)
         } else {
             Ok(None)
@@ -1510,18 +1430,6 @@ fn rvs_verify_offline_emission_acks_BIS(
         }
     }
     Ok(VerifiedOfflineEmissionAcks)
-}
-
-fn rvs_write_untested_selection_BIST(
-    generation_root: &Path,
-    functions: &BTreeMap<crate::artifacts::FunctionIdentity, crate::artifacts::CoverageLabel>,
-) -> Result<PathBuf, String> {
-    let path = generation_root.join("untested-functions.json");
-    let json = crate::artifacts::rvs_serialize_untested_selection(functions)
-        .map_err(|error| error.to_string())?;
-    super::fs_guard::rvs_atomic_write_BIST(&path, json.as_bytes())
-        .map_err(|error| format!("cannot write {}: {error}", path.display()))?;
-    Ok(path)
 }
 
 fn rvs_reject_forwarded_check_args(extra_args: &[String]) -> Result<(), String> {
@@ -2253,6 +2161,7 @@ mod tests {
     use crate::test_support::{
         rvs_caps_v2, rvs_make_cargo_project_BIS, rvs_make_temp_dir_BIS, rvs_snapshot_BIS,
     };
+    use std::collections::BTreeMap;
 
     fn rvs_make_workspace_temp_dir_BIS(tag: &str) -> PathBuf {
         rvs_make_temp_dir_BIS(&format!("workspace-{tag}"))
@@ -2264,16 +2173,9 @@ mod tests {
         target_scope: CargoTargetScope,
     ) -> RivusRunGeneration {
         let mode = match mode {
-            CargoCheckMode::Lint(CargoLintInput::ProjectCaps) => RunGenerationMode::Analysis {
+            CargoCheckMode::Lint(CargoLintInput::Offline(_)) => RunGenerationMode::Analysis {
                 target_scope: target_scope.into(),
-                analysis: RunGenerationAnalysisMode::ProjectCaps,
-            },
-            CargoCheckMode::Lint(CargoLintInput::Offline(input)) => RunGenerationMode::Analysis {
-                target_scope: target_scope.into(),
-                analysis: RunGenerationAnalysisMode::Offline {
-                    has_untested_selection: input.untested_paths.is_some(),
-                    has_offline_emissions: input.emissions.is_some(),
-                },
+                analysis: RunGenerationAnalysisMode::Offline,
             },
             CargoCheckMode::Callgraph { collection, .. } => RunGenerationMode::Collection {
                 collection: (*collection).into(),
@@ -2815,53 +2717,6 @@ mod tests {
 
         assert!(output.status.success(), "{stderr}");
         assert_eq!(warning_count, 1, "{stderr}");
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn test_20260714_direct_driver_checks_local_test_coverage() {
-        let dir = rvs_make_workspace_temp_dir_BIS("direct-driver-coverage");
-        std::fs::create_dir_all(dir.join("src")).unwrap();
-        std::fs::write(
-            dir.join("Cargo.toml"),
-            "[package]\nname = \"direct-coverage\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
-        )
-        .unwrap();
-        std::fs::write(
-            dir.join("src/lib.rs"),
-            "#![feature(register_tool)]\n#![register_tool(rivus)]\n#![allow(internal_features)]\n#![allow(non_snake_case)]\n#![warn(rivus::rvs_untested_good_fn)]\n\n/// Function intentionally left uncovered.\npub fn rvs_uncovered() -> i32 { 1 }\n",
-        )
-        .unwrap();
-        let mode = CargoCheckMode::Lint(CargoLintInput::ProjectCaps);
-        let mut generation =
-            rvs_reserve_cargo_check_test_generation_BIST(&dir, &mode, CargoTargetScope::Production);
-        let config = CargoCheckConfig {
-            project_path: &dir,
-            generation: &generation,
-            mode,
-            target_scope: CargoTargetScope::Production,
-            extra_args: vec![],
-            target_subdir: Some("direct-driver-coverage"),
-        };
-        let output = rvs_prepare_cargo_check_command_BIST(&config)
-            .unwrap()
-            .output()
-            .unwrap();
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let reported = stderr.contains("good fn 'rvs_uncovered' not called by any test");
-        let summary = format!(
-            "success={}\nuntested_reported={reported}\n",
-            output.status.success(),
-        );
-        rvs_snapshot_BIS(
-            "test_20260714_direct_driver_checks_local_test_coverage",
-            &summary,
-        );
-
-        assert!(output.status.success(), "{stderr}");
-        assert!(reported, "{stderr}");
-        rvs_cleanup_run_generation_BIMS(&mut generation)
-            .expect("never: direct driver test generation cleanup should succeed");
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -3601,7 +3456,12 @@ name = "throughput-bench"
             ("production", CargoTargetScope::Production),
             ("all_targets", CargoTargetScope::WithTestExampleBench),
         ] {
-            let mode = CargoCheckMode::Lint(CargoLintInput::ProjectCaps);
+            let mode = CargoCheckMode::Lint(CargoLintInput::Offline(OfflineLintInput {
+                emissions: OfflineEmissionInput {
+                    path: PathBuf::from("emissions.json"),
+                    acknowledgement_dir: PathBuf::from("acks"),
+                },
+            }));
             let mut generation =
                 rvs_reserve_cargo_check_test_generation_BIST(&dir, &mode, target_scope);
             let config = CargoCheckConfig {
@@ -3636,7 +3496,12 @@ name = "throughput-bench"
     #[test]
     fn test_20260704_prepare_cargo_check_sanitizes_rivus_env() {
         let dir = rvs_make_workspace_temp_dir_BIS("sanitize-env-no-caps");
-        let mode = CargoCheckMode::Lint(CargoLintInput::ProjectCaps);
+        let mode = CargoCheckMode::Lint(CargoLintInput::Offline(OfflineLintInput {
+            emissions: OfflineEmissionInput {
+                path: dir.join("emissions.json"),
+                acknowledgement_dir: dir.join("acks"),
+            },
+        }));
         let mut generation = rvs_reserve_cargo_check_test_generation_BIST(
             &dir,
             &mode,
@@ -3667,7 +3532,8 @@ name = "throughput-bench"
             rvs_command_env_value(&cmd, "RIVUS_ENABLED"),
             rvs_command_env_value(&cmd, "RIVUS_UI_TESTING"),
             rvs_command_env_value(&cmd, "RIVUS_UNTESTED_PATHS"),
-        );
+        )
+        .replace(&dir.to_string_lossy().into_owned(), "$TMP");
         rvs_snapshot_BIS(
             "test_20260704_prepare_cargo_check_sanitizes_rivus_env",
             &output,
@@ -3724,17 +3590,12 @@ name = "throughput-bench"
         std::fs::write(dir.join("src/lib.rs"), "pub fn rvs_value() {}\n").unwrap();
         let modes = [
             (
-                "project_lint",
-                CargoCheckMode::Lint(CargoLintInput::ProjectCaps),
-            ),
-            (
                 "offline_lint",
                 CargoCheckMode::Lint(CargoLintInput::Offline(OfflineLintInput {
-                    untested_paths: Some(PathBuf::from("untested.json")),
-                    emissions: Some(OfflineEmissionInput {
+                    emissions: OfflineEmissionInput {
                         path: PathBuf::from("emissions.json"),
                         acknowledgement_dir: PathBuf::from("acks"),
-                    }),
+                    },
                 })),
             ),
             (
@@ -3785,12 +3646,11 @@ name = "throughput-bench"
                 .flatten()
                 .unwrap_or_else(|| "none".to_string());
             output.push_str(&format!(
-                "{name}: workspace_wrapper={} all_crates_wrapper={} callgraph={} provenance={provenance} offline={} untested={} emissions={} acks={} nightly={} build_std={} target={}\n",
+                "{name}: workspace_wrapper={} all_crates_wrapper={} callgraph={} provenance={provenance} offline={} emissions={} acks={} nightly={} build_std={} target={}\n",
                 env_is_set("RUSTC_WORKSPACE_WRAPPER"),
                 env_is_set("RUSTC_WRAPPER"),
                 env_is_set("RIVUS_CALLGRAPH"),
                 env_is_set("RIVUS_OFFLINE_CAPS"),
-                env_is_set("RIVUS_UNTESTED_PATHS"),
                 env_is_set("RIVUS_OFFLINE_EMISSIONS"),
                 env_is_set("RIVUS_OFFLINE_EMISSIONS_ACK_DIR"),
                 env_is_set("RUSTUP_TOOLCHAIN"),
@@ -3807,11 +3667,10 @@ name = "throughput-bench"
 
         assert_eq!(
             output,
-            "project_lint: workspace_wrapper=true all_crates_wrapper=false callgraph=false provenance=none offline=false untested=false emissions=false acks=false nightly=false build_std=false target=false\n\
-offline_lint: workspace_wrapper=true all_crates_wrapper=false callgraph=false provenance=none offline=true untested=true emissions=true acks=true nightly=false build_std=false target=false\n\
-workspace_callgraph: workspace_wrapper=true all_crates_wrapper=false callgraph=true provenance=cargo-primary offline=false untested=false emissions=false acks=false nightly=false build_std=false target=false\n\
-all_crates_callgraph: workspace_wrapper=false all_crates_wrapper=true callgraph=true provenance=cargo-primary offline=false untested=false emissions=false acks=false nightly=false build_std=false target=false\n\
-standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true callgraph=true provenance=cargo-primary offline=false untested=false emissions=false acks=false nightly=true build_std=true target=true\n"
+            "offline_lint: workspace_wrapper=true all_crates_wrapper=false callgraph=false provenance=none offline=true emissions=true acks=true nightly=false build_std=false target=false\n\
+workspace_callgraph: workspace_wrapper=true all_crates_wrapper=false callgraph=true provenance=cargo-primary offline=false emissions=false acks=false nightly=false build_std=false target=false\n\
+all_crates_callgraph: workspace_wrapper=false all_crates_wrapper=true callgraph=true provenance=cargo-primary offline=false emissions=false acks=false nightly=false build_std=false target=false\n\
+standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true callgraph=true provenance=cargo-primary offline=false emissions=false acks=false nightly=true build_std=true target=true\n"
         );
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -3820,31 +3679,15 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
     fn test_20260706_prepare_cargo_check_rejects_caps_file() {
         let dir = rvs_make_workspace_temp_dir_BIS("caps-file");
         std::fs::write(dir.join("caps"), "bad=Z\n").unwrap();
-        let mode = CargoCheckMode::Lint(CargoLintInput::ProjectCaps);
-        let mut generation = rvs_reserve_cargo_check_test_generation_BIST(
-            &dir,
-            &mode,
-            CargoTargetScope::WithTestExampleBench,
-        );
-        let config = CargoCheckConfig {
-            project_path: &dir,
-            generation: &generation,
-            mode,
-            target_scope: CargoTargetScope::WithTestExampleBench,
-            extra_args: vec![],
-            target_subdir: None,
-        };
-
-        let result = rvs_prepare_cargo_check_command_BIST(&config);
-        let output = format!("{result:?}\n").replace(&dir.to_string_lossy().into_owned(), "$TMP");
+        // Broken caps must fail the check before any cargo process spawns.
+        let result = rvs_run_cargo_check_at_BIST(&dir, &[]);
+        let output = format!("is_err={}\ncode={:?}\n", result.is_err(), result.err());
         rvs_snapshot_BIS(
             "test_20260706_prepare_cargo_check_rejects_caps_file",
             &output,
         );
 
-        assert!(matches!(result, Err(CargoCheckError::Message(_))));
-        rvs_cleanup_run_generation_BIMS(&mut generation)
-            .expect("never: caps-file command generation cleanup should succeed");
+        assert_eq!(result, Err(1));
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -3852,7 +3695,12 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
     fn test_20260713_prepare_offline_cargo_check_defers_caps_to_parent() {
         let dir = rvs_make_workspace_temp_dir_BIS("offline-caps-parent-snapshot");
         std::fs::write(dir.join("caps"), "bad=Z\n").unwrap();
-        let mode = CargoCheckMode::Lint(CargoLintInput::Offline(OfflineLintInput::default()));
+        let mode = CargoCheckMode::Lint(CargoLintInput::Offline(OfflineLintInput {
+            emissions: OfflineEmissionInput {
+                path: PathBuf::from("emissions.json"),
+                acknowledgement_dir: PathBuf::from("acks"),
+            },
+        }));
         let mut generation = rvs_reserve_cargo_check_test_generation_BIST(
             &dir,
             &mode,
@@ -3899,32 +3747,16 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
         )
         .unwrap();
         std::os::unix::fs::symlink(dir.join("missing-caps"), dir.join("caps")).unwrap();
-        let mode = CargoCheckMode::Lint(CargoLintInput::ProjectCaps);
-        let mut generation = rvs_reserve_cargo_check_test_generation_BIST(
-            &dir,
-            &mode,
-            CargoTargetScope::WithTestExampleBench,
-        );
-
-        let result = rvs_prepare_cargo_check_command_BIST(&CargoCheckConfig {
-            project_path: &dir,
-            generation: &generation,
-            mode,
-            target_scope: CargoTargetScope::WithTestExampleBench,
-            extra_args: vec![],
-            target_subdir: None,
-        });
-        let output = format!("{result:?}\n").replace(&dir.to_string_lossy().into_owned(), "$TMP");
+        // A broken caps symlink must fail the check before any cargo process
+        // spawns.
+        let result = rvs_run_cargo_check_at_BIST(&dir, &[]);
+        let output = format!("is_err={}\ncode={:?}\n", result.is_err(), result.err());
         rvs_snapshot_BIS(
             "test_20260706_prepare_cargo_check_rejects_broken_project_caps_symlink",
             &output,
         );
 
-        assert!(result.is_err());
-        assert!(output.contains("is not a directory"));
-
-        rvs_cleanup_run_generation_BIMS(&mut generation)
-            .expect("never: broken-caps command generation cleanup should succeed");
+        assert_eq!(result, Err(1));
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -4563,31 +4395,16 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
             "# rivus-caps-v2\n{\"path\":\"bad\",\"caps\":\"Z\",\"basis\":{\"kind\":\"explicit\"},\"completeness\":\"complete\"}\n",
         )
         .unwrap();
-        let mode = CargoCheckMode::Lint(CargoLintInput::ProjectCaps);
-        let mut generation = rvs_reserve_cargo_check_test_generation_BIST(
-            &dir,
-            &mode,
-            CargoTargetScope::WithTestExampleBench,
-        );
-        let config = CargoCheckConfig {
-            project_path: &dir,
-            generation: &generation,
-            mode,
-            target_scope: CargoTargetScope::WithTestExampleBench,
-            extra_args: vec![],
-            target_subdir: None,
-        };
-
-        let result = rvs_prepare_cargo_check_command_BIST(&config);
-        let output = format!("{result:?}\n").replace(&dir.to_string_lossy().into_owned(), "$TMP");
+        // Invalid caps records must fail the check before any cargo process
+        // spawns.
+        let result = rvs_run_cargo_check_at_BIST(&dir, &[]);
+        let output = format!("is_err={}\ncode={:?}\n", result.is_err(), result.err());
         rvs_snapshot_BIS(
             "test_20260706_prepare_cargo_check_validates_project_caps_without_std_cache",
             &output,
         );
 
-        assert!(matches!(result, Err(CargoCheckError::Message(_))));
-        rvs_cleanup_run_generation_BIMS(&mut generation)
-            .expect("never: invalid-caps command generation cleanup should succeed");
+        assert_eq!(result, Err(1));
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -4604,7 +4421,12 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
         let absolute_project = std::env::current_dir().unwrap().join(&relative_project);
         std::fs::create_dir_all(absolute_project.join("caps")).unwrap();
 
-        let mode = CargoCheckMode::Lint(CargoLintInput::ProjectCaps);
+        let mode = CargoCheckMode::Lint(CargoLintInput::Offline(OfflineLintInput {
+            emissions: OfflineEmissionInput {
+                path: absolute_project.join("emissions.json"),
+                acknowledgement_dir: absolute_project.join("acks"),
+            },
+        }));
         let mut generation = rvs_reserve_cargo_check_test_generation_BIST(
             &relative_project,
             &mode,
@@ -4629,15 +4451,15 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
             .windows(2)
             .find_map(|window| (window[0] == "--target-dir").then(|| PathBuf::from(&window[1])))
             .expect("command should set target dir");
-        let capsmap = rvs_command_env_value(&cmd, "RIVUS_CAPSMAP")
+        let emissions_path = rvs_command_env_value(&cmd, "RIVUS_OFFLINE_EMISSIONS")
             .and_then(|value| value)
             .map(PathBuf::from)
-            .expect("project caps should be configured");
+            .expect("offline emissions should be configured");
         let output = format!(
-            "cwd_abs={}\ntarget_abs={}\ncaps_abs={}\n",
+            "cwd_abs={}\ntarget_abs={}\nemissions_abs={}\n",
             current_dir.is_absolute(),
             target_dir.is_absolute(),
-            capsmap.is_absolute(),
+            emissions_path.is_absolute(),
         );
         rvs_snapshot_BIS(
             "test_20260704_prepare_cargo_check_uses_absolute_paths",
@@ -4646,9 +4468,9 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
 
         assert!(current_dir.is_absolute());
         assert!(target_dir.is_absolute());
-        assert!(capsmap.is_absolute());
+        assert!(emissions_path.is_absolute());
         assert!(target_dir.ends_with("target/rivus-custom-build"));
-        assert!(capsmap.ends_with("caps"));
+        assert!(emissions_path.ends_with("emissions.json"));
 
         rvs_cleanup_run_generation_BIMS(&mut generation)
             .expect("never: absolute-path command generation cleanup should succeed");

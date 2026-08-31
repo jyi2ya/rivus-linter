@@ -64,6 +64,8 @@ pub(crate) enum OfflineCapsLint {
     TraitImplOutlier,
     UnknownCallee,
     UnknownSuffixLetter,
+    UntestedGoodFn,
+    UntestedOkFn,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1029,9 +1031,9 @@ pub(crate) fn rvs_uncovered_test_functions(
         if !node.has_body || !node.is_coverage_candidate {
             continue;
         }
-        // The emission compile only registers good/ok candidates whose name
-        // carries the rvs_ prefix; the selection must apply the same filter
-        // so unreportable entries never enter it or the name-coverage
+        // Only rvs_-prefixed names are reportable as untested — parity with
+        // the direct local-coverage registration filter. Entries outside
+        // the filter never enter the selection or the name-coverage
         // counting.
         if !ParsedFunctionName::rvs_parse(def_path.rvs_as_str()).rvs_has_rvs_prefix() {
             continue;
@@ -1072,6 +1074,34 @@ pub(crate) fn rvs_uncovered_test_functions(
         }
     }
     uncovered
+}
+
+/// Converts the uncovered selection into merged-graph emissions. The
+/// message matches the historical direct emission exactly; each identity
+/// anchors once and is acknowledged by the crate that defines it.
+pub(crate) fn rvs_untested_emissions(
+    uncovered: &BTreeMap<FunctionIdentity, crate::artifacts::CoverageLabel>,
+) -> Vec<OfflineCapsEmission> {
+    uncovered
+        .iter()
+        .map(|(identity, coverage)| {
+            let (lint, label) = match coverage {
+                crate::artifacts::CoverageLabel::Good => (OfflineCapsLint::UntestedGoodFn, "good"),
+                crate::artifacts::CoverageLabel::Ok => (OfflineCapsLint::UntestedOkFn, "ok"),
+            };
+            OfflineCapsEmission {
+                lint,
+                span_anchors: BTreeSet::from([OfflineCapsEmissionAnchor {
+                    identity: identity.clone(),
+                    call_site: None,
+                }]),
+                message: format!(
+                    "{label} fn '{}' not called by any test",
+                    identity.def_path.rvs_fn_name_str()
+                ),
+            }
+        })
+        .collect()
 }
 
 fn rvs_collect_suffix_diagnostics_M(
@@ -1795,12 +1825,51 @@ fn rvs_format_caps_bound(caps: &CapabilitySet, completeness: CapabilityCompleten
 mod tests {
     use super::*;
     use crate::artifacts::{
-        CallEdgeType, CallSiteSource, CrateProvenance, FnNode, FnSource, rvs_test_target_of_M,
+        CallEdgeType, CallSiteSource, CoverageLabel, CrateProvenance, FnNode, FnSource,
+        FunctionIdentity, rvs_test_target_of_M,
     };
     use crate::capability::{CapabilityBasis, CapabilityFacts, CapabilityInfo, CapabilitySource};
-    use crate::symbols::CapsMapKey;
+    use crate::symbols::{CapsMapKey, DefPath};
     use crate::test_support::{rvs_make_capsmap, rvs_snapshot_BIS};
     use std::path::PathBuf;
+
+    #[test]
+    fn test_20260831_untested_selection_converts_to_emissions() {
+        let uncovered = BTreeMap::from([
+            (
+                FunctionIdentity {
+                    crate_id: 3,
+                    def_path: DefPath::from("demo::rvs_alpha"),
+                },
+                CoverageLabel::Good,
+            ),
+            (
+                FunctionIdentity {
+                    crate_id: 5,
+                    def_path: DefPath::from("demo::Worker::rvs_run_P"),
+                },
+                CoverageLabel::Ok,
+            ),
+        ]);
+        let emissions = rvs_untested_emissions(&uncovered);
+        let output = format!("{emissions:#?}\n");
+        rvs_snapshot_BIS(
+            "test_20260831_untested_selection_converts_to_emissions",
+            &output,
+        );
+
+        assert_eq!(emissions.len(), 2);
+        assert_eq!(emissions[0].lint, OfflineCapsLint::UntestedGoodFn);
+        assert_eq!(emissions[1].lint, OfflineCapsLint::UntestedOkFn);
+        assert_eq!(
+            emissions[0].message,
+            "good fn 'rvs_alpha' not called by any test"
+        );
+        assert_eq!(
+            emissions[1].message,
+            "ok fn 'rvs_run_P' not called by any test"
+        );
+    }
 
     fn rvs_node(calls: &[&str]) -> FnNode {
         let mut node = FnNode::default();

@@ -1,1 +1,2 @@
-Err(Message("caps/: $TMP/caps/ext: line 2: invalid capsmap v2 record: invalid capability letter: 'Z' at line 1 column 24"))
+is_err=true
+code=Some(1)

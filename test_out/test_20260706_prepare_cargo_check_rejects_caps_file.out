@@ -1,1 +1,2 @@
-Err(Message("capsmap path '$TMP/caps' is not a directory"))
+is_err=true
+code=Some(1)

@@ -18,9 +18,6 @@ pub(crate) fn rvs_check_crate_post_MPS<'tcx, E: LintEnvironment>(
     good_fns: &[CoverageFn],
     ok_fns: &[CoverageFn],
     test_calls: &HashSet<TestCallTarget>,
-    selected_untested_functions: Option<
-        &BTreeMap<FunctionIdentity, crate::artifacts::CoverageLabel>,
-    >,
     callgraph: &FnGraph,
     test_outputs: Option<&BTreeSet<String>>,
     world: &mut E::World,
@@ -29,9 +26,7 @@ pub(crate) fn rvs_check_crate_post_MPS<'tcx, E: LintEnvironment>(
 ) {
     rvs_check_duplicate_tests_S(cx, test_names);
     rvs_check_missing_test_output_S(cx, test_names, test_outputs, ui_testing);
-    if let Some(selected) = selected_untested_functions {
-        rvs_check_selected_untested_fns_S(cx, good_fns, ok_fns, selected);
-    } else if check_local_coverage || ui_testing {
+    if check_local_coverage || ui_testing {
         let covered = rvs_direct_covered_functions(callgraph);
         let mut candidate_name_counts = BTreeMap::new();
         for candidate in good_fns.iter().chain(ok_fns) {
@@ -49,34 +44,6 @@ pub(crate) fn rvs_check_crate_post_MPS<'tcx, E: LintEnvironment>(
         );
     }
     rvs_write_callgraph_MPS::<E>(cx, callgraph, world);
-}
-
-fn rvs_check_selected_untested_fns_S<'tcx>(
-    cx: &LateContext<'tcx>,
-    good_fns: &[CoverageFn],
-    ok_fns: &[CoverageFn],
-    selected: &BTreeMap<FunctionIdentity, crate::artifacts::CoverageLabel>,
-) {
-    // The selection carries the coverage class computed by the offline
-    // engine from semantic caps; the emission compile only resolves spans
-    // and must not reclassify from signature facts, which cannot see
-    // propagated capabilities.
-    for candidate in good_fns.iter().chain(ok_fns) {
-        let Some(label) = selected.get(&candidate.identity) else {
-            continue;
-        };
-        let (lint, label) = match label {
-            crate::artifacts::CoverageLabel::Good => (RVS_UNTESTED_GOOD_FN, "good"),
-            crate::artifacts::CoverageLabel::Ok => (RVS_UNTESTED_OK_FN, "ok"),
-        };
-        rvs_emit_node_span_lint_S(
-            cx,
-            lint,
-            candidate.hir_id,
-            candidate.span,
-            format!("{label} fn '{}' not called by any test", candidate.name),
-        );
-    }
 }
 
 fn rvs_check_duplicate_tests_S<'tcx>(

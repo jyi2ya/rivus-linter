@@ -1,5 +1,4 @@
-project_lint: workspace_wrapper=true all_crates_wrapper=false callgraph=false provenance=none offline=false untested=false emissions=false acks=false nightly=false build_std=false target=false
-offline_lint: workspace_wrapper=true all_crates_wrapper=false callgraph=false provenance=none offline=true untested=true emissions=true acks=true nightly=false build_std=false target=false
-workspace_callgraph: workspace_wrapper=true all_crates_wrapper=false callgraph=true provenance=cargo-primary offline=false untested=false emissions=false acks=false nightly=false build_std=false target=false
-all_crates_callgraph: workspace_wrapper=false all_crates_wrapper=true callgraph=true provenance=cargo-primary offline=false untested=false emissions=false acks=false nightly=false build_std=false target=false
-standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true callgraph=true provenance=cargo-primary offline=false untested=false emissions=false acks=false nightly=true build_std=true target=true
+offline_lint: workspace_wrapper=true all_crates_wrapper=false callgraph=false provenance=none offline=true emissions=true acks=true nightly=false build_std=false target=false
+workspace_callgraph: workspace_wrapper=true all_crates_wrapper=false callgraph=true provenance=cargo-primary offline=false emissions=false acks=false nightly=false build_std=false target=false
+all_crates_callgraph: workspace_wrapper=false all_crates_wrapper=true callgraph=true provenance=cargo-primary offline=false emissions=false acks=false nightly=false build_std=false target=false
+standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true callgraph=true provenance=cargo-primary offline=false emissions=false acks=false nightly=true build_std=true target=true

@@ -1,10 +1,10 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use snafu::Snafu;
 
-use crate::artifacts::{CrateProvenance, FnGraph, FunctionIdentity};
+use crate::artifacts::{CrateProvenance, FnGraph};
 use crate::capsmap::{self, CapsMap};
 use crate::lints::{LintEnvironment, LintExecutionMode, RivusLintConfig};
 use crate::offline_caps::OfflineCapsEmission;
@@ -119,9 +119,8 @@ pub(crate) fn rvs_prepare_lint_config_BIS(
     } else {
         Ok(None)
     };
-    let untested_functions = rvs_load_untested_functions_BIS(offline_input.as_ref());
     let offline_emissions = rvs_load_offline_emissions_BIS(offline_input.as_ref());
-    let acknowledgement_dir = offline_input.and_then(|input| input.acknowledgement_dir);
+    let acknowledgement_dir = offline_input.map(|input| input.acknowledgement_dir);
     let crate_provenance = callgraph_output
         .as_ref()
         .map_or(CrateProvenance::LegacyUnknown, |output| {
@@ -131,7 +130,6 @@ pub(crate) fn rvs_prepare_lint_config_BIS(
     RivusLintConfig {
         mode: lint_mode,
         capsmap,
-        untested_functions,
         offline_emissions,
         test_outputs: rvs_collect_test_outputs_BIS(Path::new("test_out"), ui_testing),
         ui_testing,
@@ -151,27 +149,10 @@ pub(crate) fn rvs_load_capsmap_path_BIS(path: Option<&Path>) -> Result<CapsMap, 
     }
 }
 
-fn rvs_load_untested_functions_BIS(
-    input: Option<&RivusOfflineDriverInput>,
-) -> Result<Option<BTreeMap<FunctionIdentity, crate::artifacts::CoverageLabel>>, String> {
-    let Some(path) = input.and_then(|input| input.untested_paths.as_deref()) else {
-        return Ok(None);
-    };
-    let json = std::fs::read_to_string(path).map_err(|error| {
-        format!(
-            "cannot read untested-function selection {}: {error}",
-            path.display()
-        )
-    })?;
-    crate::artifacts::rvs_parse_untested_selection(&json)
-        .map(Some)
-        .map_err(|error| format!("{}: {error}", path.display()))
-}
-
 fn rvs_load_offline_emissions_BIS(
     input: Option<&RivusOfflineDriverInput>,
 ) -> Result<Vec<OfflineCapsEmission>, String> {
-    let Some(path) = input.and_then(|input| input.emissions.as_deref()) else {
+    let Some(path) = input.map(|input| input.emissions.as_path()) else {
         return Ok(Vec::new());
     };
     let json = std::fs::read_to_string(path).map_err(|error| {

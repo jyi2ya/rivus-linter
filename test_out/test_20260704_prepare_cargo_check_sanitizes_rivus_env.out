@@ -1,7 +1,7 @@
 callgraph=Some(None)
 capsmap=removed
-offline_emissions=Some(None)
-offline_acks=Some(None)
+offline_emissions=Some(Some("$TMP/emissions.json"))
+offline_acks=Some(Some("$TMP/acks"))
 rustc=Some(None)
 rivus_enabled=Some(Some("1"))
 ui_testing=Some(None)

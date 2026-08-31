@@ -260,9 +260,6 @@ pub struct RivusLintPass<E: LintEnvironment> {
     mode: LintExecutionMode,
     test_fn_names: HashSet<String>,
     banned_import_statements: HashSet<(rustc_span::StableSourceFileId, u32, String)>,
-    untested_functions:
-        Option<BTreeMap<crate::artifacts::FunctionIdentity, crate::artifacts::CoverageLabel>>,
-    untested_functions_error: Option<String>,
     offline_emissions: Vec<crate::offline_caps::OfflineCapsEmission>,
     offline_emissions_error: Option<String>,
     test_outputs: Option<BTreeSet<String>>,
@@ -279,7 +276,6 @@ impl<E: LintEnvironment> RivusLintPass<E> {
         let RivusLintConfig {
             mode,
             capsmap,
-            untested_functions,
             offline_emissions,
             test_outputs,
             ui_testing,
@@ -289,10 +285,6 @@ impl<E: LintEnvironment> RivusLintPass<E> {
         } = config;
         let (capsmap, capsmap_error) = match capsmap {
             Ok(capsmap) => (capsmap, None),
-            Err(error) => (None, Some(error)),
-        };
-        let (untested_functions, untested_functions_error) = match untested_functions {
-            Ok(functions) => (functions, None),
             Err(error) => (None, Some(error)),
         };
         let (offline_emissions, offline_emissions_error) = match offline_emissions {
@@ -313,8 +305,6 @@ impl<E: LintEnvironment> RivusLintPass<E> {
             mode,
             test_fn_names: HashSet::new(),
             banned_import_statements: HashSet::new(),
-            untested_functions,
-            untested_functions_error,
             offline_emissions,
             offline_emissions_error,
             test_outputs,
@@ -386,9 +376,6 @@ impl<E: LintEnvironment> LintPass for RivusLintPass<E> {
 
 impl<'tcx, E: LintEnvironment> LateLintPass<'tcx> for RivusLintPass<E> {
     fn check_crate(&mut self, cx: &LateContext<'tcx>) {
-        if let Some(error) = self.untested_functions_error.take() {
-            cx.tcx.dcx().err(error);
-        }
         if let Some(error) = self.offline_emissions_error.take() {
             cx.tcx.dcx().err(error);
         }
@@ -473,7 +460,6 @@ impl<'tcx, E: LintEnvironment> LateLintPass<'tcx> for RivusLintPass<E> {
             &self.good_fns,
             &self.ok_fns,
             &self.test_calls,
-            self.untested_functions.as_ref(),
             &self.callgraph,
             self.test_outputs.as_ref(),
             &mut self.world,
@@ -629,6 +615,8 @@ fn rvs_offline_caps_lint_S(
         OfflineCapsLint::TraitImplOutlier => RVS_TRAIT_IMPL_OUTLIER,
         OfflineCapsLint::UnknownCallee => RVS_UNKNOWN_CALLEE,
         OfflineCapsLint::UnknownSuffixLetter => RVS_UNKNOWN_SUFFIX_LETTER,
+        OfflineCapsLint::UntestedGoodFn => RVS_UNTESTED_GOOD_FN,
+        OfflineCapsLint::UntestedOkFn => RVS_UNTESTED_OK_FN,
     }
 }
 
@@ -764,10 +752,10 @@ fn rvs_effective_caps(subject: &FnSubject<'_, '_>) -> CapabilitySet {
     effective_caps
 }
 
-/// Registers a good/ok coverage candidate for the untested selection.
-/// Registration is collection, not emission: it also runs in replay
-/// processes that no longer emit direct lints, so the selection can
-/// anchor onto real spans.
+/// Registers a good/ok coverage candidate for the direct local-coverage
+/// view of the caps-report mode. The merged-graph pipeline does not use
+/// registration: it emits untested fns as offline emissions anchored by
+/// the graph collection walk.
 fn rvs_register_coverage_candidate_BM<'tcx>(
     cx: &LateContext<'tcx>,
     subject: &FnSubject<'_, 'tcx>,
@@ -851,9 +839,9 @@ fn rvs_run_body_fn_pipeline_BMS<'tcx, F>(
         // scopes.
         rvs_check_unsupported_implicit_execution_S(cx, subject.body_facts);
     }
-    // Coverage candidates are production source only, matching the
-    // offline engine's is_coverage_candidate exclusion of test modules.
-    if data.mode.rvs_registers_coverage_candidates() && scope == DiagnosticScope::Production {
+    // Coverage candidates feed the direct local-coverage view only; the
+    // merged-graph pipeline emits untested fns as offline emissions.
+    if data.mode.rvs_is_caps_report() && scope == DiagnosticScope::Production {
         rvs_register_coverage_candidate_BM(cx, subject, data);
     }
     if data.mode.rvs_collect_caps_facts() {

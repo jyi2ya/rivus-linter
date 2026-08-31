@@ -1,0 +1,32 @@
+[
+    OfflineCapsEmission {
+        lint: UntestedGoodFn,
+        span_anchors: {
+            OfflineCapsEmissionAnchor {
+                identity: FunctionIdentity {
+                    crate_id: 3,
+                    def_path: DefPath(
+                        "demo::rvs_alpha",
+                    ),
+                },
+                call_site: None,
+            },
+        },
+        message: "good fn 'rvs_alpha' not called by any test",
+    },
+    OfflineCapsEmission {
+        lint: UntestedOkFn,
+        span_anchors: {
+            OfflineCapsEmissionAnchor {
+                identity: FunctionIdentity {
+                    crate_id: 5,
+                    def_path: DefPath(
+                        "demo::Worker::rvs_run_P",
+                    ),
+                },
+                call_site: None,
+            },
+        },
+        message: "ok fn 'rvs_run_P' not called by any test",
+    },
+]
