@@ -23,6 +23,7 @@ use crate::symbols::{CrateName, DefPath};
 mod body;
 mod caps;
 mod ctx;
+mod identity_cache;
 mod msg;
 mod node;
 mod ports;
@@ -30,6 +31,7 @@ mod test_quality;
 mod utils;
 
 pub use crate::artifacts::FnGraph;
+pub(crate) use identity_cache::IdentityCache;
 pub(crate) use ports::{LintEnvironment, LintExecutionMode, RivusLintConfig};
 
 use body::{catch_unwind, debug_assert, empty_fn, error_swallow, reflection, spawn, stub_macro};
@@ -237,6 +239,7 @@ macro_rules! rvs_fn_check_data {
             callgraph: &mut $pass.callgraph,
             diagnostic_spans: &mut $pass.diagnostic_spans,
             diagnostic_call_spans: &mut $pass.diagnostic_call_spans,
+            identity_cache: &mut $pass.identity_cache,
             mode: $pass.mode,
             crate_provenance: $pass.crate_provenance,
         }
@@ -256,6 +259,7 @@ pub struct RivusLintPass<E: LintEnvironment> {
     callgraph: FnGraph,
     diagnostic_spans: BTreeMap<FunctionIdentity, (rustc_hir::HirId, Span)>,
     diagnostic_call_spans: BTreeMap<(FunctionIdentity, CallSiteIdentity), (rustc_hir::HirId, Span)>,
+    identity_cache: IdentityCache,
     done_crate_level: bool,
     mode: LintExecutionMode,
     test_fn_names: HashSet<String>,
@@ -294,6 +298,7 @@ impl<E: LintEnvironment> RivusLintPass<E> {
             callgraph: FnGraph::rvs_new(),
             diagnostic_spans: BTreeMap::new(),
             diagnostic_call_spans: BTreeMap::new(),
+            identity_cache: IdentityCache::rvs_new(),
             done_crate_level: false,
             mode,
             test_fn_names: HashSet::new(),
@@ -627,12 +632,13 @@ enum DiagnosticScope {
 /// Test source: a `#[test]` function or an owner whose DefPath contains a
 /// `tests` segment before the function-name segment. Nested bodies inherit
 /// the enclosing owner's scope and never re-derive it.
-fn rvs_diagnostic_scope_B(
+fn rvs_diagnostic_scope_BM(
+    cache: &mut IdentityCache,
     cx: &LateContext<'_>,
     def_id: rustc_span::def_id::DefId,
     is_test: bool,
 ) -> DiagnosticScope {
-    let path = DefPath::rvs_new(utils::rvs_def_path_B(cx, def_id));
+    let path = DefPath::rvs_new(cache.rvs_def_path_BM(cx, def_id));
     if is_test || path.rvs_is_in_test_module() {
         DiagnosticScope::Test
     } else {
@@ -745,10 +751,10 @@ fn rvs_register_coverage_candidate_BM<'tcx>(
                     .tcx
                     .stable_crate_id(subject.hir_id.owner.def_id.to_def_id().krate)
                     .as_u64(),
-                def_path: DefPath::rvs_new(utils::rvs_def_path_B(
-                    cx,
-                    subject.hir_id.owner.def_id.to_def_id(),
-                )),
+                def_path: DefPath::rvs_new(
+                    data.identity_cache
+                        .rvs_def_path_BM(cx, subject.hir_id.owner.def_id.to_def_id()),
+                ),
             },
             name: name.to_string(),
             hir_id: subject.hir_id,
@@ -800,6 +806,7 @@ fn rvs_run_body_fn_pipeline_BMS<'tcx, F>(
     }
     {
         let collected = callgraph::rvs_collect_callgraph_for_item_BMS(
+            data.identity_cache,
             data.callgraph,
             cx,
             subject,
@@ -838,11 +845,20 @@ fn rvs_check_item_BMS<'tcx>(
         } => {
             let name = ident.name.as_str();
             let body = cx.tcx.hir_body(*body);
-            let body_facts =
-                body::rvs_collect_body_facts_B(cx, body, data.mode.rvs_should_emit_lints());
+            let body_facts = body::rvs_collect_body_facts_BM(
+                data.identity_cache,
+                cx,
+                body,
+                data.mode.rvs_should_emit_lints(),
+            );
             let attrs = cx.tcx.hir_attrs(item.hir_id());
             let is_test = utils::rvs_has_attr(attrs, "test") || test_fn_names.contains(name);
-            let scope = rvs_diagnostic_scope_B(cx, item.owner_id.def_id.to_def_id(), is_test);
+            let scope = rvs_diagnostic_scope_BM(
+                data.identity_cache,
+                cx,
+                item.owner_id.def_id.to_def_id(),
+                is_test,
+            );
             let subject = FnSubject::rvs_body(
                 *ident,
                 item.hir_id(),
@@ -880,8 +896,12 @@ fn rvs_check_item_BMS<'tcx>(
         }
         ItemKind::Use(path, use_kind) => {
             if data.mode.rvs_should_emit_lints()
-                && rvs_diagnostic_scope_B(cx, item.owner_id.def_id.to_def_id(), false)
-                    == DiagnosticScope::Production
+                && rvs_diagnostic_scope_BM(
+                    data.identity_cache,
+                    cx,
+                    item.owner_id.def_id.to_def_id(),
+                    false,
+                ) == DiagnosticScope::Production
             {
                 banned_import::rvs_check_item_BMS(
                     cx,
@@ -894,16 +914,24 @@ fn rvs_check_item_BMS<'tcx>(
         }
         ItemKind::ExternCrate(..) => {
             if data.mode.rvs_should_emit_lints()
-                && rvs_diagnostic_scope_B(cx, item.owner_id.def_id.to_def_id(), false)
-                    == DiagnosticScope::Production
+                && rvs_diagnostic_scope_BM(
+                    data.identity_cache,
+                    cx,
+                    item.owner_id.def_id.to_def_id(),
+                    false,
+                ) == DiagnosticScope::Production
             {
                 banned_import::rvs_check_extern_crate_S(cx, item);
             }
         }
         ItemKind::Enum(_, _, enum_def) => {
             if data.mode.rvs_should_emit_lints()
-                && rvs_diagnostic_scope_B(cx, item.owner_id.def_id.to_def_id(), false)
-                    == DiagnosticScope::Production
+                && rvs_diagnostic_scope_BM(
+                    data.identity_cache,
+                    cx,
+                    item.owner_id.def_id.to_def_id(),
+                    false,
+                ) == DiagnosticScope::Production
             {
                 missing_debug_derive::rvs_check_struct_or_enum_S(cx, item);
                 catch_all_error::rvs_check_enum_S(cx, item, enum_def);
@@ -911,8 +939,12 @@ fn rvs_check_item_BMS<'tcx>(
         }
         ItemKind::Struct(_, _, data_fields) => {
             if data.mode.rvs_should_emit_lints()
-                && rvs_diagnostic_scope_B(cx, item.owner_id.def_id.to_def_id(), false)
-                    == DiagnosticScope::Production
+                && rvs_diagnostic_scope_BM(
+                    data.identity_cache,
+                    cx,
+                    item.owner_id.def_id.to_def_id(),
+                    false,
+                ) == DiagnosticScope::Production
             {
                 missing_debug_derive::rvs_check_struct_or_enum_S(cx, item);
                 match data_fields {
@@ -925,8 +957,12 @@ fn rvs_check_item_BMS<'tcx>(
         }
         ItemKind::Impl(imp) => {
             if data.mode.rvs_should_emit_lints()
-                && rvs_diagnostic_scope_B(cx, item.owner_id.def_id.to_def_id(), false)
-                    == DiagnosticScope::Production
+                && rvs_diagnostic_scope_BM(
+                    data.identity_cache,
+                    cx,
+                    item.owner_id.def_id.to_def_id(),
+                    false,
+                ) == DiagnosticScope::Production
             {
                 deref_polymorphism::rvs_check_impl_S(cx, item, imp);
                 implicit_execution::rvs_check_impl_S(cx, item, imp);
@@ -974,9 +1010,18 @@ fn rvs_check_impl_item_BMS<'tcx>(
         let attrs = cx.tcx.hir_attrs(impl_item.hir_id());
         let is_test = utils::rvs_has_attr(attrs, "test") || test_fn_names.contains(name);
         let is_pub = !is_trait_impl && cx.tcx.visibility(impl_item.owner_id.def_id).is_public();
-        let scope = rvs_diagnostic_scope_B(cx, impl_item.owner_id.def_id.to_def_id(), is_test);
-        let body_facts =
-            body::rvs_collect_body_facts_B(cx, body, data.mode.rvs_should_emit_lints());
+        let scope = rvs_diagnostic_scope_BM(
+            data.identity_cache,
+            cx,
+            impl_item.owner_id.def_id.to_def_id(),
+            is_test,
+        );
+        let body_facts = body::rvs_collect_body_facts_BM(
+            data.identity_cache,
+            cx,
+            body,
+            data.mode.rvs_should_emit_lints(),
+        );
         if data.mode.rvs_should_emit_lints()
             && scope == DiagnosticScope::Production
             && !is_trait_impl
@@ -1059,9 +1104,18 @@ fn rvs_check_trait_item_BMS<'tcx>(
     match &trait_item.kind {
         TraitItemKind::Fn(sig, TraitFn::Provided(body_id)) => {
             let body = cx.tcx.hir_body(*body_id);
-            let body_facts =
-                body::rvs_collect_body_facts_B(cx, body, data.mode.rvs_should_emit_lints());
-            let scope = rvs_diagnostic_scope_B(cx, trait_item.owner_id.def_id.to_def_id(), false);
+            let body_facts = body::rvs_collect_body_facts_BM(
+                data.identity_cache,
+                cx,
+                body,
+                data.mode.rvs_should_emit_lints(),
+            );
+            let scope = rvs_diagnostic_scope_BM(
+                data.identity_cache,
+                cx,
+                trait_item.owner_id.def_id.to_def_id(),
+                false,
+            );
             let subject = FnSubject::rvs_body(
                 trait_item.ident,
                 trait_item.hir_id(),
@@ -1094,8 +1148,12 @@ fn rvs_check_trait_item_BMS<'tcx>(
         }
         TraitItemKind::Fn(sig, TraitFn::Required(_)) => {
             if data.mode.rvs_should_emit_lints()
-                && rvs_diagnostic_scope_B(cx, trait_item.owner_id.def_id.to_def_id(), false)
-                    == DiagnosticScope::Production
+                && rvs_diagnostic_scope_BM(
+                    data.identity_cache,
+                    cx,
+                    trait_item.owner_id.def_id.to_def_id(),
+                    false,
+                ) == DiagnosticScope::Production
             {
                 let name = trait_item.ident.name.as_str();
                 let parsed_name = ParsedFunctionName::rvs_parse(name);
@@ -1129,6 +1187,7 @@ fn rvs_check_trait_item_BMS<'tcx>(
             }
             // Required methods (no body) — collect signature info for callgraph.
             let def_path = callgraph::rvs_collect_callgraph_for_signature_BMS(
+                data.identity_cache,
                 data.callgraph,
                 cx,
                 trait_item.hir_id(),

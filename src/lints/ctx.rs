@@ -112,12 +112,13 @@ mod tests {
 /// threaded through without leaking RivusLintPass internals.
 #[derive(Debug)]
 pub(crate) struct FnCheckData<'a> {
-    pub good_fns: &'a mut Vec<CoverageFn>,
-    pub ok_fns: &'a mut Vec<CoverageFn>,
-    pub callgraph: &'a mut FnGraph,
-    pub diagnostic_spans: &'a mut BTreeMap<FunctionIdentity, (HirId, Span)>,
-    pub diagnostic_call_spans:
+    pub(crate) good_fns: &'a mut Vec<CoverageFn>,
+    pub(crate) ok_fns: &'a mut Vec<CoverageFn>,
+    pub(crate) callgraph: &'a mut FnGraph,
+    pub(crate) diagnostic_spans: &'a mut BTreeMap<FunctionIdentity, (HirId, Span)>,
+    pub(crate) diagnostic_call_spans:
         &'a mut BTreeMap<(FunctionIdentity, CallSiteIdentity), (HirId, Span)>,
-    pub mode: super::LintExecutionMode,
-    pub crate_provenance: CrateProvenance,
+    pub(crate) identity_cache: &'a mut super::identity_cache::IdentityCache,
+    pub(crate) mode: super::LintExecutionMode,
+    pub(crate) crate_provenance: CrateProvenance,
 }

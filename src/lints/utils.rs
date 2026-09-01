@@ -17,6 +17,7 @@ use rustc_middle::{
 use rustc_span::{Span, Symbol};
 
 use super::body::macro_expansion::rvs_span_has_bang_macro;
+use super::identity_cache::{IdentityCache, ImplTypeIdentity};
 use crate::symbols::{DefPath, rvs_attach_generated_definition_marker_M};
 
 // ─── Constants ───────────────────────────────────────────────────────────
@@ -47,13 +48,6 @@ pub(crate) const REFLECTION_PATHS: &[&str] = &[
 pub(crate) const CATCH_ALL_VARIANT_NAMES: &[&str] =
     &["Unknown", "Other", "UnknownError", "OtherError"];
 pub(crate) const VALIDATE_PREFIXES: &[&str] = &["validate", "check", "verify"];
-
-#[derive(Debug)]
-struct ImplTypeIdentity {
-    readable_path: String,
-    marker: String,
-    is_nominal_path: bool,
-}
 
 #[allow(
     clippy::allow_attributes,
@@ -705,7 +699,11 @@ pub(crate) struct CallObservation {
     pub body_owner: LocalDefId,
 }
 
-pub(crate) fn rvs_resolve_call_B(cx: &LateContext<'_>, expr: &Expr<'_>) -> Option<CallObservation> {
+pub(crate) fn rvs_resolve_call_BM(
+    cache: &mut IdentityCache,
+    cx: &LateContext<'_>,
+    expr: &Expr<'_>,
+) -> Option<CallObservation> {
     match &expr.kind {
         ExprKind::Call(func, _) => {
             let mut callee = *func;
@@ -759,7 +757,7 @@ pub(crate) fn rvs_resolve_call_B(cx: &LateContext<'_>, expr: &Expr<'_>) -> Optio
                     });
                 }
                 rustc_hir::def::Res::Def(def_kind, def_id) => CallTarget::Resolved {
-                    def_path: DefPath::rvs_new(rvs_def_path_B(cx, def_id)),
+                    def_path: DefPath::rvs_new(cache.rvs_def_path_BM(cx, def_id)),
                     def_kind,
                     crate_id: cx.tcx.stable_crate_id(def_id.krate).as_u64(),
                 },
@@ -806,7 +804,7 @@ pub(crate) fn rvs_resolve_call_B(cx: &LateContext<'_>, expr: &Expr<'_>) -> Optio
             }
             let resolved = resolved_def_id.map(|def_id| {
                 (
-                    DefPath::rvs_new(rvs_def_path_B(cx, def_id)),
+                    DefPath::rvs_new(cache.rvs_def_path_BM(cx, def_id)),
                     cx.tcx.def_kind(def_id),
                     cx.tcx.stable_crate_id(def_id.krate).as_u64(),
                 )
@@ -882,17 +880,22 @@ pub(crate) fn rvs_tys(t: &rustc_hir::Ty<'_>) -> String {
     }
 }
 
-pub(crate) fn rvs_def_path_B(cx: &LateContext<'_>, did: DefId) -> String {
+pub(crate) fn rvs_compute_def_path_BM(
+    cache: &mut IdentityCache,
+    cx: &LateContext<'_>,
+    did: DefId,
+) -> String {
     let tcx = cx.tcx;
     let dp = tcx.def_path(did);
     let impl_def_id = rvs_enclosing_impl_def_id(cx, did);
-    let impl_ty = impl_def_id.and_then(|impl_def_id| rvs_impl_type_identity_B(cx, impl_def_id));
+    let impl_ty =
+        impl_def_id.and_then(|impl_def_id| cache.rvs_impl_type_identity_BM(cx, impl_def_id));
     let is_sourceless = tcx.def_span(did).is_dummy();
     let definition_marker = cx
         .tcx
         .opt_associated_item(did)
         .is_none()
-        .then(|| rvs_definition_identity_B(cx, did))
+        .then(|| cache.rvs_definition_identity_BM(cx, did))
         .flatten()
         .map(|identity| rvs_encode_identity_marker(&identity));
 
@@ -953,7 +956,7 @@ pub(crate) fn rvs_def_path_B(cx: &LateContext<'_>, did: DefId) -> String {
             if let rustc_hir::def::DefKind::Impl { of_trait: true } = cx.tcx.def_kind(impl_def_id) {
                 let trait_ref = cx.tcx.impl_trait_ref(impl_def_id);
                 let trait_def_id = trait_ref.skip_binder().def_id;
-                let trait_path = rvs_def_path_B(cx, trait_def_id);
+                let trait_path = cache.rvs_def_path_BM(cx, trait_def_id);
                 path.push('@');
                 path.push_str(&trait_path);
             }
@@ -963,19 +966,7 @@ pub(crate) fn rvs_def_path_B(cx: &LateContext<'_>, did: DefId) -> String {
     path
 }
 
-fn rvs_definition_identity_B(cx: &LateContext<'_>, did: DefId) -> Option<String> {
-    let definition_span = cx.tcx.def_span(did);
-    if definition_span.from_expansion() {
-        return rvs_generated_definition_identity_B(cx, did);
-    }
-    if !rvs_is_body_nested_definition(cx, did) {
-        return None;
-    }
-    rvs_span_source_identity(cx, definition_span)
-        .map(|definition| format!("definition={definition}"))
-}
-
-fn rvs_is_body_nested_definition(cx: &LateContext<'_>, did: DefId) -> bool {
+pub(crate) fn rvs_is_body_nested_definition(cx: &LateContext<'_>, did: DefId) -> bool {
     if did.is_crate_root() {
         return false;
     }
@@ -993,23 +984,18 @@ fn rvs_is_body_nested_definition(cx: &LateContext<'_>, did: DefId) -> bool {
     )
 }
 
-fn rvs_generated_definition_identity_B(cx: &LateContext<'_>, did: DefId) -> Option<String> {
-    let mut identity = rvs_generated_definition_base_identity_B(cx, did)?;
-    if let Some(ordinal) = rvs_generated_definition_repetition_ordinal_B(cx, did, &identity) {
-        identity.push_str("|same-source-ordinal=");
-        identity.push_str(&ordinal.to_string());
-    }
-    Some(identity)
-}
-
-fn rvs_generated_definition_base_identity_B(cx: &LateContext<'_>, did: DefId) -> Option<String> {
+pub(crate) fn rvs_compute_generated_base_identity_BM(
+    cache: &mut IdentityCache,
+    cx: &LateContext<'_>,
+    did: DefId,
+) -> Option<String> {
     let definition_span = cx.tcx.def_span(did);
     if !definition_span.from_expansion() {
         return None;
     }
 
     let mut identity = Vec::new();
-    if let Some(definition) = rvs_span_source_identity(cx, definition_span) {
+    if let Some(definition) = cache.rvs_span_source_identity_M(cx, definition_span) {
         identity.push(format!("definition={definition}"));
     }
 
@@ -1021,12 +1007,14 @@ fn rvs_generated_definition_base_identity_B(cx: &LateContext<'_>, did: DefId) ->
             component.push_str(";macro=");
             component.push_str(cx.tcx.crate_name(macro_def_id.krate).as_str());
             component.push_str(&cx.tcx.def_path(macro_def_id).to_string_no_crate_verbose());
-            if let Some(definition) = rvs_span_source_identity(cx, cx.tcx.def_span(macro_def_id)) {
+            if let Some(definition) =
+                cache.rvs_span_source_identity_M(cx, cx.tcx.def_span(macro_def_id))
+            {
                 component.push_str(";macro_definition=");
                 component.push_str(&definition);
             }
         }
-        if let Some(call_site) = rvs_span_source_identity(cx, data.call_site) {
+        if let Some(call_site) = cache.rvs_span_source_identity_M(cx, data.call_site) {
             component.push_str(";call_site=");
             component.push_str(&call_site);
         }
@@ -1042,40 +1030,7 @@ fn rvs_generated_definition_base_identity_B(cx: &LateContext<'_>, did: DefId) ->
     (!identity.is_empty()).then(|| identity.join("|"))
 }
 
-fn rvs_generated_definition_repetition_ordinal_B(
-    cx: &LateContext<'_>,
-    did: DefId,
-    base_identity: &str,
-) -> Option<usize> {
-    debug_assert!(
-        !base_identity.is_empty(),
-        "generated base identity is nonempty"
-    );
-    let local_did = did.as_local()?;
-    let definition_kind = cx.tcx.def_kind(did);
-    let mut matching_definitions = 0usize;
-    let mut ordinal = None;
-    for owner in cx.tcx.hir_crate_items(()).owners() {
-        let candidate = owner.def_id.to_def_id();
-        if cx.tcx.def_kind(candidate) != definition_kind
-            || rvs_generated_definition_base_identity_B(cx, candidate).as_deref()
-                != Some(base_identity)
-        {
-            continue;
-        }
-        if owner.def_id == local_did {
-            ordinal = Some(matching_definitions);
-        }
-        matching_definitions += 1;
-    }
-    if matching_definitions > 1 {
-        ordinal
-    } else {
-        None
-    }
-}
-
-fn rvs_span_source_identity(cx: &LateContext<'_>, span: Span) -> Option<String> {
+pub(crate) fn rvs_compute_span_source_identity(cx: &LateContext<'_>, span: Span) -> Option<String> {
     if span.is_dummy() {
         return None;
     }
@@ -1146,7 +1101,11 @@ fn rvs_predicate_nominal_crate_identities<'tcx>(
     visitor.rvs_finish()
 }
 
-fn rvs_impl_type_identity_B(cx: &LateContext<'_>, impl_def_id: DefId) -> Option<ImplTypeIdentity> {
+pub(crate) fn rvs_compute_impl_type_identity_BM(
+    cache: &mut IdentityCache,
+    cx: &LateContext<'_>,
+    impl_def_id: DefId,
+) -> Option<ImplTypeIdentity> {
     let self_ty = cx.tcx.type_of(impl_def_id).skip_binder();
     let self_type_text = rustc_middle::ty::print::with_resolve_crate_name!(
         rustc_middle::ty::print::with_no_visible_paths!(
@@ -1157,9 +1116,9 @@ fn rvs_impl_type_identity_B(cx: &LateContext<'_>, impl_def_id: DefId) -> Option<
         rvs_type_nominal_crate_identities(cx, impl_def_id.krate, self_ty);
     let (readable_path, is_nominal_path, generated_self_type_identity) = match self_ty.kind() {
         rustc_middle::ty::TyKind::Adt(adt_def, _) => (
-            rvs_def_path_B(cx, adt_def.did()),
+            cache.rvs_def_path_BM(cx, adt_def.did()),
             true,
-            rvs_generated_definition_identity_B(cx, adt_def.did()),
+            cache.rvs_generated_definition_identity_BM(cx, adt_def.did()),
         ),
         _ => (
             self_type_text.rsplit("::").next().map(str::to_string)?,
@@ -1201,7 +1160,7 @@ fn rvs_impl_type_identity_B(cx: &LateContext<'_>, impl_def_id: DefId) -> Option<
         } else {
             None
         };
-    let generated_impl_identity = rvs_generated_definition_identity_B(cx, impl_def_id);
+    let generated_impl_identity = cache.rvs_generated_definition_identity_BM(cx, impl_def_id);
     let generated_definition_identity = generated_impl_identity.or(generated_self_type_identity);
     let marker = rvs_impl_identity_marker(
         &self_type_text,
@@ -1558,8 +1517,8 @@ mod tests {
             rvs_root_body_expr,
             rvs_qp,
             rvs_tys,
-            rvs_def_path_B,
-            rvs_resolve_call_B,
+            rvs_compute_def_path_BM,
+            rvs_resolve_call_BM,
             rvs_is_sysroot_crate_id,
         ));
     }

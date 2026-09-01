@@ -6,9 +6,9 @@ use rustc_lint::LateContext;
 use rustc_span::{FileName, Ident, Span};
 
 use super::super::ctx::FnSubject;
+use super::super::identity_cache::IdentityCache;
 use super::super::utils::{
-    CallTarget, rvs_count_body_effective_lines, rvs_def_path_B, rvs_has_allow,
-    rvs_has_mutable_params,
+    CallTarget, rvs_count_body_effective_lines, rvs_has_allow, rvs_has_mutable_params,
 };
 use crate::artifacts::{
     CallEdgeType, CallSiteIdentity, CallSiteSource, CrateProvenance, FnGraph, FnNode, FnSource,
@@ -60,6 +60,7 @@ fn rvs_fn_node_from_signature(
 }
 
 pub(crate) fn rvs_collect_callgraph_for_item_BMS<'tcx>(
+    cache: &mut IdentityCache,
     callgraph: &mut FnGraph,
     cx: &LateContext<'tcx>,
     subject: &FnSubject<'_, 'tcx>,
@@ -67,7 +68,7 @@ pub(crate) fn rvs_collect_callgraph_for_item_BMS<'tcx>(
 ) -> CollectedCallgraphItem {
     let local_def_id = subject.hir_id.owner.def_id;
     let def_id = local_def_id.to_def_id();
-    let caller_path = DefPath::rvs_new(rvs_def_path_B(cx, def_id));
+    let caller_path = DefPath::rvs_new(cache.rvs_def_path_BM(cx, def_id));
     let cargo_package_name = crate::symbols::rvs_cargo_package_name_BS();
     let crate_id = cx.tcx.stable_crate_id(def_id.krate).as_u64();
     if caller_path.rvs_is_build_script_for_package(cargo_package_name.as_deref()) {
@@ -80,7 +81,7 @@ pub(crate) fn rvs_collect_callgraph_for_item_BMS<'tcx>(
         };
     }
     let is_in_test_module = caller_path.rvs_is_in_test_module();
-    let is_entrypoint = rvs_is_executable_entry_B(cx, def_id);
+    let is_entrypoint = rvs_is_executable_entry_BM(cache, cx, def_id);
 
     let resolved_edges: Vec<(
         DefPath,
@@ -232,6 +233,7 @@ pub(crate) fn rvs_collect_callgraph_for_item_BMS<'tcx>(
 /// Collect callgraph entry from a signature alone (no body — e.g. trait method
 /// declarations without default implementation).
 pub(crate) fn rvs_collect_callgraph_for_signature_BMS(
+    cache: &mut IdentityCache,
     callgraph: &mut FnGraph,
     cx: &LateContext<'_>,
     hir_id: HirId,
@@ -243,7 +245,7 @@ pub(crate) fn rvs_collect_callgraph_for_signature_BMS(
 ) -> DefPath {
     let local_def_id = hir_id.owner.def_id;
     let def_id = local_def_id.to_def_id();
-    let caller_path = DefPath::rvs_new(rvs_def_path_B(cx, def_id));
+    let caller_path = DefPath::rvs_new(cache.rvs_def_path_BM(cx, def_id));
     let cargo_package_name = crate::symbols::rvs_cargo_package_name_BS();
     if caller_path.rvs_is_build_script_for_package(cargo_package_name.as_deref()) {
         return caller_path;
@@ -273,7 +275,11 @@ pub(crate) fn rvs_collect_callgraph_for_signature_BMS(
     caller_path
 }
 
-fn rvs_is_executable_entry_B(cx: &LateContext<'_>, def_id: rustc_span::def_id::DefId) -> bool {
+fn rvs_is_executable_entry_BM(
+    cache: &mut IdentityCache,
+    cx: &LateContext<'_>,
+    def_id: rustc_span::def_id::DefId,
+) -> bool {
     if cx
         .tcx
         .entry_fn(())
@@ -281,7 +287,7 @@ fn rvs_is_executable_entry_B(cx: &LateContext<'_>, def_id: rustc_span::def_id::D
     {
         return true;
     }
-    let path = rvs_def_path_B(cx, def_id);
+    let path = cache.rvs_def_path_BM(cx, def_id);
     let segs: Vec<&str> = path.split("::").collect();
     segs.get(1)
         .is_some_and(|seg| segs.len() == 2 && *seg == "main")
