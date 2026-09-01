@@ -1,7 +1,9 @@
-callgraph=Some(None)
+callgraph=Some(Some("1"))
+callgraph_dir=Some(Some("$TMP/artifacts"))
 capsmap=removed
-offline_emissions=Some(Some("$TMP/emissions.json"))
-offline_acks=Some(Some("$TMP/acks"))
+offline_caps=Some(None)
+offline_emissions=Some(None)
+offline_acks=Some(None)
 rustc=Some(None)
 rivus_enabled=Some(Some("1"))
 ui_testing=Some(None)

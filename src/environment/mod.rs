@@ -3,6 +3,7 @@ pub(crate) mod callgraph_cache;
 pub(crate) mod capsmap_loader;
 pub(crate) mod cargo_targets;
 pub(crate) mod fs_guard;
+pub(crate) mod graph_render;
 pub(crate) mod infer_commands;
 pub(crate) mod lint_driver;
 pub(crate) mod rename;

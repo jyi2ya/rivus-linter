@@ -51,7 +51,7 @@
 - 源码写回只使用 artifact 记录的路径基准；旧 artifact 没有基准时允许兼容解析，但多个候选都存在则拒绝猜测
 - 源码写回的 eligibility 只由 rustc 函数图生成的精确 source plan 决定；rust-analyzer 只把计划中的文件和字节范围解析为语义 rename position，不能按目录或语法标签再次筛选候选
 - 同一命令已经确定本地 crate 边界后，callgraph 收集、std cache 选择、报告和缓存过滤都必须接收并复用这一份边界快照，并通过同一个 `LocalScope` 执行归属判定，不允许各阶段重新探测项目范围。crate-name prefix 只用于收集前的函数查询、同名 std cache 防碰撞和 standalone legacy 诊断；versioned graph 中的函数与调用边必须优先按稳定 crate ID 对应的 Cargo primary-package provenance 判定。Cargo 会把所有 build script 命名为 `build_script_build`，因此该名字绝不能单独证明本地归属，也不能单独证明 build-script 身份。build script 是编译期机器代码而非被分析程序的运行时代码，其判定必须到编译单元级：crate name 为 `build_script_build` 且 Cargo 包名（`CARGO_PKG_NAME`）归一化后不同才排除。名为 `build-script-build` 的普通包必须正常分析；lint pass 对真实 build script 的函数不收集节点（artifact 仍写出空图以满足完整性），本地 crate 发现也不把 build-script 排除视为 prefix 语义，build script 函数不参与能力推断、报告、契约诊断、trait 投票或测试覆盖。一个名为 `build-script-build` 的包自身的 build.rs 是该规则的残留歧义，作为精度边界接受
-- `check` 的父进程在启动两个 Cargo 阶段前加载一次项目 caps 快照；第一阶段是 lint-bearing 采集编译——收集工作区函数图并执行直接 lint，其非零退出（编译错误或 deny 级直接 lint）立即终止命令；第二阶段是纯锚点回放——复用与采集相同的 body 遍历和调用点编号收集 identity/call-site 到源码 span 的锚点，不构建函数图节点，把合并图诊断（契约、调用合规、unknown/incomplete 与全项目 untested 选择）回放到源码 span，不重新解析 caps，最终离线能力分析必须复用命令开始时的同一份快照
+- `check` 的父进程只启动一次 Cargo 编译：lint-bearing 采集编译——收集工作区函数图并执行直接 lint，其非零退出（编译错误或 deny 级直接 lint）立即终止命令，不合并图、不推断、不渲染图诊断。命令开始时加载一次项目 caps 快照；采集结束后父进程在同一份快照上运行离线能力分析（契约、调用合规、unknown/incomplete 与全项目 untested 选择），并在进程内以固定 severity 渲染合并图诊断，不再发起第二次 Cargo 编译。
 - Cargo target 范围使用具名策略区分 production target 与 test/example/bench target；本地 crate 发现与 Cargo invocation 必须共享同一策略，不能用含义不明的布尔值分别传递
 - 一次分析通过共享的 inference preparation 只执行一次 Port scope、能力推断、impl 索引和 synthetic path 识别；本地分析只为具有可写源码位置且启用契约检查的真实图节点生成契约差异，每条差异都携带完整的期望名称和期望能力，不用 `Option` 表示“此节点不检查契约”。synthetic path 和无可写源码的宏生成节点仍参与能力推断，但不产生无法修复的名称契约。synthetic path 只属于推断结果，各输出视图不能分别重建可能漂移的分析上下文
 
@@ -90,7 +90,7 @@ free function、impl method 和带默认实现的 trait method 共享同一条 b
 - **直接 lint**：单个 HIR 编译单元内即可判断的 node/body lint 与纯名称语法检查（后缀字母序、重复字母、未知字母、缺 allow 等）。在 rustc 进程内发射，服从 crate root 的 Rivus lint level 与 `-D warnings`。`check` 的采集编译承担此类诊断；采集编译任何非零退出（编译错误或 deny 级直接 lint）即终止本次命令——不合并 artifact、不运行离线推断、不进入任何后续阶段，失败原样返回。
 - **图诊断**：需要合并全项目调用图才能判断的诊断——命名契约、unknown callee、incomplete knowledge、trait outlier、调用边合规与全项目 untested 选择。由离线引擎在图合并后计算，severity 固定为 Error 或 Warning，是引擎输出的一部分，不受 crate root lint 属性、`#[allow]` 或 `-D warnings` 影响，对其配置 lint level 不改变结果。图 Error 使命令以非零退出结束，图 warning 不影响退出码。
 
-图诊断的位置与渲染属于环境适配：核心产生结构化诊断（类别、severity、锚点），渲染先后有两个实现——迁移期内由第二个 rustc 编译把锚定 identity 解析回源码 span 并经 rustc 管线呈现，最终形态由外部渲染器直接消费 artifact 记录的源码位置（文件 + 基准 + 字节范围）。两种渲染必须产生一致的锚定位置；无法解析源码位置的图诊断按 def_path 呈现，不得静默丢弃。
+图诊断的位置与渲染属于环境适配：核心产生结构化诊断（类别、severity、锚点），渲染由父进程的渲染适配器直接消费 artifact 记录的源码位置（文件 + 基准 + 字节范围）——调用点锚点优先取 call-site 自带位置，否则按完整 `FunctionIdentity`（def path 与稳定 crate ID 都必须精确匹配）解析节点源码位置，拼接后的绝对路径拼写去重后逐锚点渲染。图诊断不经 rustc lint 管线，severity 固定，`-D warnings` 等属性无法升降级；无法解析源码位置的图诊断按 def_path 呈现，不得静默丢弃。
 
 ## 测试覆盖
 
@@ -98,7 +98,7 @@ free function、impl method 和带默认实现的 trait method 共享同一条 b
 
 跨进程 UI fixture 实际执行了 linter 代码，但该执行不在 unit-test crate 的运行时图内。此类覆盖只能通过带唯一 rustc diagnostic item 的测试注册 helper 显式声明：helper 接收经过类型检查的 function item，collector 使用精确 `DefId` 把它加入测试可达性；helper 自身必须位于可达测试路径。注册不是普通 callable 执行证据，禁止用 `if false`、`black_box(false)`、未调用 closure 或函数名字符串伪造同一效果。
 
-测试覆盖必须在所有 Cargo target 的 artifact 成功收集并合并后判断。production 编译提供候选函数，unit test 和 integration test 编译提供测试调用；只在 test compilation 中存在的 helper 不是生产覆盖候选。覆盖身份由 rustc 的稳定 crate ID 和 `DefPath` 共同组成。传递可达性必须沿测试实际编译出的身份和调用边前进。无法解析的调用只有在候选名称唯一时才可回退，已解析为局部 binding 的 callable 不能进入该回退。直接 rustc/UI 模式也必须沿当前 crate 内存图做相同的传递可达性判断。合并结果由中间转换为固定 severity 的图诊断 emissions（good/ok 各自的 untested lint、identity 锚点），与其他图诊断同通道在最终 rustc 阶段回放；Rivus lint 属性只在 crate root 生效。不能在单次 rustc 编译结束时把尚未看到其他 target 的函数报告为未测试。若任一 target 编译失败，本次全项目覆盖判断不可用，也不输出基于部分图的覆盖结论。
+测试覆盖必须在所有 Cargo target 的 artifact 成功收集并合并后判断。production 编译提供候选函数，unit test 和 integration test 编译提供测试调用；只在 test compilation 中存在的 helper 不是生产覆盖候选。覆盖身份由 rustc 的稳定 crate ID 和 `DefPath` 共同组成。传递可达性必须沿测试实际编译出的身份和调用边前进。无法解析的调用只有在候选名称唯一时才可回退，已解析为局部 binding 的 callable 不能进入该回退。直接 rustc/UI 模式也必须沿当前 crate 内存图做相同的传递可达性判断。合并结果由中间转换为固定 severity 的图诊断 emissions（good/ok 各自的 untested lint、identity 锚点），与其他图诊断同通道由父进程渲染；Rivus lint 属性只在 crate root 生效。不能在单次 rustc 编译结束时把尚未看到其他 target 的函数报告为未测试。若任一 target 编译失败，本次全项目覆盖判断不可用，也不输出基于部分图的覆盖结论。
 
 同一 `DefPath` 在不同 Cargo target 中可能由 `cfg` 产生不同函数体或不同入口角色。扁平合并图按 `DefPath` 合并所有 Cargo target 的 artifact，各节点的行为、调用边、事实、角色和源码取保守并集。任何消费者需要 target 身份、调用、事实、body、角色、归属或源码时都读取同一合并节点。contract、static/thread-local 和 trait outlier 等离线诊断锚定实际具有违规行为的合并节点。Trait 投票按实现路径计数；不同定义 crate 的实现必须进入同一投票。该聚合是工作区运行时代码模型，不是 Cargo unit graph 的无损表示：同名 lib/bin target 的 target 级精度有意不保证，只有 build-script crate 被整体排除；依赖版本同名冲突只在 all-crates 推断中可能出现，不构成恢复 per-target 项目模型的理由。
 

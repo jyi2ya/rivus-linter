@@ -1,0 +1,8 @@
+exact=[
+    DiagnosticLocation {
+        file: "/abs/src/lib.rs",
+        start: 10,
+        end: 19,
+    },
+]
+stale=[]

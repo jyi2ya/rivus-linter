@@ -53,6 +53,7 @@ mod artifacts;
 mod callgraph;
 mod capability;
 mod capsmap;
+mod diagnostic_source;
 mod environment;
 mod function_classification;
 mod inference;

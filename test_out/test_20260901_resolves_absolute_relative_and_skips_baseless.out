@@ -1,0 +1,12 @@
+[
+    DiagnosticLocation {
+        file: "/abs/project/src/b.rs",
+        start: 2,
+        end: 6,
+    },
+    DiagnosticLocation {
+        file: "/abs/src/a.rs",
+        start: 1,
+        end: 5,
+    },
+]

@@ -32,7 +32,7 @@ use crate::symbols::CrateName;
 
 const RVS_RUN_GENERATION_MARKER_FILE: &str = ".rivus-generation.json";
 const RVS_PRIMARY_PACKAGE_TARGETS_FILE: &str = ".rivus-primary-package-targets";
-const RVS_RUN_GENERATION_SCHEMA_VERSION: u32 = 6;
+const RVS_RUN_GENERATION_SCHEMA_VERSION: u32 = 7;
 const RVS_PRIMARY_PACKAGE_TARGETS_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Snafu)]
@@ -207,7 +207,6 @@ impl From<CallgraphCollectionMode> for RunGenerationCollectionMode {
 #[serde(tag = "input", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum RunGenerationAnalysisMode {
     ProjectCaps,
-    Offline,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -368,17 +367,10 @@ fn rvs_write_artifact_no_replace_BIST(
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct RivusOfflineDriverInput {
-    pub(crate) emissions: PathBuf,
-    pub(crate) acknowledgement_dir: PathBuf,
-}
-
-#[derive(Debug, Clone)]
 pub(crate) enum RivusDriverMode {
     ProjectCaps {
         capsmap: Option<PathBuf>,
     },
-    Offline(RivusOfflineDriverInput),
     Callgraph {
         output: RivusCallgraphOutput,
         lints: CollectionLints,
@@ -783,38 +775,6 @@ fn rvs_parse_driver_protocol_environment_BIS(
             };
             RivusDriverMode::ProjectCaps { capsmap }
         }
-        RunGenerationMode::Analysis {
-            analysis: RunGenerationAnalysisMode::Offline,
-            ..
-        } => {
-            rvs_require_driver_flag(environment.offline_caps.as_ref(), "RIVUS_OFFLINE_CAPS")?;
-            for (value, name) in [
-                (environment.callgraph.as_ref(), "RIVUS_CALLGRAPH"),
-                (environment.callgraph_dir.as_ref(), "RIVUS_CALLGRAPH_DIR"),
-                (
-                    environment.crate_provenance.as_ref(),
-                    "RIVUS_CRATE_PROVENANCE",
-                ),
-                (environment.capsmap.as_ref(), "RIVUS_CAPSMAP"),
-                (environment.untested_paths.as_ref(), "RIVUS_UNTESTED_PATHS"),
-            ] {
-                rvs_reject_driver_variable(value, name)?;
-            }
-            let emissions = rvs_require_driver_path_match(
-                environment.offline_emissions.as_ref(),
-                "RIVUS_OFFLINE_EMISSIONS",
-                &canonical_root.join("offline-emissions.json"),
-            )?;
-            let acknowledgement_dir = rvs_require_driver_path_match(
-                environment.offline_emissions_ack_dir.as_ref(),
-                "RIVUS_OFFLINE_EMISSIONS_ACK_DIR",
-                &canonical_root.join("offline-emission-acks"),
-            )?;
-            RivusDriverMode::Offline(RivusOfflineDriverInput {
-                emissions,
-                acknowledgement_dir,
-            })
-        }
     };
     Ok(RivusDriverConfig { mode, ui_testing })
 }
@@ -846,27 +806,10 @@ pub(crate) struct CargoCheckConfig<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CargoCheckMode {
-    Lint(CargoLintInput),
     Callgraph {
         collection: CallgraphCollectionMode,
         artifact_dir: PathBuf,
     },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum CargoLintInput {
-    Offline(OfflineLintInput),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct OfflineLintInput {
-    pub(crate) emissions: OfflineEmissionInput,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct OfflineEmissionInput {
-    pub(crate) path: PathBuf,
-    pub(crate) acknowledgement_dir: PathBuf,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -940,15 +883,6 @@ impl Drop for RivusRunGeneration {
                 "warning: cannot clean Rivus run generation {} during drop: {error}",
                 self.root.display()
             );
-        }
-    }
-}
-
-impl CargoCheckError {
-    pub(crate) const fn rvs_exit_code(&self) -> i32 {
-        match self {
-            Self::Message(_) => 1,
-            Self::ExitCode(code) => *code,
         }
     }
 }
@@ -1113,14 +1047,8 @@ fn rvs_prepare_cargo_check_command_BIST(
     let project_path =
         rvs_absolute_path_BIS(config.project_path).map_err(CargoCheckError::Message)?;
 
-    if matches!(config.mode, CargoCheckMode::Callgraph { .. }) {
-        rvs_write_primary_package_targets_BIST(
-            &project_path,
-            config.generation,
-            config.target_scope,
-        )
+    rvs_write_primary_package_targets_BIST(&project_path, config.generation, config.target_scope)
         .map_err(CargoCheckError::Message)?;
-    }
 
     for key in [
         "RIVUS_CALLGRAPH",
@@ -1157,8 +1085,7 @@ fn rvs_prepare_cargo_check_command_BIST(
     cmd.current_dir(&project_path);
 
     let wrapper_env = match &config.mode {
-        CargoCheckMode::Lint(_)
-        | CargoCheckMode::Callgraph {
+        CargoCheckMode::Callgraph {
             collection: CallgraphCollectionMode::Workspace,
             ..
         } => "RUSTC_WORKSPACE_WRAPPER",
@@ -1174,25 +1101,13 @@ fn rvs_prepare_cargo_check_command_BIST(
     cmd.env("RIVUS_GENERATION_ID", config.generation.rvs_generation_id())
         .env("RIVUS_GENERATION_ROOT", config.generation.rvs_root());
 
-    match &config.mode {
-        CargoCheckMode::Lint(CargoLintInput::Offline(input)) => {
-            cmd.env("RIVUS_OFFLINE_CAPS", "1");
-            cmd.env("RIVUS_OFFLINE_EMISSIONS", &input.emissions.path);
-            cmd.env(
-                "RIVUS_OFFLINE_EMISSIONS_ACK_DIR",
-                &input.emissions.acknowledgement_dir,
-            );
-        }
-        CargoCheckMode::Callgraph { artifact_dir, .. } => {
-            cmd.env("RIVUS_CALLGRAPH", "1");
-            cmd.env("RIVUS_CALLGRAPH_DIR", artifact_dir);
-            cmd.env("RIVUS_CRATE_PROVENANCE", "cargo-primary");
-        }
-    }
+    let CargoCheckMode::Callgraph { artifact_dir, .. } = &config.mode;
+    cmd.env("RIVUS_CALLGRAPH", "1");
+    cmd.env("RIVUS_CALLGRAPH_DIR", artifact_dir);
+    cmd.env("RIVUS_CRATE_PROVENANCE", "cargo-primary");
 
     cmd.arg("check");
     let needs_test_profile = match &config.mode {
-        CargoCheckMode::Lint(_) => true,
         CargoCheckMode::Callgraph {
             collection: CallgraphCollectionMode::Workspace,
             ..
@@ -1311,125 +1226,22 @@ fn rvs_run_cargo_check_at_BIST(project_path: &Path, extra_args: &[String]) -> Re
     );
     let mut offline_emissions = report.rvs_emissions(&callgraph);
     offline_emissions.extend(crate::offline_caps::rvs_untested_emissions(&uncovered));
-    let lint_result = rvs_run_project_lints_BIST(
-        project_path,
-        &target_scope,
-        &extra_args_ref,
-        &offline_emissions,
-    );
-    if let Err(error) = lint_result {
-        eprintln!("{error}");
-        return Err(error.rvs_exit_code());
+    // Graph diagnostics render in-process with their fixed severities;
+    // there is no second Cargo compile.
+    let rendered =
+        super::graph_render::rvs_render_graph_emissions_BIS(&callgraph, &offline_emissions);
+    if !rendered.output.is_empty() {
+        eprint!("{}", rendered.output);
+    }
+    if rendered.error_count > 0 {
+        eprintln!(
+            "rivus check failed: {} graph error(s), {} graph warning(s); fix the graph diagnostics above",
+            rendered.error_count, rendered.warning_count
+        );
+        return Err(101);
     }
     println!("Offline Caps Check: ok");
     Ok(())
-}
-
-/// The replay compile of `cargo rivus check`: it anchors the merged-graph
-/// emissions (contract diagnostics and the untested selection) onto real
-/// source spans. Always runs in Offline mode, even with zero emissions.
-fn rvs_run_project_lints_BIST(
-    project_path: &Path,
-    target_scope: &CargoTargetScope,
-    extra_args: &[&str],
-    offline_emissions: &[crate::offline_caps::OfflineCapsEmission],
-) -> Result<(), CargoCheckError> {
-    let mut generation = rvs_reserve_run_generation_for_BIST(
-        project_path,
-        RunGenerationMode::Analysis {
-            target_scope: (*target_scope).into(),
-            analysis: RunGenerationAnalysisMode::Offline,
-        },
-    )
-    .map_err(|error| CargoCheckError::Message(error.to_string()))?;
-    let lint_result = (|| {
-        let path = rvs_write_offline_emissions_BIST(generation.rvs_root(), offline_emissions)
-            .map_err(CargoCheckError::Message)?;
-        let ack_dir = generation.rvs_root().join("offline-emission-acks");
-        std::fs::create_dir(&ack_dir).map_err(|error| {
-            CargoCheckError::Message(format!(
-                "cannot create offline emission acknowledgement directory {}: {error}",
-                ack_dir.display()
-            ))
-        })?;
-        let lint_input = CargoLintInput::Offline(OfflineLintInput {
-            emissions: OfflineEmissionInput {
-                path,
-                acknowledgement_dir: ack_dir,
-            },
-        });
-        let cargo_result = rvs_run_cargo_check_impl_BIST(&CargoCheckConfig {
-            project_path,
-            generation: &generation,
-            mode: CargoCheckMode::Lint(lint_input),
-            target_scope: *target_scope,
-            extra_args: extra_args.to_vec(),
-            target_subdir: Some(generation.rvs_target_subdir()),
-        });
-        let ack_result = if cargo_result.is_ok() {
-            rvs_verify_offline_emission_acks_BIS(generation.rvs_root(), offline_emissions).map(Some)
-        } else {
-            Ok(None)
-        };
-        rvs_merge_lint_results(&cargo_result, &ack_result)
-    })();
-    let cleanup_result = rvs_cleanup_run_generation_BIMS(&mut generation);
-    match (lint_result, cleanup_result) {
-        (Ok(()), Ok(())) => Ok(()),
-        (Err(error), Ok(())) => Err(error),
-        (Ok(()), Err(cleanup)) => Err(CargoCheckError::Message(cleanup)),
-        (Err(error), Err(cleanup)) => {
-            eprintln!("warning: additionally failed to clean lint generation: {cleanup}");
-            Err(error)
-        }
-    }
-}
-
-fn rvs_merge_lint_results(
-    cargo_result: &Result<(), CargoCheckError>,
-    ack_result: &Result<Option<VerifiedOfflineEmissionAcks>, String>,
-) -> Result<(), CargoCheckError> {
-    match (cargo_result, ack_result) {
-        (Ok(()), Ok(_)) => Ok(()),
-        (Ok(()), Err(message)) => Err(CargoCheckError::Message(message.clone())),
-        (Err(error), _) => Err(error.clone()),
-    }
-}
-
-fn rvs_write_offline_emissions_BIST(
-    generation_root: &Path,
-    emissions: &[crate::offline_caps::OfflineCapsEmission],
-) -> Result<PathBuf, String> {
-    let path = generation_root.join("offline-emissions.json");
-    let json = crate::offline_caps::rvs_serialize_emissions(emissions)?;
-    super::fs_guard::rvs_atomic_write_BIST(&path, json.as_bytes())
-        .map_err(|error| format!("cannot write {}: {error}", path.display()))?;
-    Ok(path)
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct VerifiedOfflineEmissionAcks;
-
-fn rvs_verify_offline_emission_acks_BIS(
-    generation_root: &Path,
-    emissions: &[crate::offline_caps::OfflineCapsEmission],
-) -> Result<VerifiedOfflineEmissionAcks, String> {
-    let ack_dir = generation_root.join("offline-emission-acks");
-    for (emission_index, emission) in emissions.iter().enumerate() {
-        for (anchor_index, anchor) in emission.span_anchors.iter().enumerate() {
-            let ack = ack_dir.join(crate::offline_caps::rvs_emission_ack_name(
-                emission_index,
-                anchor_index,
-            ));
-            if !ack.is_file() {
-                return Err(format!(
-                    "offline caps diagnostic was not matched by the final compilation: {} (crate id {})",
-                    anchor.identity.def_path, anchor.identity.crate_id
-                ));
-            }
-        }
-    }
-    Ok(VerifiedOfflineEmissionAcks)
 }
 
 fn rvs_reject_forwarded_check_args(extra_args: &[String]) -> Result<(), String> {
@@ -2172,10 +1984,6 @@ mod tests {
         target_scope: CargoTargetScope,
     ) -> RivusRunGeneration {
         let mode = match mode {
-            CargoCheckMode::Lint(CargoLintInput::Offline(_)) => RunGenerationMode::Analysis {
-                target_scope: target_scope.into(),
-                analysis: RunGenerationAnalysisMode::Offline,
-            },
             CargoCheckMode::Callgraph { collection, .. } => RunGenerationMode::Collection {
                 collection: (*collection).into(),
                 target_scope: target_scope.into(),
@@ -2551,45 +2359,6 @@ mod tests {
 
         assert!(output.status.success(), "{stderr}");
         std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn test_20260715_offline_emission_acknowledgements_are_required() {
-        let generation = rvs_make_workspace_temp_dir_BIS("offline-emission-ack");
-        let ack_dir = generation.join("offline-emission-acks");
-        std::fs::create_dir(&ack_dir).unwrap();
-        let emissions = vec![crate::offline_caps::OfflineCapsEmission {
-            lint: crate::offline_caps::OfflineCapsLint::DuplicateSuffix,
-            span_anchors: BTreeSet::from([crate::offline_caps::OfflineCapsEmissionAnchor {
-                identity: crate::artifacts::FunctionIdentity {
-                    crate_id: 7,
-                    def_path: crate::symbols::DefPath::from("demo::rvs_call"),
-                },
-                call_site: None,
-            }]),
-            message: "violation".to_string(),
-        }];
-
-        let missing = rvs_verify_offline_emission_acks_BIS(&generation, &emissions);
-        std::fs::write(
-            ack_dir.join(crate::offline_caps::rvs_emission_ack_name(0, 0)),
-            [],
-        )
-        .unwrap();
-        let present = rvs_verify_offline_emission_acks_BIS(&generation, &emissions);
-        let output = format!(
-            "missing_error={}\npresent_ok={}\n",
-            missing.is_err(),
-            present.is_ok()
-        );
-        rvs_snapshot_BIS(
-            "test_20260715_offline_emission_acknowledgements_are_required",
-            &output,
-        );
-
-        assert!(missing.is_err());
-        assert_eq!(present, Ok(VerifiedOfflineEmissionAcks));
-        std::fs::remove_dir_all(generation).unwrap();
     }
 
     #[test]
@@ -3450,17 +3219,22 @@ name = "throughput-bench"
     #[test]
     fn test_20260713_prepare_cargo_check_matches_target_scope() {
         let dir = rvs_make_workspace_temp_dir_BIS("target-scope-command");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"target-scope-demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("src/lib.rs"), "pub fn rvs_value() {}\n").unwrap();
         let mut output = String::new();
         for (name, target_scope) in [
             ("production", CargoTargetScope::Production),
             ("all_targets", CargoTargetScope::WithTestExampleBench),
         ] {
-            let mode = CargoCheckMode::Lint(CargoLintInput::Offline(OfflineLintInput {
-                emissions: OfflineEmissionInput {
-                    path: PathBuf::from("emissions.json"),
-                    acknowledgement_dir: PathBuf::from("acks"),
-                },
-            }));
+            let mode = CargoCheckMode::Callgraph {
+                collection: CallgraphCollectionMode::Workspace,
+                artifact_dir: dir.join("artifacts"),
+            };
             let mut generation =
                 rvs_reserve_cargo_check_test_generation_BIST(&dir, &mode, target_scope);
             let config = CargoCheckConfig {
@@ -3495,12 +3269,17 @@ name = "throughput-bench"
     #[test]
     fn test_20260704_prepare_cargo_check_sanitizes_rivus_env() {
         let dir = rvs_make_workspace_temp_dir_BIS("sanitize-env-no-caps");
-        let mode = CargoCheckMode::Lint(CargoLintInput::Offline(OfflineLintInput {
-            emissions: OfflineEmissionInput {
-                path: dir.join("emissions.json"),
-                acknowledgement_dir: dir.join("acks"),
-            },
-        }));
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"sanitize-env-demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("src/lib.rs"), "pub fn rvs_value() {}\n").unwrap();
+        let mode = CargoCheckMode::Callgraph {
+            collection: CallgraphCollectionMode::Workspace,
+            artifact_dir: dir.join("artifacts"),
+        };
         let mut generation = rvs_reserve_cargo_check_test_generation_BIST(
             &dir,
             &mode,
@@ -3523,8 +3302,10 @@ name = "throughput-bench"
             None => "inherited",
         };
         let output = format!(
-            "callgraph={:?}\ncapsmap={capsmap_state}\noffline_emissions={:?}\noffline_acks={:?}\nrustc={:?}\nrivus_enabled={:?}\nui_testing={:?}\nuntested_paths={:?}\n",
+            "callgraph={:?}\ncallgraph_dir={:?}\ncapsmap={capsmap_state}\noffline_caps={:?}\noffline_emissions={:?}\noffline_acks={:?}\nrustc={:?}\nrivus_enabled={:?}\nui_testing={:?}\nuntested_paths={:?}\n",
             rvs_command_env_value(&cmd, "RIVUS_CALLGRAPH"),
+            rvs_command_env_value(&cmd, "RIVUS_CALLGRAPH_DIR"),
+            rvs_command_env_value(&cmd, "RIVUS_OFFLINE_CAPS"),
             rvs_command_env_value(&cmd, "RIVUS_OFFLINE_EMISSIONS"),
             rvs_command_env_value(&cmd, "RIVUS_OFFLINE_EMISSIONS_ACK_DIR"),
             rvs_command_env_value(&cmd, "RUSTC"),
@@ -3538,17 +3319,32 @@ name = "throughput-bench"
             &output,
         );
 
-        assert_eq!(rvs_command_env_value(&cmd, "RIVUS_CALLGRAPH"), Some(None));
         assert_eq!(
-            rvs_command_env_value(&cmd, "RIVUS_CALLGRAPH_DIR"),
-            Some(None)
+            rvs_command_env_value(&cmd, "RIVUS_CALLGRAPH"),
+            Some(Some("1".to_string()))
         );
-        assert_eq!(rvs_command_env_value(&cmd, "RIVUS_CAPSMAP"), Some(None));
-        assert_eq!(rvs_command_env_value(&cmd, "RUSTC"), Some(None));
+        assert!(
+            rvs_command_env_value(&cmd, "RIVUS_CALLGRAPH_DIR")
+                .is_some_and(|value| { value.is_some_and(|path| Path::new(&path).is_absolute()) })
+        );
         assert_eq!(
             rvs_command_env_value(&cmd, "RIVUS_CRATE_PROVENANCE"),
+            Some(Some("cargo-primary".to_string()))
+        );
+        assert_eq!(rvs_command_env_value(&cmd, "RIVUS_CAPSMAP"), Some(None));
+        assert_eq!(
+            rvs_command_env_value(&cmd, "RIVUS_OFFLINE_CAPS"),
             Some(None)
         );
+        assert_eq!(
+            rvs_command_env_value(&cmd, "RIVUS_OFFLINE_EMISSIONS"),
+            Some(None)
+        );
+        assert_eq!(
+            rvs_command_env_value(&cmd, "RIVUS_OFFLINE_EMISSIONS_ACK_DIR"),
+            Some(None)
+        );
+        assert_eq!(rvs_command_env_value(&cmd, "RUSTC"), Some(None));
         assert_eq!(
             rvs_command_env_value(&cmd, "CARGO_PRIMARY_PACKAGE"),
             Some(None)
@@ -3588,15 +3384,6 @@ name = "throughput-bench"
         .unwrap();
         std::fs::write(dir.join("src/lib.rs"), "pub fn rvs_value() {}\n").unwrap();
         let modes = [
-            (
-                "offline_lint",
-                CargoCheckMode::Lint(CargoLintInput::Offline(OfflineLintInput {
-                    emissions: OfflineEmissionInput {
-                        path: PathBuf::from("emissions.json"),
-                        acknowledgement_dir: PathBuf::from("acks"),
-                    },
-                })),
-            ),
             (
                 "workspace_callgraph",
                 CargoCheckMode::Callgraph {
@@ -3666,8 +3453,7 @@ name = "throughput-bench"
 
         assert_eq!(
             output,
-            "offline_lint: workspace_wrapper=true all_crates_wrapper=false callgraph=false provenance=none offline=true emissions=true acks=true nightly=false build_std=false target=false\n\
-workspace_callgraph: workspace_wrapper=true all_crates_wrapper=false callgraph=true provenance=cargo-primary offline=false emissions=false acks=false nightly=false build_std=false target=false\n\
+            "workspace_callgraph: workspace_wrapper=true all_crates_wrapper=false callgraph=true provenance=cargo-primary offline=false emissions=false acks=false nightly=false build_std=false target=false\n\
 all_crates_callgraph: workspace_wrapper=false all_crates_wrapper=true callgraph=true provenance=cargo-primary offline=false emissions=false acks=false nightly=false build_std=false target=false\n\
 standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true callgraph=true provenance=cargo-primary offline=false emissions=false acks=false nightly=true build_std=true target=true\n"
         );
@@ -3687,52 +3473,6 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
         );
 
         assert_eq!(result, Err(1));
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn test_20260713_prepare_offline_cargo_check_defers_caps_to_parent() {
-        let dir = rvs_make_workspace_temp_dir_BIS("offline-caps-parent-snapshot");
-        std::fs::write(dir.join("caps"), "bad=Z\n").unwrap();
-        let mode = CargoCheckMode::Lint(CargoLintInput::Offline(OfflineLintInput {
-            emissions: OfflineEmissionInput {
-                path: PathBuf::from("emissions.json"),
-                acknowledgement_dir: PathBuf::from("acks"),
-            },
-        }));
-        let mut generation = rvs_reserve_cargo_check_test_generation_BIST(
-            &dir,
-            &mode,
-            CargoTargetScope::WithTestExampleBench,
-        );
-        let config = CargoCheckConfig {
-            project_path: &dir,
-            generation: &generation,
-            mode,
-            target_scope: CargoTargetScope::WithTestExampleBench,
-            extra_args: vec![],
-            target_subdir: None,
-        };
-
-        let result = rvs_prepare_cargo_check_command_BIST(&config);
-        let capsmap_env = result
-            .as_ref()
-            .ok()
-            .and_then(|command| rvs_command_env_value(command, "RIVUS_CAPSMAP"))
-            .flatten();
-        let output = format!(
-            "result_is_ok={}\ncapsmap_env={capsmap_env:?}\n",
-            result.is_ok()
-        );
-        rvs_snapshot_BIS(
-            "test_20260713_prepare_offline_cargo_check_defers_caps_to_parent",
-            &output,
-        );
-
-        assert!(result.is_ok());
-        assert!(capsmap_env.is_none());
-        rvs_cleanup_run_generation_BIMS(&mut generation)
-            .expect("never: offline command generation cleanup should succeed");
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -4419,13 +4159,22 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
         ));
         let absolute_project = std::env::current_dir().unwrap().join(&relative_project);
         std::fs::create_dir_all(absolute_project.join("caps")).unwrap();
+        std::fs::create_dir_all(absolute_project.join("src")).unwrap();
+        std::fs::write(
+            absolute_project.join("Cargo.toml"),
+            "[package]\nname = \"absolute-paths-demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            absolute_project.join("src/lib.rs"),
+            "pub fn rvs_value() {}\n",
+        )
+        .unwrap();
 
-        let mode = CargoCheckMode::Lint(CargoLintInput::Offline(OfflineLintInput {
-            emissions: OfflineEmissionInput {
-                path: absolute_project.join("emissions.json"),
-                acknowledgement_dir: absolute_project.join("acks"),
-            },
-        }));
+        let mode = CargoCheckMode::Callgraph {
+            collection: CallgraphCollectionMode::Workspace,
+            artifact_dir: absolute_project.join("artifacts"),
+        };
         let mut generation = rvs_reserve_cargo_check_test_generation_BIST(
             &relative_project,
             &mode,
@@ -4450,15 +4199,15 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
             .windows(2)
             .find_map(|window| (window[0] == "--target-dir").then(|| PathBuf::from(&window[1])))
             .expect("command should set target dir");
-        let emissions_path = rvs_command_env_value(&cmd, "RIVUS_OFFLINE_EMISSIONS")
+        let artifact_dir = rvs_command_env_value(&cmd, "RIVUS_CALLGRAPH_DIR")
             .and_then(|value| value)
             .map(PathBuf::from)
-            .expect("offline emissions should be configured");
+            .expect("callgraph artifact dir should be configured");
         let output = format!(
-            "cwd_abs={}\ntarget_abs={}\nemissions_abs={}\n",
+            "cwd_abs={}\ntarget_abs={}\nartifact_dir_abs={}\n",
             current_dir.is_absolute(),
             target_dir.is_absolute(),
-            emissions_path.is_absolute(),
+            artifact_dir.is_absolute(),
         );
         rvs_snapshot_BIS(
             "test_20260704_prepare_cargo_check_uses_absolute_paths",
@@ -4467,9 +4216,9 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
 
         assert!(current_dir.is_absolute());
         assert!(target_dir.is_absolute());
-        assert!(emissions_path.is_absolute());
+        assert!(artifact_dir.is_absolute());
         assert!(target_dir.ends_with("target/rivus-custom-build"));
-        assert!(emissions_path.ends_with("emissions.json"));
+        assert!(artifact_dir.ends_with("artifacts"));
 
         rvs_cleanup_run_generation_BIMS(&mut generation)
             .expect("never: absolute-path command generation cleanup should succeed");
@@ -5710,33 +5459,87 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
     }
 
     #[test]
-    fn test_20260809_merge_lint_results_priority() {
-        let ok_ok = rvs_merge_lint_results(&Ok(()), &Ok(None));
-        let ok_ack_err = rvs_merge_lint_results(&Ok(()), &Err("ack fail".into()));
-        let cargo_err_ok = rvs_merge_lint_results(&Err(CargoCheckError::ExitCode(1)), &Ok(None));
-        let both_err = rvs_merge_lint_results(
-            &Err(CargoCheckError::Message("cargo fail".into())),
-            &Err("ack fail".into()),
+    fn test_20260901_artifact_anchor_resolver_matches_source_ground_truth() {
+        let dir = rvs_make_cargo_project_BIS(
+            "anchor-resolver-ground-truth",
+            "anchor-resolver",
+            &[(
+                "src/lib.rs",
+                "#![allow(non_snake_case)]\npub fn rvs_value(seed: i32) -> i32 {\n    debug_assert!(seed >= 0);\n    seed + 1\n}\n\npub fn rvs_user(seed: i32) -> i32 {\n    rvs_value(seed)\n}\n",
+            )],
         );
-        let output = format!(
-            "ok_ok={}\nok_ack_err={}\ncargo_err_ok={}\nboth_err={}\n",
-            ok_ok.is_ok(),
-            ok_ack_err.is_err(),
-            cargo_err_ok.is_err(),
-            both_err.is_err(),
-        );
-        rvs_snapshot_BIS("test_20260809_merge_lint_results_priority", &output);
+        let target_scope = CargoTargetScope::Production;
+        let local_crate_names = rvs_load_local_crate_prefixes_BIS(&dir, target_scope).unwrap();
+        let callgraph =
+            rvs_collect_workspace_callgraph_BIST(&dir, target_scope, &local_crate_names).unwrap();
 
-        assert!(ok_ok.is_ok());
-        assert!(ok_ack_err.is_err_and(|e| matches!(
-            e,
-            CargoCheckError::Message(m) if m == "ack fail"
-        )));
-        assert!(cargo_err_ok.is_err_and(|e| matches!(e, CargoCheckError::ExitCode(1))));
-        assert!(both_err.is_err_and(|e| matches!(
-            e,
-            CargoCheckError::Message(m) if m == "cargo fail"
-        )));
+        let mut node_checks = 0usize;
+        let mut node_failures = Vec::new();
+        let mut call_site_checks = 0usize;
+        let mut call_site_failures = Vec::new();
+        for (def_path, node) in callgraph.rvs_iter() {
+            let identity = FunctionIdentity {
+                crate_id: node.crate_id,
+                def_path: def_path.clone(),
+            };
+            for location in crate::diagnostic_source::rvs_resolve_node_anchor(&callgraph, &identity)
+            {
+                node_checks += 1;
+                let content = std::fs::read(&location.file).unwrap_or_default();
+                let name_text = content
+                    .get(location.start as usize..location.end as usize)
+                    .map(|bytes| String::from_utf8_lossy(bytes).into_owned());
+                if name_text.as_deref() != Some(def_path.rvs_fn_name_str()) {
+                    node_failures
+                        .push(format!("{}@{}..{}", def_path, location.start, location.end));
+                }
+            }
+            for call_site in &node.call_sites {
+                if let Some(location) =
+                    crate::diagnostic_source::rvs_resolve_call_site_anchor(call_site)
+                        .into_iter()
+                        .next()
+                {
+                    call_site_checks += 1;
+                    let content = std::fs::read(&location.file).unwrap_or_default();
+                    let call_text = content
+                        .get(location.start as usize..location.end as usize)
+                        .map(|bytes| String::from_utf8_lossy(bytes).into_owned());
+                    // Ground truth: a call to an rvs_ callee must anchor at
+                    // a range starting with the callee name. Desugared or
+                    // external calls inside macros anchor at the macro
+                    // invocation (source_callsite semantics); those ranges
+                    // must still be non-empty source text.
+                    let callee = call_site.callee.def_path.rvs_fn_name_str().to_string();
+                    let matches_ground_truth = match call_text.as_deref() {
+                        None => false,
+                        Some(text) if callee.starts_with("rvs_") => {
+                            text.starts_with(callee.as_str())
+                        }
+                        Some(text) => !text.is_empty(),
+                    };
+                    if !matches_ground_truth {
+                        call_site_failures.push(format!(
+                            "{} occurrence {} text={:?}",
+                            def_path, call_site.occurrence, call_text
+                        ));
+                    }
+                }
+            }
+        }
+        let output = format!(
+            "node_checks={node_checks}\nnode_failures={node_failures:?}\ncall_site_checks={call_site_checks}\ncall_site_failures={call_site_failures:?}\n",
+        );
+        rvs_snapshot_BIS(
+            "test_20260901_artifact_anchor_resolver_matches_source_ground_truth",
+            &output,
+        );
+
+        assert!(node_checks >= 2, "fixture must resolve at least two nodes");
+        assert!(node_failures.is_empty());
+        assert!(call_site_checks >= 1, "fixture must resolve a call site");
+        assert!(call_site_failures.is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -5785,18 +5588,18 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
     }
 
     #[test]
-    fn test_20260831_check_graph_error_fails_replay_phase() {
+    fn test_20260901_check_graph_error_renders_in_parent_fails_101() {
         let dir = rvs_make_cargo_project_BIS(
             "check-graph-error",
             "check-graph-error",
             &[(
                 "src/lib.rs",
-                "#![allow(non_snake_case)]\nstatic FLAG: u32 = 7;\npub fn rvs_flag() -> u32 {\n    FLAG\n}\n",
+                "#![allow(non_snake_case)]\nstatic FLAG: u32 = 7;\n\n/// Reads the flag.\npub fn rvs_flag() -> u32 {\n    FLAG\n}\n",
             )],
         );
         // Phase isolation: the lint-bearing collection compile alone must
         // succeed for this fixture, so a failure of the full command can
-        // only come from the replay phase.
+        // only come from the parent-process graph rendering.
         let target_scope = CargoTargetScope::WithTestExampleBench;
         let local_crate_names = rvs_load_local_crate_prefixes_BIS(&dir, target_scope)
             .expect("never: graph-error fixture should expose its local crate names");
@@ -5809,14 +5612,23 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
             CollectionLints::Check,
         )
         .is_ok();
+        let check_output = Command::new(rvs_current_wrapper_exe_BIS().unwrap())
+            .arg("check")
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&check_output.stderr).into_owned();
+        let rendered_error = stderr.contains("error[contract_mismatch]:");
+        let located = stderr.contains("src/lib.rs");
+        let expected_name = stderr.contains("expected name: rvs_flag_S");
         let result = rvs_run_cargo_check_at_BIST(&dir, &[]);
         let output = format!(
-            "collection_ok={collection_ok}\nis_err={}\ncode={:?}\n",
+            "collection_ok={collection_ok}\nis_err={}\ncode={:?}\nrendered_error={rendered_error}\nlocated={located}\nexpected_name={expected_name}\n",
             result.is_err(),
             result.err()
         );
         rvs_snapshot_BIS(
-            "test_20260831_check_graph_error_fails_replay_phase",
+            "test_20260901_check_graph_error_renders_in_parent_fails_101",
             &output,
         );
 
@@ -5824,9 +5636,79 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
             collection_ok,
             "fixture must not fail the collection compile"
         );
-        // The contract mismatch is a graph Error replayed in the second
-        // phase and fails the command with the cargo exit code.
+        // The contract mismatch is a graph Error with fixed severity: the
+        // parent renders it and the command fails with 101.
         assert_eq!(result, Err(101));
+        assert!(!check_output.status.success());
+        assert!(rendered_error, "{stderr}");
+        assert!(located, "{stderr}");
+        assert!(expected_name, "{stderr}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260901_check_runs_single_cargo_compile() {
+        let dir = rvs_make_cargo_project_BIS(
+            "single-compile-proof",
+            "single-compile-proof",
+            &[
+                (
+                    "src/lib.rs",
+                    "#![allow(non_snake_case)]\n\n/// Adds two numbers.\npub fn rvs_add(left: i32, right: i32) -> i32 {\n    debug_assert!(left >= 0);\n    debug_assert!(right >= 0);\n    left + right\n}\n",
+                ),
+                (
+                    "build.rs",
+                    "fn main() {\n    let manifest = std::env::var(\"CARGO_MANIFEST_DIR\").unwrap();\n    let log = std::path::Path::new(&manifest).join(\"build-runs.log\");\n    use std::io::Write as _;\n    let mut file = std::fs::OpenOptions::new()\n        .create(true)\n        .append(true)\n        .open(&log)\n        .unwrap();\n    writeln!(file, \"build\").unwrap();\n}\n",
+                ),
+            ],
+        );
+        let result = rvs_run_cargo_check_at_BIST(&dir, &[]);
+        let log_path = dir.join("build-runs.log");
+        let build_runs = std::fs::read_to_string(&log_path)
+            .map(|content| content.lines().filter(|line| !line.is_empty()).count())
+            .unwrap_or(0);
+        let output = format!("is_ok={}\nbuild_runs={build_runs}\n", result.is_ok());
+        rvs_snapshot_BIS("test_20260901_check_runs_single_cargo_compile", &output);
+
+        // Each isolated cargo compilation runs the build script exactly
+        // once; a second Cargo compile would produce a second line.
+        assert_eq!(result, Ok(()));
+        assert_eq!(build_runs, 1);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_20260901_check_graph_warning_not_escalated_by_deny_warnings() {
+        let dir = rvs_make_cargo_project_BIS(
+            "graph-warning-deny",
+            "graph-warning-deny",
+            &[(
+                "src/lib.rs",
+                "#![allow(non_snake_case)]\n\n/// Adds two numbers.\npub fn rvs_add(left: i32, right: i32) -> i32 {\n    debug_assert!(left >= 0);\n    debug_assert!(right >= 0);\n    left + right\n}\n",
+            )],
+        );
+        let check_output = Command::new(rvs_current_wrapper_exe_BIS().unwrap())
+            .arg("check")
+            .env("RUSTFLAGS", "-Dwarnings")
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&check_output.stderr).into_owned();
+        let graph_warning = stderr.contains("warning[untested_good_fn]:");
+        let output = format!(
+            "success={}\ngraph_warning={graph_warning}\n",
+            check_output.status.success()
+        );
+        rvs_snapshot_BIS(
+            "test_20260901_check_graph_warning_not_escalated_by_deny_warnings",
+            &output,
+        );
+
+        // Graph warnings carry a fixed severity and never pass through the
+        // rustc lint pipeline, so `-Dwarnings` cannot escalate them. The
+        // fixture has no direct rustc warnings, so the command succeeds.
+        assert!(check_output.status.success(), "{stderr}");
+        assert!(graph_warning, "{stderr}");
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

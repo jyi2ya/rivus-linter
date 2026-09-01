@@ -18,7 +18,7 @@ use std::process::Command;
 use serde::Serialize;
 
 const RVS_UI_GENERATION_MARKER_FILE: &str = ".rivus-generation.json";
-const RVS_RUN_GENERATION_SCHEMA_VERSION: u32 = 6;
+const RVS_RUN_GENERATION_SCHEMA_VERSION: u32 = 7;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "snake_case")]

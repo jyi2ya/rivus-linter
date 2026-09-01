@@ -52,7 +52,7 @@
 
 ## `cargo rivus check [OPTIONS] [ARGS]`
 
-基于 rustc-driver 的 HIR 分析。第一阶段是 lint-bearing 采集编译——收集全项目函数图并执行直接 HIR lint（采集编译任何非零退出都会立即终止命令）；离线能力引擎在合并图上检查命名契约、后缀、静态状态和调用链合规性，并把结果连同全项目测试覆盖选择一起作为图诊断在第二阶段回放到源码位置。第三方依赖不重新启用其编译 warning，而是通过本地调用边和项目 `caps/` 参与分析。
+基于 rustc-driver 的 HIR 分析，只执行一次 Cargo 编译。lint-bearing 采集编译收集全项目函数图并执行直接 HIR lint（采集编译任何非零退出都会立即终止命令，不进入图分析）；随后离线能力引擎在合并图上检查命名契约、后缀、静态状态和调用链合规性，连同全项目测试覆盖选择一起作为图诊断，由父进程按固定 severity（Error/Warning）渲染到 artifact 记录的源码位置——任一图 Error 使命令以 101 失败，图 Warning 不受 `-D warnings` 或 crate lint 属性影响。第三方依赖不重新启用其编译 warning，而是通过本地调用边和项目 `caps/` 参与分析。
 
 ```bash
 cargo rivus check                    # 使用项目 caps/（若存在）

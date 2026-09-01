@@ -7,13 +7,9 @@ use snafu::Snafu;
 use crate::artifacts::{CrateProvenance, FnGraph};
 use crate::capsmap::{self, CapsMap};
 use crate::lints::{LintEnvironment, LintExecutionMode, RivusLintConfig};
-use crate::offline_caps::OfflineCapsEmission;
 use crate::symbols::CrateName;
 
-use super::workspace::{
-    CollectionLints, RivusCallgraphOutput, RivusDriverConfig, RivusDriverMode,
-    RivusOfflineDriverInput,
-};
+use super::workspace::{CollectionLints, RivusCallgraphOutput, RivusDriverConfig, RivusDriverMode};
 
 static RVS_CALLGRAPH_ARTIFACT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -41,7 +37,6 @@ pub(crate) struct RivusLintEnvironment;
 #[derive(Debug)]
 pub(crate) struct RivusLintWorld {
     callgraph_output: Option<RivusCallgraphOutput>,
-    acknowledgement_dir: Option<PathBuf>,
 }
 
 impl LintEnvironment for RivusLintEnvironment {
@@ -59,59 +54,22 @@ impl LintEnvironment for RivusLintEnvironment {
             .map(|_| ())
             .map_err(|error| error.to_string())
     }
-
-    fn rvs_acknowledge_offline_emission_P(
-        world: &mut Self::World,
-        emission_index: usize,
-        anchor_index: usize,
-    ) -> Result<(), String> {
-        debug_assert!(
-            emission_index < usize::MAX,
-            "emission index must leave room for bounded acknowledgement arithmetic"
-        );
-        debug_assert!(
-            anchor_index < usize::MAX,
-            "anchor index must leave room for bounded acknowledgement arithmetic"
-        );
-        let Some(directory) = &world.acknowledgement_dir else {
-            return Ok(());
-        };
-        let path = directory.join(crate::offline_caps::rvs_emission_ack_name(
-            emission_index,
-            anchor_index,
-        ));
-        std::fs::write(&path, []).map_err(|error| {
-            format!(
-                "cannot acknowledge offline caps diagnostic {}: {error}",
-                path.display()
-            )
-        })
-    }
 }
 
 pub(crate) fn rvs_prepare_lint_config_BIS(
     driver_config: RivusDriverConfig,
 ) -> RivusLintConfig<RivusLintEnvironment> {
     let RivusDriverConfig { mode, ui_testing } = driver_config;
-    let (lint_mode, capsmap_path, offline_input, callgraph_output) = match mode {
-        RivusDriverMode::ProjectCaps { capsmap } => (
-            LintExecutionMode::ProjectCapsCompatibility,
-            capsmap,
-            None,
-            None,
-        ),
-        RivusDriverMode::Offline(input) => (
-            LintExecutionMode::ReplayDiagnostics,
-            None,
-            Some(input),
-            None,
-        ),
+    let (lint_mode, capsmap_path, callgraph_output) = match mode {
+        RivusDriverMode::ProjectCaps { capsmap } => {
+            (LintExecutionMode::ProjectCapsCompatibility, capsmap, None)
+        }
         RivusDriverMode::Callgraph { output, lints } => {
             let lint_mode = match lints {
                 CollectionLints::Silent => LintExecutionMode::CollectOnly,
                 CollectionLints::Check => LintExecutionMode::CheckAndCollect,
             };
-            (lint_mode, None, None, Some(output))
+            (lint_mode, None, Some(output))
         }
     };
     let capsmap = if lint_mode.rvs_is_caps_report() {
@@ -119,8 +77,6 @@ pub(crate) fn rvs_prepare_lint_config_BIS(
     } else {
         Ok(None)
     };
-    let offline_emissions = rvs_load_offline_emissions_BIS(offline_input.as_ref());
-    let acknowledgement_dir = offline_input.map(|input| input.acknowledgement_dir);
     let crate_provenance = callgraph_output
         .as_ref()
         .map_or(CrateProvenance::LegacyUnknown, |output| {
@@ -130,7 +86,6 @@ pub(crate) fn rvs_prepare_lint_config_BIS(
     RivusLintConfig {
         mode: lint_mode,
         capsmap,
-        offline_emissions,
         test_outputs: if lint_mode.rvs_should_emit_lints() {
             rvs_collect_test_outputs_BIS(Path::new("test_out"), ui_testing)
         } else {
@@ -138,10 +93,7 @@ pub(crate) fn rvs_prepare_lint_config_BIS(
         },
         ui_testing,
         crate_provenance,
-        world: RivusLintWorld {
-            callgraph_output,
-            acknowledgement_dir,
-        },
+        world: RivusLintWorld { callgraph_output },
         interpreter: std::marker::PhantomData,
     }
 }
@@ -151,22 +103,6 @@ pub(crate) fn rvs_load_capsmap_path_BIS(path: Option<&Path>) -> Result<CapsMap, 
         Some(path) => CapsMap::rvs_load_effective_BIS(path).map_err(|error| error.to_string()),
         None => capsmap::rvs_load_distributed_seed().map_err(|error| error.to_string()),
     }
-}
-
-fn rvs_load_offline_emissions_BIS(
-    input: Option<&RivusOfflineDriverInput>,
-) -> Result<Vec<OfflineCapsEmission>, String> {
-    let Some(path) = input.map(|input| input.emissions.as_path()) else {
-        return Ok(Vec::new());
-    };
-    let json = std::fs::read_to_string(path).map_err(|error| {
-        format!(
-            "cannot read offline caps emissions {}: {error}",
-            path.display()
-        )
-    })?;
-    crate::offline_caps::rvs_parse_emissions(&json)
-        .map_err(|error| format!("{}: {error}", path.display()))
 }
 
 fn rvs_collect_test_outputs_BIS(directory: &Path, ui_testing: bool) -> Option<BTreeSet<String>> {

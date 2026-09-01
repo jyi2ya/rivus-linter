@@ -1,0 +1,7 @@
+error[contract_mismatch]: fn 'rvs_flag' is missing capability marker missing_side_effect
+  --> $TMP/src/lib.rs:3:8 (bytes 19..27)
+  |
+3 | pub fn rvs_flag() -> u32 {
+  |        ^^^^^^^^
+warning[untested_good_fn]: good fn 'rvs_sourceless' not called by any test
+  at demo::rvs_sourceless (no source location recorded)

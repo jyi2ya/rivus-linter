@@ -19,7 +19,8 @@ use crate::inference::{
 };
 use crate::symbols::{CrateName, DefPath, FnName};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum OfflineCapsSeverity {
     Error,
     Warning,
@@ -68,9 +69,30 @@ pub(crate) enum OfflineCapsLint {
     UntestedOkFn,
 }
 
+impl OfflineCapsLint {
+    pub(crate) const fn rvs_as_str(self) -> &'static str {
+        match self {
+            Self::ContractMismatch => "contract_mismatch",
+            Self::DuplicateSuffix => "duplicate_suffix",
+            Self::IncompleteCapsKnowledge => "incomplete_caps_knowledge",
+            Self::MissingRvsPrefix => "missing_rvs_prefix",
+            Self::NonAlphabeticalSuffix => "non_alphabetical_suffix",
+            Self::NonSuffixCapInSuffix => "non_suffix_cap_in_suffix",
+            Self::TraitImplOutlier => "trait_impl_outlier",
+            Self::UnknownCallee => "unknown_callee",
+            Self::UnknownSuffixLetter => "unknown_suffix_letter",
+            Self::UntestedGoodFn => "untested_good_fn",
+            Self::UntestedOkFn => "untested_ok_fn",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct OfflineCapsEmission {
     pub(crate) lint: OfflineCapsLint,
+    /// Fixed graph-diagnostic severity. It never derives from rustc lint
+    /// levels: the parent renderer turns it into the check exit code.
+    pub(crate) severity: OfflineCapsSeverity,
     pub(crate) span_anchors: BTreeSet<OfflineCapsEmissionAnchor>,
     pub(crate) message: String,
 }
@@ -220,6 +242,7 @@ impl OfflineCapsReport {
                 }
                 OfflineCapsEmission {
                     lint: rvs_lint_for_kind(diagnostic.kind),
+                    severity: diagnostic.severity,
                     span_anchors,
                     message: if diagnostic.details.is_empty() {
                         diagnostic.message.clone()
@@ -230,61 +253,6 @@ impl OfflineCapsReport {
             })
             .collect()
     }
-}
-
-pub(crate) fn rvs_serialize_emissions(emissions: &[OfflineCapsEmission]) -> Result<String, String> {
-    let validated = rvs_validate_emissions(emissions)?;
-    serde_json::to_string(validated)
-        .map_err(|error| format!("cannot serialize offline caps emissions: {error}"))
-}
-
-pub(crate) fn rvs_parse_emissions(json: &str) -> Result<Vec<OfflineCapsEmission>, String> {
-    let emissions: Vec<OfflineCapsEmission> = serde_json::from_str(json)
-        .map_err(|error| format!("cannot parse offline caps emissions: {error}"))?;
-    rvs_validate_emissions(&emissions)?;
-    Ok(emissions)
-}
-
-fn rvs_validate_emissions(
-    emissions: &[OfflineCapsEmission],
-) -> Result<&[OfflineCapsEmission], String> {
-    for (index, emission) in emissions.iter().enumerate() {
-        if emission.span_anchors.is_empty() {
-            return Err(format!(
-                "offline caps emission {index} must contain at least one diagnostic anchor"
-            ));
-        }
-        for anchor in &emission.span_anchors {
-            if anchor.identity.crate_id == 0 {
-                return Err(format!(
-                    "offline caps emission {index} contains a zero crate id anchor"
-                ));
-            }
-            if anchor.identity.def_path.rvs_as_str().is_empty() {
-                return Err(format!(
-                    "offline caps emission {index} contains an empty function path anchor"
-                ));
-            }
-            if let Some(call_site) = &anchor.call_site
-                && (call_site.callee.crate_id == 0
-                    || call_site.callee.def_path.rvs_as_str().is_empty())
-            {
-                return Err(format!(
-                    "offline caps emission {index} contains an invalid call-site anchor"
-                ));
-            }
-        }
-    }
-    Ok(emissions)
-}
-
-pub(crate) fn rvs_emission_ack_name(emission_index: usize, anchor_index: usize) -> String {
-    debug_assert!(
-        emission_index < usize::MAX,
-        "emission index is representable"
-    );
-    debug_assert!(anchor_index < usize::MAX, "anchor index is representable");
-    format!("emission-{emission_index}-anchor-{anchor_index}.ack")
 }
 
 const fn rvs_lint_for_kind(kind: OfflineCapsKind) -> OfflineCapsLint {
@@ -1091,6 +1059,7 @@ pub(crate) fn rvs_untested_emissions(
             };
             OfflineCapsEmission {
                 lint,
+                severity: OfflineCapsSeverity::Warning,
                 span_anchors: BTreeSet::from([OfflineCapsEmissionAnchor {
                     identity: identity.clone(),
                     call_site: None,
@@ -4283,28 +4252,6 @@ mod tests {
     }
 
     #[test]
-    fn test_20260716_offline_emissions_reject_empty_anchor_sets() {
-        let emissions = vec![OfflineCapsEmission {
-            lint: OfflineCapsLint::ContractMismatch,
-            span_anchors: BTreeSet::new(),
-            message: "unanchored".to_string(),
-        }];
-        let serialize_error = rvs_serialize_emissions(&emissions).unwrap_err();
-        let parse_error = rvs_parse_emissions(
-            r#"[{"lint":"contract_mismatch","span_anchors":[],"message":"unanchored"}]"#,
-        )
-        .unwrap_err();
-        let output = format!("serialize={serialize_error}\nparse={parse_error}\n");
-        rvs_snapshot_BIS(
-            "test_20260716_offline_emissions_reject_empty_anchor_sets",
-            &output,
-        );
-
-        assert!(serialize_error.contains("anchor"));
-        assert!(parse_error.contains("anchor"));
-    }
-
-    #[test]
     fn test_20260811_incomplete_caps_warning_keeps_one_root_anchor_lists_callers() {
         // One knowledge gap shared by many callers: exactly one root
         // warning, with every affected caller visible as detail. The
@@ -5088,32 +5035,6 @@ mod tests {
         );
 
         assert_eq!(first, "S");
-    }
-
-    #[test]
-    fn test_20260715_offline_caps_emissions_round_trip() {
-        let emissions = vec![OfflineCapsEmission {
-            lint: OfflineCapsLint::ContractMismatch,
-            span_anchors: BTreeSet::from([OfflineCapsEmissionAnchor {
-                identity: FunctionIdentity {
-                    crate_id: 1,
-                    def_path: DefPath::from("demo::rvs_handle"),
-                },
-                call_site: None,
-            }]),
-            message: "missing S capability".to_string(),
-        }];
-
-        let validated = rvs_validate_emissions(&emissions).unwrap();
-        let json = rvs_serialize_emissions(&emissions).unwrap();
-        let parsed = rvs_parse_emissions(&json).unwrap();
-        rvs_snapshot_BIS(
-            "test_20260715_offline_caps_emissions_round_trip",
-            &(json + "\n"),
-        );
-
-        assert_eq!(validated, emissions.as_slice());
-        assert_eq!(parsed, emissions);
     }
 
     #[test]

@@ -4,7 +4,6 @@ use std::marker::PhantomData;
 
 use crate::artifacts::{CrateProvenance, FnGraph};
 use crate::capsmap::CapsMap;
-use crate::offline_caps::OfflineCapsEmission;
 use crate::symbols::CrateName;
 
 pub(crate) trait LintEnvironment {
@@ -14,12 +13,6 @@ pub(crate) trait LintEnvironment {
         world: &mut Self::World,
         crate_name: &CrateName,
         callgraph: &FnGraph,
-    ) -> Result<(), String>;
-
-    fn rvs_acknowledge_offline_emission_P(
-        world: &mut Self::World,
-        emission_index: usize,
-        anchor_index: usize,
     ) -> Result<(), String>;
 }
 
@@ -35,10 +28,6 @@ pub(crate) enum LintExecutionMode {
     /// compile of `cargo rivus check`; its non-zero exit short-circuits
     /// the whole command before graph analysis.
     CheckAndCollect,
-    /// Replay merged-graph diagnostics and the untested selection onto HIR
-    /// anchors. Direct lints are owned by the collection compile and do
-    /// not fire here.
-    ReplayDiagnostics,
     /// Direct single-crate analysis: run direct lints and the local caps
     /// report against the in-crate graph.
     ProjectCapsCompatibility,
@@ -50,30 +39,9 @@ impl LintExecutionMode {
         matches!(self, Self::CheckAndCollect | Self::ProjectCapsCompatibility)
     }
 
-    /// Function-graph facts and diagnostic anchors are collected in this
-    /// process. Every current mode collects; the anchor-only replay split
-    /// arrives with the check2 elimination migration.
-    pub(crate) const fn rvs_collect_caps_facts(self) -> bool {
-        true
-    }
-
     /// The single-crate caps report runs in this process.
     pub(crate) const fn rvs_is_caps_report(self) -> bool {
         matches!(self, Self::ProjectCapsCompatibility)
-    }
-
-    /// Function-graph nodes are inserted into the in-process graph. The
-    /// anchor-only replay keeps the identity/call-site walks but skips
-    /// node construction and merging entirely.
-    pub(crate) const fn rvs_collects_graph_nodes(self) -> bool {
-        !matches!(self, Self::ReplayDiagnostics)
-    }
-
-    /// The crate-post test-quality pass runs in this process. The
-    /// anchor-only replay has empty test facts, no coverage view, and no
-    /// callgraph output, so the pass is skipped entirely.
-    pub(crate) const fn rvs_runs_test_quality(self) -> bool {
-        !matches!(self, Self::ReplayDiagnostics)
     }
 }
 
@@ -81,7 +49,6 @@ impl LintExecutionMode {
 pub(crate) struct RivusLintConfig<E: LintEnvironment> {
     pub(crate) mode: LintExecutionMode,
     pub(crate) capsmap: Result<Option<CapsMap>, String>,
-    pub(crate) offline_emissions: Result<Vec<OfflineCapsEmission>, String>,
     pub(crate) test_outputs: Option<BTreeSet<String>>,
     pub(crate) ui_testing: bool,
     pub(crate) crate_provenance: CrateProvenance,

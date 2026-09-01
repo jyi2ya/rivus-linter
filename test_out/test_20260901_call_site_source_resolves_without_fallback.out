@@ -1,0 +1,7 @@
+[
+    DiagnosticLocation {
+        file: "/abs/project/src/lib.rs",
+        start: 10,
+        end: 24,
+    },
+]

@@ -1,1 +1,0 @@
-[{"lint":"contract_mismatch","span_anchors":[{"identity":{"crate_id":1,"def_path":"demo::rvs_handle"}}],"message":"missing S capability"}]

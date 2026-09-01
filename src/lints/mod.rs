@@ -260,8 +260,6 @@ pub struct RivusLintPass<E: LintEnvironment> {
     mode: LintExecutionMode,
     test_fn_names: HashSet<String>,
     banned_import_statements: HashSet<(rustc_span::StableSourceFileId, u32, String)>,
-    offline_emissions: Vec<crate::offline_caps::OfflineCapsEmission>,
-    offline_emissions_error: Option<String>,
     test_outputs: Option<BTreeSet<String>>,
     world: E::World,
     interpreter: std::marker::PhantomData<E>,
@@ -276,7 +274,6 @@ impl<E: LintEnvironment> RivusLintPass<E> {
         let RivusLintConfig {
             mode,
             capsmap,
-            offline_emissions,
             test_outputs,
             ui_testing,
             crate_provenance,
@@ -286,10 +283,6 @@ impl<E: LintEnvironment> RivusLintPass<E> {
         let (capsmap, capsmap_error) = match capsmap {
             Ok(capsmap) => (capsmap, None),
             Err(error) => (None, Some(error)),
-        };
-        let (offline_emissions, offline_emissions_error) = match offline_emissions {
-            Ok(emissions) => (emissions, None),
-            Err(error) => (Vec::new(), Some(error)),
         };
         Self {
             capsmap,
@@ -305,8 +298,6 @@ impl<E: LintEnvironment> RivusLintPass<E> {
             mode,
             test_fn_names: HashSet::new(),
             banned_import_statements: HashSet::new(),
-            offline_emissions,
-            offline_emissions_error,
             test_outputs,
             world,
             interpreter,
@@ -376,9 +367,6 @@ impl<E: LintEnvironment> LintPass for RivusLintPass<E> {
 
 impl<'tcx, E: LintEnvironment> LateLintPass<'tcx> for RivusLintPass<E> {
     fn check_crate(&mut self, cx: &LateContext<'tcx>) {
-        if let Some(error) = self.offline_emissions_error.take() {
-            cx.tcx.dcx().err(error);
-        }
         if self.mode.rvs_is_caps_report()
             && let Err(error) = self.rvs_ensure_capsmap_M()
         {
@@ -437,40 +425,27 @@ impl<'tcx, E: LintEnvironment> LateLintPass<'tcx> for RivusLintPass<E> {
                 caps,
                 &local_crate_names,
             );
-            rvs_emit_offline_caps_diagnostics_MP::<E>(
+            rvs_emit_offline_caps_diagnostics_S::<E>(
                 cx,
                 &report,
                 &self.callgraph,
                 &self.diagnostic_spans,
                 &self.diagnostic_call_spans,
-                &mut self.world,
                 self.ui_testing,
             );
         }
-        rvs_emit_offline_caps_emissions_MPS::<E>(
+        test_quality::rvs_check_crate_post_MPS::<E>(
             cx,
-            &self.offline_emissions,
-            &self.diagnostic_spans,
-            &self.diagnostic_call_spans,
-            true,
+            &self.test_names,
+            &self.good_fns,
+            &self.ok_fns,
+            &self.test_calls,
+            &self.callgraph,
+            self.test_outputs.as_ref(),
             &mut self.world,
+            self.mode.rvs_is_caps_report(),
             self.ui_testing,
         );
-
-        if self.mode.rvs_runs_test_quality() {
-            test_quality::rvs_check_crate_post_MPS::<E>(
-                cx,
-                &self.test_names,
-                &self.good_fns,
-                &self.ok_fns,
-                &self.test_calls,
-                &self.callgraph,
-                self.test_outputs.as_ref(),
-                &mut self.world,
-                self.mode.rvs_is_caps_report(),
-                self.ui_testing,
-            );
-        }
     }
 
     fn check_item(&mut self, cx: &LateContext<'tcx>, item: &'tcx rustc_hir::Item<'tcx>) {
@@ -540,54 +515,28 @@ impl<'tcx, E: LintEnvironment> LateLintPass<'tcx> for RivusLintPass<E> {
 
 // ─── Dispatch functions ──────────────────────────────────────────────────
 
-fn rvs_emit_offline_caps_diagnostics_MP<E: LintEnvironment>(
+fn rvs_emit_offline_caps_diagnostics_S<E: LintEnvironment>(
     cx: &LateContext<'_>,
     report: &crate::offline_caps::OfflineCapsReport,
     graph: &FnGraph,
     spans: &BTreeMap<FunctionIdentity, (rustc_hir::HirId, Span)>,
     call_spans: &BTreeMap<(FunctionIdentity, CallSiteIdentity), (rustc_hir::HirId, Span)>,
-    world: &mut E::World,
     ui_testing: bool,
 ) {
-    rvs_emit_offline_caps_emissions_MPS::<E>(
-        cx,
-        &report.rvs_emissions(graph),
-        spans,
-        call_spans,
-        false,
-        world,
-        ui_testing,
-    );
-}
-
-fn rvs_emit_offline_caps_emissions_MPS<E: LintEnvironment>(
-    cx: &LateContext<'_>,
-    emissions: &[crate::offline_caps::OfflineCapsEmission],
-    spans: &BTreeMap<FunctionIdentity, (rustc_hir::HirId, Span)>,
-    call_spans: &BTreeMap<(FunctionIdentity, CallSiteIdentity), (rustc_hir::HirId, Span)>,
-    acknowledge: bool,
-    world: &mut E::World,
-    ui_testing: bool,
-) {
-    for (emission_index, emission) in emissions.iter().enumerate() {
+    let emissions = report.rvs_emissions(graph);
+    for emission in &emissions {
         if emission.lint == crate::offline_caps::OfflineCapsLint::IncompleteCapsKnowledge
             && ui_testing
         {
             continue;
         }
         let lint = rvs_offline_caps_lint_S(emission.lint);
-        for (anchor_index, anchor) in emission.span_anchors.iter().enumerate() {
-            let location = rvs_resolve_emission_location(anchor, spans, call_spans);
-            let Some((hir_id, span)) = location else {
+        for anchor in &emission.span_anchors {
+            let Some((hir_id, span)) = rvs_resolve_emission_location(anchor, spans, call_spans)
+            else {
                 continue;
             };
             msg::rvs_emit_node_span_lint_S(cx, lint, hir_id, span, emission.message.clone());
-            if acknowledge
-                && let Err(error) =
-                    E::rvs_acknowledge_offline_emission_P(world, emission_index, anchor_index)
-            {
-                cx.tcx.dcx().err(error);
-            }
         }
     }
 }
@@ -849,13 +798,12 @@ fn rvs_run_body_fn_pipeline_BMS<'tcx, F>(
     if data.mode.rvs_is_caps_report() && scope == DiagnosticScope::Production {
         rvs_register_coverage_candidate_BM(cx, subject, data);
     }
-    if data.mode.rvs_collect_caps_facts() {
+    {
         let collected = callgraph::rvs_collect_callgraph_for_item_BMS(
             data.callgraph,
             cx,
             subject,
             data.crate_provenance,
-            data.mode,
         );
         data.diagnostic_spans
             .insert(collected.caller.clone(), (subject.hir_id, subject.span));
@@ -1180,29 +1128,26 @@ fn rvs_check_trait_item_BMS<'tcx>(
                 );
             }
             // Required methods (no body) — collect signature info for callgraph.
-            if data.mode.rvs_collect_caps_facts() {
-                let def_path = callgraph::rvs_collect_callgraph_for_signature_BMS(
-                    data.callgraph,
-                    cx,
-                    trait_item.hir_id(),
-                    trait_item.ident,
-                    sig,
-                    false,
-                    is_port_trait,
-                    data.crate_provenance,
-                    data.mode,
-                );
-                data.diagnostic_spans.insert(
-                    FunctionIdentity {
-                        crate_id: cx
-                            .tcx
-                            .stable_crate_id(trait_item.hir_id().owner.def_id.to_def_id().krate)
-                            .as_u64(),
-                        def_path,
-                    },
-                    (trait_item.hir_id(), trait_item.span),
-                );
-            }
+            let def_path = callgraph::rvs_collect_callgraph_for_signature_BMS(
+                data.callgraph,
+                cx,
+                trait_item.hir_id(),
+                trait_item.ident,
+                sig,
+                false,
+                is_port_trait,
+                data.crate_provenance,
+            );
+            data.diagnostic_spans.insert(
+                FunctionIdentity {
+                    crate_id: cx
+                        .tcx
+                        .stable_crate_id(trait_item.hir_id().owner.def_id.to_def_id().krate)
+                        .as_u64(),
+                    def_path,
+                },
+                (trait_item.hir_id(), trait_item.span),
+            );
         }
         _ => {}
     }

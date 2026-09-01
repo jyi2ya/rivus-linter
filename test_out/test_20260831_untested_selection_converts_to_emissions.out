@@ -1,6 +1,7 @@
 [
     OfflineCapsEmission {
         lint: UntestedGoodFn,
+        severity: Warning,
         span_anchors: {
             OfflineCapsEmissionAnchor {
                 identity: FunctionIdentity {
@@ -16,6 +17,7 @@
     },
     OfflineCapsEmission {
         lint: UntestedOkFn,
+        severity: Warning,
         span_anchors: {
             OfflineCapsEmissionAnchor {
                 identity: FunctionIdentity {
