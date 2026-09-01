@@ -1,0 +1,10 @@
+error[contract_mismatch]: multiline span must underline every covered line
+ --> $TMP/src/lib.rs:1:8
+  |
+1 |   pub fn rvs_two() -> u32 {
+  |  ________^
+2 | |     1 +
+  | |_^ bytes 7..27
+3 |       2
+4 |   }
+  |

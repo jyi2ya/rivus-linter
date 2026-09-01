@@ -136,7 +136,7 @@ pub(crate) fn rvs_validate_optional_dir_BIS(path: &Path, label: &str) -> Result<
 mod tests {
     use super::*;
     #[cfg(unix)]
-    use crate::test_support::rvs_make_temp_dir_BIS;
+    use crate::test_support::rvs_make_temp_dir_BIST;
     use crate::test_support::rvs_snapshot_BIS;
 
     #[cfg(any(target_os = "android", target_os = "linux", target_vendor = "apple"))]
@@ -146,7 +146,7 @@ mod tests {
         use std::os::unix::net::UnixStream;
         use std::os::unix::process::CommandExt as _;
 
-        let dir = rvs_make_temp_dir_BIS("directory-lock-fork-inheritance");
+        let dir = rvs_make_temp_dir_BIST("directory-lock-fork-inheritance");
         let lock = rvs_try_lock_directory_BIS(&dir).unwrap();
         let lock_path = dir.join(RVS_DIRECTORY_LOCK_FILE);
         let lock_file_regular = std::fs::symlink_metadata(&lock_path)
@@ -217,7 +217,7 @@ mod tests {
             return;
         }
 
-        let dir = rvs_make_temp_dir_BIS("directory-lock-other-process");
+        let dir = rvs_make_temp_dir_BIST("directory-lock-other-process");
         let lock = rvs_try_lock_directory_BIS(&dir).unwrap();
         let child = std::process::Command::new(std::env::current_exe().unwrap())
             .arg("--exact")
@@ -225,7 +225,7 @@ mod tests {
                 "environment::fs_guard::tests::test_20260716_directory_lock_excludes_other_process",
             )
             .arg("--nocapture")
-            .env(CHILD_DIRECTORY_ENV, &dir)
+            .env(CHILD_DIRECTORY_ENV, dir.as_os_str())
             .status()
             .unwrap();
         drop(lock);
@@ -249,7 +249,7 @@ mod tests {
     #[cfg(any(target_os = "android", target_os = "linux", target_vendor = "apple"))]
     #[test]
     fn test_20260727_directory_lock_rejects_symlink() {
-        let dir = rvs_make_temp_dir_BIS("directory-lock-symlink");
+        let dir = rvs_make_temp_dir_BIST("directory-lock-symlink");
         let victim = dir.join("victim");
         let lock_path = dir.join(RVS_DIRECTORY_LOCK_FILE);
         std::fs::write(&victim, "safe").unwrap();

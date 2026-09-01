@@ -298,12 +298,12 @@ mod tests {
         rvs_caps_layer_file_path, rvs_parse_caps_file, rvs_require_caps_dir_BIS,
     };
     use crate::test_support::{
-        rvs_caps_v2, rvs_make_capsmap, rvs_make_temp_dir_BIS, rvs_snapshot_BIS,
+        rvs_caps_v2, rvs_make_capsmap, rvs_make_temp_dir_BIST, rvs_snapshot_BIS,
     };
 
     #[test]
     fn test_20260716_selected_layer_validation_rejects_missing_escape_and_atomic_temp() {
-        let root = rvs_make_temp_dir_BIS("capsmap-selected-layer-validation");
+        let root = rvs_make_temp_dir_BIST("capsmap-selected-layer-validation");
         let missing = root.join("missing");
         let caps = root.join("caps");
         std::fs::create_dir(&caps).unwrap();
@@ -428,7 +428,7 @@ mod tests {
 
     #[test]
     fn test_20260715_capsmap_rejects_case_aliased_reserved_layer() {
-        let dir = rvs_make_temp_dir_BIS("capsmap-case-aliased-reserved-layer");
+        let dir = rvs_make_temp_dir_BIST("capsmap-case-aliased-reserved-layer");
         std::fs::write(dir.join("ext"), rvs_caps_v2(&[("winner", "S")])).unwrap();
         std::fs::write(dir.join("DEPS"), rvs_caps_v2(&[("winner", "B")])).unwrap();
 
@@ -449,7 +449,7 @@ mod tests {
     fn test_20260717_distributed_seed_precedence_is_storage_independent() {
         const DISTRIBUTED_PATH: &str = "alloc::alloc::__rust_alloc";
 
-        let dir = rvs_make_temp_dir_BIS("distributed-seed-precedence");
+        let dir = rvs_make_temp_dir_BIST("distributed-seed-precedence");
         let distributed_only = CapsMap::rvs_load_effective_dir_BIS(&dir).unwrap();
         std::fs::write(dir.join("std"), rvs_caps_v2(&[(DISTRIBUTED_PATH, "B")])).unwrap();
         let with_generated = CapsMap::rvs_load_effective_dir_BIS(&dir).unwrap();
@@ -710,7 +710,7 @@ mod tests {
 
     #[test]
     fn test_20260715_capsmap_v2_roundtrip_preserves_vote_metadata_and_source() {
-        let dir = rvs_make_temp_dir_BIS("capsmap-v2-vote-roundtrip");
+        let dir = rvs_make_temp_dir_BIST("capsmap-v2-vote-roundtrip");
         let mut map = CapsMap::rvs_new();
         map.rvs_insert_info_M(
             CapsMapKey::from("demo::FromString::rvs_parse"),
@@ -857,7 +857,7 @@ mod tests {
 
     #[test]
     fn test_20260710_capsmap_selection_preserves_global_precedence_table() {
-        let dir = rvs_make_temp_dir_BIS("capsmap-selection-precedence");
+        let dir = rvs_make_temp_dir_BIST("capsmap-selection-precedence");
         for (name, caps) in [
             ("seed", "I"),
             ("std", "A"),
@@ -1018,7 +1018,7 @@ mod tests {
 
     #[test]
     fn test_20260714_caps_loader_ignores_atomic_temp() {
-        let dir = rvs_make_temp_dir_BIS("capsmap-ignore-atomic-temp");
+        let dir = rvs_make_temp_dir_BIST("capsmap-ignore-atomic-temp");
         std::fs::write(dir.join("ext"), rvs_caps_v2(&[("winner", "P")])).unwrap();
         std::fs::write(dir.join(".deps.123.0.tmp"), rvs_caps_v2(&[("winner", "S")])).unwrap();
 
@@ -1035,7 +1035,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_20260714_caps_loader_rejects_broken_custom_layer_symlink() {
-        let dir = rvs_make_temp_dir_BIS("capsmap-broken-custom-layer");
+        let dir = rvs_make_temp_dir_BIST("capsmap-broken-custom-layer");
         let layer = dir.join("custom");
         std::os::unix::fs::symlink(dir.join("missing"), &layer).unwrap();
 
@@ -1053,7 +1053,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_20260715_caps_loader_rejects_valid_custom_layer_symlink() {
-        let dir = rvs_make_temp_dir_BIS("capsmap-valid-custom-layer-symlink");
+        let dir = rvs_make_temp_dir_BIST("capsmap-valid-custom-layer-symlink");
         let source = dir.join("source");
         std::fs::write(&source, rvs_caps_v2(&[("value", "S")])).unwrap();
         std::os::unix::fs::symlink(&source, dir.join("custom")).unwrap();

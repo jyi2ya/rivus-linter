@@ -189,7 +189,7 @@ mod tests {
     use super::*;
     use crate::artifacts::FnNode;
     use crate::symbols::DefPath;
-    use crate::test_support::{rvs_make_temp_dir_BIS, rvs_snapshot_BIS};
+    use crate::test_support::{rvs_make_temp_dir_BIST, rvs_snapshot_BIS};
 
     const TEST_GENERATION_ID: &str = "rivus-v4-test-generation";
 
@@ -211,7 +211,7 @@ mod tests {
 
     #[test]
     fn test_20260703_has_test_output_false_when_dir_missing() {
-        let directory = rvs_make_temp_dir_BIS("test-output-missing");
+        let directory = rvs_make_temp_dir_BIST("test-output-missing");
         std::fs::remove_dir_all(&directory)
             .expect("never: missing test-output fixture should be removable");
 
@@ -230,7 +230,7 @@ mod tests {
 
     #[test]
     fn test_20260714_missing_test_out_disables_snapshot_lint() {
-        let directory = rvs_make_temp_dir_BIS("test-output-disabled");
+        let directory = rvs_make_temp_dir_BIST("test-output-disabled");
         std::fs::remove_dir_all(&directory)
             .expect("never: disabled test-output fixture should be removable");
 
@@ -245,7 +245,7 @@ mod tests {
 
     #[test]
     fn test_20260703_has_test_output_true_for_existing_snapshot() {
-        let directory = rvs_make_temp_dir_BIS("test-output-existing");
+        let directory = rvs_make_temp_dir_BIST("test-output-existing");
         std::fs::write(
             directory.join("test_20260703_has_test_output_true_for_existing_snapshot.out"),
             "ok\n",
@@ -267,7 +267,7 @@ mod tests {
 
     #[test]
     fn test_20260706_has_test_output_false_for_snapshot_directory() {
-        let directory = rvs_make_temp_dir_BIS("test-output-directory");
+        let directory = rvs_make_temp_dir_BIST("test-output-directory");
         std::fs::create_dir_all(
             directory.join("test_20260706_has_test_output_false_for_snapshot_directory.out"),
         )
@@ -288,7 +288,7 @@ mod tests {
 
     #[test]
     fn test_20260714_explicit_capsmap_load_failure_is_fatal() {
-        let directory = rvs_make_temp_dir_BIS("invalid-explicit-capsmap");
+        let directory = rvs_make_temp_dir_BIST("invalid-explicit-capsmap");
         std::fs::write(directory.join("seed"), "invalid capsmap line\n")
             .expect("never: invalid capsmap fixture should be writable");
 
@@ -311,7 +311,7 @@ mod tests {
     #[cfg(any(target_os = "android", target_os = "linux", target_vendor = "apple"))]
     #[test]
     fn test_20260706_write_json_artifact_uses_final_json_file() {
-        let directory = rvs_make_temp_dir_BIS("artifact-write");
+        let directory = rvs_make_temp_dir_BIST("artifact-write");
         let output = rvs_test_callgraph_output_BIS(&directory);
         let path = rvs_write_bound_callgraph_artifact_BIST(
             &output,
@@ -354,7 +354,7 @@ mod tests {
     #[cfg(any(target_os = "android", target_os = "linux", target_vendor = "apple"))]
     #[test]
     fn test_20260729_same_process_callgraph_writes_do_not_replace_artifacts() {
-        let directory = rvs_make_temp_dir_BIS("artifact-same-process");
+        let directory = rvs_make_temp_dir_BIST("artifact-same-process");
         let output = rvs_test_callgraph_output_BIS(&directory);
         let graph = rvs_test_callgraph();
 
@@ -391,7 +391,7 @@ mod tests {
     #[cfg(any(target_os = "android", target_os = "linux", target_vendor = "apple"))]
     #[test]
     fn test_20260714_write_empty_callgraph_artifact() {
-        let directory = rvs_make_temp_dir_BIS("artifact-empty-json");
+        let directory = rvs_make_temp_dir_BIST("artifact-empty-json");
         let output = rvs_test_callgraph_output_BIS(&directory);
         let result = rvs_write_bound_callgraph_artifact_BIST(
             &output,
@@ -419,7 +419,7 @@ mod tests {
 
     #[test]
     fn test_20260707_write_json_artifact_rejects_pathy_crate_name() {
-        let directory = rvs_make_temp_dir_BIS("artifact-pathy-crate");
+        let directory = rvs_make_temp_dir_BIST("artifact-pathy-crate");
         std::fs::remove_dir_all(&directory)
             .expect("never: pathy crate fixture directory should be removable");
         let graph = rvs_test_callgraph();
@@ -449,7 +449,7 @@ mod tests {
 
     #[test]
     fn test_20260707_write_json_artifact_rejects_nul_crate_name() {
-        let directory = rvs_make_temp_dir_BIS("artifact-nul-crate");
+        let directory = rvs_make_temp_dir_BIST("artifact-nul-crate");
         std::fs::remove_dir_all(&directory)
             .expect("never: nul crate fixture directory should be removable");
         let result = rvs_serialize_callgraph_artifact(

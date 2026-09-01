@@ -75,25 +75,42 @@ pub(crate) fn rvs_snapshot_BIS(name: &str, content: &str) {
     }
 }
 
-pub(crate) fn rvs_make_temp_dir_BIS(tag: &str) -> PathBuf {
-    let unique = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("never: system clock should be after unix epoch for test temp dir")
-        .as_nanos();
-    let dir = std::env::temp_dir().join(format!("rivus-{tag}-{}-{unique}", std::process::id()));
-    if dir.exists() {
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+/// Test fixture directory that dereferences to its [`Path`] and removes
+/// itself when dropped, so failure paths no longer leak fixtures.
+pub(crate) struct TestTempDir {
+    inner: tempfile::TempDir,
 }
 
-pub(crate) fn rvs_make_cargo_project_BIS(
+impl std::ops::Deref for TestTempDir {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        self.inner.path()
+    }
+}
+
+impl AsRef<Path> for TestTempDir {
+    fn as_ref(&self) -> &Path {
+        self.inner.path()
+    }
+}
+
+/// Creates a unique test fixture directory under the system temp dir,
+/// prefixed `rivus-{tag}-`.
+pub(crate) fn rvs_make_temp_dir_BIST(tag: &str) -> TestTempDir {
+    let inner = tempfile::Builder::new()
+        .prefix(&format!("rivus-{tag}-"))
+        .tempdir()
+        .expect("never: system temp dir is writable for test fixtures");
+    TestTempDir { inner }
+}
+
+pub(crate) fn rvs_make_cargo_project_BIST(
     tag: &str,
     package_name: &str,
     files: &[(&str, &str)],
-) -> PathBuf {
-    let dir = rvs_make_temp_dir_BIS(tag);
+) -> TestTempDir {
+    let dir = rvs_make_temp_dir_BIST(tag);
     let manifest =
         format!("[package]\nname = \"{package_name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n");
     std::fs::write(dir.join("Cargo.toml"), manifest).unwrap();
@@ -175,7 +192,7 @@ mod tests {
 
     #[test]
     fn test_20260712_make_cargo_project_layout() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "cargo-project-layout",
             "fixture-demo",
             &[("src/lib.rs", "pub fn value() -> i32 { 1 }\n")],

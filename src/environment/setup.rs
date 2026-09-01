@@ -268,14 +268,16 @@ pub(crate) fn rvs_run_setup_BIST(path: &Path) -> Result<(), SetupError> {
     super::workspace::rvs_ensure_cargo_project_BIS(path)
         .map_err(|message| SetupError::ProjectValidation { message })?;
 
-    let project = super::cargo_targets::rvs_load_cargo_project_model_BIS(path)
-        .map_err(|message| SetupError::ProjectValidation { message })?;
-    super::cargo_targets::rvs_collect_local_crate_prefixes_from_model_BIS(
+    // Validation runs through cargo metadata (the same source of truth as
+    // every other target query), rejecting virtual workspace roots and
+    // manifests cargo itself refuses.
+    super::cargo_targets::rvs_detect_local_crate_prefixes_BIS(
         path,
-        &project,
         super::cargo_targets::CargoTargetScope::WithTestExampleBench,
     )
     .map_err(|message| SetupError::ProjectValidation { message })?;
+    let project = super::cargo_targets::rvs_load_cargo_project_model_BIS(path)
+        .map_err(|message| SetupError::ProjectValidation { message })?;
     let (content, mut document) = project.rvs_into_source_and_document();
 
     let count = rvs_inject_clippy_lints_into_document_M(&mut document).map_err(|source| {
@@ -410,7 +412,7 @@ fn rvs_read_optional_setup_file_BIS(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{rvs_make_temp_dir_BIS, rvs_snapshot_BIS};
+    use crate::test_support::{rvs_make_temp_dir_BIST, rvs_snapshot_BIS};
 
     fn rvs_setup_result_debug(result: &Result<(), SetupError>) -> String {
         match result {
@@ -480,7 +482,7 @@ mod tests {
 
     #[test]
     fn test_20260702_setup_rejects_non_cargo_dir_without_writing_agents() {
-        let dir = rvs_make_temp_dir_BIS("setup-non-cargo");
+        let dir = rvs_make_temp_dir_BIST("setup-non-cargo");
         let agents_md = dir.join("AGENTS.md");
         let result = rvs_run_setup_BIST(&dir);
         let output = format!(
@@ -505,7 +507,7 @@ mod tests {
 
     #[test]
     fn test_20260702_setup_rejects_invalid_cargo_toml_without_writing_agents() {
-        let dir = rvs_make_temp_dir_BIS("setup-invalid-cargo-toml");
+        let dir = rvs_make_temp_dir_BIST("setup-invalid-cargo-toml");
         std::fs::write(dir.join("Cargo.toml"), "[package\nname = \"broken\"\n").unwrap();
         let agents_md = dir.join("AGENTS.md");
 
@@ -532,12 +534,14 @@ mod tests {
 
     #[test]
     fn test_20260706_setup_rejects_non_table_lints_without_writing_agents() {
-        let dir = rvs_make_temp_dir_BIS("setup-non-table-lints");
+        let dir = rvs_make_temp_dir_BIST("setup-non-table-lints");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::write(
             dir.join("Cargo.toml"),
             "lints = \"bad\"\n\n[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
         )
         .unwrap();
+        std::fs::write(dir.join("src/lib.rs"), "pub fn value() -> u8 { 1 }\n").unwrap();
         let agents_md = dir.join("AGENTS.md");
 
         let result = rvs_run_setup_BIST(&dir);
@@ -563,12 +567,14 @@ mod tests {
 
     #[test]
     fn test_20260706_setup_rejects_non_table_clippy_lints_without_writing_agents() {
-        let dir = rvs_make_temp_dir_BIS("setup-non-table-clippy-lints");
+        let dir = rvs_make_temp_dir_BIST("setup-non-table-clippy-lints");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::write(
             dir.join("Cargo.toml"),
             "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[lints]\nclippy = \"bad\"\n",
         )
         .unwrap();
+        std::fs::write(dir.join("src/lib.rs"), "pub fn value() -> u8 { 1 }\n").unwrap();
         let agents_md = dir.join("AGENTS.md");
 
         let result = rvs_run_setup_BIST(&dir);
@@ -597,7 +603,7 @@ mod tests {
 
     #[test]
     fn test_20260707_setup_rejects_agents_directory_without_writing_cargo() {
-        let dir = rvs_make_temp_dir_BIS("setup-agents-directory");
+        let dir = rvs_make_temp_dir_BIST("setup-agents-directory");
         let cargo_toml = "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n";
         std::fs::write(dir.join("Cargo.toml"), cargo_toml).unwrap();
         std::fs::create_dir_all(dir.join("AGENTS.md")).unwrap();
@@ -628,6 +634,8 @@ mod tests {
         let cargo_toml =
             "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n".to_string();
         std::fs::write(dir.join("Cargo.toml"), &cargo_toml).unwrap();
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/lib.rs"), "pub fn value() -> u8 { 1 }\n").unwrap();
         cargo_toml
     }
 
@@ -651,7 +659,7 @@ mod tests {
 
     #[test]
     fn test_20260729_setup_preserves_existing_custom_agents_content() {
-        let dir = rvs_make_temp_dir_BIS("setup-preserve-custom-agents");
+        let dir = rvs_make_temp_dir_BIST("setup-preserve-custom-agents");
         rvs_write_setup_manifest_BIS(&dir);
         let custom = "# Team policy\n\nKeep this exact text.\n";
         std::fs::write(dir.join("AGENTS.md"), custom).unwrap();
@@ -707,7 +715,7 @@ mod tests {
         let mut output = String::new();
 
         for (case, agents_before) in cases {
-            let dir = rvs_make_temp_dir_BIS(&format!("setup-markers-{case}"));
+            let dir = rvs_make_temp_dir_BIST(&format!("setup-markers-{case}"));
             let cargo_before = rvs_write_setup_manifest_BIS(&dir);
             std::fs::write(dir.join("AGENTS.md"), &agents_before).unwrap();
 
@@ -742,7 +750,7 @@ mod tests {
 
     #[test]
     fn test_20260729_setup_preserves_other_policy_and_config_files() {
-        let dir = rvs_make_temp_dir_BIS("setup-preserve-adjacent-policy");
+        let dir = rvs_make_temp_dir_BIST("setup-preserve-adjacent-policy");
         rvs_write_setup_manifest_BIS(&dir);
         std::fs::create_dir_all(dir.join(".cargo")).unwrap();
         let files = [
@@ -786,7 +794,7 @@ mod tests {
 
     #[test]
     fn test_20260729_setup_replaces_only_existing_managed_region() {
-        let dir = rvs_make_temp_dir_BIS("setup-replace-managed-region");
+        let dir = rvs_make_temp_dir_BIST("setup-replace-managed-region");
         rvs_write_setup_manifest_BIS(&dir);
         let prefix = "# Team policy: café\r\n\r\n";
         let suffix = "\r\n\r\n# Local footer without final newline";
@@ -879,7 +887,7 @@ mod tests {
 
     #[test]
     fn test_20260729_setup_repeated_run_is_byte_idempotent() {
-        let dir = rvs_make_temp_dir_BIS("setup-repeated-idempotent");
+        let dir = rvs_make_temp_dir_BIST("setup-repeated-idempotent");
         rvs_write_setup_manifest_BIS(&dir);
         let custom = "# Existing team policy\n";
         std::fs::write(dir.join("AGENTS.md"), custom).unwrap();

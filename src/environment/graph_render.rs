@@ -2,13 +2,16 @@
 //!
 //! The offline engine produces structured emissions with fixed severities;
 //! this adapter resolves each anchor onto artifact-recorded source
-//! locations and renders plain-text diagnostics. It is the single
-//! renderer of `cargo rivus check` graph diagnostics — rustc lint levels
-//! never apply to them.
+//! locations and renders plain-text diagnostics with the
+//! `annotate-snippets` renderer (the library rustc itself uses). It is the
+//! single renderer of `cargo rivus check` graph diagnostics — rustc lint
+//! levels never apply to them.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::PathBuf;
+
+use annotate_snippets::{Level, Renderer, Snippet};
 
 use crate::artifacts::FnGraph;
 use crate::diagnostic_source::{
@@ -25,160 +28,119 @@ pub(crate) struct RenderedGraphDiagnostics {
     pub(crate) warning_count: usize,
 }
 
-/// Renders every emission: a header line per diagnostic, then one located
-/// block per anchor. Anchors that resolve to no source location render by
+/// One resolved anchor whose source could be read, held as owned data so
+/// the borrowed `Snippet` view can be built right before rendering.
+struct LocatedSnippet {
+    source: String,
+    origin: String,
+    byte_label: String,
+    start: usize,
+    end: usize,
+}
+
+/// Renders every emission: a header line per diagnostic
+/// (`{severity}[{lint}]: {message}`), then one annotated snippet per
+/// resolvable anchor. Anchors that resolve to no source location render by
 /// readable def path — a graph diagnostic is never silently dropped.
 pub(crate) fn rvs_render_graph_emissions_BIS(
     graph: &FnGraph,
     emissions: &[OfflineCapsEmission],
 ) -> RenderedGraphDiagnostics {
     let mut rendered = RenderedGraphDiagnostics::default();
-    let mut file_cache: BTreeMap<PathBuf, Option<Vec<u8>>> = BTreeMap::new();
+    let mut file_cache: BTreeMap<PathBuf, Option<String>> = BTreeMap::new();
+    let renderer = Renderer::plain();
     for emission in emissions {
-        let severity = match emission.severity {
+        let level = match emission.severity {
             OfflineCapsSeverity::Error => {
                 rendered.error_count += 1;
-                "error"
+                Level::Error
             }
             OfflineCapsSeverity::Warning => {
                 rendered.warning_count += 1;
-                "warning"
+                Level::Warning
             }
         };
-        writeln!(
-            rendered.output,
-            "{}[{}]: {}",
-            severity,
-            emission.lint.rvs_as_str(),
-            emission.message
-        )
-        .expect("never: writing to String cannot fail");
+        let mut located: Vec<LocatedSnippet> = Vec::new();
+        let mut fallback_lines: Vec<String> = Vec::new();
         for anchor in &emission.span_anchors {
             let locations = match &anchor.call_site {
                 Some(call_site) => rvs_resolve_call_site_anchor(call_site),
                 None => rvs_resolve_node_anchor(graph, &anchor.identity),
             };
             if locations.is_empty() {
-                writeln!(
-                    rendered.output,
+                fallback_lines.push(format!(
                     "  at {} (no source location recorded)",
                     anchor.identity.def_path.rvs_user_path()
-                )
-                .expect("never: writing to String cannot fail");
+                ));
                 continue;
             }
             for location in &locations {
-                rvs_write_location_block_BIMS(&mut rendered.output, location, &mut file_cache);
+                rvs_collect_location_snippet_BIMS(
+                    location,
+                    &mut file_cache,
+                    &mut located,
+                    &mut fallback_lines,
+                );
             }
+        }
+        let snippets = located.iter().map(|piece| {
+            Snippet::source(&piece.source)
+                .origin(&piece.origin)
+                .annotation(level.span(piece.start..piece.end).label(&piece.byte_label))
+        });
+        let message = level
+            .title(&emission.message)
+            .id(emission.lint.rvs_as_str())
+            .snippets(snippets);
+        writeln!(rendered.output, "{}", renderer.render(message))
+            .expect("never: writing to String cannot fail");
+        for fallback_line in fallback_lines {
+            writeln!(rendered.output, "{fallback_line}")
+                .expect("never: writing to String cannot fail");
         }
     }
     rendered
 }
 
-fn rvs_write_location_block_BIMS(
-    output: &mut String,
+/// Records the snippet for one resolvable location, or a fallback location
+/// line when the file cannot be rendered (missing, non-UTF-8, or offsets
+/// outside the content).
+fn rvs_collect_location_snippet_BIMS(
     location: &DiagnosticLocation,
-    file_cache: &mut BTreeMap<PathBuf, Option<Vec<u8>>>,
+    file_cache: &mut BTreeMap<PathBuf, Option<String>>,
+    located: &mut Vec<LocatedSnippet>,
+    fallback_lines: &mut Vec<String>,
 ) {
-    let content = file_cache
-        .entry(location.file.clone())
-        .or_insert_with(|| std::fs::read(&location.file).ok())
-        .as_deref();
-    let (line_number, column) = content
-        .and_then(|content| rvs_line_col(content, location.start))
-        .map_or((None, None), |(line, column)| (Some(line), Some(column)));
-    match (line_number, column) {
-        (Some(line), Some(column)) => {
-            writeln!(
-                output,
-                "  --> {}:{}:{} (bytes {}..{})",
-                location.file.display(),
-                line,
-                column,
-                location.start,
-                location.end
-            )
-            .expect("never: writing to String cannot fail");
-            if let Some(content) = content {
-                rvs_write_snippet_block_M(output, content, location, line, column);
-            }
-        }
-        _ => {
-            writeln!(
-                output,
-                "  --> {} (bytes {}..{})",
-                location.file.display(),
-                location.start,
-                location.end
-            )
-            .expect("never: writing to String cannot fail");
-        }
+    if !file_cache.contains_key(&location.file) {
+        let content = std::fs::read_to_string(&location.file).ok();
+        file_cache.insert(location.file.clone(), content);
     }
-}
-
-/// Writes the offending source line and a caret underline. Spans crossing
-/// a line break underline up to the end of the first line only.
-fn rvs_write_snippet_block_M(
-    output: &mut String,
-    content: &[u8],
-    location: &DiagnosticLocation,
-    line_number: usize,
-    column: usize,
-) {
-    let Some(line_start) = rvs_line_start(content, location.start) else {
+    let source = file_cache
+        .get(&location.file)
+        .and_then(Option::as_deref)
+        .unwrap_or_default();
+    let start = usize::try_from(location.start).unwrap_or(usize::MAX);
+    let end = usize::try_from(location.end).unwrap_or(usize::MAX);
+    let renderable = start <= end
+        && end <= source.len()
+        && source.is_char_boundary(start)
+        && source.is_char_boundary(end);
+    if file_cache.get(&location.file).is_some_and(Option::is_none) || !renderable {
+        fallback_lines.push(format!(
+            "  --> {} (bytes {}..{})",
+            location.file.display(),
+            location.start,
+            location.end
+        ));
         return;
-    };
-    let line_end = content
-        .get(line_start..)
-        .and_then(|tail| tail.iter().position(|byte| *byte == b'\n'))
-        .map_or(content.len(), |offset| line_start + offset);
-    let line_text =
-        String::from_utf8_lossy(content.get(line_start..line_end).unwrap_or_default()).into_owned();
-    let gutter_width = line_number.to_string().len();
-    let pad = " ".repeat(gutter_width);
-    writeln!(output, "{pad} |").expect("never: writing to String cannot fail");
-    writeln!(output, "{line_number} | {line_text}").expect("never: writing to String cannot fail");
-    let highlight_end =
-        (usize::try_from(location.end).expect("never: offset fits usize")).min(line_end);
-    let caret_count = highlight_end
-        .saturating_sub(usize::try_from(location.start).expect("never: offset fits usize"))
-        .max(1);
-    let indent = " ".repeat(column.saturating_sub(1));
-    let carets = "^".repeat(caret_count);
-    writeln!(output, "{pad} | {indent}{carets}").expect("never: writing to String cannot fail");
-}
-
-/// One-based line and column of a byte offset, or `None` when the offset
-/// lies outside the content.
-fn rvs_line_col(content: &[u8], offset: u32) -> Option<(usize, usize)> {
-    let offset = usize::try_from(offset).ok()?;
-    if offset > content.len() {
-        return None;
     }
-    let mut line = 1usize;
-    let mut line_start = 0usize;
-    for (index, byte) in content.iter().enumerate().take(offset) {
-        if *byte == b'\n' {
-            line += 1;
-            line_start = index + 1;
-        }
-    }
-    let column = content.get(line_start..offset)?.len() + 1;
-    Some((line, column))
-}
-
-fn rvs_line_start(content: &[u8], offset: u32) -> Option<usize> {
-    let offset = usize::try_from(offset).ok()?;
-    if offset > content.len() {
-        return None;
-    }
-    let mut line_start = 0usize;
-    for (index, byte) in content.iter().enumerate().take(offset) {
-        if *byte == b'\n' {
-            line_start = index + 1;
-        }
-    }
-    Some(line_start)
+    located.push(LocatedSnippet {
+        source: source.to_string(),
+        origin: location.file.display().to_string(),
+        byte_label: format!("bytes {}..{}", location.start, location.end),
+        start,
+        end,
+    });
 }
 
 #[cfg(test)]
@@ -187,7 +149,7 @@ mod tests {
     use crate::artifacts::{FnNode, FnSource, FunctionIdentity};
     use crate::offline_caps::{OfflineCapsEmissionAnchor, OfflineCapsLint};
     use crate::symbols::DefPath;
-    use crate::test_support::{rvs_make_temp_dir_BIS, rvs_snapshot_BIS};
+    use crate::test_support::{rvs_make_temp_dir_BIST, rvs_snapshot_BIS};
     use std::collections::BTreeSet;
 
     fn rvs_source_graph_BIS(dir: &std::path::Path) -> FnGraph {
@@ -218,7 +180,7 @@ mod tests {
 
     #[test]
     fn test_20260901_renders_node_anchor_and_def_path_fallback() {
-        let dir = rvs_make_temp_dir_BIS("graph-render");
+        let dir = rvs_make_temp_dir_BIST("graph-render");
         let graph = rvs_source_graph_BIS(&dir);
         let anchored = OfflineCapsEmission {
             lint: OfflineCapsLint::ContractMismatch,
@@ -256,6 +218,7 @@ mod tests {
         assert!(rendered.output.contains("error[contract_mismatch]:"));
         assert!(rendered.output.contains("warning[untested_good_fn]:"));
         assert!(rendered.output.contains("rvs_flag"));
+        assert!(rendered.output.contains("bytes 19..27"));
         assert!(
             rendered
                 .output
@@ -263,25 +226,119 @@ mod tests {
         );
         assert_eq!(rendered.error_count, 1);
         assert_eq!(rendered.warning_count, 1);
-        std::fs::remove_dir_all(dir).expect("never: temp dir removes");
     }
 
     #[test]
-    fn test_20260901_line_col_maps_offsets_to_one_based_positions() {
-        let content = b"ab\ncdef\ngh";
-        let output = format!(
-            "first={:?}\nsecond={:?}\npast_end={:?}\n",
-            rvs_line_col(content, 0),
-            rvs_line_col(content, 4),
-            rvs_line_col(content, 99),
-        );
+    fn test_20260901_renders_multiline_span_with_carets() {
+        let dir = rvs_make_temp_dir_BIST("graph-render-multiline");
+        std::fs::create_dir_all(dir.join("src")).expect("never: fixture dir creates");
+        std::fs::write(
+            dir.join("src/lib.rs"),
+            "pub fn rvs_two() -> u32 {\n    1 +\n    2\n}\n",
+        )
+        .expect("never: fixture file writes");
+        let content = std::fs::read(dir.join("src/lib.rs")).expect("never: fixture reads back");
+        let start = content
+            .windows(7)
+            .position(|window| window == b"rvs_two")
+            .expect("never: fixture contains the ident");
+        // Span crosses a line break: the renderer underlines both lines.
+        let mut graph = FnGraph::rvs_new();
+        let mut node = FnNode::default();
+        node.crate_id = 3;
+        node.sources = BTreeSet::from([FnSource::rvs_new_relative(
+            std::path::PathBuf::from("src/lib.rs"),
+            dir.to_path_buf(),
+            u32::try_from(start).expect("never: offset fits u32"),
+            u32::try_from(start + 20).expect("never: offset fits u32"),
+        )]);
+        graph.rvs_insert_M(DefPath::from("demo::rvs_two"), node);
+        let emission = OfflineCapsEmission {
+            lint: OfflineCapsLint::ContractMismatch,
+            severity: OfflineCapsSeverity::Error,
+            span_anchors: BTreeSet::from([OfflineCapsEmissionAnchor {
+                identity: FunctionIdentity {
+                    crate_id: 3,
+                    def_path: DefPath::from("demo::rvs_two"),
+                },
+                call_site: None,
+            }]),
+            message: "multiline span must underline every covered line".to_string(),
+        };
+
+        let rendered = rvs_render_graph_emissions_BIS(&graph, &[emission]);
+        let output = rendered
+            .output
+            .replace(&dir.to_string_lossy().into_owned(), "$TMP");
+        rvs_snapshot_BIS("test_20260901_renders_multiline_span_with_carets", &output);
+
+        assert!(rendered.output.contains("pub fn rvs_two() -> u32 {"));
+        assert!(rendered.output.contains("    1 +"));
+        assert_eq!(rendered.error_count, 1);
+    }
+
+    #[test]
+    fn test_20260901_falls_back_for_missing_and_non_utf8_sources() {
+        let dir = rvs_make_temp_dir_BIST("graph-render-fallback");
+        std::fs::create_dir_all(dir.join("src")).expect("never: fixture dir creates");
+        std::fs::write(dir.join("src/lib.rs"), b"pub fn \xff\xfe broken() {}\n")
+            .expect("never: fixture file writes");
+        let content = std::fs::read(dir.join("src/lib.rs")).expect("never: fixture reads back");
+        let start = content
+            .windows(6)
+            .position(|window| window == b"broken")
+            .expect("never: fixture contains the ident");
+        let mut graph = FnGraph::rvs_new();
+        let mut node = FnNode::default();
+        node.crate_id = 4;
+        node.sources = BTreeSet::from([FnSource::rvs_new_relative(
+            std::path::PathBuf::from("src/lib.rs"),
+            dir.to_path_buf(),
+            u32::try_from(start).expect("never: offset fits u32"),
+            u32::try_from(start + 6).expect("never: offset fits u32"),
+        )]);
+        graph.rvs_insert_M(DefPath::from("demo::rvs_non_utf8"), node);
+        let mut missing_node = FnNode::default();
+        missing_node.crate_id = 5;
+        missing_node.sources = BTreeSet::from([FnSource::rvs_new_relative(
+            std::path::PathBuf::from("src/gone.rs"),
+            dir.to_path_buf(),
+            0,
+            3,
+        )]);
+        graph.rvs_insert_M(DefPath::from("demo::rvs_missing"), missing_node);
+        let emission = OfflineCapsEmission {
+            lint: OfflineCapsLint::ContractMismatch,
+            severity: OfflineCapsSeverity::Error,
+            span_anchors: BTreeSet::from([
+                OfflineCapsEmissionAnchor {
+                    identity: FunctionIdentity {
+                        crate_id: 4,
+                        def_path: DefPath::from("demo::rvs_non_utf8"),
+                    },
+                    call_site: None,
+                },
+                OfflineCapsEmissionAnchor {
+                    identity: FunctionIdentity {
+                        crate_id: 5,
+                        def_path: DefPath::from("demo::rvs_missing"),
+                    },
+                    call_site: None,
+                },
+            ]),
+            message: "unrenderable sources degrade to location lines".to_string(),
+        };
+
+        let rendered = rvs_render_graph_emissions_BIS(&graph, &[emission]);
+        let output = rendered
+            .output
+            .replace(&dir.to_string_lossy().into_owned(), "$TMP");
         rvs_snapshot_BIS(
-            "test_20260901_line_col_maps_offsets_to_one_based_positions",
+            "test_20260901_falls_back_for_missing_and_non_utf8_sources",
             &output,
         );
 
-        assert_eq!(rvs_line_col(content, 0), Some((1, 1)));
-        assert_eq!(rvs_line_col(content, 4), Some((2, 2)));
-        assert_eq!(rvs_line_col(content, 99), None);
+        assert!(rendered.output.contains("src/gone.rs"));
+        assert!(!rendered.output.contains('^'));
     }
 }

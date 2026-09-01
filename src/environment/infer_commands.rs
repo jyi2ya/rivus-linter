@@ -567,13 +567,13 @@ mod tests {
     use super::*;
     use crate::artifacts::{CallEdgeType, FunctionIdentity};
     use crate::test_support::{
-        rvs_caps_v2, rvs_make_capsmap, rvs_make_cargo_project_BIS, rvs_make_temp_dir_BIS,
+        rvs_caps_v2, rvs_make_capsmap, rvs_make_cargo_project_BIST, rvs_make_temp_dir_BIST,
         rvs_snapshot_BIS,
     };
 
     #[test]
     fn test_20260717_infer_std_uses_distributed_seed_without_project_seed() {
-        let dir = rvs_make_temp_dir_BIS("infer-std-distributed-seed");
+        let dir = rvs_make_temp_dir_BIST("infer-std-distributed-seed");
         let caps_dir = dir.join("caps");
         let seed = rvs_load_std_inference_seed_BIS(&caps_dir).unwrap();
         let info = seed
@@ -599,7 +599,7 @@ mod tests {
 
     #[test]
     fn test_20260731_distributed_seed_covers_posix_spawn_boundary() {
-        let dir = rvs_make_temp_dir_BIS("infer-std-posix-spawn-seed");
+        let dir = rvs_make_temp_dir_BIST("infer-std-posix-spawn-seed");
         let caps_dir = dir.join("caps");
         let seed = rvs_load_std_inference_seed_BIS(&caps_dir).unwrap();
         let info = seed
@@ -626,7 +626,7 @@ mod tests {
 
     #[test]
     fn test_20260801_distributed_seed_covers_supported_posix_spawn_families() {
-        let dir = rvs_make_temp_dir_BIS("infer-std-posix-spawn-families");
+        let dir = rvs_make_temp_dir_BIST("infer-std-posix-spawn-families");
         let seed = rvs_load_std_inference_seed_BIS(&dir.join("caps")).unwrap();
         let families = [
             ("linux-android", "libc::unix::linux_like::linux"),
@@ -1070,7 +1070,7 @@ mod tests {
     #[cfg(any(target_os = "android", target_os = "linux", target_vendor = "apple"))]
     #[test]
     fn test_20260715_inference_rejects_concurrent_caps_update() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "infer-concurrent-caps-update",
             "infer-concurrent-caps-update",
             &[("src/lib.rs", "pub fn rvs_value() -> u8 { 1 }\n")],
@@ -1091,7 +1091,7 @@ mod tests {
 
     #[test]
     fn test_20260702_infer_capsmap_rejects_workspace_root() {
-        let dir = rvs_make_temp_dir_BIS("infer-capsmap-workspace-root");
+        let dir = rvs_make_temp_dir_BIST("infer-capsmap-workspace-root");
         std::fs::write(
             dir.join("Cargo.toml"),
             "[workspace]\nmembers = []\nresolver = \"2\"\n",
@@ -1114,7 +1114,7 @@ mod tests {
 
     #[test]
     fn test_20260702_infer_std_rejects_workspace_root() {
-        let dir = rvs_make_temp_dir_BIS("infer-std-workspace-root");
+        let dir = rvs_make_temp_dir_BIST("infer-std-workspace-root");
         std::fs::write(
             dir.join("Cargo.toml"),
             "[workspace]\nmembers = []\nresolver = \"2\"\n",
@@ -1133,7 +1133,7 @@ mod tests {
 
     #[test]
     fn test_20260706_infer_std_rejects_caps_file() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "infer-std-caps-file",
             "infer-std-caps-file",
             &[("src/lib.rs", "pub fn rvs_add() -> i32 { 1 }\n")],
@@ -1152,7 +1152,7 @@ mod tests {
 
     #[test]
     fn test_20260706_infer_std_local_prefixes_exclude_unchecked_std_named_tests() {
-        let dir = rvs_make_temp_dir_BIS("infer-std-local-prefix-targets");
+        let dir = rvs_make_temp_dir_BIST("infer-std-local-prefix-targets");
         std::fs::write(
             dir.join("Cargo.toml"),
             "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[[test]]\nname = \"std\"\n\n[[example]]\nname = \"core\"\n",
@@ -1200,7 +1200,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_20260706_infer_std_rejects_broken_caps_symlink() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "infer-std-broken-caps-symlink",
             "infer-std-broken-caps",
             &[("src/lib.rs", "pub fn rvs_add() -> i32 { 1 }\n")],
@@ -1222,7 +1222,7 @@ mod tests {
 
     #[test]
     fn test_20260707_infer_std_rejects_invalid_seed_before_callgraph() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "infer-std-invalid-seed-preflight",
             "infer-std-invalid-seed",
             &[("src/lib.rs", "pub fn rvs_add() -> i32 { 1 }\n")],
@@ -1250,7 +1250,7 @@ mod tests {
 
     #[test]
     fn test_20260713_infer_std_rejects_output_directory_before_callgraph() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "infer-std-output-dir-preflight",
             "infer-std-output-dir",
             &[("src/lib.rs", "pub fn rvs_add() -> i32 { 1 }\n")],
@@ -1275,7 +1275,7 @@ mod tests {
 
     #[test]
     fn test_20260715_infer_capsmap_rejects_reserved_seed_output() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "infer-capsmap-reserved-seed-output",
             "infer-capsmap-reserved-seed-output",
             &[("src/lib.rs", "pub fn rvs_add() -> i32 { 1 }\n")],
@@ -1303,7 +1303,7 @@ mod tests {
 
     #[test]
     fn test_20260715_infer_capsmap_rejects_case_aliased_missing_caps_seed() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "infer-capsmap-case-aliased-missing-caps",
             "infer-capsmap-case-aliased-missing-caps",
             &[("src/lib.rs", "pub fn rvs_add() -> i32 { 1 }\n")],
@@ -1329,7 +1329,7 @@ mod tests {
 
     #[test]
     fn test_20260715_infer_capsmap_rejects_case_aliased_existing_caps_output() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "infer-capsmap-case-aliased-existing-caps",
             "infer-capsmap-case-aliased-existing-caps",
             &[("src/lib.rs", "pub fn rvs_add() -> i32 { 1 }\n")],
@@ -1355,7 +1355,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_20260715_infer_capsmap_rejects_case_alias_through_project_symlink() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "infer-capsmap-case-alias-project-symlink",
             "infer-capsmap-case-alias-project-symlink",
             &[("src/lib.rs", "pub fn rvs_add() -> i32 { 1 }\n")],
@@ -1390,7 +1390,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_20260715_caps_output_layer_rejects_multiple_hardlink_names() {
-        let dir = rvs_make_temp_dir_BIS("caps-output-hardlink-alias");
+        let dir = rvs_make_temp_dir_BIST("caps-output-hardlink-alias");
         let caps_dir = dir.join("caps");
         std::fs::create_dir_all(&caps_dir).unwrap();
         std::fs::write(caps_dir.join("seed"), rvs_caps_v2(&[("manual", "B")])).unwrap();
@@ -1409,7 +1409,7 @@ mod tests {
 
     #[test]
     fn test_20260715_infer_std_rejects_reserved_deps_output_before_seed() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "infer-std-reserved-deps-output",
             "infer-std-reserved-deps-output",
             &[("src/lib.rs", "pub fn rvs_add() -> i32 { 1 }\n")],
@@ -1587,7 +1587,7 @@ mod tests {
 
     #[test]
     fn test_20260729_infer_capsmap_rejects_inside_caps_and_accepts_outside() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "infer-capsmap-canonical-active-layer",
             "infer-capsmap-canonical-active-layer",
             &[("src/lib.rs", "pub fn rvs_value() -> u8 { 1 }\n")],
@@ -1633,7 +1633,7 @@ mod tests {
 
     #[test]
     fn test_20260706_infer_capsmap_rejects_output_directory_before_cache_write() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "infer-capsmap-output-dir-preflight",
             "infer-capsmap-output-dir",
             &[("src/lib.rs", "pub fn rvs_add() -> i32 { 1 }\n")],
@@ -1660,7 +1660,7 @@ mod tests {
 
     #[test]
     fn test_20260707_infer_capsmap_rejects_dotdot_output_before_callgraph() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "infer-capsmap-dotdot-output",
             "infer-capsmap-dotdot-output",
             &[("src/lib.rs", "pub fn rvs_add() -> i32 { 1 }\n")],
@@ -1688,7 +1688,7 @@ mod tests {
 
     #[test]
     fn test_20260706_infer_capsmap_rejects_invalid_seed_before_callgraph() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "infer-capsmap-invalid-seed-preflight",
             "infer-capsmap-invalid-seed",
             &[("src/lib.rs", "pub fn rvs_add() -> i32 { 1 }\n")],
@@ -1716,7 +1716,7 @@ mod tests {
 
     #[test]
     fn test_20260710_infer_capsmap_replaces_invalid_deps() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "infer-capsmap-invalid-old-deps",
             "infer-capsmap-invalid-old-deps",
             &[("src/lib.rs", "pub fn rvs_add() -> i32 { 1 }\n")],
@@ -1742,7 +1742,7 @@ mod tests {
 
     #[test]
     fn test_20260714_infer_capsmap_replaces_invalid_custom_output() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "infer-capsmap-invalid-custom-output",
             "infer-capsmap-invalid-custom-output",
             &[("src/lib.rs", "pub fn rvs_add() -> i32 { 1 }\n")],
@@ -1768,7 +1768,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_20260729_infer_capsmap_rejects_active_caps_output_through_symlink() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "infer-capsmap-invalid-symlink-output",
             "infer-capsmap-invalid-symlink-output",
             &[("src/lib.rs", "pub fn rvs_add() -> i32 { 1 }\n")],
@@ -1797,7 +1797,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_20260731_inference_rejects_deps_and_std_through_caps_symlink_alias() {
-        let dir = rvs_make_temp_dir_BIS("inference-canonical-caps-parent");
+        let dir = rvs_make_temp_dir_BIST("inference-canonical-caps-parent");
         let caps_dir = dir.join("caps");
         std::fs::create_dir(&caps_dir).unwrap();
         let deps_sentinel = rvs_caps_v2(&[("dependency::sentinel", "I")]);
@@ -1844,7 +1844,7 @@ mod tests {
     fn test_20260729_infer_capsmap_rejects_non_utf8_active_caps_output() {
         use std::os::unix::ffi::OsStringExt as _;
 
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "infer-capsmap-invalid-non-utf8-output",
             "infer-capsmap-invalid-non-utf8-output",
             &[("src/lib.rs", "pub fn rvs_add() -> i32 { 1 }\n")],
@@ -1873,7 +1873,7 @@ mod tests {
 
     #[test]
     fn test_20260714_infer_capsmap_creates_missing_caps_dir() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "infer-capsmap-missing-caps-dir",
             "infer-capsmap-missing-caps-dir",
             &[("src/lib.rs", "pub fn rvs_add() -> i32 { 1 }\n")],
@@ -2147,7 +2147,7 @@ mod tests {
 
     #[test]
     fn test_20260716_infer_capsmap_unknown_callee_recommends_ext_only() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "infer-capsmap-unknown-callee-guidance",
             "infer-capsmap-unknown-callee-guidance",
             &[(
@@ -2188,7 +2188,7 @@ mod tests {
 
     #[test]
     fn test_20260801_infer_capsmap_includes_returned_closure_body() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "infer-capsmap-returned-closure",
             "infer-capsmap-returned-closure",
             &[(

@@ -529,7 +529,7 @@ mod tests {
     use crate::artifacts::{FnGraph, FnNode, FnSource};
     use crate::symbols::{CrateName, FnName};
     use crate::test_support::{
-        rvs_caps_v2, rvs_make_capsmap, rvs_make_cargo_project_BIS, rvs_make_temp_dir_BIS,
+        rvs_caps_v2, rvs_make_capsmap, rvs_make_cargo_project_BIST, rvs_make_temp_dir_BIST,
         rvs_snapshot_BIS,
     };
 
@@ -964,7 +964,7 @@ mod tests {
 
     #[test]
     fn test_20260706_normalize_source_for_project() {
-        let dir = rvs_make_temp_dir_BIS("normalize-source");
+        let dir = rvs_make_temp_dir_BIST("normalize-source");
         std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::write(dir.join("src/lib.rs"), "fn parse() {}\n").unwrap();
         let source = FnSource::rvs_new(std::path::PathBuf::from("src/lib.rs"), 3, 8);
@@ -988,7 +988,7 @@ mod tests {
 
     #[test]
     fn test_20260706_normalize_source_reports_missing_file() {
-        let dir = rvs_make_temp_dir_BIS("normalize-source-missing");
+        let dir = rvs_make_temp_dir_BIST("normalize-source-missing");
         let source = FnSource::rvs_new(std::path::PathBuf::from("src/missing.rs"), 3, 8);
 
         let result = rename::rvs_normalize_source_for_project_BIS(&source, &dir);
@@ -1004,7 +1004,7 @@ mod tests {
 
     #[test]
     fn test_20260710_normalize_legacy_relative_source_rejects_ambiguous_bases() {
-        let workspace = rvs_make_temp_dir_BIS("normalize-source-ambiguous");
+        let workspace = rvs_make_temp_dir_BIST("normalize-source-ambiguous");
         let member = workspace.join("member");
         std::fs::create_dir_all(member.join("src")).unwrap();
         std::fs::create_dir_all(member.join("member/src")).unwrap();
@@ -1031,7 +1031,7 @@ mod tests {
 
     #[test]
     fn test_20260710_normalize_relative_source_uses_recorded_exact_base() {
-        let workspace = rvs_make_temp_dir_BIS("normalize-source-exact-base");
+        let workspace = rvs_make_temp_dir_BIST("normalize-source-exact-base");
         let member = workspace.join("member");
         std::fs::create_dir_all(member.join("src")).unwrap();
         std::fs::create_dir_all(member.join("member/src")).unwrap();
@@ -1043,7 +1043,7 @@ mod tests {
         .unwrap();
         let source = FnSource::rvs_new_relative(
             std::path::PathBuf::from("member/src/lib.rs"),
-            workspace.clone(),
+            workspace.to_path_buf(),
             3,
             8,
         );
@@ -1072,7 +1072,7 @@ mod tests {
 
     #[test]
     fn test_20260710_recorded_source_base_does_not_fall_back() {
-        let workspace = rvs_make_temp_dir_BIS("normalize-source-no-fallback");
+        let workspace = rvs_make_temp_dir_BIST("normalize-source-no-fallback");
         let member = workspace.join("member");
         std::fs::create_dir_all(member.join("src")).unwrap();
         std::fs::write(member.join("src/lib.rs"), "fn member_parse() {}\n").unwrap();
@@ -1153,7 +1153,7 @@ mod tests {
 
     #[test]
     fn test_20260705_why_std_like_works_in_workspace_root() {
-        let dir = rvs_make_temp_dir_BIS("why-std-workspace-root");
+        let dir = rvs_make_temp_dir_BIST("why-std-workspace-root");
         std::fs::write(
             dir.join("Cargo.toml"),
             "[workspace]\nmembers = []\nresolver = \"2\"\n",
@@ -1201,7 +1201,7 @@ mod tests {
 
     #[test]
     fn test_20260706_why_inexact_match_returns_error() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "why-inexact-match",
             "why-inexact-demo",
             &[("src/lib.rs", "pub fn rvs_parse() -> i32 { 1 }\n")],
@@ -1217,7 +1217,7 @@ mod tests {
 
     #[test]
     fn test_20260715_why_accepts_unique_readable_specialized_path() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "why-readable-specialized-path",
             "why-readable-specialized",
             &[(
@@ -1299,7 +1299,7 @@ mod tests {
 
     #[test]
     fn test_20260702_annotate_uses_bin_crate_prefix() {
-        let dir = rvs_make_temp_dir_BIS("annotate-bin-prefix");
+        let dir = rvs_make_temp_dir_BIST("annotate-bin-prefix");
         let cargo_toml = r#"[package]
 name = "annotate-prefix-demo"
 version = "0.1.0"
@@ -1362,7 +1362,7 @@ path = "src/main.rs"
 
     #[test]
     fn test_20260709_annotate_skips_integration_test_targets() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "annotate-skip-integration-tests",
             "annotate-skip-integration-demo",
             &[
@@ -1400,7 +1400,7 @@ path = "src/main.rs"
 
     #[test]
     fn test_20260702_annotate_renames_nested_main_helper() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "annotate-nested-main",
             "annotate-main-demo",
             &[(
@@ -1455,7 +1455,7 @@ path = "src/main.rs"
 
     #[test]
     fn test_20260702_annotate_renames_conflicting_duplicate_names() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "annotate-duplicate-name",
             "annotate-duplicate-demo",
             &[(
@@ -1515,7 +1515,7 @@ path = "src/main.rs"
 
     #[test]
     fn test_20260703_annotate_renames_existing_rvs_wrong_suffix() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "annotate-existing-rvs-suffix",
             "annotate-rvs-demo",
             &[(
@@ -1540,7 +1540,7 @@ path = "src/main.rs"
 
     #[test]
     fn test_20260704_annotate_renames_uppercase_function() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "annotate-uppercase-function",
             "annotate-uppercase-demo",
             &[("src/lib.rs", "pub fn Foo() -> i32 { 1 }\n")],
@@ -1578,7 +1578,7 @@ path = "src/main.rs"
 
     #[test]
     fn test_20260704_annotate_errors_when_candidates_match_no_symbols() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "annotate-unmatched-candidate",
             "annotate-unmatched-demo",
             &[("src/lib.rs", "pub fn existing() -> i32 { 1 }\n")],
@@ -1604,7 +1604,7 @@ path = "src/main.rs"
 
     #[test]
     fn test_20260704_annotate_errors_on_partial_rename() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "annotate-partial-rename",
             "annotate-partial-demo",
             &[("src/lib.rs", "pub fn parse() -> i32 { 1 }\n")],
@@ -1636,7 +1636,7 @@ path = "src/main.rs"
 
     #[test]
     fn test_20260704_annotate_renames_out_of_line_module_function() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "annotate-out-of-line-module",
             "annotate-module-demo",
             &[
@@ -1680,7 +1680,7 @@ path = "src/main.rs"
 
     #[test]
     fn test_20260706_annotate_renames_path_attribute_module_function() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "annotate-path-attribute-module",
             "annotate-path-attr-demo",
             &[
@@ -1704,7 +1704,7 @@ path = "src/main.rs"
 
     #[test]
     fn test_20260706_annotate_renames_lib_and_main_same_name_functions() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "annotate-lib-main-same-name",
             "annotate-samename-demo",
             &[
@@ -1734,7 +1734,7 @@ path = "src/main.rs"
 
     #[test]
     fn test_20260713_annotate_renames_library_main_but_preserves_binary_entry() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "annotate-library-and-binary-main",
             "annotate-main-identity-demo",
             &[
@@ -1760,7 +1760,7 @@ path = "src/main.rs"
 
     #[test]
     fn test_20260706_annotate_skips_macro_generated_function_without_source() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "annotate-macro-generated-function",
             "annotate-macro-demo",
             &[(
@@ -1788,7 +1788,7 @@ path = "src/main.rs"
 
     #[test]
     fn test_20260704_annotate_renames_inherent_method() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "annotate-inherent-method",
             "annotate-method-demo",
             &[(
@@ -1829,7 +1829,7 @@ path = "src/main.rs"
 
     #[test]
     fn test_20260704_annotate_renames_generic_inherent_method() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "annotate-generic-inherent-method",
             "annotate-generic-method-demo",
             &[(
@@ -1873,7 +1873,7 @@ path = "src/main.rs"
 
     #[test]
     fn test_20260702_annotate_surfaces_callgraph_collection_error() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "annotate-callgraph-error",
             "annotate-callgraph-demo",
             &[("src/lib.rs", "pub fn parse( {\n")],

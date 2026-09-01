@@ -1,2 +1,2 @@
-result=Err("cannot merge clippy lints into '$TMP/Cargo.toml': [lints] must be a table or inline table")
+result=Err("cargo metadata for local crate detection failed: `cargo metadata` exited with an error: error: invalid type: string \"bad\", expected a lints table\n --> Cargo.toml:1:9\n  |\n1 | lints = \"bad\"\n  |         ^^^^^\n")
 exists=false

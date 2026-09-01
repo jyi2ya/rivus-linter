@@ -239,9 +239,11 @@
 {"path":"serde_json::ser::to_string","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
 {"path":"serde_json::ser::to_vec","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
 # tempfile 3.27.0: Builder::new is a pure constructor (no random state until creation);
+# tempdir (lib.rs:595) forwards to tempdir_in(env::temp_dir());
 # tempdir_in/new_in create a random-named directory on disk; persist* rename the temp file
 # on the filesystem; close runs remove_dir_all (dir/mod.rs:470).
 {"path":"tempfile::Builder::new","caps":"","basis":{"kind":"explicit"},"completeness":"complete"}
+{"path":"tempfile::Builder::tempdir","caps":"BIST","basis":{"kind":"explicit"},"completeness":"complete"}
 {"path":"tempfile::Builder::tempdir_in","caps":"BIST","basis":{"kind":"explicit"},"completeness":"complete"}
 {"path":"tempfile::dir::TempDir::close","caps":"BIS","basis":{"kind":"explicit"},"completeness":"complete"}
 {"path":"tempfile::file::NamedTempFile::new_in","caps":"BIST","basis":{"kind":"explicit"},"completeness":"complete"}

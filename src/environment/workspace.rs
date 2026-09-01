@@ -13,12 +13,9 @@ use super::callgraph_cache::{
     rvs_load_published_std_callgraph_cache_BIS, rvs_merge_callgraph_dir_BIS,
     rvs_merge_generation_callgraph_dir_BIS,
 };
-use super::cargo_targets::{CargoTargetScope, rvs_detect_local_crate_prefixes_BIS};
 #[cfg(test)]
-use super::cargo_targets::{
-    rvs_collect_auto_target_prefixes_BIMS, rvs_collect_local_crate_prefixes,
-    rvs_collect_local_crate_prefixes_for_targets, rvs_insert_manifest_crate_name_M,
-};
+use super::cargo_targets::rvs_insert_manifest_crate_name_M;
+use super::cargo_targets::{CargoTargetScope, rvs_detect_local_crate_prefixes_BIS};
 use crate::artifacts::{CrateProvenance, FnGraph};
 #[cfg(test)]
 use crate::callgraph::rvs_merge_std_like_callgraph_M;
@@ -289,24 +286,6 @@ struct PrimaryPackageTargets {
     schema_version: u32,
     generation_id: String,
     targets: BTreeSet<PrimaryPackageTarget>,
-}
-
-#[derive(Debug, Deserialize)]
-struct CargoMetadataOutput {
-    packages: Vec<CargoMetadataPackage>,
-}
-
-#[derive(Debug, Deserialize)]
-struct CargoMetadataPackage {
-    manifest_path: PathBuf,
-    targets: Vec<CargoMetadataTarget>,
-}
-
-#[derive(Debug, Deserialize)]
-struct CargoMetadataTarget {
-    name: String,
-    kind: Vec<String>,
-    src_path: PathBuf,
 }
 
 #[derive(Debug, Clone)]
@@ -921,14 +900,18 @@ fn rvs_create_primary_package_targets_file_BIST(
 }
 
 fn rvs_cargo_target_is_selected(
-    target: &CargoMetadataTarget,
+    target: &cargo_metadata::Target,
     target_scope: CargoTargetScope,
 ) -> bool {
     target_scope == CargoTargetScope::WithTestExampleBench
-        || !target
-            .kind
-            .iter()
-            .any(|kind| matches!(kind.as_str(), "test" | "example" | "bench"))
+        || !target.kind.iter().any(|kind| {
+            matches!(
+                kind,
+                cargo_metadata::TargetKind::Test
+                    | cargo_metadata::TargetKind::Example
+                    | cargo_metadata::TargetKind::Bench
+            )
+        })
 }
 
 fn rvs_write_primary_package_targets_BIST(
@@ -943,64 +926,39 @@ fn rvs_write_primary_package_targets_BIST(
             manifest_path.display()
         )
     })?;
-    let output = Command::new(rvs_cargo_command_from_env_BS())
-        .arg("metadata")
-        .arg("--format-version=1")
-        .arg("--no-deps")
-        .arg("--manifest-path")
-        .arg(&canonical_manifest)
-        .current_dir(project_path)
-        .output()
-        .map_err(|error| format!("cannot run cargo metadata for target provenance: {error}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "cargo metadata for target provenance failed with {}: {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    let metadata: CargoMetadataOutput = serde_json::from_slice(&output.stdout)
-        .map_err(|error| format!("cannot parse cargo metadata for target provenance: {error}"))?;
-    let mut selected_package = None;
-    for package in metadata.packages {
-        let package_manifest = package.manifest_path.canonicalize().map_err(|error| {
-            format!(
-                "cannot canonicalize cargo metadata manifest {}: {error}",
-                package.manifest_path.display()
-            )
-        })?;
-        if package_manifest == canonical_manifest && selected_package.replace(package).is_some() {
-            return Err(format!(
-                "cargo metadata contains duplicate package records for {}",
-                canonical_manifest.display()
-            ));
-        }
-    }
-    let package = selected_package.ok_or_else(|| {
+    let (_, targets) = super::cargo_targets::rvs_cargo_metadata_primary_package_BIS(
+        project_path,
+        "target provenance",
+    )?
+    .ok_or_else(|| {
         format!(
             "cargo metadata does not contain the primary package {}",
             canonical_manifest.display()
         )
     })?;
-    let mut targets = BTreeSet::new();
-    for target in package.targets {
+    let mut targets_set = BTreeSet::new();
+    for target in targets {
         if !rvs_cargo_target_is_selected(&target, target_scope) {
             continue;
         }
-        let source_path = target.src_path.canonicalize().map_err(|error| {
-            format!(
-                "cannot canonicalize primary-package target source {}: {error}",
-                target.src_path.display()
-            )
-        })?;
-        targets.insert(PrimaryPackageTarget {
+        let source_path = target
+            .src_path
+            .as_std_path()
+            .canonicalize()
+            .map_err(|error| {
+                format!(
+                    "cannot canonicalize primary-package target source {}: {error}",
+                    target.src_path
+                )
+            })?;
+        targets_set.insert(PrimaryPackageTarget {
             crate_name: CrateName::rvs_from_manifest_name(&target.name)
                 .rvs_as_str()
                 .to_string(),
             source_path,
         });
     }
-    if targets.is_empty() {
+    if targets_set.is_empty() {
         return Err(format!(
             "cargo metadata contains no selected targets for {}",
             canonical_manifest.display()
@@ -1011,7 +969,7 @@ fn rvs_write_primary_package_targets_BIST(
         &PrimaryPackageTargets {
             schema_version: RVS_PRIMARY_PACKAGE_TARGETS_SCHEMA_VERSION,
             generation_id: generation.rvs_generation_id().to_string(),
-            targets,
+            targets: targets_set,
         },
     )
 }
@@ -1138,7 +1096,7 @@ fn rvs_prepare_cargo_check_command_BIST(
     Ok(cmd)
 }
 
-fn rvs_cargo_command_from_env_BS() -> OsString {
+pub(crate) fn rvs_cargo_command_from_env_BS() -> OsString {
     env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"))
 }
 
@@ -1971,11 +1929,11 @@ mod tests {
     use super::*;
     use crate::artifacts::{CallEdgeType, FunctionIdentity};
     use crate::test_support::{
-        rvs_caps_v2, rvs_make_cargo_project_BIS, rvs_make_temp_dir_BIS, rvs_snapshot_BIS,
+        rvs_caps_v2, rvs_make_cargo_project_BIST, rvs_make_temp_dir_BIST, rvs_snapshot_BIS,
     };
 
-    fn rvs_make_workspace_temp_dir_BIS(tag: &str) -> PathBuf {
-        rvs_make_temp_dir_BIS(&format!("workspace-{tag}"))
+    fn rvs_make_workspace_temp_dir_BIST(tag: &str) -> crate::test_support::TestTempDir {
+        rvs_make_temp_dir_BIST(&format!("workspace-{tag}"))
     }
 
     fn rvs_reserve_cargo_check_test_generation_BIST(
@@ -2061,8 +2019,18 @@ mod tests {
 
     #[test]
     fn test_20260630_collect_local_crate_prefixes_bin_name() {
-        let input = "[package]\nname = \"rivus-linter\"\n\n[[bin]]\nname = \"cargo-rivus\"\npath = \"src/main.rs\"\n";
-        let prefixes = rvs_collect_local_crate_prefixes(input).expect("prefixes should parse");
+        let dir = rvs_make_workspace_temp_dir_BIST("prefixes-bin-name");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"rivus-linter\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[[bin]]\nname = \"cargo-rivus\"\npath = \"src/main.rs\"\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("src/main.rs"), "fn main() {}\n").unwrap();
+
+        let prefixes =
+            rvs_detect_local_crate_prefixes_BIS(&dir, CargoTargetScope::WithTestExampleBench)
+                .expect("bin-name manifest should resolve");
         let output = prefixes
             .iter()
             .map(CrateName::rvs_as_str)
@@ -2078,8 +2046,15 @@ mod tests {
 
     #[test]
     fn test_20260702_collect_local_crate_prefixes_rejects_workspace_root() {
-        let input = "[workspace]\nmembers = []\nresolver = \"2\"\n";
-        let result = rvs_collect_local_crate_prefixes(input);
+        let dir = rvs_make_workspace_temp_dir_BIST("prefixes-workspace-root");
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[workspace]\nmembers = []\nresolver = \"2\"\n",
+        )
+        .unwrap();
+
+        let result =
+            rvs_detect_local_crate_prefixes_BIS(&dir, CargoTargetScope::WithTestExampleBench);
         let output = format!("{result:?}");
         rvs_snapshot_BIS(
             "test_20260702_collect_local_crate_prefixes_rejects_workspace_root",
@@ -2091,7 +2066,7 @@ mod tests {
 
     #[test]
     fn test_20260710_callgraph_source_records_exact_workspace_member_base() {
-        let workspace = rvs_make_workspace_temp_dir_BIS("source-provenance");
+        let workspace = rvs_make_workspace_temp_dir_BIST("source-provenance");
         let member = workspace.join("member");
         std::fs::write(
             workspace.join("Cargo.toml"),
@@ -2167,7 +2142,7 @@ mod tests {
 
     #[test]
     fn test_20260714_check_accepts_const_only_crate() {
-        let dir = rvs_make_workspace_temp_dir_BIS("const-only-check");
+        let dir = rvs_make_workspace_temp_dir_BIST("const-only-check");
         std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::write(
             dir.join("Cargo.toml"),
@@ -2196,7 +2171,7 @@ mod tests {
 
     #[test]
     fn test_20260714_project_callgraph_excludes_path_dependency_nodes() {
-        let dir = rvs_make_workspace_temp_dir_BIS("project-callgraph-local-only");
+        let dir = rvs_make_workspace_temp_dir_BIST("project-callgraph-local-only");
         std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::create_dir_all(dir.join("fixture-dep/src")).unwrap();
         std::fs::write(
@@ -2249,7 +2224,7 @@ mod tests {
 
     #[test]
     fn test_20260715_offline_caps_emission_respects_cfg_target_identity() {
-        let dir = rvs_make_workspace_temp_dir_BIS("offline-caps-cfg-target-identity");
+        let dir = rvs_make_workspace_temp_dir_BIST("offline-caps-cfg-target-identity");
         std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::write(
             dir.join("Cargo.toml"),
@@ -2285,7 +2260,7 @@ mod tests {
 
     #[test]
     fn test_20260716_shared_def_path_entrypoint_is_target_scoped() {
-        let dir = rvs_make_workspace_temp_dir_BIS("shared-def-path-entrypoint");
+        let dir = rvs_make_workspace_temp_dir_BIST("shared-def-path-entrypoint");
         std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::write(
             dir.join("Cargo.toml"),
@@ -2327,7 +2302,7 @@ mod tests {
 
     #[test]
     fn test_20260716_cfg_gated_call_does_not_emit_in_absent_test_variant() {
-        let dir = rvs_make_workspace_temp_dir_BIS("offline-call-cfg-statement");
+        let dir = rvs_make_workspace_temp_dir_BIST("offline-call-cfg-statement");
         std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::write(
             dir.join("Cargo.toml"),
@@ -2363,7 +2338,7 @@ mod tests {
 
     #[test]
     fn test_20260714_callgraph_collection_caps_source_deny_warnings() {
-        let dir = rvs_make_workspace_temp_dir_BIS("collection-deny-warnings");
+        let dir = rvs_make_workspace_temp_dir_BIST("collection-deny-warnings");
         std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::write(
             dir.join("Cargo.toml"),
@@ -2400,7 +2375,7 @@ mod tests {
 
     #[test]
     fn test_20260714_merged_coverage_conservatively_merges_same_path_targets() {
-        let dir = rvs_make_workspace_temp_dir_BIS("merged-coverage-target-identity");
+        let dir = rvs_make_workspace_temp_dir_BIST("merged-coverage-target-identity");
         std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::write(
             dir.join("Cargo.toml"),
@@ -2428,7 +2403,7 @@ mod tests {
             stderr.contains("conflicting ordinary definitions across Cargo targets");
         let report_output = Command::new(rvs_current_wrapper_exe_BIS().unwrap())
             .arg("report")
-            .arg(&dir)
+            .arg(dir.as_os_str())
             .output()
             .unwrap();
         let report_stdout = String::from_utf8_lossy(&report_output.stdout);
@@ -2452,7 +2427,7 @@ mod tests {
 
     #[test]
     fn test_20260714_unresolved_local_callable_does_not_cover_function() {
-        let dir = rvs_make_workspace_temp_dir_BIS("coverage-local-callable");
+        let dir = rvs_make_workspace_temp_dir_BIST("coverage-local-callable");
         std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::write(
             dir.join("Cargo.toml"),
@@ -2490,38 +2465,32 @@ mod tests {
 
     #[test]
     fn test_20260709_collect_local_crate_prefixes_rejects_invalid_target_names_table() {
+        // cargo itself rejects invalid manifest names; the direct helper
+        // validation keeps rejecting the same shapes at the insertion
+        // boundary.
         let cases = [
-            (
-                "empty",
-                "[package]\nname = \"\"\n",
-                "[[bin]]\nname = \"\"\n",
-                "",
-            ),
+            ("empty", "[package]\nname = \"\"\n", ""),
             (
                 "whitespace",
                 "[package]\nname = \"bad name\"\n",
-                "[lib]\nname = \" bad\"\n",
                 "bad\tname",
             ),
-            (
-                "pathy",
-                "[package]\nname = \"bad/name\"\n",
-                "[lib]\nname = \"bad\\\\name\"\n",
-                "bad\0name",
-            ),
+            ("pathy", "[package]\nname = \"bad/name\"\n", "bad\\name"),
         ];
         let mut output = String::new();
-        for (name, first_input, second_input, helper_name) in cases {
-            let first = rvs_collect_local_crate_prefixes(first_input);
-            let second = rvs_collect_local_crate_prefixes(second_input);
+        for (name, manifest, helper_name) in cases {
+            let dir = rvs_make_workspace_temp_dir_BIST(&format!("prefixes-invalid-{name}"));
+            std::fs::write(dir.join("Cargo.toml"), manifest).unwrap();
+            let detection =
+                rvs_detect_local_crate_prefixes_BIS(&dir, CargoTargetScope::WithTestExampleBench);
             let mut prefixes = BTreeSet::new();
             let helper = rvs_insert_manifest_crate_name_M(&mut prefixes, "demo", helper_name);
             output.push_str(&format!(
-                "{name}: first={first:?} second={second:?} helper={helper:?} len={}\n",
+                "{name}: detection_is_err={} helper={helper:?} len={}\n",
+                detection.is_err(),
                 prefixes.len()
             ));
-            assert!(first.is_err(), "{name}");
-            assert!(second.is_err(), "{name}");
+            assert!(detection.is_err(), "{name}");
             assert!(helper.is_err(), "{name}");
             assert!(prefixes.is_empty(), "{name}");
         }
@@ -2531,19 +2500,32 @@ mod tests {
         );
     }
 
+    fn rvs_write_optional_target_fixture_BIS(dir: &Path) {
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"core-demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[[bin]]\nname = \"tool-bin\"\npath = \"src/tool-bin.rs\"\n\n[[test]]\nname = \"integration-test\"\npath = \"tests/integration-test.rs\"\n\n[[example]]\nname = \"demo-example\"\npath = \"examples/demo-example.rs\"\n\n[[bench]]\nname = \"throughput-bench\"\npath = \"benches/throughput-bench.rs\"\n",
+        )
+        .unwrap();
+        for path in [
+            "src/tool-bin.rs",
+            "tests/integration-test.rs",
+            "examples/demo-example.rs",
+            "benches/throughput-bench.rs",
+        ] {
+            let file = dir.join(path);
+            std::fs::create_dir_all(file.parent().expect("never: fixture path has a parent"))
+                .unwrap();
+            std::fs::write(file, "fn main() {}\n").unwrap();
+        }
+    }
+
     #[test]
     fn test_20260705_collect_local_crate_prefixes_test_example_bench() {
-        let input = r#"
-[[test]]
-name = "integration-test"
-
-[[example]]
-name = "demo-example"
-
-[[bench]]
-name = "throughput-bench"
-"#;
-        let prefixes = rvs_collect_local_crate_prefixes(input).unwrap();
+        let dir = rvs_make_workspace_temp_dir_BIST("prefixes-optional-targets");
+        rvs_write_optional_target_fixture_BIS(&dir);
+        let prefixes =
+            rvs_detect_local_crate_prefixes_BIS(&dir, CargoTargetScope::WithTestExampleBench)
+                .expect("optional targets should resolve");
         let output = prefixes
             .iter()
             .map(CrateName::rvs_as_str)
@@ -2554,6 +2536,7 @@ name = "throughput-bench"
             &output,
         );
 
+        assert!(prefixes.contains(&CrateName::from("core_demo")));
         assert!(prefixes.contains(&CrateName::from("integration_test")));
         assert!(prefixes.contains(&CrateName::from("demo_example")));
         assert!(prefixes.contains(&CrateName::from("throughput_bench")));
@@ -2561,25 +2544,10 @@ name = "throughput-bench"
 
     #[test]
     fn test_20260706_collect_prefixes_for_build_targets() {
-        let input = r#"
-[package]
-name = "core-demo"
-
-[[bin]]
-name = "tool-bin"
-
-[[test]]
-name = "integration-test"
-
-[[example]]
-name = "demo-example"
-
-[[bench]]
-name = "throughput-bench"
-"#;
-        let prefixes =
-            rvs_collect_local_crate_prefixes_for_targets(input, CargoTargetScope::Production)
-                .unwrap();
+        let dir = rvs_make_workspace_temp_dir_BIST("prefixes-build-targets");
+        rvs_write_optional_target_fixture_BIS(&dir);
+        let prefixes = rvs_detect_local_crate_prefixes_BIS(&dir, CargoTargetScope::Production)
+            .expect("production targets should resolve");
         let output = prefixes
             .iter()
             .map(CrateName::rvs_as_str)
@@ -2596,30 +2564,13 @@ name = "throughput-bench"
 
     #[test]
     fn test_20260712_cargo_target_scope_selects_optional_targets() {
-        let input = r#"
-[package]
-name = "core-demo"
-
-[[bin]]
-name = "tool-bin"
-
-[[test]]
-name = "integration-test"
-
-[[example]]
-name = "demo-example"
-
-[[bench]]
-name = "throughput-bench"
-"#;
-        let production =
-            rvs_collect_local_crate_prefixes_for_targets(input, CargoTargetScope::Production)
-                .expect("production targets should parse");
-        let with_optional = rvs_collect_local_crate_prefixes_for_targets(
-            input,
-            CargoTargetScope::WithTestExampleBench,
-        )
-        .expect("all targets should parse");
+        let dir = rvs_make_workspace_temp_dir_BIST("prefixes-scope-selection");
+        rvs_write_optional_target_fixture_BIS(&dir);
+        let production = rvs_detect_local_crate_prefixes_BIS(&dir, CargoTargetScope::Production)
+            .expect("production targets should resolve");
+        let with_optional =
+            rvs_detect_local_crate_prefixes_BIS(&dir, CargoTargetScope::WithTestExampleBench)
+                .expect("all targets should resolve");
         let rvs_render = |targets: &BTreeSet<CrateName>| {
             targets
                 .iter()
@@ -2655,7 +2606,7 @@ name = "throughput-bench"
 
     #[test]
     fn test_20260705_detect_local_crate_prefixes_auto_targets() {
-        let dir = rvs_make_workspace_temp_dir_BIS("auto-target-prefixes");
+        let dir = rvs_make_workspace_temp_dir_BIST("auto-target-prefixes");
         std::fs::write(
             dir.join("Cargo.toml"),
             "[package]\nname = \"auto-target-demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
@@ -2705,12 +2656,14 @@ name = "throughput-bench"
 
     #[test]
     fn test_20260705_detect_local_crate_prefixes_respects_auto_flags() {
-        let dir = rvs_make_workspace_temp_dir_BIS("auto-target-prefix-flags");
+        let dir = rvs_make_workspace_temp_dir_BIST("auto-target-prefix-flags");
         std::fs::write(
             dir.join("Cargo.toml"),
             "[package]\nname = \"auto-flag-demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\nautobins = false\nautotests = false\nautoexamples = false\nautobenches = false\n",
         )
         .unwrap();
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/lib.rs"), "pub fn value() -> u8 { 1 }\n").unwrap();
         for (subdir, file) in [
             ("tests", "ui_tests.rs"),
             ("examples", "demo.rs"),
@@ -2744,7 +2697,7 @@ name = "throughput-bench"
 
     #[test]
     fn test_20260715_detect_local_crate_prefixes_build_script_modes() {
-        let root = rvs_make_workspace_temp_dir_BIS("build-script-prefix-modes");
+        let root = rvs_make_workspace_temp_dir_BIST("build-script-prefix-modes");
         let cases = [
             (
                 "default",
@@ -2770,7 +2723,8 @@ name = "throughput-bench"
         let mut output = String::new();
         for (label, manifest, build_path) in cases {
             let dir = root.join(label);
-            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::create_dir_all(dir.join("src")).unwrap();
+            std::fs::write(dir.join("src/lib.rs"), "pub fn value() -> u8 { 1 }\n").unwrap();
             std::fs::write(dir.join("Cargo.toml"), manifest).unwrap();
             if let Some(build_path) = build_path {
                 let build_path = dir.join(build_path);
@@ -2806,7 +2760,7 @@ name = "throughput-bench"
 
     #[test]
     fn test_20260715_build_script_functions_are_excluded() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "build-script-shared-scope",
             "build-script-shared-scope",
             &[
@@ -2844,7 +2798,7 @@ name = "throughput-bench"
 
     #[test]
     fn test_20260814_ordinary_package_named_build_script_build_is_analyzed() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "ordinary-build-script-build",
             "build-script-build",
             &[(
@@ -2880,7 +2834,7 @@ name = "throughput-bench"
 
     #[test]
     fn test_20260729_all_crates_excludes_build_script_nodes() {
-        let dir = rvs_make_workspace_temp_dir_BIS("build-script-package-identity");
+        let dir = rvs_make_workspace_temp_dir_BIST("build-script-package-identity");
         std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::create_dir_all(dir.join("fixture-dep/src")).unwrap();
         std::fs::write(
@@ -2945,7 +2899,7 @@ name = "throughput-bench"
 
     #[test]
     fn test_20260730_cargo_env_cannot_forge_primary_package_provenance() {
-        let dir = rvs_make_workspace_temp_dir_BIS("cargo-env-primary-provenance");
+        let dir = rvs_make_workspace_temp_dir_BIST("cargo-env-primary-provenance");
         std::fs::create_dir_all(dir.join(".cargo")).unwrap();
         std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::create_dir_all(dir.join("fixture-dep/src")).unwrap();
@@ -3000,168 +2954,8 @@ name = "throughput-bench"
     }
 
     #[test]
-    fn test_20260706_collect_auto_target_prefixes_reports_invalid_cargo_toml() {
-        let dir = rvs_make_workspace_temp_dir_BIS("auto-target-invalid-cargo-toml");
-        std::fs::write(dir.join("Cargo.toml"), "[package\nname = \"demo\"\n").unwrap();
-        let mut prefixes = BTreeSet::new();
-
-        let result = rvs_collect_auto_target_prefixes_BIMS(&dir, &mut prefixes);
-        rvs_snapshot_BIS(
-            "test_20260706_collect_auto_target_prefixes_reports_invalid_cargo_toml",
-            &format!("{result:?}\nlen={}\n", prefixes.len())
-                .replace(&dir.to_string_lossy().into_owned(), "$TMP"),
-        );
-
-        assert!(result.is_err());
-        assert!(prefixes.is_empty());
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn test_20260706_collect_auto_target_prefixes_rejects_file_target_dir() {
-        let dir = rvs_make_workspace_temp_dir_BIS("auto-target-file-dir");
-        std::fs::write(
-            dir.join("Cargo.toml"),
-            "[package]\nname = \"file-dir-demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
-        )
-        .unwrap();
-        std::fs::write(dir.join("tests"), "not a directory\n").unwrap();
-        let mut prefixes = BTreeSet::new();
-
-        let result = rvs_collect_auto_target_prefixes_BIMS(&dir, &mut prefixes);
-        rvs_snapshot_BIS(
-            "test_20260706_collect_auto_target_prefixes_rejects_file_target_dir",
-            &format!("{result:?}\nlen={}\n", prefixes.len())
-                .replace(&dir.to_string_lossy().into_owned(), "$TMP"),
-        );
-
-        assert!(result.is_err());
-        assert!(prefixes.is_empty());
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn test_20260706_collect_auto_target_prefixes_ignores_rs_directory() {
-        let dir = rvs_make_workspace_temp_dir_BIS("auto-target-rs-directory");
-        std::fs::write(
-            dir.join("Cargo.toml"),
-            "[package]\nname = \"rs-dir-demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
-        )
-        .unwrap();
-        std::fs::create_dir_all(dir.join("tests/fake.rs")).unwrap();
-        std::fs::write(dir.join("tests/real.rs"), "fn main() {}\n").unwrap();
-        let mut prefixes = BTreeSet::new();
-
-        let result = rvs_collect_auto_target_prefixes_BIMS(&dir, &mut prefixes);
-        let output = prefixes
-            .iter()
-            .map(CrateName::rvs_as_str)
-            .collect::<Vec<_>>()
-            .join("\n");
-        rvs_snapshot_BIS(
-            "test_20260706_collect_auto_target_prefixes_ignores_rs_directory",
-            &format!("result={result:?}\n{output}\n"),
-        );
-
-        assert!(result.is_ok());
-        assert!(prefixes.contains(&CrateName::from("real")));
-        assert!(!prefixes.contains(&CrateName::from("fake")));
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn test_20260709_collect_auto_target_prefixes_reject_invalid_names_table() {
-        use std::os::unix::ffi::OsStringExt as _;
-
-        let cases = [
-            ("whitespace_rs_stem", "bad name.rs", None),
-            (
-                "non_utf8_rs_stem",
-                "",
-                Some(std::ffi::OsString::from_vec(vec![
-                    b'b', b'a', b'd', 0xff, b'.', b'r', b's',
-                ])),
-            ),
-            (
-                "non_utf8_dir_name",
-                "",
-                Some(std::ffi::OsString::from_vec(vec![b'b', b'a', b'd', 0xff])),
-            ),
-        ];
-        let mut output = String::new();
-        for (name, file_name, os_name) in cases {
-            let dir = rvs_make_workspace_temp_dir_BIS(&format!("auto-target-{name}"));
-            std::fs::write(
-                dir.join("Cargo.toml"),
-                "[package]\nname = \"invalid-target-demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
-            )
-            .unwrap();
-            std::fs::create_dir_all(dir.join("tests")).unwrap();
-            match (name, os_name) {
-                ("whitespace_rs_stem", _) => {
-                    std::fs::write(dir.join("tests").join(file_name), "fn main() {}\n").unwrap();
-                }
-                ("non_utf8_rs_stem", Some(file_name)) => {
-                    std::fs::write(dir.join("tests").join(file_name), "fn main() {}\n").unwrap();
-                }
-                ("non_utf8_dir_name", Some(dir_name)) => {
-                    let target_dir = dir.join("tests").join(dir_name);
-                    std::fs::create_dir_all(&target_dir).unwrap();
-                    std::fs::write(target_dir.join("main.rs"), "fn main() {}\n").unwrap();
-                }
-                _ => unreachable!("case setup should be exhaustive"),
-            }
-            let mut prefixes = BTreeSet::new();
-            let result = rvs_collect_auto_target_prefixes_BIMS(&dir, &mut prefixes);
-            output.push_str(&format!(
-                "{name}: is_err={} len={}\n",
-                result.is_err(),
-                prefixes.len()
-            ));
-            assert!(result.is_err(), "{name}");
-            assert!(prefixes.is_empty(), "{name}");
-            std::fs::remove_dir_all(dir).unwrap();
-        }
-        rvs_snapshot_BIS(
-            "test_20260709_collect_auto_target_prefixes_reject_invalid_names_table",
-            &output,
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn test_20260714_collect_auto_target_prefixes_reports_first_sorted_error() {
-        use std::os::unix::ffi::OsStringExt as _;
-
-        let dir = rvs_make_workspace_temp_dir_BIS("auto-target-sorted-error");
-        std::fs::write(
-            dir.join("Cargo.toml"),
-            "[package]\nname = \"sorted-error-demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
-        )
-        .unwrap();
-        std::fs::create_dir_all(dir.join("tests")).unwrap();
-        std::fs::write(dir.join("tests/z bad.rs"), "fn main() {}\n").unwrap();
-        let non_utf8_name = std::ffi::OsString::from_vec(vec![b'a', 0xff, b'.', b'r', b's']);
-        std::fs::write(dir.join("tests").join(non_utf8_name), "fn main() {}\n").unwrap();
-
-        let mut prefixes = BTreeSet::new();
-        let result = rvs_collect_auto_target_prefixes_BIMS(&dir, &mut prefixes);
-        let output = format!("{result:?}\nlen={}\n", prefixes.len())
-            .replace(&dir.to_string_lossy().into_owned(), "$TMP");
-        rvs_snapshot_BIS(
-            "test_20260714_collect_auto_target_prefixes_reports_first_sorted_error",
-            &output,
-        );
-
-        assert!(output.contains("not UTF-8"), "{output}");
-        assert!(prefixes.is_empty());
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
     fn test_20260706_detect_local_crate_prefixes_for_cargo_check_excludes_unchecked_targets() {
-        let dir = rvs_make_workspace_temp_dir_BIS("production-target-prefixes");
+        let dir = rvs_make_workspace_temp_dir_BIST("production-target-prefixes");
         std::fs::write(
             dir.join("Cargo.toml"),
             "[package]\nname = \"prod-prefix-demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[[test]]\nname = \"tokio\"\n\n[[example]]\nname = \"serde\"\n\n[[bench]]\nname = \"criterion\"\n\n[[bin]]\nname = \"tool-bin\"\npath = \"src/main.rs\"\n",
@@ -3203,7 +2997,7 @@ name = "throughput-bench"
 
     #[test]
     fn test_20260702_ensure_cargo_project_requires_cargo_toml() {
-        let dir = rvs_make_workspace_temp_dir_BIS("cargo-check");
+        let dir = rvs_make_workspace_temp_dir_BIST("cargo-check");
 
         let result = rvs_ensure_cargo_project_BIS(&dir);
         let output = format!("{result:?}").replace(&dir.to_string_lossy().into_owned(), "$TMP");
@@ -3218,7 +3012,7 @@ name = "throughput-bench"
 
     #[test]
     fn test_20260713_prepare_cargo_check_matches_target_scope() {
-        let dir = rvs_make_workspace_temp_dir_BIS("target-scope-command");
+        let dir = rvs_make_workspace_temp_dir_BIST("target-scope-command");
         std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::write(
             dir.join("Cargo.toml"),
@@ -3268,7 +3062,7 @@ name = "throughput-bench"
 
     #[test]
     fn test_20260704_prepare_cargo_check_sanitizes_rivus_env() {
-        let dir = rvs_make_workspace_temp_dir_BIS("sanitize-env-no-caps");
+        let dir = rvs_make_workspace_temp_dir_BIST("sanitize-env-no-caps");
         std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::write(
             dir.join("Cargo.toml"),
@@ -3375,7 +3169,7 @@ name = "throughput-bench"
 
     #[test]
     fn test_20260726_cargo_check_modes_own_driver_protocol() {
-        let dir = rvs_make_workspace_temp_dir_BIS("typed-cargo-check-modes");
+        let dir = rvs_make_workspace_temp_dir_BIST("typed-cargo-check-modes");
         std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::write(
             dir.join("Cargo.toml"),
@@ -3462,7 +3256,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
 
     #[test]
     fn test_20260706_prepare_cargo_check_rejects_caps_file() {
-        let dir = rvs_make_workspace_temp_dir_BIS("caps-file");
+        let dir = rvs_make_workspace_temp_dir_BIST("caps-file");
         std::fs::write(dir.join("caps"), "bad=Z\n").unwrap();
         // Broken caps must fail the check before any cargo process spawns.
         let result = rvs_run_cargo_check_at_BIST(&dir, &[]);
@@ -3479,7 +3273,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
     #[cfg(unix)]
     #[test]
     fn test_20260706_prepare_cargo_check_rejects_broken_project_caps_symlink() {
-        let dir = rvs_make_workspace_temp_dir_BIS("broken-project-caps-symlink");
+        let dir = rvs_make_workspace_temp_dir_BIST("broken-project-caps-symlink");
         std::fs::write(
             dir.join("Cargo.toml"),
             "[package]\nname = \"broken-caps-demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
@@ -3502,7 +3296,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
     #[cfg(unix)]
     #[test]
     fn test_20260706_load_project_caps_rejects_broken_caps_symlink() {
-        let dir = rvs_make_workspace_temp_dir_BIS("load-broken-project-caps-symlink");
+        let dir = rvs_make_workspace_temp_dir_BIST("load-broken-project-caps-symlink");
         std::os::unix::fs::symlink(dir.join("missing-caps"), dir.join("caps")).unwrap();
 
         let result = rvs_load_project_caps_BIS(&dir);
@@ -3683,7 +3477,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
 
     #[test]
     fn test_20260714_grouped_banned_import_reports_once() {
-        let dir = rvs_make_workspace_temp_dir_BIS("grouped-banned-import");
+        let dir = rvs_make_workspace_temp_dir_BIST("grouped-banned-import");
         std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::create_dir_all(dir.join("anyhow/src")).unwrap();
         std::fs::write(
@@ -3823,7 +3617,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
 
     #[test]
     fn test_20260706_clean_dir_removes_file_path() {
-        let dir = rvs_make_workspace_temp_dir_BIS("clean-dir-file-path");
+        let dir = rvs_make_workspace_temp_dir_BIST("clean-dir-file-path");
         let path = dir.join("target/rivus-callgraph");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, "stale").unwrap();
@@ -3841,7 +3635,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
     #[cfg(unix)]
     #[test]
     fn test_20260706_clean_dir_removes_broken_symlink() {
-        let dir = rvs_make_workspace_temp_dir_BIS("clean-dir-broken-symlink");
+        let dir = rvs_make_workspace_temp_dir_BIST("clean-dir-broken-symlink");
         let path = dir.join("target/rivus-callgraph");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::os::unix::fs::symlink(dir.join("missing"), &path).unwrap();
@@ -3858,7 +3652,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
 
     #[test]
     fn test_20260706_write_capsmap_result_rejects_output_directory_before_default_write() {
-        let dir = rvs_make_workspace_temp_dir_BIS("capsmap-output-dir-preflight");
+        let dir = rvs_make_workspace_temp_dir_BIST("capsmap-output-dir-preflight");
         let default_path = dir.join("target/rivus-std-capsmap.txt");
         let output_path = dir.join("out-dir");
         std::fs::create_dir_all(&output_path).unwrap();
@@ -3885,7 +3679,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
 
     #[test]
     fn test_20260707_write_capsmap_result_rejects_output_without_file_name() {
-        let dir = rvs_make_workspace_temp_dir_BIS("capsmap-output-no-file-name");
+        let dir = rvs_make_workspace_temp_dir_BIST("capsmap-output-no-file-name");
         let default_path = dir.join("target/rivus-std-capsmap.txt");
         let output = Some(PathBuf::new());
 
@@ -3909,7 +3703,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
 
     #[test]
     fn test_20260707_write_capsmap_result_rejects_parent_dir_output_before_default_write() {
-        let dir = rvs_make_workspace_temp_dir_BIS("capsmap-output-parent-dir");
+        let dir = rvs_make_workspace_temp_dir_BIST("capsmap-output-parent-dir");
         let default_path = dir.join("target/rivus-std-capsmap.txt");
         let output_path = dir.join("missing").join("..");
         let output = Some(output_path);
@@ -3934,7 +3728,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
 
     #[test]
     fn test_20260707_write_capsmap_result_rejects_internal_parent_dir_without_side_effects() {
-        let dir = rvs_make_workspace_temp_dir_BIS("capsmap-output-internal-parent-dir");
+        let dir = rvs_make_workspace_temp_dir_BIST("capsmap-output-internal-parent-dir");
         let default_path = dir.join("target/rivus-std-capsmap.txt");
         let output_path = dir.join("missing").join("..").join("deps");
         let output = Some(output_path);
@@ -3965,7 +3759,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
 
     #[test]
     fn test_20260707_write_capsmap_result_rejects_current_dir_output_before_default_write() {
-        let dir = rvs_make_workspace_temp_dir_BIS("capsmap-output-current-dir");
+        let dir = rvs_make_workspace_temp_dir_BIST("capsmap-output-current-dir");
         let default_path = dir.join("target/rivus-std-capsmap.txt");
         let output_path = dir.join("missing").join(".");
         let output = Some(output_path);
@@ -3990,7 +3784,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
 
     #[test]
     fn test_20260707_write_capsmap_result_rejects_trailing_slash_output_before_default_write() {
-        let dir = rvs_make_workspace_temp_dir_BIS("capsmap-output-trailing-slash");
+        let dir = rvs_make_workspace_temp_dir_BIST("capsmap-output-trailing-slash");
         let default_path = dir.join("target/rivus-std-capsmap.txt");
         let output = Some(PathBuf::from(format!("{}/out/", dir.to_string_lossy())));
 
@@ -4015,7 +3809,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
     #[cfg(unix)]
     #[test]
     fn test_20260706_write_capsmap_file_preserves_existing_temp_collision() {
-        let dir = rvs_make_workspace_temp_dir_BIS("capsmap-temp-collision");
+        let dir = rvs_make_workspace_temp_dir_BIST("capsmap-temp-collision");
         let path = dir.join("deps");
         let temp_path = dir.join(format!(".deps.{}.0.tmp", std::process::id()));
         std::fs::write(&temp_path, "old-temp\n").unwrap();
@@ -4037,7 +3831,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
     #[cfg(unix)]
     #[test]
     fn test_20260706_write_capsmap_result_rejects_symlink_output_before_default_write() {
-        let dir = rvs_make_workspace_temp_dir_BIS("capsmap-output-symlink");
+        let dir = rvs_make_workspace_temp_dir_BIST("capsmap-output-symlink");
         let default_path = dir.join("target/rivus-std-capsmap.txt");
         let output_target = dir.join("output-target-dir");
         let output_path = dir.join("output-link");
@@ -4069,7 +3863,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
     #[cfg(unix)]
     #[test]
     fn test_20260707_write_capsmap_result_rejects_socket_output_before_default_write() {
-        let dir = rvs_make_workspace_temp_dir_BIS("capsmap-output-socket");
+        let dir = rvs_make_workspace_temp_dir_BIST("capsmap-output-socket");
         let default_path = dir.join("target/rivus-std-capsmap.txt");
         let output_path = dir.join("output-socket");
         let listener = std::os::unix::net::UnixListener::bind(&output_path).unwrap();
@@ -4100,7 +3894,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
     #[cfg(unix)]
     #[test]
     fn test_20260706_write_capsmap_result_rejects_broken_parent_symlink_before_default_write() {
-        let dir = rvs_make_workspace_temp_dir_BIS("capsmap-broken-parent-symlink");
+        let dir = rvs_make_workspace_temp_dir_BIST("capsmap-broken-parent-symlink");
         let default_path = dir.join("target/rivus-std-capsmap.txt");
         let parent_link = dir.join("missing-parent-link");
         std::os::unix::fs::symlink(dir.join("missing-parent"), &parent_link).unwrap();
@@ -4127,7 +3921,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
 
     #[test]
     fn test_20260706_prepare_cargo_check_validates_project_caps_without_std_cache() {
-        let dir = rvs_make_workspace_temp_dir_BIS("invalid-project-caps-no-std-cache");
+        let dir = rvs_make_workspace_temp_dir_BIST("invalid-project-caps-no-std-cache");
         std::fs::create_dir_all(dir.join("caps")).unwrap();
         std::fs::write(
             dir.join("caps/ext"),
@@ -4227,7 +4021,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
 
     #[test]
     fn test_20260715_callgraph_generations_are_sibling_safe() {
-        let dir = rvs_make_workspace_temp_dir_BIS("callgraph-generation-isolation");
+        let dir = rvs_make_workspace_temp_dir_BIST("callgraph-generation-isolation");
         let (mut first, mut second) = std::thread::scope(|scope| {
             let first = scope.spawn(|| rvs_reserve_run_generation_BIST(&dir, "callgraph").unwrap());
             let second =
@@ -4289,7 +4083,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
             return;
         }
 
-        let dir = rvs_make_workspace_temp_dir_BIS("infer-std-dependency-free-probe");
+        let dir = rvs_make_workspace_temp_dir_BIST("infer-std-dependency-free-probe");
         std::fs::write(
             dir.join("Cargo.toml"),
             "[package]\nname = \"std-probe-host\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nexpensive-dependency = { path = \"expensive-dependency\" }\n",
@@ -4312,7 +4106,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
             )
             .arg("--nocapture")
             .env(CHILD_ENV, "1")
-            .env(PROJECT_ENV, &dir)
+            .env(PROJECT_ENV, dir.as_os_str())
             .env(CWD_ENV, &cwd_path)
             .env(MANIFEST_ENV, &manifest_path)
             .env(REAL_CARGO_ENV, rvs_cargo_command_from_env_BS())
@@ -4321,7 +4115,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
             .unwrap();
         let cargo_cwd = PathBuf::from(std::fs::read_to_string(&cwd_path).unwrap().trim());
         let cargo_manifest = std::fs::read_to_string(&manifest_path).unwrap();
-        let cwd_is_probe = cargo_cwd != dir;
+        let cwd_is_probe = cargo_cwd != dir.as_ref();
         let dependency_free = !cargo_manifest.contains("[dependencies]");
         let standalone = cargo_manifest.contains("[workspace]");
         let std_debug_assertions_disabled =
@@ -4345,7 +4139,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
 
     #[test]
     fn test_20260715_concurrent_callgraph_collections_do_not_mix_generations() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "concurrent-callgraph-generations",
             "concurrent-callgraph-generations",
             &[(
@@ -4415,7 +4209,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
 
     #[test]
     fn test_20260715_specialized_impls_keep_distinct_callgraph_identity() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "specialized-impl-identity",
             "specialized-impl-identity",
             &[(
@@ -4498,7 +4292,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
 
     #[test]
     fn test_20260715_dependency_impl_identity_matches_consumer_call_target() {
-        let dir = rvs_make_workspace_temp_dir_BIS("dependency-impl-identity");
+        let dir = rvs_make_workspace_temp_dir_BIST("dependency-impl-identity");
         std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::create_dir_all(dir.join("fixture-dep/src")).unwrap();
         std::fs::write(
@@ -4568,7 +4362,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
 
     #[test]
     fn test_20260715_trait_impl_nested_paths_preserve_nominal_identity() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "trait-impl-nested-identity",
             "trait-impl-nested-identity",
             &[(
@@ -4657,7 +4451,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
 
     #[test]
     fn test_20260715_local_trait_impl_for_external_type_remains_in_scope() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "local-trait-external-type",
             "local-trait-external-type",
             &[(
@@ -4705,7 +4499,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
 
     #[test]
     fn test_20260715_published_std_callgraph_precedes_legacy_directory() {
-        let dir = rvs_make_workspace_temp_dir_BIS("published-std-callgraph-precedence");
+        let dir = rvs_make_workspace_temp_dir_BIST("published-std-callgraph-precedence");
         let legacy_dir = dir.join("target/rivus-callgraph-std");
         std::fs::create_dir_all(&legacy_dir).unwrap();
         let mut legacy = FnGraph::rvs_new();
@@ -4746,7 +4540,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
 
     #[test]
     fn test_20260715_std_callgraph_publish_replaces_previous_cache() {
-        let dir = rvs_make_workspace_temp_dir_BIS("replace-std-callgraph-cache");
+        let dir = rvs_make_workspace_temp_dir_BIST("replace-std-callgraph-cache");
         let mut previous = FnGraph::rvs_new();
         previous.rvs_insert_M(
             crate::symbols::DefPath::from("std::rvs_previous"),
@@ -4783,7 +4577,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
 
     #[test]
     fn test_20260728_published_std_cache_preserves_support_inference_for_why() {
-        let dir = rvs_make_workspace_temp_dir_BIS("std-cache-support-inference");
+        let dir = rvs_make_workspace_temp_dir_BIST("std-cache-support-inference");
         let support_path = crate::symbols::DefPath::from("support_crate::help");
         let published = rvs_support_inference_test_graph();
         crate::environment::callgraph_cache::rvs_publish_std_callgraph_cache_BIST(&dir, &published)
@@ -4832,7 +4626,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
 
     #[test]
     fn test_20260728_std_why_cache_respects_current_caps_override() {
-        let dir = rvs_make_workspace_temp_dir_BIS("std-cache-current-caps-override");
+        let dir = rvs_make_workspace_temp_dir_BIST("std-cache-current-caps-override");
         let support_path = crate::symbols::DefPath::from("support_crate::help");
         let published = rvs_support_inference_test_graph();
         crate::environment::callgraph_cache::rvs_publish_std_callgraph_cache_BIST(&dir, &published)
@@ -4875,7 +4669,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
 
     #[test]
     fn test_20260704_load_std_only_cached_callgraph() {
-        let dir = rvs_make_workspace_temp_dir_BIS("std-only-callgraph");
+        let dir = rvs_make_workspace_temp_dir_BIST("std-only-callgraph");
         std::fs::create_dir_all(dir.join("target/rivus-callgraph-std")).unwrap();
         std::fs::write(
             dir.join("target/rivus-callgraph-std/callgraph.json"),
@@ -4912,7 +4706,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
 
     #[test]
     fn test_20260704_std_only_mode_requires_std_cache() {
-        let dir = rvs_make_workspace_temp_dir_BIS("std-only-missing-cache");
+        let dir = rvs_make_workspace_temp_dir_BIST("std-only-missing-cache");
 
         let result = rvs_load_required_std_callgraph_cache_BIS(&dir);
         let output = format!("{result:?}\n");
@@ -4926,7 +4720,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
 
     #[test]
     fn test_20260706_std_only_rejects_callgraph_cache_file_path() {
-        let dir = rvs_make_workspace_temp_dir_BIS("std-callgraph-cache-file");
+        let dir = rvs_make_workspace_temp_dir_BIST("std-callgraph-cache-file");
         std::fs::create_dir_all(dir.join("target")).unwrap();
         std::fs::write(dir.join("target/rivus-callgraph-std"), "stale").unwrap();
 
@@ -4944,7 +4738,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
 
     #[test]
     fn test_20260704_std_only_mode_ignores_project_cache_without_std_cache() {
-        let dir = rvs_make_workspace_temp_dir_BIS("std-only-project-cache-no-std");
+        let dir = rvs_make_workspace_temp_dir_BIST("std-only-project-cache-no-std");
         std::fs::create_dir_all(dir.join("target/rivus-callgraph")).unwrap();
         std::fs::write(
             dir.join("target/rivus-callgraph/callgraph.json"),
@@ -5009,12 +4803,14 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
 
     #[test]
     fn test_20260710_std_like_query_matching_local_crate_uses_project_collection() {
-        let dir = rvs_make_workspace_temp_dir_BIS("std-like-local-crate");
+        let dir = rvs_make_workspace_temp_dir_BIST("std-like-local-crate");
         std::fs::write(
             dir.join("Cargo.toml"),
             "[package]\nname = \"std\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
         )
         .unwrap();
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/lib.rs"), "pub fn value() -> u8 { 1 }\n").unwrap();
         let local_names =
             rvs_load_local_crate_prefixes_BIS(&dir, CargoTargetScope::WithTestExampleBench)
                 .unwrap();
@@ -5038,7 +4834,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
 
     #[test]
     fn test_20260706_std_like_query_mode_reports_invalid_cargo_toml() {
-        let dir = rvs_make_workspace_temp_dir_BIS("std-like-invalid-cargo-toml");
+        let dir = rvs_make_workspace_temp_dir_BIST("std-like-invalid-cargo-toml");
         std::fs::write(dir.join("Cargo.toml"), "[package\nname = \"std\"\n").unwrap();
 
         let result = crate::environment::cargo_targets::rvs_detect_local_crate_prefixes_for_function_query_BIS(
@@ -5205,7 +5001,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
 
     #[test]
     fn test_20260706_merge_callgraph_dir_rejects_empty_artifact_dir() {
-        let dir = rvs_make_workspace_temp_dir_BIS("empty-callgraph-dir");
+        let dir = rvs_make_workspace_temp_dir_BIST("empty-callgraph-dir");
         let cg_dir = dir.join("target/rivus-callgraph");
         std::fs::create_dir_all(&cg_dir).unwrap();
 
@@ -5222,7 +5018,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
 
     #[test]
     fn test_20260714_merge_callgraph_dir_accepts_empty_graph_json() {
-        let dir = rvs_make_workspace_temp_dir_BIS("empty-callgraph-json");
+        let dir = rvs_make_workspace_temp_dir_BIST("empty-callgraph-json");
         let cg_dir = dir.join("target/rivus-callgraph");
         std::fs::create_dir_all(&cg_dir).unwrap();
         let json = crate::artifacts::rvs_serialize_callgraph_json(&FnGraph::rvs_new()).unwrap();
@@ -5246,7 +5042,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
 
     #[test]
     fn test_20260706_merge_callgraph_dir_sorts_json_artifacts() {
-        let dir = rvs_make_workspace_temp_dir_BIS("sorted-callgraph-json");
+        let dir = rvs_make_workspace_temp_dir_BIST("sorted-callgraph-json");
         let cg_dir = dir.join("target/rivus-callgraph");
         std::fs::create_dir_all(&cg_dir).unwrap();
         std::fs::write(cg_dir.join("z.json"), "not json\n").unwrap();
@@ -5267,7 +5063,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
 
     #[test]
     fn test_20260706_merge_callgraph_dir_ignores_json_directory() {
-        let dir = rvs_make_workspace_temp_dir_BIS("callgraph-json-directory");
+        let dir = rvs_make_workspace_temp_dir_BIST("callgraph-json-directory");
         let cg_dir = dir.join("target/rivus-callgraph");
         std::fs::create_dir_all(cg_dir.join("a.json")).unwrap();
         std::fs::write(
@@ -5306,7 +5102,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
 
     #[test]
     fn test_20260710_callgraph_artifact_write_failure_fails_cargo_BIS() {
-        let dir = rvs_make_workspace_temp_dir_BIS("callgraph-artifact-write-failure");
+        let dir = rvs_make_workspace_temp_dir_BIST("callgraph-artifact-write-failure");
         let project = dir.join("project");
         std::fs::create_dir_all(project.join("src")).unwrap();
         std::fs::write(
@@ -5460,7 +5256,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
 
     #[test]
     fn test_20260901_artifact_anchor_resolver_matches_source_ground_truth() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "anchor-resolver-ground-truth",
             "anchor-resolver",
             &[(
@@ -5544,7 +5340,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
 
     #[test]
     fn test_20260831_check_collection_deny_short_circuits_graph_analysis() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "check-deny-short-circuit",
             "check-deny-short-circuit",
             &[(
@@ -5567,7 +5363,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
 
     #[test]
     fn test_20260831_check_warning_project_completes_full_pipeline() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "check-warning-pipeline",
             "check-warning-pipeline",
             &[(
@@ -5589,7 +5385,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
 
     #[test]
     fn test_20260901_check_graph_error_renders_in_parent_fails_101() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "check-graph-error",
             "check-graph-error",
             &[(
@@ -5648,7 +5444,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
 
     #[test]
     fn test_20260901_check_runs_single_cargo_compile() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "single-compile-proof",
             "single-compile-proof",
             &[
@@ -5679,7 +5475,7 @@ standard_library_callgraph: workspace_wrapper=false all_crates_wrapper=true call
 
     #[test]
     fn test_20260901_check_graph_warning_not_escalated_by_deny_warnings() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "graph-warning-deny",
             "graph-warning-deny",
             &[(

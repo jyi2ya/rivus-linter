@@ -383,7 +383,7 @@ mod tests {
     use crate::artifacts::{CallEdgeType, FnNode, FnSource, FunctionIdentity};
     use crate::symbols::DefPath;
     use crate::test_support::{
-        rvs_make_capsmap, rvs_make_cargo_project_BIS, rvs_make_temp_dir_BIS, rvs_snapshot_BIS,
+        rvs_make_capsmap, rvs_make_cargo_project_BIST, rvs_make_temp_dir_BIST, rvs_snapshot_BIS,
     };
 
     fn rvs_report_target_node(crate_id: u64, calls: &[&str], is_trait_impl: bool) -> FnNode {
@@ -834,7 +834,7 @@ mod tests {
 
     #[test]
     fn test_20260702_report_rejects_non_cargo_dir() {
-        let dir = rvs_make_temp_dir_BIS("report-non-cargo");
+        let dir = rvs_make_temp_dir_BIST("report-non-cargo");
         let result = rvs_run_report_BIST(&dir);
         let output = format!("{result:?}").replace(&dir.to_string_lossy().into_owned(), "$TMP");
         rvs_snapshot_BIS("test_20260702_report_rejects_non_cargo_dir", &output);
@@ -949,7 +949,7 @@ mod tests {
         // body's call edge on the trait declaration node. The unit-level
         // inference assertions live in src/inference.rs; this test guards
         // the collection step itself with real compilation.
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "port-default-body-collection",
             "port-default-body",
             &[(
@@ -1010,7 +1010,7 @@ mod tests {
 
     #[test]
     fn test_20260713_report_enforces_library_crate_root_main() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "report-library-root-main",
             "report-library-main",
             &[("src/lib.rs", "pub fn main() -> i32 { 1 }\n")],
@@ -1049,7 +1049,7 @@ mod tests {
 
     #[test]
     fn test_20260713_report_preserves_binary_entry_across_all_targets() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "report-binary-entry-all-targets",
             "report-binary-entry",
             &[("src/main.rs", "fn main() {}\n")],
@@ -1090,7 +1090,7 @@ mod tests {
 
     #[test]
     fn test_20260713_report_enforces_integration_test_main_as_ordinary() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "report-integration-test-main",
             "report-integration-main",
             &[
@@ -1130,7 +1130,7 @@ mod tests {
 
     #[test]
     fn test_20260713_report_enforces_no_main_binary_function() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "report-no-main-binary-function",
             "report-no-main-binary",
             &[("src/main.rs", "#![no_main]\nfn main() -> i32 { 1 }\n")],
@@ -1167,7 +1167,7 @@ mod tests {
 
     #[test]
     fn test_20260713_report_enforces_cfg_test_only_main() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "report-cfg-test-only-main",
             "report-cfg-main",
             &[(
@@ -1213,7 +1213,7 @@ mod tests {
 
     #[test]
     fn test_20260713_report_same_name_lib_bin_retains_only_library_main() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "report-same-name-lib-bin-main",
             "report-same-name-main",
             &[
@@ -1754,7 +1754,7 @@ mod tests {
 
     #[test]
     fn test_20260708_run_report_accepts_async_fn_project() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "report-async-project",
             "report-async-project",
             &[(

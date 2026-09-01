@@ -1,2 +1,2 @@
-result=Err("$TMP/Cargo.toml: invalid TOML: TOML parse error at line 1, column 9\n  |\n1 | [package\n  |         ^\ninvalid table header\nexpected `.`, `]`\n")
+result=Err("cargo metadata for local crate detection failed: `cargo metadata` exited with an error: error: unclosed table, expected `]`\n --> Cargo.toml:1:9\n  |\n1 | [package\n  |         ^\n")
 exists=false

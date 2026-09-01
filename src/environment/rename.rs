@@ -703,7 +703,7 @@ fn rvs_require_directory_BIS(path: &Path) -> Result<(), String> {
 mod tests {
     use super::*;
     use crate::test_support::{
-        rvs_make_cargo_project_BIS, rvs_make_temp_dir_BIS, rvs_register_test_coverage,
+        rvs_make_cargo_project_BIST, rvs_make_temp_dir_BIST, rvs_register_test_coverage,
         rvs_snapshot_BIS,
     };
     use ra_ap_ide::{TextRange, TextSize};
@@ -763,7 +763,7 @@ mod tests {
 
     #[test]
     fn test_20260610_is_local_file_true() {
-        let root = rvs_make_temp_dir_BIS("local-file-true");
+        let root = rvs_make_temp_dir_BIST("local-file-true");
         std::fs::create_dir_all(root.join("src")).unwrap();
         let file = root.join("src/main.rs");
         std::fs::write(&file, "fn main() {}\n").unwrap();
@@ -773,8 +773,8 @@ mod tests {
 
     #[test]
     fn test_20260610_is_local_file_false_dependency() {
-        let root = rvs_make_temp_dir_BIS("local-file-false-dep-root");
-        let dep = rvs_make_temp_dir_BIS("local-file-false-dep");
+        let root = rvs_make_temp_dir_BIST("local-file-false-dep-root");
+        let dep = rvs_make_temp_dir_BIST("local-file-false-dep");
         std::fs::create_dir_all(dep.join("src")).unwrap();
         let file = dep.join("src/lib.rs");
         std::fs::write(&file, "pub fn rvs_dep() {}\n").unwrap();
@@ -785,7 +785,7 @@ mod tests {
 
     #[test]
     fn test_20260705_is_local_file_false_target_dir() {
-        let root = rvs_make_temp_dir_BIS("local-file-target");
+        let root = rvs_make_temp_dir_BIST("local-file-target");
         let file = root.join("target/debug/build/pkg/out/generated.rs");
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
         std::fs::write(&file, "pub fn rvs_generated() {}\n").unwrap();
@@ -801,8 +801,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_20260707_is_local_file_rejects_symlink_escape() {
-        let root = rvs_make_temp_dir_BIS("local-file-symlink-root");
-        let external = rvs_make_temp_dir_BIS("local-file-symlink-external");
+        let root = rvs_make_temp_dir_BIST("local-file-symlink-root");
+        let external = rvs_make_temp_dir_BIST("local-file-symlink-external");
         std::fs::create_dir_all(root.join("src")).unwrap();
         let external_file = external.join("outside.rs");
         std::fs::write(&external_file, "pub fn rvs_outside() {}\n").unwrap();
@@ -822,7 +822,7 @@ mod tests {
 
     #[test]
     fn test_20260706_strip_renames_lib_and_main_same_name_functions() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "strip-lib-main-same-name",
             "strip-samename-demo",
             &[
@@ -852,7 +852,7 @@ mod tests {
 
     #[test]
     fn test_20260713_strip_renames_production_module_under_tests_directory() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "strip-production-module-under-tests",
             "strip-production-path-demo",
             &[
@@ -884,7 +884,7 @@ mod tests {
 
     #[test]
     fn test_20260706_strip_skips_direct_trait_impl_candidates() {
-        let dir = rvs_make_cargo_project_BIS(
+        let dir = rvs_make_cargo_project_BIST(
             "strip-trait-impl-method",
             "strip-trait-demo",
             &[(
@@ -910,7 +910,7 @@ mod tests {
 
     #[test]
     fn test_20260706_strip_does_not_edit_sibling_workspace_member() {
-        let dir = rvs_make_temp_dir_BIS("strip-sibling-member");
+        let dir = rvs_make_temp_dir_BIST("strip-sibling-member");
         std::fs::write(
             dir.join("Cargo.toml"),
             "[workspace]\nmembers = [\"a\", \"b\"]\nresolver = \"2\"\n",
@@ -952,7 +952,7 @@ mod tests {
 
     #[test]
     fn test_20260706_strip_rejects_file_path_before_loading_workspace() {
-        let dir = rvs_make_temp_dir_BIS("strip-file-path");
+        let dir = rvs_make_temp_dir_BIST("strip-file-path");
         let cargo_toml = dir.join("Cargo.toml");
         std::fs::write(
             &cargo_toml,
@@ -975,8 +975,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_20260706_write_collected_edits_rejects_symlink_escape() {
-        let dir = rvs_make_temp_dir_BIS("edit-symlink-project");
-        let outside = rvs_make_temp_dir_BIS("edit-symlink-outside");
+        let dir = rvs_make_temp_dir_BIST("edit-symlink-project");
+        let outside = rvs_make_temp_dir_BIST("edit-symlink-outside");
         std::fs::create_dir_all(dir.join("src")).unwrap();
         let outside_file = outside.join("lib.rs");
         let before = "pub fn rvs_escape() {}\n";
@@ -1026,7 +1026,7 @@ mod tests {
 
     #[test]
     fn test_20260706_invalidate_callgraph_cache_removes_file_path() {
-        let dir = rvs_make_temp_dir_BIS("invalidate-cache-file");
+        let dir = rvs_make_temp_dir_BIST("invalidate-cache-file");
         std::fs::create_dir_all(dir.join("target")).unwrap();
         let cache = dir.join("target/rivus-callgraph");
         std::fs::write(&cache, "stale").unwrap();
@@ -1046,7 +1046,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_20260706_invalidate_callgraph_cache_removes_broken_symlink() {
-        let dir = rvs_make_temp_dir_BIS("invalidate-cache-symlink");
+        let dir = rvs_make_temp_dir_BIST("invalidate-cache-symlink");
         std::fs::create_dir_all(dir.join("target")).unwrap();
         let cache = dir.join("target/rivus-callgraph");
         std::os::unix::fs::symlink(dir.join("missing"), &cache).unwrap();
@@ -1065,7 +1065,7 @@ mod tests {
 
     #[test]
     fn test_20260715_invalidate_callgraph_cache_preserves_active_generation() {
-        let dir = rvs_make_temp_dir_BIS("invalidate-published-cache");
+        let dir = rvs_make_temp_dir_BIST("invalidate-published-cache");
         let active_generation = dir.join("target/.rivus-runs/callgraph-active");
         std::fs::create_dir_all(&active_generation).unwrap();
         std::fs::write(active_generation.join("sentinel"), "active\n").unwrap();
@@ -1093,7 +1093,7 @@ mod tests {
     fn test_20260715_cache_invalidation_continues_after_error() {
         use std::os::unix::ffi::OsStringExt;
 
-        let dir = rvs_make_temp_dir_BIS("invalidate-cache-continues");
+        let dir = rvs_make_temp_dir_BIST("invalidate-cache-continues");
         let invalid = PathBuf::from(std::ffi::OsString::from_vec(b"invalid\0path".to_vec()));
         let removable = dir.join("removable-cache");
         std::fs::write(&removable, "stale\n").unwrap();

@@ -232,7 +232,7 @@ mod tests {
     use super::*;
     use crate::artifacts::{CALLGRAPH_SCHEMA_VERSION, CrateProvenance, FnNode};
     use crate::symbols::DefPath;
-    use crate::test_support::{rvs_make_temp_dir_BIS, rvs_snapshot_BIS};
+    use crate::test_support::{rvs_make_temp_dir_BIST, rvs_snapshot_BIS};
 
     fn rvs_current_std_graph() -> FnGraph {
         let mut node = FnNode::default();
@@ -335,7 +335,7 @@ mod tests {
 
     #[test]
     fn test_20260729_published_cache_errors_remain_structured() {
-        let dir = rvs_make_temp_dir_BIS("published-callgraph-structured-errors");
+        let dir = rvs_make_temp_dir_BIST("published-callgraph-structured-errors");
         let target = dir.join("target");
         std::fs::create_dir_all(&target).unwrap();
         let cache = rvs_std_callgraph_cache_path(&dir);
@@ -389,7 +389,7 @@ mod tests {
 
     #[test]
     fn test_20260729_cache_mergers_reject_legacy_current_mixtures() {
-        let dir = rvs_make_temp_dir_BIS("mixed-callgraph-cache-formats");
+        let dir = rvs_make_temp_dir_BIST("mixed-callgraph-cache-formats");
         let artifacts = dir.join("artifacts");
         std::fs::create_dir(&artifacts).unwrap();
         std::fs::write(
@@ -444,7 +444,7 @@ mod tests {
 
     #[test]
     fn test_20260729_generation_merge_rejects_foreign_artifacts() {
-        let dir = rvs_make_temp_dir_BIS("foreign-generation-artifact");
+        let dir = rvs_make_temp_dir_BIST("foreign-generation-artifact");
         let artifacts = dir.join("artifacts");
         std::fs::create_dir(&artifacts).unwrap();
         let json =

@@ -1,2 +1,0 @@
-Err("auto target file stem is not UTF-8: $TMP/tests/a�.rs")
-len=0

@@ -1,3 +1,3 @@
-empty: first=Err("[package].name must not be empty") second=Err("[[bin]].name must not be empty") helper=Err("demo must not be empty") len=0
-whitespace: first=Err("[package].name must not contain whitespace") second=Err("[lib].name must not contain whitespace") helper=Err("demo must not contain whitespace") len=0
-pathy: first=Err("[package].name must be a crate name, not a path") second=Err("[lib].name must be a crate name, not a path") helper=Err("demo must be a crate name, not a path") len=0
+empty: detection_is_err=true helper=Err("demo must not be empty") len=0
+whitespace: detection_is_err=true helper=Err("demo must not contain whitespace") len=0
+pathy: detection_is_err=true helper=Err("demo must be a crate name, not a path") len=0

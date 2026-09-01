@@ -1,2 +1,0 @@
-Err("cannot read auto target dir $TMP/tests: Not a directory (os error 20)")
-len=0
